@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AURA-SENTINEL</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="grid-container">
+        <!-- Panel Izquierdo: Árbol de carpetas del espacio de trabajo -->
+        <div class="panel panel-left" id="workspace-panel">
+            <div class="panel-header">
+                WORKSPACE
+                <button id="load-workspace-btn" class="action-btn">[+] Cargar Workspace</button>
+            </div>
+            <div class="panel-content" id="workspace-tree">
+                <!-- Árbol de directorios renderizado aquí -->
+            </div>
+        </div>
+
+        <div class="panel-center">
+            <!-- Panel Central superior: Chat de usuario con el orquestador -->
+            <div class="panel chat-panel" id="chat-panel">
+            <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>ORCHESTRATOR LINK</span>
+                <button id="clear-chat-btn" class="btn btn-outline" style="padding: 2px 8px; font-size: 12px;">🧹 Limpiar Chat</button>
+            </div>
+            <div class="panel-content" id="chat-messages">
+                <div style="color: #8b949e; text-align: center; margin-top: 20px;">Esperando instrucciones tácticas...</div>
+            </div>
+            <div class="chat-input-container">
+                    <input type="text" id="chat-input" placeholder="Enter command...">
+                </div>
+            </div>
+
+            <!-- Panel Central inferior: Consola técnica en tiempo real -->
+            <div class="panel panel-console" id="console-panel">
+                <div class="panel-header">TECHNICAL CONSOLE [RUST & OLLAMA]</div>
+                <div class="panel-content" id="system-thoughts">
+                    <!-- Flujo de pensamientos aquí -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Panel Derecho: Monitor de telemetría ligero -->
+        <div class="panel panel-right" id="telemetry-panel">
+            <div class="panel-header">TELEMETRY</div>
+            <div class="panel-content" id="telemetry-data">
+                <div class="telemetry-stat">
+                    <span>RAM (Rust):</span> <span id="ram-usage">0 MB</span>
+                </div>
+                <div class="telemetry-stat">
+                    <span>Ollama Model:</span> <span id="model-status">Standby</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
