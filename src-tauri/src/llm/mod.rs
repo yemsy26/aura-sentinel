@@ -3,6 +3,7 @@ use crate::memory::{self, Cambio};
 use tauri::AppHandle;
 
 pub mod agent;
+pub mod translator;
 
 #[derive(Serialize)]
 struct OllamaRequest<'a> {
@@ -80,7 +81,7 @@ async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
 }
 
 /// Llamada a Ollama SIN forzar JSON. Usada para reportes de texto libre (Auditoría, Análisis).
-async fn call_ollama_text(model: &str, prompt: &str) -> Result<String, String> {
+pub async fn call_ollama_text(model: &str, prompt: &str) -> Result<String, String> {
     #[derive(serde::Serialize)]
     struct TextRequest<'a> {
         model: &'a str,
@@ -199,6 +200,10 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
 
 #[tauri::command]
 pub async fn process_user_prompt(user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+    let technical_intent = translator::translate_to_technical_intent(&user_message).await;
+    println!("[TRADUCTOR] Input: '{}' -> Intención: '{}'", user_message, technical_intent);
+    let user_message = technical_intent;
+
     let workspace_tree_nodes = crate::memory::get_workspace_tree_internal(workspace_path.clone()).await?;
     let files_only: Vec<_> = workspace_tree_nodes.iter().filter(|n| !n.is_dir).collect();
     let mut index = crate::memory::read_vector_index(&workspace_path).await;
