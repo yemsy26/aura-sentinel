@@ -18,8 +18,20 @@ pub struct MemoryChunk {
 
 /// Helper function to create the data/memory directory
 async fn get_memory_file_path() -> String {
-    let current_dir = std::env::current_dir().unwrap_or_default();
-    let mem_dir = current_dir.join("data").join("memory");
+    let current = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+
+    let project_root = if current.ends_with("src-tauri") || current.ends_with("src-tauri\\") {
+        Path::new(&current)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(current)
+    } else {
+        current
+    };
+
+    let mem_dir = Path::new(&project_root).join("data").join("memory");
     let _ = fs::create_dir_all(&mem_dir).await;
     mem_dir.join("vectors.json").to_string_lossy().to_string()
 }
