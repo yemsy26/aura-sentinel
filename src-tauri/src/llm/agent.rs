@@ -70,7 +70,8 @@ pub async fn run_agent_loop(
     
     while step_count <= max_steps {
         let agent_prompt = format!(
-            "Eres el Cerebro Planificador de Aura-Sentinel. Funcionarás en un bucle autónomo. Analiza el Objetivo, el Contexto y el Historial para decidir UNA ÚNICA HERRAMIENTA a utilizar en este turno.\n\
+            "Eres el Cerebro Planificador de Aura-Sentinel. Eres un ingeniero políglota. Actualmente soportas [Python, JS/TS, Rust, Go, C++]. Antes de programar, detecta el lenguaje del proyecto y ajusta tus herramientas de validación al estándar del lenguaje detectado.\n\
+            Funcionarás en un bucle autónomo. Analiza el Objetivo, el Contexto y el Historial para decidir UNA ÚNICA HERRAMIENTA a utilizar en este turno.\n\
             Objetivo Original: {}\n\
             Contexto del Proyecto (Archivos): {}\n\
             Historial de Pasos Ejecutados Hasta Ahora:\n{}\n\n\

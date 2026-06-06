@@ -3,6 +3,7 @@ pub mod tester;
 pub mod env_check;
 pub mod memory;
 pub mod security;
+pub mod languages;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};
