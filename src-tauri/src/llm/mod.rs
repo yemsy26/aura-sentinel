@@ -200,7 +200,7 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
 
 #[tauri::command]
 pub async fn process_user_prompt(user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
-    let technical_intent = translator::translate_to_technical_intent(&user_message).await;
+    let technical_intent = translator::translate_to_technical_intent(&user_message, &app_handle).await;
     println!("[TRADUCTOR] Input: '{}' -> Intención: '{}'", user_message, technical_intent);
     let user_message = technical_intent;
 
