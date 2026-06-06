@@ -1,5 +1,6 @@
 pub mod architect;
 pub mod tester;
+pub mod env_check;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};

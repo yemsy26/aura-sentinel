@@ -35,6 +35,19 @@ pub async fn run_agent_loop(
     tree_json: String,
     app_handle: AppHandle
 ) -> Result<String, String> {
+    
+    // PRE-FLIGHT CHECK
+    emit_event(&app_handle, 0, "Ejecutando validación ambiental (Pre-Flight Check)...", "ACTION");
+    if let Err(env_errors) = crate::core::env_check::validate_environment(&workspace_path).await {
+        let error_msg = env_errors.join("\n");
+        emit_event(&app_handle, 0, &format!("[ENV_FAILURE] Fallo pre-vuelo:\n{}", error_msg), "FATAL");
+        let final_res = FinalResponse {
+            status: "FINISH".to_string(),
+            respuesta_conversacional: format!("[ENV_FAILURE] No puedo continuar porque el entorno no cumple con los requisitos mínimos:\n{}\n\nPor favor, soluciona esto e intenta de nuevo.", error_msg),
+        };
+        return Ok(serde_json::to_string(&final_res).unwrap());
+    }
+    emit_event(&app_handle, 0, "Pre-Flight Check superado.", "SUCCESS");
             
     let mut current_context = String::new();
     let mut archivos_editados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -68,7 +81,8 @@ pub async fn run_agent_loop(
             - Backend Rápidos: Si piden un servidor, crea el código físico con 'TOOL_PROGRAMMER' y luego levántalo con 'TOOL_BACKGROUND_START'.\n\
             - Firebase Deploy: Si piden desplegar a producción/Firebase, asume que 'firebase-tools' está instalado y usa 'TOOL_TERMINAL' con 'firebase init hosting' o 'firebase deploy --only hosting'. Asegúrate de compilar antes si es necesario (ej. 'npm run build').\n\
             - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER], tu ÚNICA tarea es corregir la sintaxis o el ID que falló. No intentes ejecutar código nuevo hasta que la herramienta devuelva [SUCCESS].\n            - Modo Arquitecto: Si al usar TOOL_ARCHITECT el campo de confianza es BAJA, no tomes decisiones de refactorización automáticas. Reporta los hallazgos al usuario y solicita confirmación manual.\n\
-            - Auto-Testing: Tu objetivo no es solo escribir código, sino entregar sistemas funcionales. Valida tu trabajo con TOOL_TESTER antes de cualquier entrega final. Un código no probado es un código incompleto.\n\n\
+            - Auto-Testing: Tu objetivo no es solo escribir código, sino entregar sistemas funcionales. Valida tu trabajo con TOOL_TESTER antes de cualquier entrega final. Un código no probado es un código incompleto.\n\
+            - Pre-Flight: Tu sistema tiene una capa de validación ambiental. Si el sistema reporta un fallo de entorno, no intentes programar nada; tu única tarea es usar TOOL_FINISH para informar al usuario sobre las dependencias faltantes.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
