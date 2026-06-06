@@ -1,4 +1,9 @@
-use std::path::Path;
+import os
+
+path = 'src-tauri/src/core/mod.rs'
+content = open(path, 'r', encoding='utf-8').read()
+
+new_content = """use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
@@ -90,11 +95,11 @@ pub async fn read_task_logs(task_id: &str) -> Result<String, String> {
     let mut tasks_guard = tasks.lock().await;
     if let Some(task) = tasks_guard.get_mut(task_id) {
         let logs_guard = task.logs.lock().await;
-        let mut recent_logs = logs_guard.iter().rev().take(50).rev().cloned().collect::<Vec<_>>().join("\n");
+        let mut recent_logs = logs_guard.iter().rev().take(50).rev().cloned().collect::<Vec<_>>().join("\\n");
         if recent_logs.is_empty() {
             recent_logs = "[No new logs]".to_string();
         }
-        Ok(format!("Logs for task '{}':\n{}", task_id, recent_logs))
+        Ok(format!("Logs for task '{}':\\n{}", task_id, recent_logs))
     } else {
         Err(format!("Task '{}' not found or already terminated.", task_id))
     }
@@ -197,7 +202,7 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
         
     // Commit
     let _ = Command::new(get_shell())
-        .args([get_shell_args(), &format!("git commit -m \"{}\"", commit_message)])
+        .args([get_shell_args(), &format!("git commit -m \\"{}\\"", commit_message)])
         .current_dir(workspace_path)
         .output()
         .await;
@@ -249,3 +254,6 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         dot_product / (norm_a.sqrt() * norm_b.sqrt())
     }
 }
+"""
+
+open(path, 'w', encoding='utf-8').write(new_content)

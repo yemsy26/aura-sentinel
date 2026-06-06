@@ -40,7 +40,9 @@ pub async fn read_vector_index(workspace_path: &str) -> Vec<VectorNode> {
 pub async fn write_vector_index(workspace_path: &str, index: &Vec<VectorNode>) -> Result<(), String> {
     let index_file = Path::new(workspace_path).join(".fenix_index.json");
     let json = serde_json::to_string(index).map_err(|e| format!("Error serializando index: {}", e))?;
-    fs::write(index_file, json).await.map_err(|e| format!("Error guardando index: {}", e))
+    fs::write(&index_file, json).await.map_err(|e| format!("Error guardando index: {}", e))?;
+    crate::core::hide_file_windows(&index_file).await;
+    Ok(())
 }
 
 pub async fn get_workspace_tree_internal(path: String) -> Result<Vec<FileNode>, String> {
@@ -291,13 +293,14 @@ pub async fn update_last_memory_status(workspace_path: &str, status: &str) -> Re
         let new_json = serde_json::to_string_pretty(&logs)
             .map_err(|e| format!("Error al serializar: {}", e))?;
             
-        fs::write(&memory_file, new_json)
-            .await
-            .map_err(|e| format!("Error al guardar la entrada en el archivo: {}", e))?;
+            fs::write(&memory_file, new_json)
+                .await
+                .map_err(|e| format!("Error al guardar la entrada en el archivo: {}", e))?;
+            crate::core::hide_file_windows(&memory_file).await;
+        }
+            
+        Ok(())
     }
-        
-    Ok(())
-}
 
 #[tauri::command]
 pub fn get_current_directory() -> String {
@@ -340,6 +343,7 @@ pub async fn init_memory_log(workspace_path: String) -> Result<String, String> {
         fs::write(&memory_file, json)
             .await
             .map_err(|e| format!("Error creando archivo de memoria: {}", e))?;
+        crate::core::hide_file_windows(&memory_file).await;
             
         Ok("Memoria inicializada correctamente.".to_string())
     } else {
@@ -366,6 +370,7 @@ pub async fn add_memory_entry(workspace_path: String, entry: FenixMemoryLog) -> 
     fs::write(&memory_file, new_json)
         .await
         .map_err(|e| format!("Error al guardar la entrada en el archivo: {}", e))?;
+    crate::core::hide_file_windows(&memory_file).await;
         
     Ok(())
 }
@@ -415,6 +420,7 @@ pub async fn save_chat_message(workspace_path: String, message: types::ChatMessa
     fs::write(&chat_file, new_json)
         .await
         .map_err(|e| format!("Error guardando chat: {}", e))?;
+    crate::core::hide_file_windows(&chat_file).await;
         
     Ok(())
 }
@@ -423,7 +429,10 @@ pub async fn save_chat_message(workspace_path: String, message: types::ChatMessa
 pub async fn clear_chat_history(workspace_path: String) -> Result<(), String> {
     let chat_file = Path::new(&workspace_path).join(".fenix_chat.json");
     if chat_file.exists() {
-        let _ = fs::remove_file(chat_file).await;
+        let _ = fs::remove_file(&chat_file).await;
     }
+    // Escribir un array vacío inmediatamente
+    let _ = fs::write(&chat_file, "[]").await;
+    crate::core::hide_file_windows(&chat_file).await;
     Ok(())
 }

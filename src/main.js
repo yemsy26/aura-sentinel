@@ -269,125 +269,60 @@ document.addEventListener('DOMContentLoaded', async () => {
             logSystemThought("Paso 1: Solicitando plan al Orquestador...");
 
             try {
-                logSystemThought(`[RAG] Vectorizando petición y filtrando mapa de contexto (Top 10 nodos relevantes)...`, '#58a6ff');
+                // Interceptamos eventos de streaming en vivo desde el Backend (El Agentic Loop)
+                const unlisten = await window.__TAURI__.event.listen('agent-step', (event) => {
+                    const payload = event.payload;
+                    const step = payload.step;
+                    const status = payload.status;
+                    const message = payload.message;
+                    
+                    let color = '#a5d6ff'; // PLANNING default
+                    if (status === 'DECISION') color = '#e3b341'; // yellow
+                    if (status === 'ACTION') color = '#bc8cff'; // purple
+                    if (status === 'SUCCESS') color = '#3fb950'; // green
+                    if (status === 'ERROR' || status === 'FATAL') color = '#f85149'; // red
+                    if (status === 'VALIDATING') color = '#1f6feb'; // blue
+
+                    logSystemThought(`[PASO ${step}] [${status}] ${message}`, color);
+                    loadingMsg.innerHTML = `<span style="color: ${color}">[PASO ${step}]</span> ${message}`;
+                    
+                    // Si hubo edición de archivos, forzamos refresco del árbol (heurística simple)
+                    if (status === 'SUCCESS' && message.toLowerCase().includes('código')) {
+                        invoke('get_workspace_tree', { path: currentWorkspace }).then(treeJson => {
+                            renderTree(JSON.parse(treeJson), workspaceTree);
+                        });
+                    }
+                });
+
                 const responseString = await invoke('process_user_prompt', { 
                     userMessage: text, 
                     workspacePath: currentWorkspace 
                 });
                 
+                // Limpiamos el listener para evitar duplicados en el próximo turno
+                unlisten();
+                
                 try {
                     const data = JSON.parse(responseString);
-                    
-                    if (data.orquestador) {
-                        const orch = data.orquestador;
-                        logSystemThought(`[ORQUESTADOR]: ${orch.pensamiento}`);
-                        
-                        if (orch.respuesta_conversacional) {
-                            const isAudit = orch.intencion && 
-                                (orch.intencion.toUpperCase().includes('AUDITORIA') || 
-                                 orch.intencion.toUpperCase().includes('ANALISIS'));
-
-                            if (isAudit) {
-                                // Reporte de auditoría: mostrar como texto preformateado con cabecera
-                                const icon = orch.intencion.toUpperCase().includes('AUDITORIA') ? '🛡️' : '📋';
-                                const label = orch.intencion.toUpperCase().includes('AUDITORIA') ? 'REPORTE DE AUDITORÍA' : 'ANÁLISIS DEL SISTEMA';
-                                loadingMsg.className = 'audit-block';
-                                loadingMsg.innerHTML = `
-                                    <span style="color:#a5d6ff">[SYSTEM]</span>
-                                    <div style="margin-top:8px; padding:10px; background:#161b22; border:1px solid #30363d; border-radius:6px; border-left:3px solid #bc8cff;">
-                                        <div style="color:#bc8cff; font-weight:bold; margin-bottom:8px; font-size:11px; letter-spacing:1px;">${icon} ${label}</div>
-                                        <pre style="white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:12px; color:#c9d1d9; margin:0; line-height:1.6; max-height:400px; overflow-y:auto;">${orch.respuesta_conversacional}</pre>
-                                    </div>`;
-                                await saveMessageToDisk('system', `[${label}]\n${orch.respuesta_conversacional}`);
-                                logSystemThought(`[MODO ${label}]: Reporte generado. Sin modificaciones en disco.`, '#bc8cff');
-                            } else {
-                                loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> ${orch.respuesta_conversacional}`;
-                                await saveMessageToDisk('system', orch.respuesta_conversacional);
-                            }
-                        } else {
-                            loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> Respuesta procesada.`;
-                            await saveMessageToDisk('system', "Respuesta procesada.");
-                        }
-
-                        if (orch.intencion === "CHAT" || !data.programador || Object.keys(data.programador).length === 0) {
-                            if (orch.intencion === "COMANDO") {
-                                logSystemThought(`[TERMINAL] Ejecutando: ${orch.comando_a_ejecutar}`, '#bc8cff');
-                                if (data.operacion_fisica) {
-                                    logSystemThought(`[SALIDA TERMINAL]\n${data.operacion_fisica}`, '#d2a8ff');
-                                }
-                            } else if (orch.intencion === "INVESTIGACION") {
-                                logSystemThought(`[EXTRACCIÓN WEB] Navegando y analizando URL: ${orch.url_a_investigar}...`, '#e3b341');
-                                if (data.operacion_fisica) {
-                                    logSystemThought(`[SALIDA WEB]\n${data.operacion_fisica}`, '#d2a8ff');
-                                }
-                            } else if (orch.intencion.toUpperCase().includes('AUDITORIA') || orch.intencion.toUpperCase().includes('ANALISIS')) {
-                                // El reporte de auditoría ya fue logueado arriba
-                            } else {
-                                logSystemThought(`[MODO CHAT]: Conversación completada sin operaciones en disco.`, '#a5d6ff');
-                            }
-                        } else {
-                            const prog = data.programador;
-                            
-                            if (orch.archivos_a_analizar && orch.archivos_a_analizar.length > 0) {
-                                logSystemThought(`[LECTURA SEGURA]: Extrayendo contenidos de: \n  - ${orch.archivos_a_analizar.join('\n  - ')}`);
-                            }
-                            
-                            logSystemThought(`Paso 2: Delegando tarea a ${orch.modelo_sugerido || "qwen2.5-coder:7b"}...`);
-                            
-                            if (prog.explicacion_tecnica) {
-                                loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> ${prog.explicacion_tecnica}`;
-                                await saveMessageToDisk('system', prog.explicacion_tecnica);
-                            }
-
-                            if (prog.cambios) {
-                                prog.cambios.forEach(cambio => {
-                                    logSystemThought(`\n--- PROPUESTA PARA: ${cambio.archivo} ---`);
-                                    logSystemThought(`BUSCAR:\n${cambio.buscar}`);
-                                    logSystemThought(`REEMPLAZAR:\n${cambio.reemplazar}`);
-                                    logSystemThought(`-----------------------------------------`);
-                                });
-                            }
-
-                            if (data.operacion_fisica) {
-                                logSystemThought(`[OPERACIÓN FÍSICA] ${data.operacion_fisica}`, '#00ffff');
-                            }
-
-                            if (data.eventos_validacion && data.eventos_validacion.length > 0) {
-                                data.eventos_validacion.forEach(evento => {
-                                    let color = '#00ff00';
-                                    if (evento.includes('[ERROR DETECTADO]') || evento.includes('[FATAL]')) {
-                                        color = '#ff7b72';
-                                    } else if (evento.includes('[ÉXITO]')) {
-                                        color = '#3fb950';
-                                    } else if (evento.includes('[VALIDACIÓN]')) {
-                                        color = '#a5d6ff';
-                                    }
-                                    logSystemThought(evento, color);
-                                });
-                            }
-                            
-                            // Refrescar el panel del explorador de archivos al instante
-                            try {
-                                const treeJson = await invoke('get_workspace_tree', { path: currentWorkspace });
-                                const treeData = JSON.parse(treeJson);
-                                renderTree(treeData, workspaceTree);
-                            } catch (e) {
-                                console.error("Error al refrescar el explorador de archivos:", e);
-                            }
-                        }
-
+                    if (data.status === "FINISH" || data.status === "ERROR") {
+                        loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> ${data.respuesta_conversacional}`;
+                        await saveMessageToDisk('system', data.respuesta_conversacional);
                     } else {
-                        loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> JSON no reconocido.`;
+                        loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> (Formato final desconocido): ${responseString}`;
                     }
-
+                    
+                    // Refrescar el árbol al final por si acaso
+                    const treeJson = await invoke('get_workspace_tree', { path: currentWorkspace });
+                    renderTree(JSON.parse(treeJson), workspaceTree);
+                    
                 } catch (parseError) {
-                    logSystemThought(`[ADVERTENCIA]: La respuesta del backend no es un JSON válido.`, '#d29922');
-                    loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> Error parseando respuesta del orquestador.`;
+                    logSystemThought(`[ADVERTENCIA]: La respuesta final del backend no es un JSON válido.`, '#d29922');
+                    loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> ${responseString}`;
                 }
                 
             } catch (error) {
                 logSystemThought(`[ERROR PIPELINE]: ${error}`, '#f85149');
-                loadingMsg.innerHTML = `<span style="color: #f85149">[ERROR]</span> Falla en la comunicación con Ollama: ${error}`;
+                loadingMsg.innerHTML = `<span style="color: #f85149">[ERROR]</span> Falla de sistema: ${error}`;
             }
         }
     });
