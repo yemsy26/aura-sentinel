@@ -50,6 +50,13 @@ pub async fn run_agent_loop(
     emit_event(&app_handle, 0, "Pre-Flight Check superado.", "SUCCESS");
             
     let mut current_context = String::new();
+    
+    // Inyección de Memoria (RAG)
+    if let Ok(historia) = crate::core::memory::query_memory(&user_message).await {
+        if !historia.contains("vacía") && !historia.contains("No se encontró") {
+            current_context.push_str(&historia);
+        }
+    }
     let mut archivos_editados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut architect_used = false;
     let mut tester_attempts = 0;
@@ -74,6 +81,8 @@ pub async fn run_agent_loop(
             8. 'TOOL_FINISH': Cuando el objetivo principal se haya completado con éxito, o si es imposible continuar. Rellena 'respuesta_conversacional' con la respuesta final para el usuario. ¡USALA SIEMPRE QUE HAYAS TERMINADO!\n\
             9. 'TOOL_ARCHITECT': Analiza la estructura y dependencias. No rellena argumentos. REGLA: Después de usarla, DEBES usar TOOL_FINISH obligatoriamente para resumirle los hallazgos al usuario.\n\
             10. 'TOOL_TESTER': Ejecuta suites de pruebas automatizadas (PyTest, Jest, etc.). Úsala para validar el código. No rellena argumentos adicionales.\n\
+            11. 'TOOL_LEARN': Indexa el conocimiento de un proyecto exitoso en la memoria permanente de Aura. Úsala si el proyecto funciona o después de un TOOL_TESTER exitoso. No requiere argumentos.\n\
+            12. 'TOOL_SEARCH': Consulta explícitamente la memoria histórica para buscar cómo resolviste problemas similares antes. Rellena 'url_a_investigar' con el término de búsqueda.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):\n\
@@ -342,7 +351,11 @@ pub async fn run_agent_loop(
                     Ok(success_msg) => {
                         tester_attempts = 0;
                         current_context.push_str(&format!("Resultado Tests:\n{}\n\n", success_msg));
-                        emit_event(&app_handle, step_count, "Todos los tests pasaron exitosamente.", "SUCCESS");
+                        emit_event(&app_handle, step_count, "Todos los tests pasaron exitosamente. Iniciando Auto-Indexación...", "SUCCESS");
+                        // AUTO INDEXACIÓN SILENCIOSA
+                        if let Ok(msg) = crate::core::memory::index_project(&workspace_path).await {
+                            current_context.push_str(&format!("Memoria Vectorial: {}\n\n", msg));
+                        }
                     },
                     Err(fail_msg) => {
                         tester_attempts += 1;
@@ -359,6 +372,32 @@ pub async fn run_agent_loop(
                             let _ = crate::core::restore_git_backup(&workspace_path).await;
                             current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
                         }
+                    }
+                }
+            },
+            "TOOL_LEARN" => {
+                emit_event(&app_handle, step_count, "Guardando conocimiento en la Memoria Permanente (RAG)...", "ACTION");
+                match crate::core::memory::index_project(&workspace_path).await {
+                    Ok(msg) => {
+                        current_context.push_str(&format!("Resultado TOOL_LEARN: {}\n\n", msg));
+                        emit_event(&app_handle, step_count, "Memoria indexada correctamente.", "SUCCESS");
+                    },
+                    Err(err) => {
+                        current_context.push_str(&format!("Error en TOOL_LEARN: {}\n\n", err));
+                        emit_event(&app_handle, step_count, &err, "ERROR");
+                    }
+                }
+            },
+            "TOOL_SEARCH" => {
+                emit_event(&app_handle, step_count, &format!("Consultando Memoria Permanente para: {}", url), "ACTION");
+                match crate::core::memory::query_memory(&url).await {
+                    Ok(msg) => {
+                        current_context.push_str(&format!("Resultado TOOL_SEARCH:\n{}\n\n", msg));
+                        emit_event(&app_handle, step_count, "Búsqueda en memoria completada.", "SUCCESS");
+                    },
+                    Err(err) => {
+                        current_context.push_str(&format!("Error en TOOL_SEARCH: {}\n\n", err));
+                        emit_event(&app_handle, step_count, &err, "ERROR");
                     }
                 }
             },
