@@ -239,6 +239,12 @@ pub async fn run_agent_loop(
                         Ok(json_res) => {
                             if let Ok(prog_output) = serde_json::from_str::<ProgrammerOutput>(&json_res) {
                                 if !prog_output.cambios.is_empty() {
+                                    emit_event(&app_handle, step_count, "Activando Git-Shield: Creando punto de retorno...", "PLANNING");
+                                    if let Err(e) = crate::core::create_git_backup(&workspace_path, "Aura-Sentinel: Git-Shield Auto-Backup").await {
+                                        emit_event(&app_handle, step_count, &format!("Fallo Crítico en Git-Shield: {}", e), "FATAL");
+                                        current_context.push_str(&format!("Git-Shield Error: {}. NO SE REALIZARON CAMBIOS.\n\n", e));
+                                        break;
+                                    }
                                     match memory::apply_code_changes(&workspace_path, prog_output.cambios.clone()).await {
                                         Ok(msg) => {
                                             emit_event(&app_handle, step_count, &msg, "SUCCESS");
