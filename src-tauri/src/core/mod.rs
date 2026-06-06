@@ -47,6 +47,7 @@ pub async fn start_background_task(workspace_path: &str, task_id: &str, command:
     let mut child = Command::new(get_shell())
         .args([get_shell_args(), command])
         .current_dir(workspace_path)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -121,6 +122,7 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
         let output = Command::new("cargo")
             .arg("check")
             .current_dir(workspace_path)
+        .stdin(Stdio::null())
             .output()
             .await
             .map_err(|e| format!("Error executing cargo check: {}", e))?;
@@ -152,6 +154,7 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
             .arg("-q")
             .arg(".")
             .current_dir(workspace_path)
+        .stdin(Stdio::null())
             .output()
             .await
             .map_err(|e| format!("Error executing python compileall: {}", e))?;
@@ -183,6 +186,7 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
         let _ = Command::new(get_shell())
             .args([get_shell_args(), "git init"])
             .current_dir(workspace_path)
+        .stdin(Stdio::null())
             .output()
             .await;
         hide_file_windows(&path.join(".git")).await;
@@ -192,6 +196,7 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
     let _ = Command::new(get_shell())
         .args([get_shell_args(), "git add ."])
         .current_dir(workspace_path)
+        .stdin(Stdio::null())
         .output()
         .await;
         
@@ -199,6 +204,7 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
     let _ = Command::new(get_shell())
         .args([get_shell_args(), &format!("git commit -m \"{}\"", commit_message)])
         .current_dir(workspace_path)
+        .stdin(Stdio::null())
         .output()
         .await;
         
@@ -220,6 +226,7 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
     let output = Command::new(get_shell())
         .args([get_shell_args(), command])
         .current_dir(workspace_path)
+        .stdin(Stdio::null())
         .output()
         .await
         .map_err(|e| format!("Process Error: {}", e))?;
