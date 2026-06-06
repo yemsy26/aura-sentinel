@@ -1,23 +1,21 @@
-use super::call_ollama_text;
+import os
+
+translator_content = """use super::call_ollama_text;
 use tauri::AppHandle;
 use crate::llm::agent::emit_event;
 
 pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHandle) -> String {
-    let model = "llama3.1:8b";
+    let model = "qwen2.5:0.5b";
     let system_prompt = format!(
-        "Eres un traductor de lenguaje natural a intenciones técnicas. Tu única función es extraer la orden principal del usuario.\n\
-        REGLA ABSOLUTA: Tu respuesta debe ser UNA SOLA LÍNEA de texto con la orden técnica. NADA de introducciones, explicaciones, ni listas.\n\
-        Ejemplo 1:\n\
-        Usuario: Haz un mapa de la estructura o dime qué falta\n\
-        Traducción: Ejecutar TOOL_ARCHITECT para auditar la arquitectura.\n\
-        Ejemplo 2:\n\
-        Usuario: Crea un servidor en python\n\
-        Traducción: Crear servidor en python usando TOOL_PROGRAMMER y ejecutar con TOOL_BACKGROUND_START.\n\
-        Ejemplo 3:\n\
-        Usuario: ponle un hola mundo al main\n\
-        Traducción: Modificar main.js agregando 'Hola Mundo' usando TOOL_PROGRAMMER.\n\n\
-        Usuario: {}\n\
-        Traducción:",
+        "Traduce el TEXTO coloquial a una orden técnica estricta para el sistema DevSecOps.\\n\\n\\
+        TEXTO: Haz un mapa de la estructura o dime qué falta\\n\\
+        TRADUCCION: Ejecutar TOOL_ARCHITECT para auditar la arquitectura.\\n\\n\\
+        TEXTO: Crea un servidor en python\\n\\
+        TRADUCCION: Crear servidor en python usando TOOL_PROGRAMMER y ejecutar con TOOL_BACKGROUND_START.\\n\\n\\
+        TEXTO: ponle un hola mundo al main\\n\\
+        TRADUCCION: Modificar main.js agregando 'Hola Mundo' usando TOOL_PROGRAMMER.\\n\\n\\
+        TEXTO: {}\\n\\
+        TRADUCCION:",
         user_input
     );
     
@@ -40,3 +38,5 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
         }
     }
 }
+"""
+open("src-tauri/src/llm/translator.rs", "w", encoding="utf-8").write(translator_content)
