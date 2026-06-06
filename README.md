@@ -65,3 +65,10 @@ Si estás instalando Aura en un entorno nuevo, simplemente ejecuta los scripts d
 - **Mac/Linux:** Ejecuta `bash setup.sh` en tu terminal.
 
 ¡Bienvenido al futuro del desarrollo automatizado! 🚀
+
+---
+
+## ⚖️ Legal & Licensing
+
+Este proyecto está distribuido bajo la [Licencia MIT](LICENSE).
+Copyright (c) 2026 Ramon Antonio Burgos Jerez.

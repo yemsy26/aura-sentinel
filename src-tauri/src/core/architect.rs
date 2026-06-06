@@ -41,6 +41,10 @@ pub fn generate_dependency_map(workspace_path: &str) -> Result<String, String> {
                 let path = entry.path();
                 let file_name = path.file_name().unwrap_or_default().to_string_lossy();
                 
+                if !crate::core::security::is_path_allowed(root, &path) {
+                    continue;
+                }
+                
                 if path.is_dir() {
                     if !file_name.starts_with('.') && file_name != "node_modules" && file_name != "target" && file_name != "__pycache__" && file_name != "venv" {
                         to_visit.push(path);

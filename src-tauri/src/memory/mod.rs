@@ -87,6 +87,14 @@ pub async fn read_files_safely(workspace_path: &str, files: Vec<String>) -> Stri
             Path::new(workspace_path).join(path_obj)
         };
 
+        if !crate::core::security::is_path_allowed(Path::new(workspace_path), &full_path) {
+            combined_content.push_str(&format!(
+                "--- ARCHIVO IGNORADO: {} ([SECURITY_VIOLATION] Acceso no permitido fuera del entorno de trabajo) ---\n\n",
+                file_path
+            ));
+            continue;
+        }
+
         match fs::metadata(&full_path).await {
             Ok(meta) => {
                 if meta.len() > max_size {
@@ -134,6 +142,10 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
         } else {
             Path::new(workspace_path).join(path_obj)
         };
+
+        if !crate::core::security::is_path_allowed(Path::new(workspace_path), &full_path) {
+            return Err(format!("[SECURITY_VIOLATION] Acceso no permitido fuera del entorno de trabajo para el archivo: {}", cambio.archivo));
+        }
         
         let mut contenido_original = String::new();
         let file_exists = full_path.exists();
