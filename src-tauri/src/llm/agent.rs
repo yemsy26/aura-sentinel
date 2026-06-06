@@ -37,6 +37,7 @@ pub async fn run_agent_loop(
 ) -> Result<String, String> {
             
     let mut current_context = String::new();
+    let mut archivos_editados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut step_count = 1;
     let max_steps = 10;
     
@@ -207,6 +208,20 @@ pub async fn run_agent_loop(
                 emit_event(&app_handle, step_count, "Auditoría completada.", "SUCCESS");
             },
             "TOOL_PROGRAMMER" => {
+                let mut ya_editados = true;
+                if archivos_vec.is_empty() { ya_editados = false; }
+                for f in &archivos_vec {
+                    if !archivos_editados_historico.contains(f) {
+                        ya_editados = false;
+                        break;
+                    }
+                }
+                
+                if ya_editados {
+                    let interception = "[SISTEMA INTERCEPTO] Error Lógico: Ya editaste estos archivos en un turno anterior con éxito. ASUME QUE EL CÓDIGO FUE ESCRITO CORRECTAMENTE. No repitas esta acción. Actualiza tu checklist mental y avanza al siguiente paso o usa TOOL_FINISH.";
+                    current_context.push_str(&format!("{}\n\n", interception));
+                    emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
+                } else {
                 emit_event(&app_handle, step_count, "Delegando a Qwen para modificar código físico...", "ACTION");
                 let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
                 let context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
@@ -232,6 +247,9 @@ pub async fn run_agent_loop(
                                                     let _ = memory::update_last_memory_status(&workspace_path, "COMPILACIÓN_EXITOSA").await;
                                                     current_context.push_str("Programador: Código modificado y validado exitosamente.\n\n");
                                                     exito_bucle_programador = true;
+                                                    for f in &archivos_vec {
+                                                        archivos_editados_historico.insert(f.clone());
+                                                    }
                                                 },
                                                 Err(e) => {
                                                     emit_event(&app_handle, step_count, &format!("Error detectado: {}", e), "ERROR");
@@ -268,6 +286,7 @@ pub async fn run_agent_loop(
                 if !exito_bucle_programador && max_intentos == 0 {
                     emit_event(&app_handle, step_count, "Max intentos de auto-sanación alcanzado. Fallo físico.", "FATAL");
                     current_context.push_str("Programador: Fracasó tras múltiples intentos.\n\n");
+                }
                 }
             },
             "TOOL_FINISH" => {
