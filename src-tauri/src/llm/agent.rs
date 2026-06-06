@@ -38,6 +38,7 @@ pub async fn run_agent_loop(
             
     let mut current_context = String::new();
     let mut archivos_editados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut architect_used = false;
     let mut step_count = 1;
     let max_steps = 10;
     
@@ -56,7 +57,7 @@ pub async fn run_agent_loop(
             5. 'TOOL_PROGRAMMER': Para escribir o modificar código fuente físico en el disco. Rellena 'archivos_a_editar' con la lista de archivos.\n\
             6. 'TOOL_WEB_SCRAPER': Para extraer contenido de una URL. Rellena 'url_a_investigar'.\n\
             7. 'TOOL_AUDITOR': Para auditar código estático o leer archivos locales si no sabes cómo están hechos. Rellena 'archivos_a_editar'.\n\
-            8. 'TOOL_FINISH': Cuando el objetivo principal se haya completado con éxito, o si es imposible continuar. Rellena 'respuesta_conversacional' con la respuesta final para el usuario. ¡USALA SIEMPRE QUE HAYAS TERMINADO!\n            9. 'TOOL_ARCHITECT': Analiza la estructura y dependencias de sistemas grandes. Úsala para generar mapas de arquitectura, detectar riesgos de modularidad o realizar refactorizaciones de alto nivel. No rellena ningún argumento adicional.\n\n\
+            8. 'TOOL_FINISH': Cuando el objetivo principal se haya completado con éxito, o si es imposible continuar. Rellena 'respuesta_conversacional' con la respuesta final para el usuario. ¡USALA SIEMPRE QUE HAYAS TERMINADO!\n            9. 'TOOL_ARCHITECT': Analiza la estructura y dependencias. No rellena argumentos. REGLA: Después de usarla, DEBES usar TOOL_FINISH obligatoriamente para resumirle los hallazgos al usuario.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):\n\
@@ -293,15 +294,21 @@ pub async fn run_agent_loop(
             },
 
             "TOOL_ARCHITECT" => {
-                emit_event(&app_handle, step_count, "Generando mapa arquitectónico del sistema...", "ACTION");
-                match crate::core::architect::generate_dependency_map(&workspace_path) {
-                    Ok(report) => {
-                        current_context.push_str(&format!("Reporte Arquitectónico:\n{}\n\n", report));
-                        emit_event(&app_handle, step_count, "Mapa arquitectónico generado.", "SUCCESS");
-                    },
-                    Err(e) => {
-                        current_context.push_str(&format!("Error en Arquitecto: {}\n\n", e));
-                        emit_event(&app_handle, step_count, &e, "ERROR");
+                if architect_used {
+                    emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown (Architect)", "WARNING");
+                    current_context.push_str(&format!("PASO {}:\nAcción: TOOL_ARCHITECT\nResultado: [SISTEMA INTERCEPTO] Error: Ya ejecutaste TOOL_ARCHITECT en este bucle. Tu única opción válida ahora es usar TOOL_FINISH para detenerte y resumir los resultados al usuario.\n\n", step_count));
+                } else {
+                    architect_used = true;
+                    emit_event(&app_handle, step_count, "Generando mapa arquitectónico del sistema...", "ACTION");
+                    match crate::core::architect::generate_dependency_map(&workspace_path) {
+                        Ok(report) => {
+                            current_context.push_str(&format!("Reporte Arquitectónico:\n{}\n\n", report));
+                            emit_event(&app_handle, step_count, "Mapa arquitectónico generado.", "SUCCESS");
+                        },
+                        Err(e) => {
+                            current_context.push_str(&format!("Error en Arquitecto: {}\n\n", e));
+                            emit_event(&app_handle, step_count, &e, "ERROR");
+                        }
                     }
                 }
             },
