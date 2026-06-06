@@ -95,8 +95,12 @@ pub async fn run_agent_loop(
         agent_res = agent_res.trim().to_string();
         
         let raw_value: serde_json::Value = match serde_json::from_str(&agent_res) {
-            Ok(v) => v,
+            Ok(v) => {
+                println!("LLM RAW RESPONSE: {}", agent_res);
+                v
+            },
             Err(e) => {
+                println!("LLM RAW RESPONSE ERROR: {}", agent_res);
                 emit_event(&app_handle, step_count, &format!("Error parseando decisión ({}). Abortando bucle.", e), "ERROR");
                 let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Error interno en el planificador.".to_string() };
                 return Ok(serde_json::to_string(&final_res).unwrap());
@@ -104,7 +108,7 @@ pub async fn run_agent_loop(
         };
         
         let checklist = raw_value.get("checklist_mental").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let tool = raw_value.get("herramienta").and_then(|v| v.as_str()).unwrap_or("TOOL_FINISH").to_uppercase();
+        let tool = raw_value.get("herramienta").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_uppercase();
         let pensamiento = raw_value.get("pensamiento").and_then(|v| v.as_str()).unwrap_or("Sin pensamiento").to_string();
         let comando = raw_value.get("comando").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let task_id = raw_value.get("task_id").and_then(|v| v.as_str()).unwrap_or("default_task").to_string();
