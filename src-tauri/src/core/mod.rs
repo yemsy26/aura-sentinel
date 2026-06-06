@@ -1,3 +1,4 @@
+pub mod architect;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};

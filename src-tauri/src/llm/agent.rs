@@ -56,14 +56,14 @@ pub async fn run_agent_loop(
             5. 'TOOL_PROGRAMMER': Para escribir o modificar código fuente físico en el disco. Rellena 'archivos_a_editar' con la lista de archivos.\n\
             6. 'TOOL_WEB_SCRAPER': Para extraer contenido de una URL. Rellena 'url_a_investigar'.\n\
             7. 'TOOL_AUDITOR': Para auditar código estático o leer archivos locales si no sabes cómo están hechos. Rellena 'archivos_a_editar'.\n\
-            8. 'TOOL_FINISH': Cuando el objetivo principal se haya completado con éxito, o si es imposible continuar. Rellena 'respuesta_conversacional' con la respuesta final para el usuario. ¡USALA SIEMPRE QUE HAYAS TERMINADO!\n\n\
+            8. 'TOOL_FINISH': Cuando el objetivo principal se haya completado con éxito, o si es imposible continuar. Rellena 'respuesta_conversacional' con la respuesta final para el usuario. ¡USALA SIEMPRE QUE HAYAS TERMINADO!\n            9. 'TOOL_ARCHITECT': Analiza la estructura y dependencias de sistemas grandes. Úsala para generar mapas de arquitectura, detectar riesgos de modularidad o realizar refactorizaciones de alto nivel. No rellena ningún argumento adicional.\n\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):\n\
             - Scaffolding Frontend: Si el usuario pide crear una web desde cero, usa 'TOOL_TERMINAL' con 'npx -y create-vite@latest frontend --template vanilla' (o similar) en lugar de intentar escribir archivos manualmente.\n\
             - Backend Rápidos: Si piden un servidor, crea el código físico con 'TOOL_PROGRAMMER' y luego levántalo con 'TOOL_BACKGROUND_START'.\n\
             - Firebase Deploy: Si piden desplegar a producción/Firebase, asume que 'firebase-tools' está instalado y usa 'TOOL_TERMINAL' con 'firebase init hosting' o 'firebase deploy --only hosting'. Asegúrate de compilar antes si es necesario (ej. 'npm run build').\n\
-            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER], tu ÚNICA tarea es corregir la sintaxis o el ID que falló. No intentes ejecutar código nuevo hasta que la herramienta devuelva [SUCCESS].\n\n\
+            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER], tu ÚNICA tarea es corregir la sintaxis o el ID que falló. No intentes ejecutar código nuevo hasta que la herramienta devuelva [SUCCESS].\n            - Modo Arquitecto: Si al usar TOOL_ARCHITECT el campo de confianza es BAJA, no tomes decisiones de refactorización automáticas. Reporta los hallazgos al usuario y solicita confirmación manual.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
@@ -289,6 +289,20 @@ pub async fn run_agent_loop(
                     emit_event(&app_handle, step_count, "Max intentos de auto-sanación alcanzado. Fallo físico.", "FATAL");
                     current_context.push_str("Programador: Fracasó tras múltiples intentos.\n\n");
                 }
+                }
+            },
+
+            "TOOL_ARCHITECT" => {
+                emit_event(&app_handle, step_count, "Generando mapa arquitectónico del sistema...", "ACTION");
+                match crate::core::architect::generate_dependency_map(&workspace_path) {
+                    Ok(report) => {
+                        current_context.push_str(&format!("Reporte Arquitectónico:\n{}\n\n", report));
+                        emit_event(&app_handle, step_count, "Mapa arquitectónico generado.", "SUCCESS");
+                    },
+                    Err(e) => {
+                        current_context.push_str(&format!("Error en Arquitecto: {}\n\n", e));
+                        emit_event(&app_handle, step_count, &e, "ERROR");
+                    }
                 }
             },
             "TOOL_FINISH" => {
