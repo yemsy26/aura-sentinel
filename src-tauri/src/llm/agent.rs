@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use crate::memory;
-use crate::core::{execute_terminal_command, start_background_task, read_task_logs, kill_task, validate_workspace};
+use crate::core::{execute_terminal_command, start_background_task, read_task_logs, kill_task, validate_workspace, format_system_error};
 use super::{get_embedding, call_ollama, delegate_to_programmer, delegate_to_auditor, ProgrammerOutput};
 
 #[derive(Clone, Serialize)]
@@ -63,7 +63,7 @@ pub async fn run_agent_loop(
             - Scaffolding Frontend: Si el usuario pide crear una web desde cero, usa 'TOOL_TERMINAL' con 'npx -y create-vite@latest frontend --template vanilla' (o similar) en lugar de intentar escribir archivos manualmente.\n\
             - Backend Rápidos: Si piden un servidor, crea el código físico con 'TOOL_PROGRAMMER' y luego levántalo con 'TOOL_BACKGROUND_START'.\n\
             - Firebase Deploy: Si piden desplegar a producción/Firebase, asume que 'firebase-tools' está instalado y usa 'TOOL_TERMINAL' con 'firebase init hosting' o 'firebase deploy --only hosting'. Asegúrate de compilar antes si es necesario (ej. 'npm run build').\n\
-            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n\n\
+            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER], tu ÚNICA tarea es corregir la sintaxis o el ID que falló. No intentes ejecutar código nuevo hasta que la herramienta devuelva [SUCCESS].\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
@@ -168,8 +168,9 @@ pub async fn run_agent_loop(
                         emit_event(&app_handle, step_count, "Logs leídos correctamente.", "SUCCESS");
                     },
                     Err(err) => {
-                        current_context.push_str(&format!("Error al leer logs: {}\n\n", err));
-                        emit_event(&app_handle, step_count, &err, "ERROR");
+                        let fmt_err = format_system_error(&err).await;
+                        current_context.push_str(&format!("[AUTO-DEBUGGER] Error al leer logs: {}\n\n", fmt_err));
+                        emit_event(&app_handle, step_count, &fmt_err, "ERROR");
                     }
                 }
             },
@@ -181,8 +182,9 @@ pub async fn run_agent_loop(
                         emit_event(&app_handle, step_count, &msg, "SUCCESS");
                     },
                     Err(err) => {
-                        current_context.push_str(&format!("Error matando tarea: {}\n\n", err));
-                        emit_event(&app_handle, step_count, &err, "ERROR");
+                        let fmt_err = format_system_error(&err).await;
+                        current_context.push_str(&format!("[AUTO-DEBUGGER] Error matando tarea: {}\n\n", fmt_err));
+                        emit_event(&app_handle, step_count, &fmt_err, "ERROR");
                     }
                 }
             },

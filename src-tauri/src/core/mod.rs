@@ -256,3 +256,14 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         dot_product / (norm_a.sqrt() * norm_b.sqrt())
     }
 }
+
+pub async fn format_system_error(error_msg: &str) -> String {
+    if error_msg.to_lowercase().contains("not found") {
+        let tasks = get_bg_tasks();
+        let guard = tasks.lock().await;
+        let active_ids: Vec<String> = guard.keys().cloned().collect();
+        format!("{} Los IDs activos son {:?}. Corrige el nombre y reintenta.", error_msg, active_ids)
+    } else {
+        error_msg.to_string()
+    }
+}
