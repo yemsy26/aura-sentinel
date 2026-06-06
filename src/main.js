@@ -77,12 +77,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     logSystemThought("AURA-SENTINEL Inicializado. Ejecutando protocolo de auto-carga...");
 
     // AUTO CARGA DEL WORKSPACE AL INICIAR LA VENTANA
+    // Recupera el workspace que el usuario eligió antes (sobrevive reinicios de Tauri)
     try {
         logSystemThought("Obteniendo directorio de ejecución actual...");
-        const cwd = await invoke('get_current_directory');
+        const defaultCwd = await invoke('get_current_directory');
         
-        currentWorkspace = cwd;
-        logSystemThought(`Workspace fijado automáticamente en: ${currentWorkspace}`);
+        // Si el usuario había seleccionado un workspace antes, lo restauramos
+        const savedWorkspace = localStorage.getItem('aura_workspace');
+        currentWorkspace = savedWorkspace || defaultCwd;
+
+        if (savedWorkspace) {
+            logSystemThought(`[MEMORIA] Workspace restaurado: ${currentWorkspace}`, '#d29922');
+        } else {
+            logSystemThought(`Workspace fijado automáticamente en: ${currentWorkspace}`);
+        }
         
         const initResult = await invoke('init_memory_log', { workspacePath: currentWorkspace });
         logSystemThought(`Memoria: ${initResult}`);
@@ -120,9 +128,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (selectedPath) {
                 currentWorkspace = selectedPath;
                 
+                // Guardamos el workspace elegido en localStorage para que persista en reinicios
+                localStorage.setItem('aura_workspace', currentWorkspace);
+                
                 // Limpiar consola para independizar contextos
                 systemThoughts.innerHTML = '';
                 logSystemThought(`[SISTEMA] Workspace cambiado a: ${currentWorkspace}`);
+                logSystemThought(`[MEMORIA] Workspace guardado. Se restaurará automáticamente al reiniciar.`, '#3fb950');
                 
                 const initResult = await invoke('init_memory_log', { workspacePath: currentWorkspace });
                 logSystemThought(`Memoria: ${initResult}`);
@@ -257,6 +269,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             logSystemThought("Paso 1: Solicitando plan al Orquestador...");
 
             try {
+                logSystemThought(`[RAG] Vectorizando petición y filtrando mapa de contexto (Top 10 nodos relevantes)...`, '#58a6ff');
                 const responseString = await invoke('process_user_prompt', { 
                     userMessage: text, 
                     workspacePath: currentWorkspace 
@@ -270,15 +283,48 @@ document.addEventListener('DOMContentLoaded', async () => {
                         logSystemThought(`[ORQUESTADOR]: ${orch.pensamiento}`);
                         
                         if (orch.respuesta_conversacional) {
-                            loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> ${orch.respuesta_conversacional}`;
-                            await saveMessageToDisk('system', orch.respuesta_conversacional);
+                            const isAudit = orch.intencion && 
+                                (orch.intencion.toUpperCase().includes('AUDITORIA') || 
+                                 orch.intencion.toUpperCase().includes('ANALISIS'));
+
+                            if (isAudit) {
+                                // Reporte de auditoría: mostrar como texto preformateado con cabecera
+                                const icon = orch.intencion.toUpperCase().includes('AUDITORIA') ? '🛡️' : '📋';
+                                const label = orch.intencion.toUpperCase().includes('AUDITORIA') ? 'REPORTE DE AUDITORÍA' : 'ANÁLISIS DEL SISTEMA';
+                                loadingMsg.className = 'audit-block';
+                                loadingMsg.innerHTML = `
+                                    <span style="color:#a5d6ff">[SYSTEM]</span>
+                                    <div style="margin-top:8px; padding:10px; background:#161b22; border:1px solid #30363d; border-radius:6px; border-left:3px solid #bc8cff;">
+                                        <div style="color:#bc8cff; font-weight:bold; margin-bottom:8px; font-size:11px; letter-spacing:1px;">${icon} ${label}</div>
+                                        <pre style="white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:12px; color:#c9d1d9; margin:0; line-height:1.6; max-height:400px; overflow-y:auto;">${orch.respuesta_conversacional}</pre>
+                                    </div>`;
+                                await saveMessageToDisk('system', `[${label}]\n${orch.respuesta_conversacional}`);
+                                logSystemThought(`[MODO ${label}]: Reporte generado. Sin modificaciones en disco.`, '#bc8cff');
+                            } else {
+                                loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> ${orch.respuesta_conversacional}`;
+                                await saveMessageToDisk('system', orch.respuesta_conversacional);
+                            }
                         } else {
                             loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> Respuesta procesada.`;
                             await saveMessageToDisk('system', "Respuesta procesada.");
                         }
 
                         if (orch.intencion === "CHAT" || !data.programador || Object.keys(data.programador).length === 0) {
-                            logSystemThought(`[MODO CHAT]: Conversación completada sin operaciones en disco.`, '#a5d6ff');
+                            if (orch.intencion === "COMANDO") {
+                                logSystemThought(`[TERMINAL] Ejecutando: ${orch.comando_a_ejecutar}`, '#bc8cff');
+                                if (data.operacion_fisica) {
+                                    logSystemThought(`[SALIDA TERMINAL]\n${data.operacion_fisica}`, '#d2a8ff');
+                                }
+                            } else if (orch.intencion === "INVESTIGACION") {
+                                logSystemThought(`[EXTRACCIÓN WEB] Navegando y analizando URL: ${orch.url_a_investigar}...`, '#e3b341');
+                                if (data.operacion_fisica) {
+                                    logSystemThought(`[SALIDA WEB]\n${data.operacion_fisica}`, '#d2a8ff');
+                                }
+                            } else if (orch.intencion.toUpperCase().includes('AUDITORIA') || orch.intencion.toUpperCase().includes('ANALISIS')) {
+                                // El reporte de auditoría ya fue logueado arriba
+                            } else {
+                                logSystemThought(`[MODO CHAT]: Conversación completada sin operaciones en disco.`, '#a5d6ff');
+                            }
                         } else {
                             const prog = data.programador;
                             
@@ -288,7 +334,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             
                             logSystemThought(`Paso 2: Delegando tarea a ${orch.modelo_sugerido || "qwen2.5-coder:7b"}...`);
                             
-                            if (prog.explicacion_tecnica && !orch.respuesta_conversacional) {
+                            if (prog.explicacion_tecnica) {
                                 loadingMsg.innerHTML = `<span style="color: #a5d6ff">[SYSTEM]</span> ${prog.explicacion_tecnica}`;
                                 await saveMessageToDisk('system', prog.explicacion_tecnica);
                             }
@@ -318,6 +364,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     }
                                     logSystemThought(evento, color);
                                 });
+                            }
+                            
+                            // Refrescar el panel del explorador de archivos al instante
+                            try {
+                                const treeJson = await invoke('get_workspace_tree', { path: currentWorkspace });
+                                const treeData = JSON.parse(treeJson);
+                                renderTree(treeData, workspaceTree);
+                            } catch (e) {
+                                console.error("Error al refrescar el explorador de archivos:", e);
                             }
                         }
 

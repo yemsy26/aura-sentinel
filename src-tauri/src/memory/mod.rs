@@ -21,6 +21,28 @@ pub struct Cambio {
     pub reemplazar: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct VectorNode {
+    pub path: String,
+    pub embedding: Vec<f32>,
+}
+
+pub async fn read_vector_index(workspace_path: &str) -> Vec<VectorNode> {
+    let index_file = Path::new(workspace_path).join(".fenix_index.json");
+    if let Ok(content) = fs::read_to_string(&index_file).await {
+        if let Ok(index) = serde_json::from_str(&content) {
+            return index;
+        }
+    }
+    vec![]
+}
+
+pub async fn write_vector_index(workspace_path: &str, index: &Vec<VectorNode>) -> Result<(), String> {
+    let index_file = Path::new(workspace_path).join(".fenix_index.json");
+    let json = serde_json::to_string(index).map_err(|e| format!("Error serializando index: {}", e))?;
+    fs::write(index_file, json).await.map_err(|e| format!("Error guardando index: {}", e))
+}
+
 pub async fn get_workspace_tree_internal(path: String) -> Result<Vec<FileNode>, String> {
     tokio::task::spawn_blocking(move || {
         let mut nodes = Vec::new();
@@ -111,17 +133,49 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
             Path::new(workspace_path).join(path_obj)
         };
         
-        let contenido_original = match fs::read_to_string(&full_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Aura-Sentinel: Error leyendo {}: {}", cambio.archivo, e);
-                continue;
+        let mut contenido_original = String::new();
+        let file_exists = full_path.exists();
+        
+        if file_exists {
+            match fs::read_to_string(&full_path).await {
+                Ok(c) => contenido_original = c,
+                Err(e) => {
+                    eprintln!("Aura-Sentinel: Error leyendo {}: {}", cambio.archivo, e);
+                    continue;
+                }
             }
-        };
+        } else {
+            // Si el archivo no existe, lo creamos. Nos aseguramos de que el directorio padre exista.
+            if let Some(parent) = full_path.parent() {
+                if let Err(e) = fs::create_dir_all(parent).await {
+                    eprintln!("Aura-Sentinel: Error creando directorio {:?}: {}", parent, e);
+                    continue;
+                }
+            }
+        }
         
-        let mut nuevo_contenido = contenido_original.replace(&cambio.buscar, &cambio.reemplazar);
+        let mut nuevo_contenido = contenido_original.clone();
+        let mut match_encontrado_seguro = false;
         
-        if nuevo_contenido == contenido_original {
+        let buscar_str = cambio.buscar.as_str();
+        
+        if !file_exists || contenido_original.trim().is_empty() || buscar_str.trim().is_empty() {
+            // Archivo nuevo, original vacío, o búsqueda vacía: no usamos .replace ni Fuzzy Match
+            nuevo_contenido = cambio.reemplazar.clone();
+            match_encontrado_seguro = true;
+        } else {
+            // Búsqueda exacta estándar
+            let count = contenido_original.matches(buscar_str).count();
+            if count == 1 {
+                nuevo_contenido = contenido_original.replace(buscar_str, &cambio.reemplazar);
+                match_encontrado_seguro = true;
+            } else if count > 1 {
+                eprintln!("Aura-Sentinel Aviso: Hay {} coincidencias exactas para un bloque. Se delega a Fuzzy Match para mayor seguridad.", count);
+                // match_encontrado_seguro = false, así entra en Fuzzy Match
+            }
+        }
+        
+        if file_exists && !match_encontrado_seguro {
             let buscar_lines: Vec<&str> = cambio.buscar.lines()
                 .map(|l| l.trim())
                 .filter(|l| !l.is_empty())
@@ -137,6 +191,8 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
             
             if !buscar_lines.is_empty() {
                 let window_size = buscar_lines.len();
+                let mut match_indices = Vec::new();
+
                 if orig_lines.len() >= window_size {
                     for i in 0..=(orig_lines.len() - window_size) {
                         let mut is_match = true;
@@ -146,34 +202,43 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
                                 break;
                             }
                         }
-                        
                         if is_match {
-                            let start_idx = orig_lines[i].0;
-                            let end_idx = orig_lines[i + window_size - 1].0;
-                            
-                            let raw_orig_lines: Vec<&str> = contenido_original.lines().collect();
-                            
-                            let mut pre_block = raw_orig_lines[0..start_idx].join("\n");
-                            if !pre_block.is_empty() { pre_block.push('\n'); }
-                            
-                            let mut post_block = raw_orig_lines[end_idx + 1..].join("\n");
-                            if !post_block.is_empty() { post_block.insert(0, '\n'); }
-                            
-                            nuevo_contenido = format!("{}{}{}", pre_block, cambio.reemplazar, post_block);
-                            matched = true;
-                            
-                            let fuzzy_msg = format!("[FUZZY MATCH] Coincidencia exacta fallida en {}, pero parche aplicado mediante búsqueda semántica.", cambio.archivo);
-                            println!("{}", fuzzy_msg);
-                            fuzzy_logs.push(fuzzy_msg);
-                            
-                            break;
+                            match_indices.push(i);
                         }
+                    }
+                    
+                    // SAFETY: Solo aplicamos Fuzzy Match si hay exactamente 1 coincidencia
+                    // o si el tamaño de la ventana es suficientemente grande (>= 3 líneas)
+                    // para evitar destruir el archivo reemplazando la primera llave "}" que encuentre.
+                    if match_indices.len() == 1 || (match_indices.len() > 1 && window_size >= 3) {
+                        let best_match_idx = match_indices[0];
+                        let start_idx = orig_lines[best_match_idx].0;
+                        let end_idx = orig_lines[best_match_idx + window_size - 1].0;
+                        
+                        let raw_orig_lines: Vec<&str> = contenido_original.lines().collect();
+                        
+                        let mut pre_block = raw_orig_lines[0..start_idx].join("\n");
+                        if !pre_block.is_empty() { pre_block.push('\n'); }
+                        
+                        let mut post_block = raw_orig_lines[end_idx + 1..].join("\n");
+                        if !post_block.is_empty() { post_block.insert(0, '\n'); }
+                        
+                        nuevo_contenido = format!("{}{}{}", pre_block, cambio.reemplazar, post_block);
+                        matched = true;
+                        
+                        let fuzzy_msg = format!("[FUZZY MATCH] Parche semántico aplicado en {}. (Ventana: {}, Coincidencias: {})", cambio.archivo, window_size, match_indices.len());
+                        println!("{}", fuzzy_msg);
+                        fuzzy_logs.push(fuzzy_msg);
+                    } else if match_indices.len() > 1 {
+                        let err_msg = format!("[FUZZY MATCH RECHAZADO] Hay múltiples ({}) coincidencias ambiguas para un bloque muy pequeño ({} líneas) en {}. Reemplazo cancelado por seguridad.", match_indices.len(), window_size, cambio.archivo);
+                        eprintln!("{}", err_msg);
+                        fuzzy_logs.push(err_msg);
                     }
                 }
             }
             
             if !matched {
-                eprintln!("Aura-Sentinel Aviso: No se encontró el texto exacto a reemplazar en {}", cambio.archivo);
+                eprintln!("Aura-Sentinel Aviso: No se encontró el texto exacto ni difuso aplicable en {}", cambio.archivo);
                 continue;
             }
         }
@@ -236,9 +301,26 @@ pub async fn update_last_memory_status(workspace_path: &str, status: &str) -> Re
 
 #[tauri::command]
 pub fn get_current_directory() -> String {
-    std::env::current_dir()
+    // Apuntamos al directorio workspace/ FUERA de src-tauri para evitar que el
+    // file watcher de Tauri reinicie la app cuando el AI crea nuevos archivos.
+    let current = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "C:\\".to_string())
+        .unwrap_or_else(|_| "C:\\".to_string());
+
+    // Si estamos dentro de src-tauri (modo dev de Tauri), subimos un nivel al proyecto raíz
+    let project_root = if current.ends_with("src-tauri") || current.ends_with("src-tauri\\") {
+        std::path::Path::new(&current)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(current)
+    } else {
+        current
+    };
+
+    // El workspace del AI vive en <raiz_proyecto>/workspace/ — invisible para Tauri
+    let workspace_dir = std::path::Path::new(&project_root).join("workspace");
+    let _ = std::fs::create_dir_all(&workspace_dir);
+    workspace_dir.to_string_lossy().to_string()
 }
 
 #[tauri::command]

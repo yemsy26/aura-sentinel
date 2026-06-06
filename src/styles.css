@@ -75,12 +75,16 @@ body, html {
     overflow: hidden;
 }
 
-.panel-chat {
+/* panel-center usa column flex: chat arriba (flex:2), console abajo fija */
+.chat-panel {
     flex: 2;
+    min-height: 0;
 }
 
 .panel-console {
-    flex: 1;
+    flex: 0 0 220px;   /* altura fija para que SIEMPRE sea visible */
+    min-height: 0;
+    max-height: 220px;
 }
 
 .chat-input-container {
@@ -102,15 +106,34 @@ body, html {
 /* Estilos de la Consola Técnica (Terminal) */
 #system-thoughts {
     background-color: #000000;
-    color: #00ff00; /* Texto verde terminal */
+    color: #00ff00;
     font-family: 'Consolas', monospace;
     padding: 8px;
     height: 100%;
+    overflow-y: auto;
 }
 
 #system-thoughts p {
     margin-bottom: 4px;
-    word-break: break-all;
+    word-break: break-word;    /* rompe palabras largas sin partir mid-char */
+    overflow-wrap: break-word;
+    white-space: pre-wrap;     /* preserva saltos de línea del backend */
+}
+
+/* Mensajes del chat: limitar altura individual para que no colapsen el layout */
+#chat-messages > div {
+    word-break: break-word;
+    overflow-wrap: break-word;
+    max-height: 320px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+    line-height: 1.5;
+}
+
+/* Los bloques de auditoría tienen su propio scroll interno — no limitar aquí */
+#chat-messages > div.audit-block {
+    max-height: none;
+    overflow-y: visible;
 }
 
 .telemetry-stat {

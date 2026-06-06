@@ -2,9 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod core;
-mod llm;
 mod memory;
+mod llm;
 pub mod math_utils;
+mod net;
 
 fn main() {
     // Aislamiento de hardware: Desactivar GPU en WebView2 (Windows)

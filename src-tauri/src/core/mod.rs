@@ -50,7 +50,45 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    // 4. Genérico
+// 4. Genérico
     println!("[VALIDACIÓN] Entorno genérico detectado. Omitiendo validación estricta.");
     Ok(())
+}
+
+pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Result<String, String> {
+    let output = Command::new("cmd")
+        .args(["/C", command])
+        .current_dir(workspace_path)
+        .output()
+        .await
+        .map_err(|e| format!("Error al ejecutar comando en terminal: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(if !stderr.is_empty() { stderr } else { stdout })
+    }
+}
+
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let mut dot_product = 0.0;
+    let mut norm_a = 0.0;
+    let mut norm_b = 0.0;
+    
+    for i in 0..a.len() {
+        if i < b.len() {
+            dot_product += a[i] * b[i];
+            norm_a += a[i] * a[i];
+            norm_b += b[i] * b[i];
+        }
+    }
+    
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    
+    dot_product / (norm_a.sqrt() * norm_b.sqrt())
 }
