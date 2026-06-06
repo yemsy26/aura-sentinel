@@ -1,1 +1,0 @@
-Aquí debes escribir el código Python para conectarte a la red de Solana y ejecutar el comando necesario para inicializar el proyecto. Puedes usar bibliotecas como PySolana o similar para interactuar con la blockchain de Solana.

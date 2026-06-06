@@ -22,6 +22,11 @@ env/
 *.log
 .aura_test_write
 tmp/
-workspace/.fenix_index.json
-workspace/.fenix_memory.json
+workspace/
+.fenix_index.json
+.fenix_memory.json
+.fenix_chat.json
 data/memory/vectors.json
+patch_*.py
+fix_*.py
+refactor_*.py
