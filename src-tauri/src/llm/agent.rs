@@ -388,6 +388,7 @@ pub async fn run_agent_loop(
                         } else {
                             emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
                             let _ = crate::core::restore_git_backup(&workspace_path).await;
+                            archivos_editados_historico.clear(); // FIX: Permitir reescribir los archivos tras un rollback
                             task_complexity = crate::llm::router::Complexity::HighComplexityFix;
                             emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
                             current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
