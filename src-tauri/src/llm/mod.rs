@@ -4,6 +4,7 @@ use tauri::AppHandle;
 
 pub mod agent;
 pub mod translator;
+pub mod router;
 
 #[derive(Serialize)]
 struct OllamaRequest<'a> {

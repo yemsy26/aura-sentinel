@@ -38,15 +38,18 @@ pub async fn run_agent_loop(
     
     // PRE-FLIGHT CHECK
     emit_event(&app_handle, 0, "Ejecutando validación ambiental (Pre-Flight Check)...", "ACTION");
-    if let Err(env_errors) = crate::core::env_check::validate_environment(&workspace_path).await {
-        let error_msg = env_errors.join("\n");
-        emit_event(&app_handle, 0, &format!("[ENV_FAILURE] Fallo pre-vuelo:\n{}", error_msg), "FATAL");
-        let final_res = FinalResponse {
-            status: "FINISH".to_string(),
-            respuesta_conversacional: format!("[ENV_FAILURE] No puedo continuar porque el entorno no cumple con los requisitos mínimos:\n{}\n\nPor favor, soluciona esto e intenta de nuevo.", error_msg),
-        };
-        return Ok(serde_json::to_string(&final_res).unwrap());
-    }
+    let available_models = match crate::core::env_check::validate_environment(&workspace_path).await {
+        Ok(models) => models,
+        Err(env_errors) => {
+            let error_msg = env_errors.join("\n");
+            emit_event(&app_handle, 0, &format!("[ENV_FAILURE] Fallo pre-vuelo:\n{}", error_msg), "FATAL");
+            let final_res = FinalResponse {
+                status: "FINISH".to_string(),
+                respuesta_conversacional: format!("[ENV_FAILURE] No puedo continuar porque el entorno no cumple con los requisitos mínimos:\n{}\n\nPor favor, soluciona esto e intenta de nuevo.", error_msg),
+            };
+            return Ok(serde_json::to_string(&final_res).unwrap());
+        }
+    };
     emit_event(&app_handle, 0, "Pre-Flight Check superado.", "SUCCESS");
             
     let mut current_context = String::new();
@@ -62,6 +65,8 @@ pub async fn run_agent_loop(
     let mut tester_attempts = 0;
     let mut step_count = 1;
     let max_steps = 15; // Increased slightly to allow for testing loops
+    
+    let mut task_complexity = crate::llm::router::Complexity::GeneralCode;
     
     while step_count <= max_steps {
         let agent_prompt = format!(
@@ -108,7 +113,10 @@ pub async fn run_agent_loop(
         
         emit_event(&app_handle, step_count, "Analizando estado y planificando siguiente paso...", "PLANNING");
         
-        let mut agent_res = match call_ollama(ORCHESTRATOR_MODEL, &agent_prompt).await {
+        let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::Complexity::Orchestrator, &available_models)
+            .unwrap_or_else(|_| ORCHESTRATOR_MODEL.to_string());
+
+        let mut agent_res = match call_ollama(&orchestrator_model, &agent_prompt).await {
             Ok(res) => res,
             Err(e) => {
                 emit_event(&app_handle, step_count, &format!("Error de conexión: {}", e), "ERROR");
@@ -257,12 +265,21 @@ pub async fn run_agent_loop(
                 let context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
                 let mut qwen_prompt = format!("Instrucción principal: {}\nDebes crear/modificar los archivos solicitados usando el JSON estructurado.", user_message);
-                
+                let target_model = match crate::llm::router::get_best_model(&task_complexity, &available_models) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let msg = format!("[ENV_FAILURE] {}", e);
+                        emit_event(&app_handle, step_count, &msg, "FATAL");
+                        current_context.push_str(&format!("{}\n\n", msg));
+                        break;
+                    }
+                };
+
                 let mut exito_bucle_programador = false;
                 let mut max_intentos = 3;
                 
                 while max_intentos > 0 && !exito_bucle_programador {
-                    match delegate_to_programmer(&qwen_prompt, &context_for_qwen, PROGRAMMER_MODEL).await {
+                    match delegate_to_programmer(&qwen_prompt, &context_for_qwen, &target_model).await {
                         Ok(json_res) => {
                             if let Ok(prog_output) = serde_json::from_str::<ProgrammerOutput>(&json_res) {
                                 if !prog_output.cambios.is_empty() {
@@ -370,6 +387,8 @@ pub async fn run_agent_loop(
                         } else {
                             emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
                             let _ = crate::core::restore_git_backup(&workspace_path).await;
+                            task_complexity = crate::llm::router::Complexity::HighComplexityFix;
+                            emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
                             current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
                         }
                     }

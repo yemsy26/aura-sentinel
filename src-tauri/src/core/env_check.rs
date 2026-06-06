@@ -5,8 +5,8 @@ use tokio::process::Command;
 use sysinfo::Disks;
 
 /// Realiza una auditoría ambiental rápida antes de que el agente comience a trabajar.
-/// Retorna `Ok(())` si todo está correcto, o `Err` con una lista de problemas encontrados.
-pub async fn validate_environment(workspace_path: &str) -> Result<(), Vec<String>> {
+/// Retorna `Ok(modelos_disponibles)` si todo está correcto, o `Err` con una lista de problemas encontrados.
+pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, Vec<String>> {
     let mut errors = Vec::new();
 
     // 1. Verificación de comandos en el PATH
@@ -82,8 +82,30 @@ pub async fn validate_environment(workspace_path: &str) -> Result<(), Vec<String
         errors.push("No hay conectividad a Internet. Falló el ping TCP a 8.8.8.8:53.".to_string());
     }
 
+    // 5. Verificar modelos de Ollama disponibles
+    let mut available_models = Vec::new();
+    let ollama_cmd = Command::new("ollama").arg("list").output().await;
+    
+    match ollama_cmd {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines().skip(1) { // Skip header
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(model_name) = parts.first() {
+                    available_models.push(model_name.to_string());
+                }
+            }
+            if available_models.is_empty() {
+                errors.push("Ollama está instalado, pero no tienes ningún modelo descargado. Debes descargar los modelos requeridos.".to_string());
+            }
+        }
+        _ => {
+            errors.push("Fallo al ejecutar 'ollama list'. Asegúrate de que Ollama esté instalado y el servicio esté corriendo.".to_string());
+        }
+    }
+
     if errors.is_empty() {
-        Ok(())
+        Ok(available_models)
     } else {
         Err(errors)
     }
