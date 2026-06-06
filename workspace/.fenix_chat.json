@@ -1,0 +1,12 @@
+[
+  {
+    "sender": "user",
+    "text": "Aura, investiga la documentación en https://docs.solana.com/ (o cualquier API moderna que uses). Luego, crea un script en Rust o Python en este workspace que se conecte a esa red, y ejecuta en la terminal el comando necesario para inicializar el proyecto",
+    "timestamp": "2026-06-04T01:22:52.171Z"
+  },
+  {
+    "sender": "system",
+    "text": "¡Genial! Voy a investigar la documentación en Solana, crear un script para conectarme a su red y ejecutar el comando necesario para inicializar el proyecto.",
+    "timestamp": "2026-06-04T01:23:14.425Z"
+  }
+]
