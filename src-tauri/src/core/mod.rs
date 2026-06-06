@@ -1,4 +1,5 @@
 pub mod architect;
+pub mod tester;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};
@@ -209,6 +210,29 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
         .output()
         .await;
         
+    Ok(())
+}
+
+/// Restores the workspace to the last committed state using Git, reverting all uncommitted changes.
+pub async fn restore_git_backup(workspace_path: &str) -> Result<(), String> {
+    let path = Path::new(workspace_path);
+    if path.join(".git").exists() {
+        // Restore all tracked files
+        let _ = Command::new(get_shell())
+            .args([get_shell_args(), "git restore ."])
+            .current_dir(workspace_path)
+            .stdin(Stdio::null())
+            .output()
+            .await;
+            
+        // Clean untracked files
+        let _ = Command::new(get_shell())
+            .args([get_shell_args(), "git clean -fd"])
+            .current_dir(workspace_path)
+            .stdin(Stdio::null())
+            .output()
+            .await;
+    }
     Ok(())
 }
 

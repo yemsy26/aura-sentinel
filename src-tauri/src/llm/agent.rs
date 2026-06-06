@@ -39,8 +39,9 @@ pub async fn run_agent_loop(
     let mut current_context = String::new();
     let mut archivos_editados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut architect_used = false;
+    let mut tester_attempts = 0;
     let mut step_count = 1;
-    let max_steps = 10;
+    let max_steps = 15; // Increased slightly to allow for testing loops
     
     while step_count <= max_steps {
         let agent_prompt = format!(
@@ -57,14 +58,17 @@ pub async fn run_agent_loop(
             5. 'TOOL_PROGRAMMER': Para escribir o modificar código fuente físico en el disco. Rellena 'archivos_a_editar' con la lista de archivos.\n\
             6. 'TOOL_WEB_SCRAPER': Para extraer contenido de una URL. Rellena 'url_a_investigar'.\n\
             7. 'TOOL_AUDITOR': Para auditar código estático o leer archivos locales si no sabes cómo están hechos. Rellena 'archivos_a_editar'.\n\
-            8. 'TOOL_FINISH': Cuando el objetivo principal se haya completado con éxito, o si es imposible continuar. Rellena 'respuesta_conversacional' con la respuesta final para el usuario. ¡USALA SIEMPRE QUE HAYAS TERMINADO!\n            9. 'TOOL_ARCHITECT': Analiza la estructura y dependencias. No rellena argumentos. REGLA: Después de usarla, DEBES usar TOOL_FINISH obligatoriamente para resumirle los hallazgos al usuario.\n\
+            8. 'TOOL_FINISH': Cuando el objetivo principal se haya completado con éxito, o si es imposible continuar. Rellena 'respuesta_conversacional' con la respuesta final para el usuario. ¡USALA SIEMPRE QUE HAYAS TERMINADO!\n\
+            9. 'TOOL_ARCHITECT': Analiza la estructura y dependencias. No rellena argumentos. REGLA: Después de usarla, DEBES usar TOOL_FINISH obligatoriamente para resumirle los hallazgos al usuario.\n\
+            10. 'TOOL_TESTER': Ejecuta suites de pruebas automatizadas (PyTest, Jest, etc.). Úsala para validar el código. No rellena argumentos adicionales.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):\n\
             - Scaffolding Frontend: Si el usuario pide crear una web desde cero, usa 'TOOL_TERMINAL' con 'npx -y create-vite@latest frontend --template vanilla' (o similar) en lugar de intentar escribir archivos manualmente.\n\
             - Backend Rápidos: Si piden un servidor, crea el código físico con 'TOOL_PROGRAMMER' y luego levántalo con 'TOOL_BACKGROUND_START'.\n\
             - Firebase Deploy: Si piden desplegar a producción/Firebase, asume que 'firebase-tools' está instalado y usa 'TOOL_TERMINAL' con 'firebase init hosting' o 'firebase deploy --only hosting'. Asegúrate de compilar antes si es necesario (ej. 'npm run build').\n\
-            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER], tu ÚNICA tarea es corregir la sintaxis o el ID que falló. No intentes ejecutar código nuevo hasta que la herramienta devuelva [SUCCESS].\n            - Modo Arquitecto: Si al usar TOOL_ARCHITECT el campo de confianza es BAJA, no tomes decisiones de refactorización automáticas. Reporta los hallazgos al usuario y solicita confirmación manual.\n\n\
+            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER], tu ÚNICA tarea es corregir la sintaxis o el ID que falló. No intentes ejecutar código nuevo hasta que la herramienta devuelva [SUCCESS].\n            - Modo Arquitecto: Si al usar TOOL_ARCHITECT el campo de confianza es BAJA, no tomes decisiones de refactorización automáticas. Reporta los hallazgos al usuario y solicita confirmación manual.\n\
+            - Auto-Testing: Tu objetivo no es solo escribir código, sino entregar sistemas funcionales. Valida tu trabajo con TOOL_TESTER antes de cualquier entrega final. Un código no probado es un código incompleto.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
@@ -314,6 +318,32 @@ pub async fn run_agent_loop(
                         Err(e) => {
                             current_context.push_str(&format!("Error en Arquitecto: {}\n\n", e));
                             emit_event(&app_handle, step_count, &e, "ERROR");
+                        }
+                    }
+                }
+            },
+            "TOOL_TESTER" => {
+                emit_event(&app_handle, step_count, "Ejecutando suite de pruebas automatizadas...", "ACTION");
+                match crate::core::tester::run_tests(&workspace_path).await {
+                    Ok(success_msg) => {
+                        tester_attempts = 0;
+                        current_context.push_str(&format!("Resultado Tests:\n{}\n\n", success_msg));
+                        emit_event(&app_handle, step_count, "Todos los tests pasaron exitosamente.", "SUCCESS");
+                    },
+                    Err(fail_msg) => {
+                        tester_attempts += 1;
+                        if tester_attempts >= 3 {
+                            emit_event(&app_handle, step_count, "[CRITICAL_FAILURE] Fallos de test superan el límite (3). Revertiendo...", "FATAL");
+                            let _ = crate::core::restore_git_backup(&workspace_path).await;
+                            let final_res = FinalResponse {
+                                status: "FINISH".to_string(),
+                                respuesta_conversacional: "He alcanzado el límite máximo de fallos de pruebas. El código era inviable. He restaurado el proyecto a su último estado funcional (Rollback). Por favor, revisa mi código y ayuda a solucionar los tests.".to_string(),
+                            };
+                            return Ok(serde_json::to_string(&final_res).unwrap());
+                        } else {
+                            emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
+                            let _ = crate::core::restore_git_backup(&workspace_path).await;
+                            current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
                         }
                     }
                 }
