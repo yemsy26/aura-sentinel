@@ -75,16 +75,16 @@ pub fn hot_reload_path() {
     {
         // Obtener User PATH
         let user_path = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", "[Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PATH', 'User')) | Out-String -Width 4096"])
+            .args(&["-NoProfile", "-Command", "[Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PATH', 'User'))"])
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .map(|o| String::from_utf8_lossy(&o.stdout).replace("\r", "").replace("\n", "").trim().to_string())
             .unwrap_or_default();
             
         // Obtener Machine PATH
         let machine_path = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", "[Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PATH', 'Machine')) | Out-String -Width 4096"])
+            .args(&["-NoProfile", "-Command", "[Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PATH', 'Machine'))"])
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .map(|o| String::from_utf8_lossy(&o.stdout).replace("\r", "").replace("\n", "").trim().to_string())
             .unwrap_or_default();
             
         let mut new_path = String::new();
