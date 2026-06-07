@@ -676,7 +676,11 @@ pub async fn run_agent_loop(
                                 || fail_msg.contains("NotFound")
                                 || fail_msg.contains("No such file or directory")
                                 || fail_msg.contains("does not contain main module")
-                                || fail_msg.contains("[ENV_FAILURE]");
+                                || fail_msg.contains("[ENV_FAILURE]")
+                                || fail_msg.contains("HHE3")
+                                || fail_msg.contains("HHE22")
+                                || fail_msg.contains("Hardhat config file found")
+                                || fail_msg.contains("non-local installation of Hardhat");
 
                             if is_dep_error {
                                 // Don't revert — the code itself is fine, deps are just missing
@@ -726,25 +730,27 @@ pub async fn run_agent_loop(
                                         }
                                     } else {
                                         // Already attempted or no binary name found — fall back to guidance
-                                        emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
-                                        current_context.push_str(&format!(
-                                            "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante:\n{}\n\n\
-                                            Tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_TERMINAL' con 'npm install' o el instalador adecuado al lenguaje.\n\n",
-                                            fail_msg
-                                        ));
-                                    }
-                                } else {
-                                    // Dependency error but no specific binary — guide the LLM
                                     emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
                                     current_context.push_str(&format!(
-                                        "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante (no por errores de lógica):\n{}\n\n\
-                                        En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
-                                        Si el proyecto es Node.js: Rellena el campo 'comando' con 'npm install'. \
-                                        Si el proyecto es Go: Rellena el campo 'comando' con 'go mod init app && go mod tidy'. \
-                                        REGLA ESTRICTA: Después de ejecutar TOOL_TERMINAL con éxito, tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER.",
+                                        "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante:\n{}\n\n\
+                                        Tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_TERMINAL' con 'npm install' o el instalador adecuado al lenguaje.\n\n",
                                         fail_msg
                                     ));
+                                    forced_next_tool = Some("TOOL_TERMINAL");
                                 }
+                            } else {
+                                // Dependency error but no specific binary — guide the LLM
+                                emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
+                                current_context.push_str(&format!(
+                                    "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante (no por errores de lógica):\n{}\n\n\
+                                    En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
+                                    Si el proyecto es Node.js: Rellena el campo 'comando' con 'npm install'. \
+                                    Si el proyecto es Go: Rellena el campo 'comando' con 'go mod init app && go mod tidy'. \
+                                    REGLA ESTRICTA: Después de ejecutar TOOL_TERMINAL con éxito, tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER.",
+                                    fail_msg
+                                ));
+                                forced_next_tool = Some("TOOL_TERMINAL");
+                            }
                             } else {
                                 // Real test logic failure — revert and let Qwen fix the code
                                 emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
