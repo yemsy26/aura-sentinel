@@ -1,10 +1,13 @@
+pub enum IntentAction {
+    Finish(String),
+    Resume { objetivo: String, resume_msg: String },
+}
+
 /// Zero-latency intent router that intercepts meta-queries BEFORE the LLM pipeline.
-/// Returns `Some(response_string)` if the message is a meta-command,
-/// or `None` if it should be handled by the normal agent loop.
 pub fn try_handle_meta_command(
     user_message: &str,
     workspace_path: &str,
-) -> Option<String> {
+) -> Option<IntentAction> {
     let msg = user_message.trim().to_lowercase();
 
     // ── Status / pending task queries ───────────────────────────────────────
@@ -39,12 +42,7 @@ pub fn try_handle_meta_command(
     if is_status_query {
         let journal = crate::core::session_journal::load_journal(workspace_path);
         let report = crate::core::session_journal::build_status_report(&journal);
-        // Wrap it in the FinalResponse JSON format so the frontend can display it normally
-        let response = serde_json::json!({
-            "status": "FINISH",
-            "respuesta_conversacional": report
-        });
-        return Some(response.to_string());
+        return Some(IntentAction::Finish(report));
     }
 
     // ── Resume / continue task ───────────────────────────────────────────────
@@ -71,20 +69,14 @@ pub fn try_handle_meta_command(
                 journal.ultimo_paso + 1,
                 journal.objetivo
             );
-            // Signal the frontend that it should re-submit the original objective
-            let response = serde_json::json!({
-                "status": "RESUME",
-                "respuesta_conversacional": resume_msg,
-                "objetivo_guardado": journal.objetivo,
-                "workspace": journal.workspace_path
+            return Some(IntentAction::Resume {
+                objetivo: journal.objetivo,
+                resume_msg,
             });
-            return Some(response.to_string());
         } else if journal.objetivo.is_empty() {
-            let response = serde_json::json!({
-                "status": "FINISH",
-                "respuesta_conversacional": "📋 No hay ninguna tarea activa que retomar en este workspace. Dame un nuevo objetivo y empezamos."
-            });
-            return Some(response.to_string());
+            return Some(IntentAction::Finish(
+                "📋 No hay ninguna tarea activa que retomar en este workspace. Dame un nuevo objetivo y empezamos.".to_string()
+            ));
         }
     }
 
@@ -122,11 +114,7 @@ pub fn try_handle_meta_command(
 Python, Rust, Go, JavaScript/TypeScript, Solidity (Hardhat/Foundry),
 Kotlin/Android, Dart/Flutter, PHP, Swift, C, C++, Java
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"#;
-        let response = serde_json::json!({
-            "status": "FINISH",
-            "respuesta_conversacional": help_text
-        });
-        return Some(response.to_string());
+        return Some(IntentAction::Finish(help_text.to_string()));
     }
 
     // Not a meta-command — let the normal pipeline handle it

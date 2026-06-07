@@ -201,18 +201,33 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
 
 #[tauri::command]
 pub async fn process_user_prompt(user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+    let mut enriched_message = String::new();
+
     // ── Zero-latency meta-command intercept ──────────────────────────────────
-    // Catches "revisa mi tarea", "continúa", "ayuda", etc. without spinning up
-    // the LLM translator or agent loop. Responds in microseconds.
-    if let Some(fast_response) = crate::core::intent_router::try_handle_meta_command(&user_message, &workspace_path) {
-        agent::emit_event(&app_handle, 0, "[META-CMD] Consulta de estado detectada. Respondiendo desde la memoria local...", "PLANNING");
-        agent::emit_event(&app_handle, 1, "Respuesta generada sin IA.", "SUCCESS");
-        return Ok(fast_response);
+    if let Some(action) = crate::core::intent_router::try_handle_meta_command(&user_message, &workspace_path) {
+        match action {
+            crate::core::intent_router::IntentAction::Finish(msg) => {
+                agent::emit_event(&app_handle, 0, "[META-CMD] Consulta de estado detectada. Respondiendo desde la memoria local...", "PLANNING");
+                agent::emit_event(&app_handle, 1, "Respuesta generada sin IA.", "SUCCESS");
+                let response = serde_json::json!({
+                    "status": "FINISH",
+                    "respuesta_conversacional": msg
+                });
+                return Ok(response.to_string());
+            },
+            crate::core::intent_router::IntentAction::Resume { objetivo, resume_msg } => {
+                agent::emit_event(&app_handle, 0, &resume_msg, "INFO");
+                // Bypass translator: directly use the saved objective
+                enriched_message = objetivo;
+            }
+        }
     }
 
-    let technical_intent = translator::translate_to_technical_intent(&user_message, &app_handle).await;
-    println!("[TRADUCTOR] Input: '{}' -> Intención: '{}'", user_message, technical_intent);
-    let enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: {}", user_message, technical_intent);
+    if enriched_message.is_empty() {
+        let technical_intent = translator::translate_to_technical_intent(&user_message, &app_handle).await;
+        println!("[TRADUCTOR] Input: '{}' -> Intención: '{}'", user_message, technical_intent);
+        enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: {}", user_message, technical_intent);
+    }
 
     let workspace_tree_nodes = crate::memory::get_workspace_tree_internal(workspace_path.clone()).await?;
     // Filter out noise directories — node_modules alone can be 4000+ nodes and pollutes
