@@ -98,6 +98,9 @@ pub async fn run_agent_loop(
             - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER] tras un fallo de TOOL_TESTER, tu ÚNICA tarea es usar TOOL_PROGRAMMER para re-escribir y arreglar el código defectuoso. ¡PROHIBIDO volver a usar TOOL_TESTER sin antes haber modificado el código!\n            - Modo Arquitecto: Si al usar TOOL_ARCHITECT el campo de confianza es BAJA, no tomes decisiones de refactorización automáticas. Reporta los hallazgos al usuario y solicita confirmación manual.\n\
             - Auto-Testing: Tu objetivo no es solo escribir código, sino entregar sistemas funcionales. Valida tu trabajo con TOOL_TESTER antes de cualquier entrega final. Un código no probado es un código incompleto.\n\
             - Pre-Flight: Tu sistema tiene una capa de validación ambiental. Si el sistema reporta un fallo de entorno, no intentes programar nada; tu única tarea es usar TOOL_FINISH para informar al usuario sobre las dependencias faltantes.\n\n\
+            REGLAS DE ESTADO (STATE MACHINE):\n\
+            - DESPUÉS de usar TOOL_PROGRAMMER con éxito, es OBLIGATORIO usar TOOL_TESTER para validar tus cambios.\n\
+            - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
