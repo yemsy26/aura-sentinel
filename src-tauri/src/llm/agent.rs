@@ -529,12 +529,11 @@ pub async fn run_agent_loop(
                             // After 3 cycles, switch strategy: bypass detect_language and run
                             // npm test directly via TOOL_TERMINAL (in case package.json exists but
                             // detect_language missed it, or jest needs to be installed first)
-                            forced_next_tool = Some("TOOL_TERMINAL");
                             let force_msg = format!(
                                 "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin detectar tests. \
-                                El sistema cambia de estrategia: FUERZA TOOL_TERMINAL. \
+                                El sistema cambia de estrategia. En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
                                 Archivos actuales en el workspace:\n{}\n\n\
-                                EJECUTA: Si ya existe package.json, usa 'npm install --save-dev jest && npm test'. \
+                                EJECUTA: Si ya existe package.json, rellena el campo 'comando' con 'npm install --save-dev jest && npm test'. \
                                 Si no existe package.json, PRIMERO crea los archivos package.json y emailValidator.test.js con TOOL_PROGRAMMER, \
                                 luego instala con TOOL_TERMINAL.",
                                 no_tests_consecutive, workspace_listing
@@ -543,11 +542,9 @@ pub async fn run_agent_loop(
                             emit_event(&app_handle, step_count, &format!("[SISTEMA] Cambiando estrategia a TOOL_TERMINAL tras {} intentos.", no_tests_consecutive), "FATAL");
 
                         } else if no_tests_consecutive >= 2 {
-                            // Force TOOL_PROGRAMMER to create missing files
-                            forced_next_tool = Some("TOOL_PROGRAMMER");
                             let force_msg = format!(
                                 "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin archivos de test detectados. \
-                                El sistema FUERZA TOOL_PROGRAMMER. \
+                                En tu próximo turno DEBES ELEGIR 'TOOL_PROGRAMMER'. \
                                 Archivos actuales en el workspace:\n{}\n\n\
                                 DEBES crear TODOS los archivos que falten. Para un proyecto Jest en Node.js necesitas:\n\
                                 1) package.json con: {{\"scripts\": {{\"test\": \"jest\"}}, \"devDependencies\": {{\"jest\": \"^29.0.0\"}}}}\n\
@@ -557,7 +554,7 @@ pub async fn run_agent_loop(
                                 no_tests_consecutive, workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", force_msg));
-                            emit_event(&app_handle, step_count, &format!("[SISTEMA] TOOL_TESTER bloqueado. Forzando TOOL_PROGRAMMER con listado de archivos.", ), "FATAL");
+                            emit_event(&app_handle, step_count, &format!("[SISTEMA] TOOL_TESTER bloqueado. Solicitando TOOL_PROGRAMMER con listado de archivos.", ), "WARNING");
 
                         } else {
                             // First hit — tell the LLM clearly
@@ -628,15 +625,14 @@ pub async fn run_agent_loop(
 
                             if is_dep_error {
                                 // Don't revert — the code itself is fine, deps are just missing
-                                emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Forzando TOOL_TERMINAL...", "ERROR");
-                                forced_next_tool = Some("TOOL_TERMINAL");
+                                emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
                                 tester_attempts -= 1; // Don’t count this as a real test failure
                                 current_context.push_str(&format!(
                                     "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante (no por errores de lógica):\n{}\n\n\
-                                    El sistema FUERZA TOOL_TERMINAL. \
-                                    Si es Node.js: Ejecuta 'npm install' o instala el framework de tests. \
-                                    Si es Go: Ejecuta 'go mod init app' y luego 'go mod tidy'. \
-                                    Si falta algún archivo de configuración (ej. package.json), usa TOOL_PROGRAMMER en tu siguiente turno para crearlo.",
+                                    En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
+                                    Si el proyecto es Node.js: Rellena el campo 'comando' con 'npm install'. \
+                                    Si el proyecto es Go: Rellena el campo 'comando' con 'go mod init app && go mod tidy'. \
+                                    REGLA ESTRICTA: Después de ejecutar TOOL_TERMINAL con éxito, tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER. ¡Bajo ninguna circunstancia uses TOOL_FINISH o TOOL_ENV_MANAGER hasta que los tests pasen!",
                                     fail_msg
                                 ));
                             } else {
