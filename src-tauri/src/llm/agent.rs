@@ -444,6 +444,7 @@ pub async fn run_agent_loop(
                         let interception = "[SISTEMA INTERCEPTO] Error Lógico: Ya editaste estos archivos en un turno anterior con éxito. ASUME QUE EL CÓDIGO FUE ESCRITO CORRECTAMENTE. No repitas esta acción. Actualiza tu checklist mental y avanza al siguiente paso (usa TOOL_TESTER) o usa TOOL_FINISH.";
                         current_context.push_str(&format!("{}\n\n", interception));
                         emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
+                        forced_next_tool = Some("TOOL_TESTER");
                     }
                 } else {
                 emit_event(&app_handle, step_count, "Delegando a Qwen para modificar código físico...", "ACTION");
