@@ -158,7 +158,7 @@ async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) ->
         Instrucción: {}\n\n\
         Contexto proporcionado:\n{}\n\n\
         REGLA DE ORO 1: NO uses placeholders (ej. 'Aquí va el código', 'Tu código aquí'). Escribe el código real y funcional COMPLETO.\n\
-        REGLA DE RUTAS: Si el usuario te pide crear un archivo nuevo en una carpeta específica (ej. 'mi_carpeta/api.js'), DEBES poner exactamente esa ruta en el campo 'archivo'. NO sobrescribas los archivos que te paso como contexto a menos que el usuario te pida explícitamente modificarlos. Si la ruta no existe, el sistema la creará automáticamente.\n\
+        REGLA DE RUTAS: USA SOLO RUTAS RELATIVAS (ej. 'src/main.rs', 'test/Test.js'). NUNCA uses rutas absolutas (como C:/Users/...). Si el usuario te pide crear un archivo nuevo en una carpeta específica, usa la ruta relativa. Si la ruta no existe, el sistema la creará automáticamente.\n\
         REGLA DE CREACIÓN: Si estás creando un archivo completamente nuevo, el campo 'buscar' DEBE estar vacío (\" \") y el campo 'reemplazar' debe contener todo el código fuente desde cero.\n\
         REGLA DE ORO 3: Escribe el código COMPLETO sin truncar. No cortes el código a la mitad. Asegúrate de cerrar todas las llaves, paréntesis y funciones.\n\
         REGLA DE ORO 4: Para scripts de Solana en Python, usa SOLO la librería estándar `requests` con `requests.post` (JSON-RPC siempre usa POST), haciendo peticiones HTTP directamente al RPC de Solana en https://api.mainnet-beta.solana.com\n\
@@ -201,6 +201,15 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
 
 #[tauri::command]
 pub async fn process_user_prompt(user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+    // ── Zero-latency meta-command intercept ──────────────────────────────────
+    // Catches "revisa mi tarea", "continúa", "ayuda", etc. without spinning up
+    // the LLM translator or agent loop. Responds in microseconds.
+    if let Some(fast_response) = crate::core::intent_router::try_handle_meta_command(&user_message, &workspace_path) {
+        agent::emit_event(&app_handle, 0, "[META-CMD] Consulta de estado detectada. Respondiendo desde la memoria local...", "PLANNING");
+        agent::emit_event(&app_handle, 1, "Respuesta generada sin IA.", "SUCCESS");
+        return Ok(fast_response);
+    }
+
     let technical_intent = translator::translate_to_technical_intent(&user_message, &app_handle).await;
     println!("[TRADUCTOR] Input: '{}' -> Intención: '{}'", user_message, technical_intent);
     let enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: {}", user_message, technical_intent);

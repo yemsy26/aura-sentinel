@@ -103,10 +103,21 @@ pub async fn run_agent_loop(
     let mut tester_attempts = 0;
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
-    let mut no_tests_consecutive = 0u32; // How many times NoTests fired in a row without TOOL_PROGRAMMER between them
-    let mut forced_next_tool: Option<&str> = None;  // When set, overrides the LLM's tool choice
+    let mut no_tests_consecutive = 0u32;
+    let mut forced_next_tool: Option<&str> = None;
     let mut step_count = 1;
-    let max_steps = 20; // BUG-7 FIX: Increased to 20 to handle complex multi-step tasks
+    let max_steps = 20;
+
+    // ── Session Journal ────────────────────────────────────────
+    // Persist mission state to disk so sleep/restart doesn’t lose context.
+    let mut journal = crate::core::session_journal::load_journal(&workspace_path);
+    journal.objetivo = user_message.clone();
+    journal.workspace_path = workspace_path.clone();
+    journal.status = "EN_PROGRESO".to_string();
+    journal.herramientas_usadas.clear();
+    journal.archivos_tocados.clear();
+    crate::core::session_journal::save_journal(&workspace_path, &journal);
+    emit_event(&app_handle, 0, "[DIARIO] Misión registrada en diario de sesión.", "INFO");
     
     let mut task_complexity = crate::llm::router::Complexity::GeneralCode;
     
@@ -239,6 +250,17 @@ pub async fn run_agent_loop(
 
         emit_event(&app_handle, step_count, &format!("Decisión: {} - {}", tool, pensamiento), "DECISION");
         current_context.push_str(&format!("--- PASO {} ---\nChecklist Mental: {}\nDecidiste: {}\nPensamiento: {}\n", step_count, checklist, tool, pensamiento));
+
+        // ── Journal: update per-step ─────────────────────────────────────
+        crate::core::session_journal::update_journal(
+            &mut journal,
+            step_count,
+            &format!("[PASO {}] {} - {}", step_count, tool, pensamiento),
+            &tool,
+            &archivos_vec,
+            &workspace_path,
+        );
+        crate::core::session_journal::save_journal(&workspace_path, &journal);
         match tool.as_str() {
             "TOOL_TERMINAL" => {
                 if comando.trim().is_empty() {
@@ -764,6 +786,8 @@ pub async fn run_agent_loop(
             },
             "TOOL_FINISH" => {
                 emit_event(&app_handle, step_count, "Bucle completado exitosamente.", "FINISH");
+                // ── Journal: mark completed ──
+                crate::core::session_journal::close_journal(&mut journal, "COMPLETADO", &workspace_path);
                 let final_res = FinalResponse {
                     status: "FINISH".to_string(),
                     respuesta_conversacional: respuesta_conv,
@@ -780,6 +804,9 @@ pub async fn run_agent_loop(
     }
     
     emit_event(&app_handle, step_count, "Límite máximo de pasos alcanzado. Bucle abortado.", "FATAL");
+    // ── Journal: mark as waiting for user ──
+    journal.status = "ESPERANDO".to_string();
+    crate::core::session_journal::save_journal(&workspace_path, &journal);
     let final_res = FinalResponse {
         status: "FINISH".to_string(),
         respuesta_conversacional: format!(
