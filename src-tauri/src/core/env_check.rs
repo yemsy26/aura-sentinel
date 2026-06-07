@@ -4,104 +4,177 @@ use std::time::Duration;
 use tokio::process::Command;
 use sysinfo::Disks;
 
+/// Checks if a single command is available in the PATH.
+async fn is_cmd_available(cmd: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    let (shell, flag, check) = ("cmd", "/C", format!("where {}", cmd));
+    #[cfg(not(target_os = "windows"))]
+    let (shell, flag, check) = ("sh", "-c", format!("which {}", cmd));
+
+    Command::new(shell)
+        .args([flag, &check])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Injects Scoop shims into the current process PATH so commands installed
+/// via Scoop are visible to subsequent `is_cmd_available` checks.
+fn inject_scoop_path() {
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        let shims = format!("{}\\scoop\\shims", profile);
+        let scripts = format!("{}\\scoop\\apps\\python\\current\\Scripts", profile);
+        let python_dir = format!("{}\\scoop\\apps\\python\\current", profile);
+        let node_dir = format!("{}\\scoop\\apps\\nodejs\\current", profile);
+
+        let current = std::env::var("PATH").unwrap_or_default();
+        let extras = [shims.as_str(), scripts.as_str(), python_dir.as_str(), node_dir.as_str()];
+        let mut new_path = current.clone();
+        for extra in &extras {
+            if !current.contains(extra) {
+                new_path = format!("{};{}", extra, new_path);
+            }
+        }
+        std::env::set_var("PATH", new_path);
+    }
+}
+
+/// Detects which language runtime is needed based on workspace contents.
+/// Returns a list of required commands for THIS specific project type.
+fn detect_required_commands(workspace_path: &str) -> Vec<&'static str> {
+    let path = Path::new(workspace_path);
+    let mut required = vec!["git"]; // git is always useful but not blocking
+
+    if path.join("Cargo.toml").exists() {
+        required.push("cargo");
+    }
+    if path.join("package.json").exists() {
+        required.push("npm");
+    }
+    if path.join("requirements.txt").exists()
+        || path.join("main.py").exists()
+        || path.join("pyproject.toml").exists()
+    {
+        required.push("python");
+    }
+    if path.join("go.mod").exists() {
+        required.push("go");
+    }
+    if path.join("pom.xml").exists() {
+        required.push("mvn");
+    }
+    if path.join("build.gradle").exists() || path.join("build.gradle.kts").exists() {
+        required.push("gradle");
+    }
+
+    required
+}
+
 /// Realiza una auditoría ambiental rápida antes de que el agente comience a trabajar.
 /// Retorna `Ok(modelos_disponibles)` si todo está correcto, o `Err` con una lista de problemas encontrados.
 pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, Vec<String>> {
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
 
-    // 1. Verificación de comandos en el PATH
-    let commands_to_check = vec!["git", "python", "npm", "cargo"];
-    for cmd in commands_to_check {
-        #[cfg(target_os = "windows")]
-        let check_cmd = format!("where {}", cmd);
-        #[cfg(not(target_os = "windows"))]
-        let check_cmd = format!("which {}", cmd);
+    // 0. Inject Scoop shims into PATH so installed tools are visible
+    inject_scoop_path();
 
-        #[cfg(target_os = "windows")]
-        let shell = "cmd";
-        #[cfg(target_os = "windows")]
-        let shell_arg = "/C";
+    // 1. Check only the commands relevant to this workspace type.
+    //    Other languages are WARNINGS, not hard errors.
+    let workspace_specific = detect_required_commands(workspace_path);
 
-        #[cfg(not(target_os = "windows"))]
-        let shell = "sh";
-        #[cfg(not(target_os = "windows"))]
-        let shell_arg = "-c";
+    // Always check Ollama (core requirement)
+    // Always check git (useful for Git-Shield)
+    // Only check language tools if the workspace actually uses that language
 
-        let result = Command::new(shell)
-            .args([shell_arg, &check_cmd])
-            .output()
-            .await;
+    // Separate into "blocking" (language runtime for this project) vs "soft" (git, others)
+    let blocking_cmds: Vec<&str> = workspace_specific
+        .iter()
+        .filter(|&&c| c != "git") // git is soft — missing git won't stop agent
+        .copied()
+        .collect();
 
-        if let Ok(output) = result {
-            if !output.status.success() {
-                errors.push(format!("No encuentro '{}' en el PATH del sistema.", cmd));
-            }
-        } else {
-            errors.push(format!("Fallo al intentar verificar '{}' en el PATH.", cmd));
+    for cmd in &blocking_cmds {
+        if !is_cmd_available(cmd).await {
+            errors.push(format!(
+                "No encuentro '{}' en el PATH. Este proyecto lo requiere. Usa TOOL_ENV_MANAGER para instalarlo.",
+                cmd
+            ));
         }
     }
 
-    // 2. Permisos de escritura en el workspace
+    if !is_cmd_available("git").await {
+        warnings.push("'git' no está en el PATH. Git-Shield (rollback) no estará disponible, pero la ejecución puede continuar.".to_string());
+    }
+
+    // 2. Write permissions in workspace
     let test_file = Path::new(workspace_path).join(".aura_test_write");
-    if let Err(_) = std::fs::write(&test_file, "test") {
+    if std::fs::write(&test_file, "test").is_err() {
         errors.push(format!("No tengo permisos de escritura en el directorio: {}", workspace_path));
     } else {
         let _ = std::fs::remove_file(&test_file);
     }
 
-    // 3. Espacio libre en disco (> 500MB)
+    // 3. Disk space (>500MB) — hard check
     let disks = Disks::new_with_refreshed_list();
     let workspace_path_obj = Path::new(workspace_path);
     let mut found_disk = false;
-
-    // Buscar el disco que contiene el workspace
     for disk in disks.list() {
         if workspace_path_obj.starts_with(disk.mount_point()) {
             found_disk = true;
             let free_mb = disk.available_space() / (1024 * 1024);
             if free_mb < 500 {
-                errors.push(format!("Espacio en disco insuficiente en {}. Libre: {} MB. Mínimo requerido: 500 MB.", disk.mount_point().display(), free_mb));
+                errors.push(format!(
+                    "Espacio en disco insuficiente en {}. Libre: {} MB. Mínimo requerido: 500 MB.",
+                    disk.mount_point().display(), free_mb
+                ));
             }
             break;
         }
     }
-
-    // Si no encontramos el disco exacto (por rutas relativas raras), comprobamos el primero (normalmente C:/)
     if !found_disk {
         if let Some(disk) = disks.list().first() {
             let free_mb = disk.available_space() / (1024 * 1024);
             if free_mb < 500 {
-                errors.push(format!("Espacio en disco insuficiente en el disco principal. Libre: {} MB. Mínimo requerido: 500 MB.", free_mb));
+                errors.push(format!(
+                    "Espacio en disco insuficiente en el disco principal. Libre: {} MB. Mínimo requerido: 500 MB.",
+                    free_mb
+                ));
             }
         }
     }
 
-    // 4. Conectividad Básica de Red (Ping TCP a 8.8.8.8 puerto 53 con timeout de 1 segundo)
+    // 4. Network connectivity (soft warning, not blocking)
     let addr: SocketAddr = "8.8.8.8:53".parse().unwrap();
-    if let Err(_) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
-        errors.push("No hay conectividad a Internet. Falló el ping TCP a 8.8.8.8:53.".to_string());
+    if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_err() {
+        warnings.push("No hay conectividad a Internet. TOOL_WEB_SCRAPER no funcionará, pero el resto sí.".to_string());
     }
 
-    // 5. Verificar modelos de Ollama disponibles
+    // 5. Ollama — REQUIRED (the agent itself depends on this)
     let mut available_models = Vec::new();
-    let ollama_cmd = Command::new("ollama").arg("list").output().await;
-    
-    match ollama_cmd {
+    match Command::new("ollama").arg("list").output().await {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines().skip(1) { // Skip header
+            for line in stdout.lines().skip(1) {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if let Some(model_name) = parts.first() {
                     available_models.push(model_name.to_string());
                 }
             }
             if available_models.is_empty() {
-                errors.push("Ollama está instalado, pero no tienes ningún modelo descargado. Debes descargar los modelos requeridos.".to_string());
+                errors.push("Ollama está instalado, pero no tienes ningún modelo descargado. Descarga al menos llama3.1:8b.".to_string());
             }
         }
         _ => {
             errors.push("Fallo al ejecutar 'ollama list'. Asegúrate de que Ollama esté instalado y el servicio esté corriendo.".to_string());
         }
+    }
+
+    // Append warnings as context (non-blocking)
+    if !warnings.is_empty() {
+        // Prepend to available_models metadata so agent gets them in context
+        available_models.insert(0, format!("[WARN] {}", warnings.join(" | ")));
     }
 
     if errors.is_empty() {
