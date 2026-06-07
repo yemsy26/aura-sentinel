@@ -373,6 +373,8 @@ pub async fn run_agent_loop(
                                                     let explicit_msg = format!("Programador: Los archivos {:?} fueron modificados y compilados con éxito. ¡LA TAREA DE ESCRITURA ESTÁ COMPLETA! Ahora DEBES usar TOOL_TESTER o avanzar a la siguiente tarea diferente.\n\n", archivos_vec);
                                                     current_context.push_str(&explicit_msg);
                                                     exito_bucle_programador = true;
+                                                    // FIX: Limpiar el historial de comandos fallidos porque el entorno ha cambiado y comandos previos ahora pueden funcionar
+                                                    comandos_ejecutados_historico.clear();
                                                     for f in &archivos_vec {
                                                         archivos_editados_historico.insert(f.clone());
                                                     }
