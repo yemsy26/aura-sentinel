@@ -15,7 +15,13 @@ pub async fn run_tests(workspace_path: &str) -> Result<String, String> {
             .stdin(Stdio::null())
             .output()
             .await
-            .map_err(|e| format!("Error executing {} test: {}", lang_config.name, e))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    format!("[ENV_FAILURE] No se encontró el comando '{}'. Asegúrate de que el lenguaje está instalado y en el PATH.", cmd)
+                } else {
+                    format!("Error ejecutando test de {}: {}", lang_config.name, e)
+                }
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

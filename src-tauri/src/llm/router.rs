@@ -29,7 +29,10 @@ pub fn get_best_model(task_complexity: &Complexity, available_models: &[String])
             if let Some(m) = has_model("llama3.1:8b") { return Ok(m); }
         }
         Complexity::HighComplexityFix => {
-            // Preferencia: qwen2.5-coder:14b -> deepseek-coder:6.7b -> qwen2.5-coder:7b
+            // Preferencia: qwen3.5:cloud -> nemotron-3-super:cloud -> gemma4:31b-cloud -> qwen2.5-coder:14b -> deepseek-coder:6.7b -> qwen2.5-coder:7b
+            if let Some(m) = has_model("qwen3.5:cloud") { return Ok(m); }
+            if let Some(m) = has_model("nemotron-3-super:cloud") { return Ok(m); }
+            if let Some(m) = has_model("gemma4:31b-cloud") { return Ok(m); }
             if let Some(m) = has_model("qwen2.5-coder:14b") { return Ok(m); }
             if let Some(m) = has_model("deepseek-coder:6.7b") { return Ok(m); }
             if let Some(m) = has_model("qwen2.5-coder:7b") { return Ok(m); }
