@@ -108,7 +108,9 @@ pub async fn run_agent_loop(
             - DESPUÉS de usar TOOL_PROGRAMMER con éxito, es OBLIGATORIO usar TOOL_TESTER para validar tus cambios.\n\
             - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
             - SI TOOL_TESTER TIENE ÉXITO, estás OBLIGADO a usar TOOL_FINISH en el siguiente paso. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests pasaron.\n\
-            - SI TOOL_TERMINAL o TOOL_ENV_MANAGER FALLAN, es OBLIGATORIO usar TOOL_FINISH para evitar bucles de comandos infinitos.\n\n\
+            - SI TOOL_TERMINAL falla constantemente, es OBLIGATORIO usar TOOL_FINISH para evitar bucles de comandos infinitos.\n\
+            - SI TOOL_ENV_MANAGER TIENE ÉXITO, NO PUEDES volver a usar TOOL_ENV_MANAGER. Debes continuar tu tarea con TOOL_TERMINAL, TOOL_PROGRAMMER o TOOL_TESTER.\n\
+            - SI TOOL_ENV_MANAGER FALLA, es OBLIGATORIO usar TOOL_FINISH en el siguiente paso para pedir intervención manual.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
@@ -216,11 +218,11 @@ pub async fn run_agent_loop(
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(&app_handle, step_count, "Paquete vacío", "ERROR");
                 } else if paquetes_instalados_historico.contains(&comando) {
-                    let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito intentando instalar el mismo paquete fallido repetidamente. Abortando misión.";
+                    let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito intentando instalar el mismo paquete repetidamente. Abortando misión.";
                     emit_event(&app_handle, step_count, res_msg, "FATAL");
                     let final_res = FinalResponse {
                         status: "FINISH".to_string(), // Frontend safe format
-                        respuesta_conversacional: format!("Se detectó un bucle intentando instalar múltiples veces el paquete '{}'. Es probable que no exista o el nombre esté mal escrito. Por favor instálalo manualmente.", comando),
+                        respuesta_conversacional: format!("Se detectó un bucle intentando instalar múltiples veces el paquete '{}'. La instalación ya se ejecutó en este turno. Misión abortada.", comando),
                     };
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 } else {
