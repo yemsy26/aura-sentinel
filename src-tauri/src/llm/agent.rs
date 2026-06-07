@@ -204,7 +204,7 @@ pub async fn run_agent_loop(
                     match execute_terminal_command(&workspace_path, &comando).await {
                         Ok(out) => {
                             let res_msg = format!("Éxito: {}", out);
-                            current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
+                            current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando tuvo éxito. Si esto cumple el requerimiento del usuario, DEBES USAR TOOL_FINISH obligatoriamente.]\n\n", res_msg));
                         emit_event(&app_handle, step_count, &res_msg, "SUCCESS");
                     },
                     Err(err) => {
