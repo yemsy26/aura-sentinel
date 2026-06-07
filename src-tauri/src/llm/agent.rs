@@ -64,6 +64,7 @@ pub async fn run_agent_loop(
     let mut comandos_ejecutados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut architect_used = false;
     let mut tester_attempts = 0;
+    let mut programmer_cooldown_hits = 0;
     let mut step_count = 1;
     let max_steps = 15; // Increased slightly to allow for testing loops
     
@@ -277,9 +278,20 @@ pub async fn run_agent_loop(
                 }
                 
                 if ya_editados {
-                    let interception = "[SISTEMA INTERCEPTO] Error Lógico: Ya editaste estos archivos en un turno anterior con éxito. ASUME QUE EL CÓDIGO FUE ESCRITO CORRECTAMENTE. No repitas esta acción. Actualiza tu checklist mental y avanza al siguiente paso o usa TOOL_FINISH.";
-                    current_context.push_str(&format!("{}\n\n", interception));
-                    emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
+                    programmer_cooldown_hits += 1;
+                    if programmer_cooldown_hits >= 3 {
+                        let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de TOOL_PROGRAMMER detectado. Abortando misión.";
+                        emit_event(&app_handle, step_count, res_msg, "FATAL");
+                        let final_res = FinalResponse {
+                            status: "ERROR".to_string(),
+                            respuesta_conversacional: format!("Me he quedado atascado editando repetidamente el mismo archivo ({:?}) sin probarlo. He detenido la ejecución por seguridad.", archivos_vec),
+                        };
+                        return Ok(serde_json::to_string(&final_res).unwrap());
+                    } else {
+                        let interception = "[SISTEMA INTERCEPTO] Error Lógico: Ya editaste estos archivos en un turno anterior con éxito. ASUME QUE EL CÓDIGO FUE ESCRITO CORRECTAMENTE. No repitas esta acción. Actualiza tu checklist mental y avanza al siguiente paso (usa TOOL_TESTER) o usa TOOL_FINISH.";
+                        current_context.push_str(&format!("{}\n\n", interception));
+                        emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
+                    }
                 } else {
                 emit_event(&app_handle, step_count, "Delegando a Qwen para modificar código físico...", "ACTION");
                 let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
@@ -320,7 +332,8 @@ pub async fn run_agent_loop(
                                                 Ok(_) => {
                                                     emit_event(&app_handle, step_count, "Validación exitosa.", "SUCCESS");
                                                     let _ = memory::update_last_memory_status(&workspace_path, "COMPILACIÓN_EXITOSA").await;
-                                                    current_context.push_str("Programador: Código modificado y validado exitosamente.\n\n");
+                                                    let explicit_msg = format!("Programador: Los archivos {:?} fueron modificados y compilados con éxito. ¡LA TAREA DE ESCRITURA ESTÁ COMPLETA! Ahora DEBES usar TOOL_TESTER o avanzar a la siguiente tarea diferente.\n\n", archivos_vec);
+                                                    current_context.push_str(&explicit_msg);
                                                     exito_bucle_programador = true;
                                                     for f in &archivos_vec {
                                                         archivos_editados_historico.insert(f.clone());
