@@ -72,8 +72,30 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
     }
 
     // ── JavaScript / TypeScript ─────────────────────────────────────────────
-    if safe_exists("package.json") {
-        // BUG-1 FIX: Only activate if there is a real test setup
+    // Recursive scan for JS/TS test files — runs REGARDLESS of package.json
+    // because Qwen may create test files before (or without) creating package.json
+    fn scan_dir_for_js_tests(dir: &std::path::Path) -> bool {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if name.starts_with('.') || name == "node_modules" { continue; }
+                if path.is_dir() {
+                    if scan_dir_for_js_tests(&path) { return true; }
+                } else if name.ends_with(".test.js")
+                    || name.ends_with(".test.ts")
+                    || name.ends_with(".spec.js")
+                    || name.ends_with(".spec.ts") {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    let has_js_test_files = scan_dir_for_js_tests(workspace_path);
+
+    if safe_exists("package.json") || has_js_test_files {
+        // BUG-1 FIX: Only activate full npm test if there is a real test setup
         let has_test_config = safe_exists("jest.config.js")
             || safe_exists("jest.config.ts")
             || safe_exists("vitest.config.js")
@@ -81,42 +103,17 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
             || safe_exists(".mocharc.js")
             || safe_exists(".mocharc.yml");
 
-        // Recursive scan for test files (handles tests/ subdirectory)
-        let has_test_files = {
-            fn scan_dir_for_tests(dir: &std::path::Path) -> bool {
-                if let Ok(entries) = std::fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        // Skip node_modules and hidden dirs
-                        if name.starts_with('.') || name == "node_modules" { continue; }
-                        if path.is_dir() {
-                            if scan_dir_for_tests(&path) { return true; }
-                        } else if name.ends_with(".test.js")
-                            || name.ends_with(".test.ts")
-                            || name.ends_with(".spec.js")
-                            || name.ends_with(".spec.ts") {
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-            scan_dir_for_tests(workspace_path)
-        };
-
         // Also check if package.json has a non-empty "test" script
         let has_test_script = std::fs::read_to_string(workspace_path.join("package.json"))
             .ok()
             .map(|content| {
-                // Simple heuristic: "test" key should not map to the npm default error string
                 content.contains("\"test\"")
                     && !content.contains("Error: no test specified")
                     && !content.contains("echo \\\"Error: no test specified\\\"")
             })
             .unwrap_or(false);
 
-        if has_test_config || has_test_files || has_test_script {
+        if has_test_config || has_js_test_files || has_test_script {
             #[cfg(target_os = "windows")]
             let npm_cmd = "npm.cmd";
             #[cfg(not(target_os = "windows"))]
@@ -127,7 +124,8 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
                 test_cmd: (npm_cmd, vec!["test"]),
             });
         }
-        return None; // Node project but no real tests
+        // Has package.json or test files but no test runner configured yet
+        return None;
     }
 
     // ── C++ ─────────────────────────────────────────────────────────────────

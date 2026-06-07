@@ -466,27 +466,74 @@ pub async fn run_agent_loop(
                     crate::core::tester::TestResult::NoTests => {
                         no_tests_consecutive += 1;
 
-                        if no_tests_consecutive >= 2 {
-                            // LLM is stuck calling TOOL_TESTER in a loop without creating test files.
-                            // Force TOOL_PROGRAMMER on the next step by setting the override.
-                            forced_next_tool = Some("TOOL_PROGRAMMER");
+                        // Build a workspace file listing so the LLM can see what actually exists
+                        let workspace_listing = {
+                            let mut files = Vec::new();
+                            fn list_dir_recursive(dir: &std::path::Path, files: &mut Vec<String>, depth: usize) {
+                                if depth > 4 { return; }
+                                if let Ok(entries) = std::fs::read_dir(dir) {
+                                    for entry in entries.flatten() {
+                                        let path = entry.path();
+                                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                        if name.starts_with('.') || name == "node_modules" || name == "__pycache__" { continue; }
+                                        files.push(path.to_string_lossy().to_string());
+                                        if path.is_dir() { list_dir_recursive(&path, files, depth + 1); }
+                                    }
+                                }
+                            }
+                            list_dir_recursive(std::path::Path::new(&workspace_path), &mut files, 0);
+                            if files.is_empty() {
+                                "(directorio vacío)".to_string()
+                            } else {
+                                files.join("\n")
+                            }
+                        };
+
+                        if no_tests_consecutive >= 3 {
+                            // After 3 cycles, switch strategy: bypass detect_language and run
+                            // npm test directly via TOOL_TERMINAL (in case package.json exists but
+                            // detect_language missed it, or jest needs to be installed first)
+                            forced_next_tool = Some("TOOL_TERMINAL");
                             let force_msg = format!(
-                                "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces seguidas sin archivos de test. \
-                                El sistema BLOQUEA TOOL_TESTER y FUERZA TOOL_PROGRAMMER. \
-                                DEBES crear TODOS los archivos necesarios: package.json (con script test y devDependency jest), \
-                                el archivo de test (emailValidator.test.js o equivalente) y el archivo de código principal. \
-                                Incluye TODOS estos archivos en 'archivos_a_editar'.",
-                                no_tests_consecutive
+                                "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin detectar tests. \
+                                El sistema cambia de estrategia: FUERZA TOOL_TERMINAL. \
+                                Archivos actuales en el workspace:\n{}\n\n\
+                                EJECUTA: Si ya existe package.json, usa 'npm install --save-dev jest && npm test'. \
+                                Si no existe package.json, PRIMERO crea los archivos package.json y emailValidator.test.js con TOOL_PROGRAMMER, \
+                                luego instala con TOOL_TERMINAL.",
+                                no_tests_consecutive, workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", force_msg));
-                            emit_event(&app_handle, step_count, &format!("[SISTEMA] TOOL_TESTER bloqueado tras {} intentos. Forzando TOOL_PROGRAMMER.", no_tests_consecutive), "FATAL");
+                            emit_event(&app_handle, step_count, &format!("[SISTEMA] Cambiando estrategia a TOOL_TERMINAL tras {} intentos.", no_tests_consecutive), "FATAL");
+
+                        } else if no_tests_consecutive >= 2 {
+                            // Force TOOL_PROGRAMMER to create missing files
+                            forced_next_tool = Some("TOOL_PROGRAMMER");
+                            let force_msg = format!(
+                                "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin archivos de test detectados. \
+                                El sistema FUERZA TOOL_PROGRAMMER. \
+                                Archivos actuales en el workspace:\n{}\n\n\
+                                DEBES crear TODOS los archivos que falten. Para un proyecto Jest en Node.js necesitas:\n\
+                                1) package.json con: {{\"scripts\": {{\"test\": \"jest\"}}, \"devDependencies\": {{\"jest\": \"^29.0.0\"}}}}\n\
+                                2) El archivo de test: test/emailValidator.test.js (o similar)\n\
+                                3) El archivo de codigo: src/validadores/email.js\n\
+                                Incluye TODOS estos archivos en 'archivos_a_editar'.",
+                                no_tests_consecutive, workspace_listing
+                            );
+                            current_context.push_str(&format!("{}\n\n", force_msg));
+                            emit_event(&app_handle, step_count, &format!("[SISTEMA] TOOL_TESTER bloqueado. Forzando TOOL_PROGRAMMER con listado de archivos.", ), "FATAL");
+
                         } else {
-                            // First hit — tell the LLM clearly but don't force yet
-                            let no_test_msg = "[SISTEMA] No se detectaron archivos de test en el workspace (no hay *.test.js, test_*.py, jest.config.js, pytest.ini, etc.). \
-                            ANALIZA EL OBJETIVO ORIGINAL: si el usuario pidio tests, significa que TOOL_PROGRAMMER nunca creo el archivo de tests. \
-                            DEBES usar TOOL_PROGRAMMER para crear los archivos de tests requeridos (ej: emailValidator.test.js con import de jest, package.json con script test y dependencia jest). \
-                            Luego instala dependencias con TOOL_TERMINAL (npm install) y vuelve a usar TOOL_TESTER. \
-                            SOLO usa TOOL_FINISH si el usuario NO pidio tests explicitamente.";
+                            // First hit — tell the LLM clearly
+                            let no_test_msg = format!(
+                                "[SISTEMA] No se detectaron archivos de test reconocidos (*.test.js, *.spec.js, jest.config.js, etc.). \
+                                Archivos actuales en el workspace:\n{}\n\n\
+                                Si el usuario pidio tests: DEBES usar TOOL_PROGRAMMER para crear package.json \
+                                (con script test=jest y devDependency jest) Y el archivo *.test.js. \
+                                Luego usa TOOL_TERMINAL con 'npm install' y despues vuelve a usar TOOL_TESTER. \
+                                SOLO usa TOOL_FINISH si el usuario NO pidio tests.",
+                                workspace_listing
+                            );
                             current_context.push_str(&format!("{}\n\n", no_test_msg));
                             emit_event(&app_handle, step_count, "Sin suite de tests detectada. Revisa si debes crear los archivos de test primero.", "WARNING");
                         }
