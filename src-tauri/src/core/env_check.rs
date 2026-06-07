@@ -153,7 +153,12 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
 
     // 5. Ollama — REQUIRED (the agent itself depends on this)
     let mut available_models = Vec::new();
-    match Command::new("ollama").arg("list").output().await {
+    #[cfg(target_os = "windows")]
+    let ollama_cmd = Command::new("cmd").args(["/C", "ollama list"]).output().await;
+    #[cfg(not(target_os = "windows"))]
+    let ollama_cmd = Command::new("ollama").arg("list").output().await;
+
+    match ollama_cmd {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines().skip(1) {
@@ -166,9 +171,14 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
                 errors.push("Ollama está instalado, pero no tienes ningún modelo descargado. Descarga al menos llama3.1:8b.".to_string());
             }
         }
-        _ => {
-            errors.push("Fallo al ejecutar 'ollama list'. Asegúrate de que Ollama esté instalado y el servicio esté corriendo.".to_string());
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            errors.push(format!("Fallo al ejecutar 'ollama list'. Código de salida: {:?}. Error: {}", output.status.code(), stderr));
         }
+        Err(e) => {
+            errors.push(format!("Fallo al iniciar el proceso 'ollama list': {}", e));
+        }
+
     }
 
     // Append warnings as context (non-blocking)
