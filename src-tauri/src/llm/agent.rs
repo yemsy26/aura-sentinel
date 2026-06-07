@@ -175,10 +175,18 @@ pub async fn run_agent_loop(
         
         match tool.as_str() {
             "TOOL_TERMINAL" => {
-                if comandos_ejecutados_historico.contains(&comando) {
-                    let res_msg = "[SISTEMA INTERCEPTO] Error: Ya intentaste ejecutar este mismo comando en este bucle y falló o ya se completó. ESTÁS OBLIGADO a usar TOOL_FINISH para pedirle ayuda al usuario.";
+                if comando.trim().is_empty() {
+                    let res_msg = "Error: El comando no puede estar vacío. Rellena el campo 'comando'.";
                     current_context.push_str(&format!("{}\n\n", res_msg));
-                    emit_event(&app_handle, step_count, "Bucle de Terminal interceptado por Cooldown", "WARNING");
+                    emit_event(&app_handle, step_count, "Comando vacío", "ERROR");
+                } else if comandos_ejecutados_historico.contains(&comando) {
+                    let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito detectado en el terminal. Abortando misión.";
+                    emit_event(&app_handle, step_count, res_msg, "FATAL");
+                    let final_res = FinalResponse {
+                        status: "ERROR".to_string(),
+                        respuesta_conversacional: format!("Se detectó un bucle intentando ejecutar múltiples veces el comando '{}'. Por favor, revisa el entorno o instala las dependencias manualmente.", comando),
+                    };
+                    return Ok(serde_json::to_string(&final_res).unwrap());
                 } else {
                     comandos_ejecutados_historico.insert(comando.clone());
                     emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
