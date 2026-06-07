@@ -423,7 +423,7 @@ pub async fn run_agent_loop(
                             let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de pruebas exitosas detectado. Abortando misión.";
                             emit_event(&app_handle, step_count, res_msg, "FATAL");
                             let final_res = FinalResponse {
-                                status: "SUCCESS".to_string(),
+                                status: "FINISH".to_string(),
                                 respuesta_conversacional: "Los tests ya pasaron con éxito, pero me quedé atascado ejecutándolos en bucle. He detenido el proceso para evitar un ciclo infinito. Misión cumplida.".to_string(),
                             };
                             return Ok(serde_json::to_string(&final_res).unwrap());
