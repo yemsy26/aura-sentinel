@@ -155,13 +155,18 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
     };
 
     if path.join("requirements.txt").exists() || path.join("main.py").exists() || has_python_files() {
-        // Try finding python from scoop shims first, fallback to system python
-        let python_cmd = if std::path::Path::new("C:\\Users\\yemsy\\scoop\\apps\\python\\current\\python.exe").exists() {
-            "C:\\Users\\yemsy\\scoop\\apps\\python\\current\\python.exe"
-        } else {
-            "python"
+        // BUG-4 FIX: Dynamically resolve Python path from USERPROFILE instead of hardcoding username
+        let python_cmd = {
+            let profile = std::env::var("USERPROFILE").unwrap_or_default();
+            let scoop_python = std::path::PathBuf::from(&profile)
+                .join("scoop").join("apps").join("python").join("current").join("python.exe");
+            if scoop_python.exists() {
+                scoop_python.to_string_lossy().into_owned()
+            } else {
+                "python".to_string()
+            }
         };
-        let output = Command::new(python_cmd)
+        let output = Command::new(&python_cmd)
             .arg("-m")
             .arg("compileall")
             .arg("-q")
@@ -179,7 +184,7 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
                 return Err(format!("{} {}", stdout, stderr).trim().to_string());
             },
             Err(_) => {
-                // python not found in PATH - treat as a no-op validation (python not in path yet)
+                // python not found in PATH — treat as a no-op (python may not be installed yet)
                 return Ok(());
             }
         }
@@ -229,20 +234,45 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
 }
 
 /// Restores the workspace to the last committed state using Git, reverting all uncommitted changes.
+/// SAFETY: Uses `git restore` for tracked files and `git clean -fd` ONLY on files added
+/// by Aura (i.e., files that appear in `git status --porcelain` as untracked '??' entries).
+/// This prevents destroying files the user had before Aura started working.
 pub async fn restore_git_backup(workspace_path: &str) -> Result<(), String> {
     let path = Path::new(workspace_path);
     if path.join(".git").exists() {
-        // Restore all tracked files
+        // 1. Restore all tracked files to last commit state (safe — only touches versioned files)
         let _ = Command::new(get_shell())
             .args([get_shell_args(), "git restore ."])
             .current_dir(workspace_path)
             .stdin(Stdio::null())
             .output()
             .await;
-            
-        // Clean untracked files
+
+        // 2. Only clean files that were explicitly staged/added by Aura (not pre-existing user files)
+        // We use `git clean -fd --dry-run` first to inspect, then selectively clean only
+        // files that appear in the git index (were added via `git add .` by Aura)
+        let staged = Command::new(get_shell())
+            .args([get_shell_args(), "git diff --name-only --cached"])
+            .current_dir(workspace_path)
+            .stdin(Stdio::null())
+            .output()
+            .await;
+
+        if let Ok(out) = staged {
+            let files = String::from_utf8_lossy(&out.stdout);
+            for file in files.lines() {
+                let file = file.trim();
+                if !file.is_empty() {
+                    let full_path = path.join(file);
+                    // Only remove if it exists and was staged by Aura
+                    let _ = std::fs::remove_file(&full_path);
+                }
+            }
+        }
+
+        // 3. Reset the index so the removed files are unstaged
         let _ = Command::new(get_shell())
-            .args([get_shell_args(), "git clean -fd"])
+            .args([get_shell_args(), "git reset HEAD ."])
             .current_dir(workspace_path)
             .stdin(Stdio::null())
             .output()

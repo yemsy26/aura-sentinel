@@ -68,7 +68,7 @@ pub async fn run_agent_loop(
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
     let mut step_count = 1;
-    let max_steps = 15; // Increased slightly to allow for testing loops
+    let max_steps = 20; // BUG-7 FIX: Increased to 20 to handle complex multi-step tasks (web apps, firebase deploys)
     
     let mut task_complexity = crate::llm::router::Complexity::GeneralCode;
     
@@ -440,7 +440,14 @@ pub async fn run_agent_loop(
             "TOOL_TESTER" => {
                 emit_event(&app_handle, step_count, "Ejecutando suite de pruebas automatizadas...", "ACTION");
                 match crate::core::tester::run_tests(&workspace_path).await {
-                    Ok(success_msg) => {
+                    crate::core::tester::TestResult::NoTests => {
+                        // No test suite found — this is NOT a failure, code is fine
+                        // Don't revert, don't panic. Treat as if code is valid.
+                        let no_test_msg = "[SISTEMA] No se detectó ningún framework de tests (ni pytest.ini, ni jest.config.js, etc.) en este workspace. TOOL_TESTER no es aplicable aquí. El código fue escrito correctamente. Usa TOOL_TERMINAL para ejecutar el script directamente y luego usa TOOL_FINISH.";
+                        current_context.push_str(&format!("{}\n\n", no_test_msg));
+                        emit_event(&app_handle, step_count, "Sin suite de tests detectada. Continúa con TOOL_TERMINAL o TOOL_FINISH.", "WARNING");
+                    },
+                    crate::core::tester::TestResult::Passed(success_msg) => {
                         tester_attempts = 0;
                         if tester_success_hits >= 1 {
                             let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de pruebas exitosas detectado. Abortando misión.";
@@ -460,7 +467,7 @@ pub async fn run_agent_loop(
                             }
                         }
                     },
-                    Err(fail_msg) => {
+                    crate::core::tester::TestResult::Failed(fail_msg) => {
                         tester_attempts += 1;
                         if tester_attempts >= 3 {
                             emit_event(&app_handle, step_count, "[CRITICAL_FAILURE] Fallos de test superan el límite (3). Revertiendo...", "FATAL");
@@ -473,7 +480,8 @@ pub async fn run_agent_loop(
                         } else {
                             emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
                             let _ = crate::core::restore_git_backup(&workspace_path).await;
-                            archivos_editados_historico.clear(); // FIX: Permitir reescribir los archivos tras un rollback
+                            archivos_editados_historico.clear();
+                            comandos_ejecutados_historico.clear();
                             task_complexity = crate::llm::router::Complexity::HighComplexityFix;
                             emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
                             current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
