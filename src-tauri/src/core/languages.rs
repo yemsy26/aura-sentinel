@@ -197,5 +197,65 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
         });
     }
 
+    // ── Java (Maven / Gradle) ────────────────────────────────────────────────
+    if safe_exists("pom.xml") {
+        // Maven project
+        #[cfg(target_os = "windows")]
+        let mvn_cmd = "mvn.cmd";
+        #[cfg(not(target_os = "windows"))]
+        let mvn_cmd = "mvn";
+        return Some(LanguageConfig {
+            name: "Java (Maven)",
+            test_cmd: (mvn_cmd, vec!["test", "-q"]),
+        });
+    }
+    if safe_exists("build.gradle") || safe_exists("build.gradle.kts") {
+        // Gradle project
+        #[cfg(target_os = "windows")]
+        let gradle_cmd = "gradlew.bat";
+        #[cfg(not(target_os = "windows"))]
+        let gradle_cmd = "./gradlew";
+        return Some(LanguageConfig {
+            name: "Java (Gradle)",
+            test_cmd: (gradle_cmd, vec!["test"]),
+        });
+    }
+
+    // ── C (gcc + simple test runner) ────────────────────────────────────────
+    // Detect standalone C test files (e.g. test_*.c or *_test.c)
+    let has_c_test_files = {
+        fn scan_dir_for_c_tests(dir: &std::path::Path) -> bool {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    if name.starts_with('.') { continue; }
+                    if path.is_dir() {
+                        if scan_dir_for_c_tests(&path) { return true; }
+                    } else if (name.starts_with("test_") && name.ends_with(".c"))
+                        || name.ends_with("_test.c") {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        scan_dir_for_c_tests(workspace_path)
+    };
+
+    if has_c_test_files && !safe_exists("CMakeLists.txt") && !safe_exists("Makefile") {
+        // Standalone C test — compile and run all test_*.c files
+        #[cfg(target_os = "windows")]
+        return Some(LanguageConfig {
+            name: "C",
+            test_cmd: ("cmd", vec!["/C", "for %f in (test_*.c) do (gcc %f -o %~nf_test.exe && %~nf_test.exe)"]),
+        });
+        #[cfg(not(target_os = "windows"))]
+        return Some(LanguageConfig {
+            name: "C",
+            test_cmd: ("bash", vec!["-c", "for f in test_*.c; do gcc \"$f\" -o \"${f%.c}_test\" && ./\"${f%.c}_test\"; done"]),
+        });
+    }
+
     None
 }
