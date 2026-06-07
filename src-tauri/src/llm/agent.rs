@@ -278,6 +278,7 @@ pub async fn run_agent_loop(
                         break;
                     }
                 };
+                emit_event(&app_handle, step_count, &format!("[ROUTER] Cerebro Programador Seleccionado: {}", target_model), "INFO");
 
                 let mut exito_bucle_programador = false;
                 let mut max_intentos = 3;
