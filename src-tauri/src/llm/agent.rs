@@ -619,7 +619,11 @@ pub async fn run_agent_loop(
                                 || fail_msg.contains("ENOENT")
                                     && (fail_msg.contains("jest") || fail_msg.contains("node_modules"))
                                 || fail_msg.contains("npm ERR! Missing script: test")
-                                || fail_msg.contains("Error: no test specified");
+                                || fail_msg.contains("Error: no test specified")
+                                || fail_msg.contains("The system cannot find the file specified")
+                                || fail_msg.contains("NotFound")
+                                || fail_msg.contains("No such file or directory");
+
 
                             if is_dep_error {
                                 // Don't revert — the code itself is fine, deps are just missing
