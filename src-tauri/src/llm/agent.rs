@@ -64,6 +64,7 @@ pub async fn run_agent_loop(
     let mut comandos_ejecutados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut architect_used = false;
     let mut tester_attempts = 0;
+    let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
     let mut step_count = 1;
     let max_steps = 15; // Increased slightly to allow for testing loops
@@ -105,7 +106,7 @@ pub async fn run_agent_loop(
             REGLAS DE ESTADO (STATE MACHINE):\n\
             - DESPUÉS de usar TOOL_PROGRAMMER con éxito, es OBLIGATORIO usar TOOL_TESTER para validar tus cambios.\n\
             - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
-            - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
+            - SI TOOL_TESTER TIENE ÉXITO, estás OBLIGADO a usar TOOL_FINISH en el siguiente paso. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests pasaron.\n\
             - SI TOOL_TERMINAL o TOOL_ENV_MANAGER FALLAN, es OBLIGATORIO usar TOOL_FINISH para evitar bucles de comandos infinitos.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
@@ -418,11 +419,22 @@ pub async fn run_agent_loop(
                 match crate::core::tester::run_tests(&workspace_path).await {
                     Ok(success_msg) => {
                         tester_attempts = 0;
-                        current_context.push_str(&format!("Resultado Tests:\n{}\n\n", success_msg));
-                        emit_event(&app_handle, step_count, "Todos los tests pasaron exitosamente. Iniciando Auto-Indexación...", "SUCCESS");
-                        // AUTO INDEXACIÓN SILENCIOSA
-                        if let Ok(msg) = crate::core::memory::index_project(&workspace_path).await {
-                            current_context.push_str(&format!("Memoria Vectorial: {}\n\n", msg));
+                        if tester_success_hits >= 1 {
+                            let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de pruebas exitosas detectado. Abortando misión.";
+                            emit_event(&app_handle, step_count, res_msg, "FATAL");
+                            let final_res = FinalResponse {
+                                status: "SUCCESS".to_string(),
+                                respuesta_conversacional: "Los tests ya pasaron con éxito, pero me quedé atascado ejecutándolos en bucle. He detenido el proceso para evitar un ciclo infinito. Misión cumplida.".to_string(),
+                            };
+                            return Ok(serde_json::to_string(&final_res).unwrap());
+                        } else {
+                            tester_success_hits += 1;
+                            current_context.push_str(&format!("Resultado Tests:\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LOS TESTS PASARON EXITOSAMENTE. LA TAREA ESTÁ COMPLETADA. EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS TOOL_TESTER.\n\n", success_msg));
+                            emit_event(&app_handle, step_count, "Todos los tests pasaron exitosamente. Iniciando Auto-Indexación...", "SUCCESS");
+                            // AUTO INDEXACIÓN SILENCIOSA
+                            if let Ok(msg) = crate::core::memory::index_project(&workspace_path).await {
+                                current_context.push_str(&format!("Memoria Vectorial: {}\n\n", msg));
+                            }
                         }
                     },
                     Err(fail_msg) => {
