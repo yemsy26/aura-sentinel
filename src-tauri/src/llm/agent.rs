@@ -61,6 +61,7 @@ pub async fn run_agent_loop(
         }
     }
     let mut archivos_editados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut comandos_ejecutados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut architect_used = false;
     let mut tester_attempts = 0;
     let mut step_count = 1;
@@ -97,10 +98,11 @@ pub async fn run_agent_loop(
             - Firebase Deploy: Si piden desplegar a producción/Firebase, asume que 'firebase-tools' está instalado y usa 'TOOL_TERMINAL' con 'firebase init hosting' o 'firebase deploy --only hosting'. Asegúrate de compilar antes si es necesario (ej. 'npm run build').\n\
             - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER] tras un fallo de TOOL_TESTER, tu ÚNICA tarea es usar TOOL_PROGRAMMER para re-escribir y arreglar el código defectuoso. ¡PROHIBIDO volver a usar TOOL_TESTER sin antes haber modificado el código!\n            - Modo Arquitecto: Si al usar TOOL_ARCHITECT el campo de confianza es BAJA, no tomes decisiones de refactorización automáticas. Reporta los hallazgos al usuario y solicita confirmación manual.\n\
             - Auto-Testing: Tu objetivo no es solo escribir código, sino entregar sistemas funcionales. Valida tu trabajo con TOOL_TESTER antes de cualquier entrega final. Un código no probado es un código incompleto.\n\
-            - Auto-Healing (Pre-Flight): Si el sistema reporta un fallo de entorno [ENV_FAILURE] por dependencias faltantes (ej. no encuentra 'go', 'npm', 'python'), tu prioridad es intentar instalar la dependencia automáticamente usando TOOL_TERMINAL (por ejemplo, con `winget install`, `npm install`, etc.). Si la instalación automática falla o requiere reinicio, usa TOOL_FINISH para pedirle al usuario que lo instale manualmente.\n\n\
+            - Auto-Healing (Pre-Flight): Si el sistema reporta un fallo de entorno [ENV_FAILURE] por dependencias faltantes (ej. no encuentra 'go', 'npm', 'python'), tu prioridad es intentar instalar la dependencia automáticamente usando TOOL_TERMINAL (por ejemplo, con `winget install`, `npm install`, etc.). REGLA ESTRICTA: Si la instalación por terminal falla, estás OBLIGADO a usar TOOL_FINISH en el siguiente turno para pedirle al usuario que lo instale manualmente.\n\n\
             REGLAS DE ESTADO (STATE MACHINE):\n\
             - DESPUÉS de usar TOOL_PROGRAMMER con éxito, es OBLIGATORIO usar TOOL_TESTER para validar tus cambios.\n\
-            - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\n\
+            - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
+            - SI TOOL_TERMINAL FALLA, es OBLIGATORIO usar TOOL_FINISH para evitar bucles de comandos infinitos.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
@@ -173,11 +175,17 @@ pub async fn run_agent_loop(
         
         match tool.as_str() {
             "TOOL_TERMINAL" => {
-                emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
-                match execute_terminal_command(&workspace_path, &comando).await {
-                    Ok(out) => {
-                        let res_msg = format!("Éxito: {}", out);
-                        current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
+                if comandos_ejecutados_historico.contains(&comando) {
+                    let res_msg = "[SISTEMA INTERCEPTO] Error: Ya intentaste ejecutar este mismo comando en este bucle y falló o ya se completó. ESTÁS OBLIGADO a usar TOOL_FINISH para pedirle ayuda al usuario.";
+                    current_context.push_str(&format!("{}\n\n", res_msg));
+                    emit_event(&app_handle, step_count, "Bucle de Terminal interceptado por Cooldown", "WARNING");
+                } else {
+                    comandos_ejecutados_historico.insert(comando.clone());
+                    emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
+                    match execute_terminal_command(&workspace_path, &comando).await {
+                        Ok(out) => {
+                            let res_msg = format!("Éxito: {}", out);
+                            current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
                         emit_event(&app_handle, step_count, &res_msg, "SUCCESS");
                     },
                     Err(err) => {
@@ -185,6 +193,7 @@ pub async fn run_agent_loop(
                         current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
                         emit_event(&app_handle, step_count, &res_msg, "ERROR");
                     }
+                }
                 }
             },
             "TOOL_BACKGROUND_START" => {
