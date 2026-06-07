@@ -75,14 +75,14 @@ pub fn hot_reload_path() {
     {
         // Obtener User PATH
         let user_path = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", "[Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PATH', 'User'))"])
+            .args(&["-NoProfile", "-Command", "[Console]::Write([Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PATH', 'User')))"])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
             
         // Obtener Machine PATH
         let machine_path = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", "[Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PATH', 'Machine'))"])
+            .args(&["-NoProfile", "-Command", "[Console]::Write([Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PATH', 'Machine')))"])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
