@@ -260,8 +260,10 @@ pub async fn run_agent_loop(
                         Ok(out) => {
                             let res_msg = format!("Éxito: {}", out);
                             current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando tuvo éxito. Tu SIGUIENTE PASO OBLIGATORIO es usar TOOL_TESTER para validar si el entorno ya está correcto. NO VUELVAS A USAR TOOL_TERMINAL BAJO NINGUNA CIRCUNSTANCIA EN EL PRÓXIMO TURNO.]\n\n", res_msg));
-                        emit_event(&app_handle, step_count, &res_msg, "SUCCESS");
-                    },
+                            emit_event(&app_handle, step_count, &res_msg, "SUCCESS");
+                            // Guardar los cambios hechos por la terminal en Git-Shield
+                            let _ = crate::core::create_git_backup(&workspace_path, "Aura-Sentinel: Git-Shield Auto-Backup (Terminal)").await;
+                        },
                     Err(err) => {
                         let res_msg = format!("Error: {}", err);
                         current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
