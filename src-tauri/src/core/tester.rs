@@ -75,11 +75,12 @@ fn ensure_hardhat_config(workspace: &Path) {
         return;
     }
 
+    // CJS-compatible config (works with Hardhat 2.x CommonJS projects)
     let minimal_cfg = r#"require("@nomicfoundation/hardhat-toolbox");
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
-  solidity: "0.8.28",
+  solidity: "0.8.20",
 };
 "#;
     if let Err(e) = std::fs::write(&config_js, minimal_cfg) {
@@ -87,6 +88,25 @@ module.exports = {
     } else {
         eprintln!("[TESTER] Auto-generated minimal hardhat.config.js.");
     }
+}
+
+/// Detects if Hardhat v3+ is installed (which requires ESM) and appends an error hint
+/// to the context so the LLM can use TOOL_TERMINAL to downgrade to v2.
+fn check_hardhat_version_compat(workspace: &Path) -> Option<String> {
+    let pkg = workspace.join("package.json");
+    if !pkg.exists() { return None; }
+    let content = std::fs::read_to_string(&pkg).ok()?;
+    // Rough check: "hardhat": "^3 or "hardhat": "3.
+    if content.contains("\"hardhat\": \"^3") || content.contains("\"hardhat\": \"3.") {
+        return Some(
+            "[AVISO CRITICO DE ENTORNO] Se detecto Hardhat v3 instalado. \
+            Hardhat v3 requiere proyectos ESM y el codigo \
+            generado usa CommonJS. Esto causa el error HHE22. \
+            SOLUCION OBLIGATORIA: Usa TOOL_TERMINAL con el comando: \
+            'npm install --save-dev hardhat@^2.22.15 @nomicfoundation/hardhat-toolbox@^4.0.0'".to_string()
+        );
+    }
+    None
 }
 
 /// If the workspace has Go source files but no `go.mod`, creates a minimal one.
@@ -118,10 +138,11 @@ fn ensure_go_mod(workspace: &Path) {
 
 // ── Bootstrap: run all manifest auto-generators before language detection ────
 
-fn bootstrap_manifests(workspace: &Path) {
+fn bootstrap_manifests(workspace: &Path) -> Option<String> {
     ensure_package_json(workspace);
     ensure_hardhat_config(workspace);
     ensure_go_mod(workspace);
+    check_hardhat_version_compat(workspace)
 }
 
 // ── Main test runner ─────────────────────────────────────────────────────────
@@ -134,7 +155,10 @@ pub async fn run_tests(workspace_path: &str) -> TestResult {
     let path = Path::new(workspace_path);
 
     // ── Pre-flight: ensure manifests exist ───────────────────────────────────
-    bootstrap_manifests(path);
+    if let Some(compat_warning) = bootstrap_manifests(path) {
+        // Hardhat v3 detected — fail fast with actionable error instead of wasting time
+        return TestResult::Failed(compat_warning);
+    }
 
     // ── Language + test-framework detection ──────────────────────────────────
     if let Some(lang_config) = crate::core::languages::detect_language(path) {

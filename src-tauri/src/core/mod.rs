@@ -204,26 +204,49 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
 /// Creates an emergency Git rollback checkpoint before executing risky code generation.
 pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Result<(), String> {
     let path = Path::new(workspace_path);
-    
+
+    // ── Protect Aura-internal files from being included in rollbacks ──────────
+    // Write (or update) a .gitignore so session/memory files are never staged.
+    let gitignore_path = path.join(".gitignore");
+    let gitignore_content = "\
+# === Aura-Sentinel internal files (never roll back) ===\n\
+.aura_session.json\n\
+.fenix_memory.json\n\
+.fenix_chat.json\n\
+\n\
+# Node.js\n\
+node_modules/\n\
+";
+    if !gitignore_path.exists() {
+        let _ = std::fs::write(&gitignore_path, gitignore_content);
+    } else {
+        // Append our entries if not already present
+        if let Ok(existing) = std::fs::read_to_string(&gitignore_path) {
+            if !existing.contains(".aura_session.json") {
+                let _ = std::fs::write(&gitignore_path, format!("{}\n{}", existing.trim_end(), gitignore_content));
+            }
+        }
+    }
+
     // Init if needed
     if !path.join(".git").exists() {
         let _ = Command::new(get_shell())
             .args([get_shell_args(), "git init"])
             .current_dir(workspace_path)
-        .stdin(Stdio::null())
+            .stdin(Stdio::null())
             .output()
             .await;
         hide_file_windows(&path.join(".git")).await;
     }
-    
-    // Add all
+
+    // Add all (gitignore protects the session files)
     let _ = Command::new(get_shell())
         .args([get_shell_args(), "git add ."])
         .current_dir(workspace_path)
         .stdin(Stdio::null())
         .output()
         .await;
-        
+
     // Commit
     let _ = Command::new(get_shell())
         .args([get_shell_args(), &format!("git commit -m \"{}\"", commit_message)])
@@ -231,7 +254,7 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
         .stdin(Stdio::null())
         .output()
         .await;
-        
+
     Ok(())
 }
 
