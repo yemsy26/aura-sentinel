@@ -210,14 +210,93 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
         });
     }
     if safe_exists("build.gradle") || safe_exists("build.gradle.kts") {
-        // Gradle project
+        // Gradle project — could be Java or Kotlin (Android included)
+        let is_android = safe_exists("AndroidManifest.xml")
+            || workspace_path.join("app").join("AndroidManifest.xml").exists()
+            || workspace_path.join("app").join("src").join("main").join("AndroidManifest.xml").exists();
         #[cfg(target_os = "windows")]
-        let gradle_cmd = "gradlew.bat";
+        let gradle_cmd = if workspace_path.join("gradlew.bat").exists() { "gradlew.bat" } else { "gradle.bat" };
         #[cfg(not(target_os = "windows"))]
-        let gradle_cmd = "./gradlew";
+        let gradle_cmd = if workspace_path.join("gradlew").exists() { "./gradlew" } else { "gradle" };
+        let lang_name = if is_android { "Kotlin/Android (Gradle)" } else { "Java/Kotlin (Gradle)" };
         return Some(LanguageConfig {
-            name: "Java (Gradle)",
+            name: lang_name,
             test_cmd: (gradle_cmd, vec!["test"]),
+        });
+    }
+
+    // ── Solidity / Blockchain (Hardhat / Foundry) ───────────────────────────
+    // MEV bots, smart contracts on Polygon, BNB, Ethereum, etc.
+    if safe_exists("hardhat.config.js") || safe_exists("hardhat.config.ts") {
+        #[cfg(target_os = "windows")]
+        let npx_cmd = "npx.cmd";
+        #[cfg(not(target_os = "windows"))]
+        let npx_cmd = "npx";
+        return Some(LanguageConfig {
+            name: "Solidity (Hardhat)",
+            test_cmd: (npx_cmd, vec!["hardhat", "test"]),
+        });
+    }
+    if safe_exists("foundry.toml") {
+        return Some(LanguageConfig {
+            name: "Solidity (Foundry)",
+            test_cmd: ("forge", vec!["test", "-v"]),
+        });
+    }
+
+    // ── PHP ─────────────────────────────────────────────────────────────────
+    // Billing systems, web backends
+    let has_php_test_files = {
+        fn scan_dir_for_php_tests(dir: &std::path::Path) -> bool {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    if name.starts_with('.') || name == "vendor" { continue; }
+                    if path.is_dir() {
+                        if scan_dir_for_php_tests(&path) { return true; }
+                    } else if (name.starts_with("Test") && name.ends_with(".php"))
+                        || name.ends_with("Test.php")
+                        || name.ends_with("_test.php") {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        scan_dir_for_php_tests(workspace_path)
+    };
+    if safe_exists("phpunit.xml") || safe_exists("phpunit.xml.dist") || has_php_test_files {
+        return Some(LanguageConfig {
+            name: "PHP (PHPUnit)",
+            test_cmd: ("php", vec!["vendor/bin/phpunit", "--testdox"]),
+        });
+    }
+
+    // ── Dart / Flutter ───────────────────────────────────────────────────────
+    if safe_exists("pubspec.yaml") {
+        let has_flutter = std::fs::read_to_string(workspace_path.join("pubspec.yaml"))
+            .ok()
+            .map(|c| c.contains("flutter"))
+            .unwrap_or(false);
+        if has_flutter {
+            return Some(LanguageConfig {
+                name: "Dart (Flutter)",
+                test_cmd: ("flutter", vec!["test"]),
+            });
+        } else {
+            return Some(LanguageConfig {
+                name: "Dart",
+                test_cmd: ("dart", vec!["test"]),
+            });
+        }
+    }
+
+    // ── Swift ────────────────────────────────────────────────────────────────
+    if safe_exists("Package.swift") {
+        return Some(LanguageConfig {
+            name: "Swift",
+            test_cmd: ("swift", vec!["test"]),
         });
     }
 
