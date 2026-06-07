@@ -67,8 +67,10 @@ pub async fn run_agent_loop(
     let mut tester_attempts = 0;
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
+    let mut no_tests_consecutive = 0u32; // How many times NoTests fired in a row without TOOL_PROGRAMMER between them
+    let mut forced_next_tool: Option<&str> = None;  // When set, overrides the LLM's tool choice
     let mut step_count = 1;
-    let max_steps = 20; // BUG-7 FIX: Increased to 20 to handle complex multi-step tasks (web apps, firebase deploys)
+    let max_steps = 20; // BUG-7 FIX: Increased to 20 to handle complex multi-step tasks
     
     let mut task_complexity = crate::llm::router::Complexity::GeneralCode;
     
@@ -181,9 +183,26 @@ pub async fn run_agent_loop(
         if !checklist.is_empty() {
             emit_event(&app_handle, step_count, &format!("Checklist Mental: {}", checklist), "PLANNING");
         }
+
+        // ── FORCED TOOL OVERRIDE ────────────────────────────────────────────
+        // If the system has determined the LLM is stuck in a tool-loop,
+        // override its decision and force a specific tool.
+        let tool = if let Some(forced) = forced_next_tool.take() {
+            let override_msg = format!(
+                "[SISTEMA INTERCEPTO] El LLM eligió '{}' pero el sistema lo bloqueó. \
+                Se forzó '{}' porque el proyecto no tiene archivos de test y el usuario los pidió. \
+                DEBES crear los archivos de test ahora con TOOL_PROGRAMMER.",
+                tool, forced
+            );
+            current_context.push_str(&format!("{}\n\n", override_msg));
+            emit_event(&app_handle, step_count, &format!("[INTERCEPT] LLM forzado de {} a {}", tool, forced), "WARNING");
+            forced.to_string()
+        } else {
+            tool
+        };
+
         emit_event(&app_handle, step_count, &format!("Decisión: {} - {}", tool, pensamiento), "DECISION");
         current_context.push_str(&format!("--- PASO {} ---\nChecklist Mental: {}\nDecidiste: {}\nPensamiento: {}\n", step_count, checklist, tool, pensamiento));
-        
         match tool.as_str() {
             "TOOL_TERMINAL" => {
                 if comando.trim().is_empty() {
@@ -414,6 +433,10 @@ pub async fn run_agent_loop(
                 if !exito_bucle_programador && max_intentos == 0 {
                     emit_event(&app_handle, step_count, "Max intentos de auto-sanación alcanzado. Fallo físico.", "FATAL");
                     current_context.push_str("Programador: Fracasó tras múltiples intentos.\n\n");
+                } else if exito_bucle_programador {
+                    // TOOL_PROGRAMMER succeeded — reset the NoTests loop counter
+                    // so TOOL_TESTER can be used again to verify the newly created test files
+                    no_tests_consecutive = 0;
                 }
                 }
             },
@@ -441,16 +464,32 @@ pub async fn run_agent_loop(
                 emit_event(&app_handle, step_count, "Ejecutando suite de pruebas automatizadas...", "ACTION");
                 match crate::core::tester::run_tests(&workspace_path).await {
                     crate::core::tester::TestResult::NoTests => {
-                        // No test suite found — this is NOT a failure, code is fine
-                        // But if the user explicitly requested tests (Jest, pytest, etc.), the
-                        // test file was probably never created. Tell the LLM to fix this.
-                        let no_test_msg = "[SISTEMA] No se detectaron archivos de test en el workspace (no hay *.test.js, test_*.py, jest.config.js, pytest.ini, etc.). \
-                        ANALIZA EL OBJETIVO ORIGINAL: si el usuario pidio tests, significa que TOOL_PROGRAMMER nunca creo el archivo de tests. \
-                        DEBES usar TOOL_PROGRAMMER para crear los archivos de tests requeridos (ej: emailValidator.test.js con import de jest, package.json con script test y dependencia jest). \
-                        Luego instala dependencias con TOOL_TERMINAL (npm install) y vuelve a usar TOOL_TESTER. \
-                        SOLO usa TOOL_FINISH si el usuario NO pidio tests explicitamente.";
-                        current_context.push_str(&format!("{}\n\n", no_test_msg));
-                        emit_event(&app_handle, step_count, "Sin suite de tests detectada. Revisa si debes crear los archivos de test primero.", "WARNING");
+                        no_tests_consecutive += 1;
+
+                        if no_tests_consecutive >= 2 {
+                            // LLM is stuck calling TOOL_TESTER in a loop without creating test files.
+                            // Force TOOL_PROGRAMMER on the next step by setting the override.
+                            forced_next_tool = Some("TOOL_PROGRAMMER");
+                            let force_msg = format!(
+                                "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces seguidas sin archivos de test. \
+                                El sistema BLOQUEA TOOL_TESTER y FUERZA TOOL_PROGRAMMER. \
+                                DEBES crear TODOS los archivos necesarios: package.json (con script test y devDependency jest), \
+                                el archivo de test (emailValidator.test.js o equivalente) y el archivo de código principal. \
+                                Incluye TODOS estos archivos en 'archivos_a_editar'.",
+                                no_tests_consecutive
+                            );
+                            current_context.push_str(&format!("{}\n\n", force_msg));
+                            emit_event(&app_handle, step_count, &format!("[SISTEMA] TOOL_TESTER bloqueado tras {} intentos. Forzando TOOL_PROGRAMMER.", no_tests_consecutive), "FATAL");
+                        } else {
+                            // First hit — tell the LLM clearly but don't force yet
+                            let no_test_msg = "[SISTEMA] No se detectaron archivos de test en el workspace (no hay *.test.js, test_*.py, jest.config.js, pytest.ini, etc.). \
+                            ANALIZA EL OBJETIVO ORIGINAL: si el usuario pidio tests, significa que TOOL_PROGRAMMER nunca creo el archivo de tests. \
+                            DEBES usar TOOL_PROGRAMMER para crear los archivos de tests requeridos (ej: emailValidator.test.js con import de jest, package.json con script test y dependencia jest). \
+                            Luego instala dependencias con TOOL_TERMINAL (npm install) y vuelve a usar TOOL_TESTER. \
+                            SOLO usa TOOL_FINISH si el usuario NO pidio tests explicitamente.";
+                            current_context.push_str(&format!("{}\n\n", no_test_msg));
+                            emit_event(&app_handle, step_count, "Sin suite de tests detectada. Revisa si debes crear los archivos de test primero.", "WARNING");
+                        }
                     },
                     crate::core::tester::TestResult::Passed(success_msg) => {
                         tester_attempts = 0;
