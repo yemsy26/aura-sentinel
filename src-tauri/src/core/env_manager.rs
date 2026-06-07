@@ -41,9 +41,14 @@ async fn install_dependency_windows(package: &str) -> Result<String, String> {
         hot_reload_path();
     }
     
+    let mut resolved_package = package.trim().to_lowercase();
+    if resolved_package == "node" {
+        resolved_package = "nodejs".to_string();
+    }
+    
     // Ejecutar instalación con scoop
     let install_pkg = Command::new("powershell")
-        .args(&["-NoProfile", "-Command", &format!("scoop install {}", package)])
+        .args(&["-NoProfile", "-Command", &format!("scoop install {}", resolved_package)])
         .output();
         
     match install_pkg {

@@ -62,6 +62,7 @@ pub async fn run_agent_loop(
     }
     let mut archivos_editados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut comandos_ejecutados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut paquetes_instalados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut architect_used = false;
     let mut tester_attempts = 0;
     let mut tester_success_hits = 0;
@@ -210,15 +211,30 @@ pub async fn run_agent_loop(
                 }
             },
             "TOOL_ENV_MANAGER" => {
-                emit_event(&app_handle, step_count, &format!("Módulo de Ingeniería de Entorno instalando: {}", comando), "ACTION");
-                match crate::core::env_manager::install_dependency(&comando).await {
-                    Ok(msg) => {
-                        current_context.push_str(&format!("Resultado TOOL_ENV_MANAGER: {}\n\n", msg));
-                        emit_event(&app_handle, step_count, "Dependencia instalada correctamente. PATH recargado en caliente.", "SUCCESS");
-                    },
-                    Err(err) => {
-                        current_context.push_str(&format!("Resultado TOOL_ENV_MANAGER Error: {}\n\n", err));
-                        emit_event(&app_handle, step_count, &err, "ERROR");
+                if comando.trim().is_empty() {
+                    let res_msg = "Error: El paquete no puede estar vacío.";
+                    current_context.push_str(&format!("{}\n\n", res_msg));
+                    emit_event(&app_handle, step_count, "Paquete vacío", "ERROR");
+                } else if paquetes_instalados_historico.contains(&comando) {
+                    let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito intentando instalar el mismo paquete fallido repetidamente. Abortando misión.";
+                    emit_event(&app_handle, step_count, res_msg, "FATAL");
+                    let final_res = FinalResponse {
+                        status: "FINISH".to_string(), // Frontend safe format
+                        respuesta_conversacional: format!("Se detectó un bucle intentando instalar múltiples veces el paquete '{}'. Es probable que no exista o el nombre esté mal escrito. Por favor instálalo manualmente.", comando),
+                    };
+                    return Ok(serde_json::to_string(&final_res).unwrap());
+                } else {
+                    paquetes_instalados_historico.insert(comando.clone());
+                    emit_event(&app_handle, step_count, &format!("Módulo de Ingeniería de Entorno instalando: {}", comando), "ACTION");
+                    match crate::core::env_manager::install_dependency(&comando).await {
+                        Ok(msg) => {
+                            current_context.push_str(&format!("Resultado TOOL_ENV_MANAGER: {}\n\n", msg));
+                            emit_event(&app_handle, step_count, "Dependencia instalada correctamente. PATH recargado en caliente.", "SUCCESS");
+                        },
+                        Err(err) => {
+                            current_context.push_str(&format!("Resultado TOOL_ENV_MANAGER Error: {}\n\n", err));
+                            emit_event(&app_handle, step_count, &err, "ERROR");
+                        }
                     }
                 }
             },
