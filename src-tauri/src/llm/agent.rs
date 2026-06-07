@@ -622,8 +622,7 @@ pub async fn run_agent_loop(
                                 || fail_msg.contains("The system cannot find the file specified")
                                 || fail_msg.contains("NotFound")
                                 || fail_msg.contains("No such file or directory")
-                                || fail_msg.contains("does not contain main module")
-                                || fail_msg.contains("setup failed");
+                                || fail_msg.contains("does not contain main module");
 
                             if is_dep_error {
                                 // Don't revert — the code itself is fine, deps are just missing
