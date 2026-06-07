@@ -91,6 +91,7 @@ pub async fn run_agent_loop(
             10. 'TOOL_TESTER': Ejecuta suites de pruebas automatizadas. ¡PELIGRO! Esta herramienta NO ESCRIBE ni implementa pruebas. SOLO LAS EJECUTA. Para escribir o arreglar un test, usa TOOL_PROGRAMMER.\n\
             11. 'TOOL_LEARN': Indexa el conocimiento de un proyecto exitoso en la memoria permanente de Aura. Úsala si el proyecto funciona o después de un TOOL_TESTER exitoso. No requiere argumentos.\n\
             12. 'TOOL_SEARCH': Consulta explícitamente la memoria histórica para buscar cómo resolviste problemas similares antes. Rellena 'url_a_investigar' con el término de búsqueda.\n\
+            13. 'TOOL_ENV_MANAGER': Instala dependencias o lenguajes faltantes en el sistema operativo de forma automática y recarga el PATH en caliente. Rellena 'comando' con el nombre del paquete (ej. 'go', 'node', 'python').\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):\n\
@@ -99,11 +100,13 @@ pub async fn run_agent_loop(
             - Firebase Deploy: Si piden desplegar a producción/Firebase, asume que 'firebase-tools' está instalado y usa 'TOOL_TERMINAL' con 'firebase init hosting' o 'firebase deploy --only hosting'. Asegúrate de compilar antes si es necesario (ej. 'npm run build').\n\
             - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER] tras un fallo de TOOL_TESTER, tu ÚNICA tarea es usar TOOL_PROGRAMMER para re-escribir y arreglar el código defectuoso. ¡PROHIBIDO volver a usar TOOL_TESTER sin antes haber modificado el código!\n            - Modo Arquitecto: Si al usar TOOL_ARCHITECT el campo de confianza es BAJA, no tomes decisiones de refactorización automáticas. Reporta los hallazgos al usuario y solicita confirmación manual.\n\
             - Auto-Testing: Tu objetivo no es solo escribir código, sino entregar sistemas funcionales. Valida tu trabajo con TOOL_TESTER antes de cualquier entrega final. Un código no probado es un código incompleto.\n\
-            - Auto-Healing (Pre-Flight): Si el sistema reporta un fallo de entorno [ENV_FAILURE] por dependencias faltantes (ej. no encuentra 'go', 'npm', 'python'), tu prioridad es intentar instalar la dependencia automáticamente usando TOOL_TERMINAL (por ejemplo, con `winget install`, `npm install`, etc.). REGLA ESTRICTA: Si la instalación por terminal falla, estás OBLIGADO a usar TOOL_FINISH en el siguiente turno para pedirle al usuario que lo instale manualmente.\n\n\
+            - Auto-Testing: Tu objetivo no es solo escribir código, sino entregar sistemas funcionales. Valida tu trabajo con TOOL_TESTER antes de cualquier entrega final. Un código no probado es un código incompleto.\n\
+            - Auto-Healing (Pre-Flight): Si el sistema reporta un fallo de entorno [ENV_FAILURE] por dependencias faltantes (ej. no encuentra 'go', 'npm', 'python'), tu prioridad es instalar la dependencia automáticamente usando TOOL_ENV_MANAGER pasándole el nombre de la dependencia. El módulo de Rust abstraerá la complejidad del SO. REGLA ESTRICTA: Si TOOL_ENV_MANAGER falla, estás OBLIGADO a usar TOOL_FINISH en el siguiente turno para pedirle al usuario que lo instale manualmente.\n\n\
             REGLAS DE ESTADO (STATE MACHINE):\n\
             - DESPUÉS de usar TOOL_PROGRAMMER con éxito, es OBLIGATORIO usar TOOL_TESTER para validar tus cambios.\n\
             - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
-            - SI TOOL_TERMINAL FALLA, es OBLIGATORIO usar TOOL_FINISH para evitar bucles de comandos infinitos.\n\n\
+            - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
+            - SI TOOL_TERMINAL o TOOL_ENV_MANAGER FALLAN, es OBLIGATORIO usar TOOL_FINISH para evitar bucles de comandos infinitos.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
@@ -203,6 +206,19 @@ pub async fn run_agent_loop(
                         emit_event(&app_handle, step_count, &res_msg, "ERROR");
                     }
                 }
+                }
+            },
+            "TOOL_ENV_MANAGER" => {
+                emit_event(&app_handle, step_count, &format!("Módulo de Ingeniería de Entorno instalando: {}", comando), "ACTION");
+                match crate::core::env_manager::install_dependency(&comando).await {
+                    Ok(msg) => {
+                        current_context.push_str(&format!("Resultado TOOL_ENV_MANAGER: {}\n\n", msg));
+                        emit_event(&app_handle, step_count, "Dependencia instalada correctamente. PATH recargado en caliente.", "SUCCESS");
+                    },
+                    Err(err) => {
+                        current_context.push_str(&format!("Resultado TOOL_ENV_MANAGER Error: {}\n\n", err));
+                        emit_event(&app_handle, step_count, &err, "ERROR");
+                    }
                 }
             },
             "TOOL_BACKGROUND_START" => {

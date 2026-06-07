@@ -4,6 +4,7 @@ pub mod env_check;
 pub mod memory;
 pub mod security;
 pub mod languages;
+pub mod env_manager;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};
