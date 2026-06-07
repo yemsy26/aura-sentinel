@@ -54,8 +54,19 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
         });
     }
 
-    // Python (PyTest)
-    if safe_exists("pytest.ini") || safe_exists("requirements.txt") || safe_exists("main.py") || safe_exists("backend.py") {
+    // Python (PyTest) - only if there is a real test setup
+    let has_test_files = || -> bool {
+        if let Ok(entries) = std::fs::read_dir(workspace_path) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("test_") && name.ends_with(".py") { return true; }
+                if name.ends_with("_test.py") { return true; }
+            }
+        }
+        false
+    };
+    if safe_exists("pytest.ini") || safe_exists("pyproject.toml") || has_test_files() {
         return Some(LanguageConfig {
             name: "Python",
             test_cmd: ("python", vec!["-m", "pytest"]),
