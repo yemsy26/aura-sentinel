@@ -264,12 +264,48 @@ pub async fn run_agent_loop(
                             // Guardar los cambios hechos por la terminal en Git-Shield
                             let _ = crate::core::create_git_backup(&workspace_path, "Aura-Sentinel: Git-Shield Auto-Backup (Terminal)").await;
                         },
-                    Err(err) => {
-                        let res_msg = format!("Error: {}", err);
-                        current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
-                        emit_event(&app_handle, step_count, &res_msg, "ERROR");
+                        Err(err) => {
+                            // ── Auto ENV_MANAGER: detect binary-not-found and auto-install ──────────
+                            let is_binary_missing = err.contains("is not recognized")
+                                || err.contains("not recognized as an internal")
+                                || err.contains("command not found")
+                                || err.contains("No such file or directory")
+                                || err.contains("cannot find the path")
+                                || err.contains("The term") && err.contains("is not recognized");
+
+                            if is_binary_missing {
+                                // Extract likely binary name from the failed command (first word)
+                                let binary = comando.split_whitespace().next().unwrap_or(&comando);
+                                emit_event(&app_handle, step_count,
+                                    &format!("[AUTO-ENV] Binario '{}' no encontrado. Invocando TOOL_ENV_MANAGER automáticamente...", binary),
+                                    "WARNING");
+
+                                match crate::core::env_manager::install_dependency(binary).await {
+                                    Ok(install_msg) => {
+                                        // Reset command history so the original command can be retried
+                                        comandos_ejecutados_historico.remove(&comando);
+                                        current_context.push_str(&format!(
+                                            "[AUTO-ENV] TOOL_ENV_MANAGER instaló '{}' automáticamente: {}\n\n\
+                                             Tu SIGUIENTE PASO OBLIGATORIO es reintentar el comando que falló: '{}'.\n\n",
+                                            binary, install_msg, comando
+                                        ));
+                                        emit_event(&app_handle, step_count,
+                                            &format!("Dependencia '{}' instalada. Reintenta el comando.", binary),
+                                            "SUCCESS");
+                                    },
+                                    Err(install_err) => {
+                                        let res_msg = format!("Error: {}\n[AUTO-ENV FALLÓ] No se pudo instalar '{}': {}\nSe requiere intervención manual.", err, binary, install_err);
+                                        current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
+                                        emit_event(&app_handle, step_count, &res_msg, "ERROR");
+                                    }
+                                }
+                            } else {
+                                let res_msg = format!("Error: {}", err);
+                                current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
+                                emit_event(&app_handle, step_count, &res_msg, "ERROR");
+                            }
+                        }
                     }
-                }
                 }
             },
             "TOOL_ENV_MANAGER" => {
@@ -528,16 +564,11 @@ pub async fn run_agent_loop(
                         };
 
                         if no_tests_consecutive >= 3 {
-                            // After 3 cycles, switch strategy: bypass detect_language and run
-                            // npm test directly via TOOL_TERMINAL (in case package.json exists but
-                            // detect_language missed it, or jest needs to be installed first)
                             let force_msg = format!(
                                 "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin detectar tests. \
                                 El sistema cambia de estrategia. En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
                                 Archivos actuales en el workspace:\n{}\n\n\
-                                EJECUTA: Si ya existe package.json, rellena el campo 'comando' con 'npm install --save-dev jest && npm test'. \
-                                Si no existe package.json, PRIMERO crea los archivos package.json y emailValidator.test.js con TOOL_PROGRAMMER, \
-                                luego instala con TOOL_TERMINAL.",
+                                EJECUTA: Identifica qué framework de testing necesita este proyecto (según su lenguaje) y usa TOOL_TERMINAL para inicializarlo e instalar sus dependencias. Si ya está instalado, ejecuta el comando de pruebas en la terminal.",
                                 no_tests_consecutive, workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", force_msg));
@@ -548,11 +579,11 @@ pub async fn run_agent_loop(
                                 "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin archivos de test detectados. \
                                 En tu próximo turno DEBES ELEGIR 'TOOL_PROGRAMMER'. \
                                 Archivos actuales en el workspace:\n{}\n\n\
-                                DEBES crear TODOS los archivos que falten. Para un proyecto Jest en Node.js necesitas:\n\
-                                1) package.json con: {{\"scripts\": {{\"test\": \"jest\"}}, \"devDependencies\": {{\"jest\": \"^29.0.0\"}}}}\n\
-                                2) El archivo de test: test/emailValidator.test.js (o similar)\n\
-                                3) El archivo de codigo: src/validadores/email.js\n\
-                                Incluye TODOS estos archivos en 'archivos_a_editar'.",
+                                DEBES crear TODOS los archivos que falten para la suite de pruebas del lenguaje en el que estés trabajando.\n\
+                                1) Archivos de configuración (ej: package.json, go.mod, Cargo.toml, hardhat.config.js)\n\
+                                2) El archivo de pruebas correspondiente\n\
+                                3) El código fuente principal a probar\n\
+                                Incluye TODOS estos archivos en 'archivos_a_editar' usando RUTAS RELATIVAS.",
                                 no_tests_consecutive, workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", force_msg));
@@ -561,12 +592,11 @@ pub async fn run_agent_loop(
                         } else {
                             // First hit — tell the LLM clearly
                             let no_test_msg = format!(
-                                "[SISTEMA] No se detectaron archivos de test reconocidos (*.test.js, *.spec.js, jest.config.js, etc.). \
+                                "[SISTEMA] No se detectaron archivos de test reconocidos para ningún lenguaje soportado. \
                                 Archivos actuales en el workspace:\n{}\n\n\
-                                Si el usuario pidio tests: DEBES usar TOOL_PROGRAMMER para crear package.json \
-                                (con script test=jest y devDependency jest) Y el archivo *.test.js. \
-                                Luego usa TOOL_TERMINAL con 'npm install' y despues vuelve a usar TOOL_TESTER. \
-                                SOLO usa TOOL_FINISH si el usuario NO pidio tests.",
+                                Si el usuario pidió tests: DEBES usar TOOL_PROGRAMMER para crear los archivos de prueba y configuración del framework adecuado. \
+                                Luego usa TOOL_TERMINAL para instalar dependencias, y después vuelve a usar TOOL_TESTER. \
+                                SOLO usa TOOL_FINISH si el usuario NO pidió tests.",
                                 workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", no_test_msg));
@@ -622,20 +652,76 @@ pub async fn run_agent_loop(
                                 || fail_msg.contains("The system cannot find the file specified")
                                 || fail_msg.contains("NotFound")
                                 || fail_msg.contains("No such file or directory")
-                                || fail_msg.contains("does not contain main module");
+                                || fail_msg.contains("does not contain main module")
+                                || fail_msg.contains("[ENV_FAILURE]");
 
                             if is_dep_error {
                                 // Don't revert — the code itself is fine, deps are just missing
-                                emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
-                                tester_attempts -= 1; // Don’t count this as a real test failure
-                                current_context.push_str(&format!(
-                                    "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante (no por errores de lógica):\n{}\n\n\
-                                    En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
-                                    Si el proyecto es Node.js: Rellena el campo 'comando' con 'npm install'. \
-                                    Si el proyecto es Go: Rellena el campo 'comando' con 'go mod init app && go mod tidy'. \
-                                    REGLA ESTRICTA: Después de ejecutar TOOL_TERMINAL con éxito, tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER. ¡Bajo ninguna circunstancia uses TOOL_FINISH o TOOL_ENV_MANAGER hasta que los tests pasen!",
-                                    fail_msg
-                                ));
+                                tester_attempts -= 1; // Don't count this as a real test failure
+
+                                // ── Auto ENV_MANAGER: if a specific binary is missing, install it ──
+                                let is_env_failure = fail_msg.contains("[ENV_FAILURE]");
+                                if is_env_failure {
+                                    // Extract the missing binary name from the [ENV_FAILURE] message
+                                    // Pattern: "No se encontró el comando 'X'"
+                                    let binary = fail_msg
+                                        .split('\'')
+                                        .nth(1)
+                                        .unwrap_or("")
+                                        .trim();
+
+                                    if !binary.is_empty() && !paquetes_instalados_historico.contains(binary) {
+                                        emit_event(&app_handle, step_count,
+                                            &format!("[AUTO-ENV] Tester detectó binario faltante '{}'. Instalando automáticamente...", binary),
+                                            "WARNING");
+                                        paquetes_instalados_historico.insert(binary.to_string());
+
+                                        match crate::core::env_manager::install_dependency(binary).await {
+                                            Ok(install_msg) => {
+                                                // Reset tester history so it can be retried
+                                                archivos_editados_historico.clear();
+                                                comandos_ejecutados_historico.clear();
+                                                current_context.push_str(&format!(
+                                                    "[AUTO-ENV] Binario '{}' instalado automáticamente: {}\n\n\
+                                                     Tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER.\n\n",
+                                                    binary, install_msg
+                                                ));
+                                                emit_event(&app_handle, step_count,
+                                                    &format!("'{}' instalado. Reintenta TOOL_TESTER.", binary),
+                                                    "SUCCESS");
+                                            },
+                                            Err(install_err) => {
+                                                current_context.push_str(&format!(
+                                                    "[AUTO-ENV FALLÓ] No se pudo instalar '{}': {}\n\
+                                                     Requiere intervención manual. Usa TOOL_FINISH.\n\n",
+                                                    binary, install_err
+                                                ));
+                                                emit_event(&app_handle, step_count,
+                                                    &format!("Fallo al auto-instalar '{}': {}", binary, install_err),
+                                                    "ERROR");
+                                            }
+                                        }
+                                    } else {
+                                        // Already attempted or no binary name found — fall back to guidance
+                                        emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
+                                        current_context.push_str(&format!(
+                                            "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante:\n{}\n\n\
+                                            Tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_TERMINAL' con 'npm install' o el instalador adecuado al lenguaje.\n\n",
+                                            fail_msg
+                                        ));
+                                    }
+                                } else {
+                                    // Dependency error but no specific binary — guide the LLM
+                                    emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
+                                    current_context.push_str(&format!(
+                                        "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante (no por errores de lógica):\n{}\n\n\
+                                        En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
+                                        Si el proyecto es Node.js: Rellena el campo 'comando' con 'npm install'. \
+                                        Si el proyecto es Go: Rellena el campo 'comando' con 'go mod init app && go mod tidy'. \
+                                        REGLA ESTRICTA: Después de ejecutar TOOL_TERMINAL con éxito, tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER.",
+                                        fail_msg
+                                    ));
+                                }
                             } else {
                                 // Real test logic failure — revert and let Qwen fix the code
                                 emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
@@ -696,7 +782,11 @@ pub async fn run_agent_loop(
     emit_event(&app_handle, step_count, "Límite máximo de pasos alcanzado. Bucle abortado.", "FATAL");
     let final_res = FinalResponse {
         status: "FINISH".to_string(),
-        respuesta_conversacional: "He alcanzado el límite máximo de 10 pasos sin llegar a una conclusión.".to_string(),
+        respuesta_conversacional: format!(
+            "He alcanzado el límite máximo de {} pasos sin llegar a una conclusión. \
+             Por favor, revisa el historial de pasos y proporciona más contexto.",
+            max_steps
+        ),
     };
     Ok(serde_json::to_string(&final_res).unwrap())
 }
