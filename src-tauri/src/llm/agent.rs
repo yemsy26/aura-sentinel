@@ -622,20 +622,21 @@ pub async fn run_agent_loop(
                                 || fail_msg.contains("Error: no test specified")
                                 || fail_msg.contains("The system cannot find the file specified")
                                 || fail_msg.contains("NotFound")
-                                || fail_msg.contains("No such file or directory");
-
+                                || fail_msg.contains("No such file or directory")
+                                || fail_msg.contains("does not contain main module")
+                                || fail_msg.contains("setup failed");
 
                             if is_dep_error {
                                 // Don't revert — the code itself is fine, deps are just missing
-                                emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Forzando TOOL_TERMINAL para npm install...", "ERROR");
+                                emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Forzando TOOL_TERMINAL...", "ERROR");
                                 forced_next_tool = Some("TOOL_TERMINAL");
                                 tester_attempts -= 1; // Don’t count this as a real test failure
                                 current_context.push_str(&format!(
-                                    "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias faltantes (no por errores de lógica):\n{}\n\n\
+                                    "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante (no por errores de lógica):\n{}\n\n\
                                     El sistema FUERZA TOOL_TERMINAL. \
-                                    Ejecuta 'npm install' para instalar jest desde el package.json. \
-                                    Si no existe package.json, usa TOOL_PROGRAMMER primero para crearlo con \
-                                    {{\"scripts\": {{\"test\": \"jest\"}}, \"devDependencies\": {{\"jest\": \"^29.0.0\"}}}}",
+                                    Si es Node.js: Ejecuta 'npm install' o instala el framework de tests. \
+                                    Si es Go: Ejecuta 'go mod init app' y luego 'go mod tidy'. \
+                                    Si falta algún archivo de configuración (ej. package.json), usa TOOL_PROGRAMMER en tu siguiente turno para crearlo.",
                                     fail_msg
                                 ));
                             } else {
