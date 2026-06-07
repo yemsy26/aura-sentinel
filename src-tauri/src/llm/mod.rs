@@ -203,7 +203,7 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
 pub async fn process_user_prompt(user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
     let technical_intent = translator::translate_to_technical_intent(&user_message, &app_handle).await;
     println!("[TRADUCTOR] Input: '{}' -> Intención: '{}'", user_message, technical_intent);
-    let user_message = technical_intent;
+    let enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: {}", user_message, technical_intent);
 
     let workspace_tree_nodes = crate::memory::get_workspace_tree_internal(workspace_path.clone()).await?;
     let files_only: Vec<_> = workspace_tree_nodes.iter().filter(|n| !n.is_dir).collect();
@@ -228,7 +228,7 @@ pub async fn process_user_prompt(user_message: String, workspace_path: String, a
             index.clear();
         }
     }
-    let user_embedding = get_embedding(&user_message).await.unwrap_or_default();
+    let user_embedding = get_embedding(&enriched_message).await.unwrap_or_default();
     let tree_json = if user_embedding.is_empty() || index.is_empty() {
         serde_json::to_string(&files_only.iter().map(|n| n.path.clone()).collect::<Vec<String>>()).unwrap_or_default()
     } else {
@@ -240,5 +240,5 @@ pub async fn process_user_prompt(user_message: String, workspace_path: String, a
         let top_10: Vec<String> = scored_nodes.into_iter().take(10).map(|(n, _)| n.path.clone()).collect();
         serde_json::to_string(&top_10).unwrap_or_default()
     };
-    agent::run_agent_loop(user_message, workspace_path, tree_json, app_handle).await
+    agent::run_agent_loop(enriched_message, workspace_path, tree_json, app_handle).await
 }
