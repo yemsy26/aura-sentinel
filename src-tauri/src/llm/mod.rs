@@ -206,7 +206,12 @@ pub async fn process_user_prompt(user_message: String, workspace_path: String, a
     let enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: {}", user_message, technical_intent);
 
     let workspace_tree_nodes = crate::memory::get_workspace_tree_internal(workspace_path.clone()).await?;
-    let files_only: Vec<_> = workspace_tree_nodes.iter().filter(|n| !n.is_dir).collect();
+    // Filter out noise directories — node_modules alone can be 4000+ nodes and pollutes
+    // the LLM context and embedding index with irrelevant framework internals.
+    let ignored_dirs = ["node_modules", ".git", "__pycache__", "target"];
+    let files_only: Vec<_> = workspace_tree_nodes.iter().filter(|n| {
+        !n.is_dir && !ignored_dirs.iter().any(|d| n.path.contains(d))
+    }).collect();
     let mut index = crate::memory::read_vector_index(&workspace_path).await;
     const MAX_NUEVOS_A_VECTORIZAR: usize = 50;
     if index.len() != files_only.len() {

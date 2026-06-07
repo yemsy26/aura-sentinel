@@ -54,10 +54,46 @@ pub async fn run_agent_loop(
             
     let mut current_context = String::new();
     
-    // Inyección de Memoria (RAG)
+    // ── Inject current workspace state first ──────────────────────────────
+    // Always show the LLM what ACTUALLY exists in the workspace right now.
+    // This prevents hallucinating a blank-slate project when files already exist.
+    {
+        let mut existing_files = Vec::new();
+        fn scan_workspace_files(dir: &std::path::Path, files: &mut Vec<String>, depth: usize) {
+            if depth > 5 { return; }
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    // Skip node_modules, .git, __pycache__, hidden dirs
+                    if name.starts_with('.') || name == "node_modules" || name == "__pycache__" || name == "target" { continue; }
+                    if path.is_dir() {
+                        scan_workspace_files(&path, files, depth + 1);
+                    } else {
+                        files.push(path.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+        scan_workspace_files(std::path::Path::new(&workspace_path), &mut existing_files, 0);
+        if !existing_files.is_empty() {
+            current_context.push_str(&format!(
+                "[ESTADO ACTUAL DEL WORKSPACE] Los siguientes archivos YA EXISTEN en el proyecto. \
+                Antes de crear nada, verifica si estos archivos ya cumplen el objetivo:\n{}\n\n",
+                existing_files.join("\n")
+            ));
+        }
+    }
+
+    // ── RAG Memory (secondary, clearly labelled) ───────────────────────────
+    // RAG provides OPTIONAL historical patterns. It NEVER overrides the current task.
+    // The current task is ALWAYS the user_message above.
     if let Ok(historia) = crate::core::memory::query_memory(&user_message).await {
         if !historia.contains("vacía") && !historia.contains("No se encontró") {
-            current_context.push_str(&historia);
+            current_context.push_str(&format!(
+                "[CONTEXTO HISTÓRICO OPCIONAL — solo como referencia de patrones, NO como objetivo actual]:\n{}\n\n",
+                historia
+            ));
         }
     }
     let mut archivos_editados_historico: std::collections::HashSet<String> = std::collections::HashSet::new();
