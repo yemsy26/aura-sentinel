@@ -569,13 +569,45 @@ pub async fn run_agent_loop(
                             };
                             return Ok(serde_json::to_string(&final_res).unwrap());
                         } else {
-                            emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
-                            let _ = crate::core::restore_git_backup(&workspace_path).await;
-                            archivos_editados_historico.clear();
-                            comandos_ejecutados_historico.clear();
-                            task_complexity = crate::llm::router::Complexity::HighComplexityFix;
-                            emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
-                            current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
+                            // ── Detect dependency/install errors vs logic errors ─────────────
+                            // If jest/npm/module is missing, auto-fix by running npm install
+                            // instead of asking Qwen to rewrite code (which won't help).
+                            let is_dep_error = fail_msg.contains("Cannot find module")
+                                || fail_msg.contains("jest: command not found")
+                                || fail_msg.contains("jest.cmd")
+                                || fail_msg.contains("not recognized")
+                                || fail_msg.contains("is not recognized")
+                                || fail_msg.contains("JSONError")
+                                || fail_msg.contains("SyntaxError: Unexpected token")
+                                    && fail_msg.contains("package.json")
+                                || fail_msg.contains("ENOENT")
+                                    && (fail_msg.contains("jest") || fail_msg.contains("node_modules"))
+                                || fail_msg.contains("npm ERR! Missing script: test")
+                                || fail_msg.contains("Error: no test specified");
+
+                            if is_dep_error {
+                                // Don't revert — the code itself is fine, deps are just missing
+                                emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Forzando TOOL_TERMINAL para npm install...", "ERROR");
+                                forced_next_tool = Some("TOOL_TERMINAL");
+                                tester_attempts -= 1; // Don’t count this as a real test failure
+                                current_context.push_str(&format!(
+                                    "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias faltantes (no por errores de lógica):\n{}\n\n\
+                                    El sistema FUERZA TOOL_TERMINAL. \
+                                    Ejecuta 'npm install' para instalar jest desde el package.json. \
+                                    Si no existe package.json, usa TOOL_PROGRAMMER primero para crearlo con \
+                                    {{\"scripts\": {{\"test\": \"jest\"}}, \"devDependencies\": {{\"jest\": \"^29.0.0\"}}}}",
+                                    fail_msg
+                                ));
+                            } else {
+                                // Real test logic failure — revert and let Qwen fix the code
+                                emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
+                                let _ = crate::core::restore_git_backup(&workspace_path).await;
+                                archivos_editados_historico.clear();
+                                comandos_ejecutados_historico.clear();
+                                task_complexity = crate::llm::router::Complexity::HighComplexityFix;
+                                emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
+                                current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
+                            }
                         }
                     }
                 }
