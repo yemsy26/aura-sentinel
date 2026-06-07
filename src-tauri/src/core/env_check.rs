@@ -153,32 +153,29 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
 
     // 5. Ollama — REQUIRED (the agent itself depends on this)
     let mut available_models = Vec::new();
-    #[cfg(target_os = "windows")]
-    let ollama_cmd = Command::new("cmd").args(["/C", "ollama list"]).output().await;
-    #[cfg(not(target_os = "windows"))]
-    let ollama_cmd = Command::new("ollama").arg("list").output().await;
-
-    match ollama_cmd {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines().skip(1) {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(model_name) = parts.first() {
-                    available_models.push(model_name.to_string());
+    
+    let client = reqwest::Client::new();
+    match client.get("http://127.0.0.1:11434/api/tags").send().await {
+        Ok(res) if res.status().is_success() => {
+            if let Ok(json) = res.json::<serde_json::Value>().await {
+                if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
+                    for model in models {
+                        if let Some(name) = model.get("name").and_then(|n| n.as_str()) {
+                            available_models.push(name.to_string());
+                        }
+                    }
                 }
             }
             if available_models.is_empty() {
                 errors.push("Ollama está instalado, pero no tienes ningún modelo descargado. Descarga al menos llama3.1:8b.".to_string());
             }
         }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            errors.push(format!("Fallo al ejecutar 'ollama list'. Código de salida: {:?}. Error: {}", output.status.code(), stderr));
+        Ok(res) => {
+            errors.push(format!("El servicio de Ollama devolvió HTTP {}", res.status()));
         }
         Err(e) => {
-            errors.push(format!("Fallo al iniciar el proceso 'ollama list': {}", e));
+            errors.push(format!("No se pudo conectar a la API de Ollama (http://127.0.0.1:11434). Asegúrate de que el servicio de Ollama esté corriendo. Detalle: {}", e));
         }
-
     }
 
     // Append warnings as context (non-blocking)
