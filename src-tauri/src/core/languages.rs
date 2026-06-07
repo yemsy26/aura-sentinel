@@ -81,12 +81,29 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
             || safe_exists(".mocharc.js")
             || safe_exists(".mocharc.yml");
 
-        let has_test_files = any_file(&|name| {
-            name.ends_with(".test.js")
-                || name.ends_with(".test.ts")
-                || name.ends_with(".spec.js")
-                || name.ends_with(".spec.ts")
-        });
+        // Recursive scan for test files (handles tests/ subdirectory)
+        let has_test_files = {
+            fn scan_dir_for_tests(dir: &std::path::Path) -> bool {
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        // Skip node_modules and hidden dirs
+                        if name.starts_with('.') || name == "node_modules" { continue; }
+                        if path.is_dir() {
+                            if scan_dir_for_tests(&path) { return true; }
+                        } else if name.ends_with(".test.js")
+                            || name.ends_with(".test.ts")
+                            || name.ends_with(".spec.js")
+                            || name.ends_with(".spec.ts") {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            scan_dir_for_tests(workspace_path)
+        };
 
         // Also check if package.json has a non-empty "test" script
         let has_test_script = std::fs::read_to_string(workspace_path.join("package.json"))
@@ -134,12 +151,27 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
         return None; // C++ project but no test target
     }
 
-    // ── Python (PyTest) ─────────────────────────────────────────────────────
-    // BUG FIX (original): Only activate if there is a real test setup
-    let has_python_test_files = any_file(&|name| {
-        (name.starts_with("test_") && name.ends_with(".py"))
-            || name.ends_with("_test.py")
-    });
+    // ── Python (PyTest) ──────────────────────────────────────────────────────
+    // Only activate if there is a real test setup (recursive scan)
+    let has_python_test_files = {
+        fn scan_dir_for_py_tests(dir: &std::path::Path) -> bool {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    if name.starts_with('.') || name == "__pycache__" { continue; }
+                    if path.is_dir() {
+                        if scan_dir_for_py_tests(&path) { return true; }
+                    } else if (name.starts_with("test_") && name.ends_with(".py"))
+                        || name.ends_with("_test.py") {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        scan_dir_for_py_tests(workspace_path)
+    };
 
     if safe_exists("pytest.ini") || safe_exists("pyproject.toml") || has_python_test_files {
         return Some(LanguageConfig {

@@ -442,10 +442,15 @@ pub async fn run_agent_loop(
                 match crate::core::tester::run_tests(&workspace_path).await {
                     crate::core::tester::TestResult::NoTests => {
                         // No test suite found — this is NOT a failure, code is fine
-                        // Don't revert, don't panic. Treat as if code is valid.
-                        let no_test_msg = "[SISTEMA] No se detectó ningún framework de tests (ni pytest.ini, ni jest.config.js, etc.) en este workspace. TOOL_TESTER no es aplicable aquí. El código fue escrito correctamente. Usa TOOL_TERMINAL para ejecutar el script directamente y luego usa TOOL_FINISH.";
+                        // But if the user explicitly requested tests (Jest, pytest, etc.), the
+                        // test file was probably never created. Tell the LLM to fix this.
+                        let no_test_msg = "[SISTEMA] No se detectaron archivos de test en el workspace (no hay *.test.js, test_*.py, jest.config.js, pytest.ini, etc.). \
+                        ANALIZA EL OBJETIVO ORIGINAL: si el usuario pidio tests, significa que TOOL_PROGRAMMER nunca creo el archivo de tests. \
+                        DEBES usar TOOL_PROGRAMMER para crear los archivos de tests requeridos (ej: emailValidator.test.js con import de jest, package.json con script test y dependencia jest). \
+                        Luego instala dependencias con TOOL_TERMINAL (npm install) y vuelve a usar TOOL_TESTER. \
+                        SOLO usa TOOL_FINISH si el usuario NO pidio tests explicitamente.";
                         current_context.push_str(&format!("{}\n\n", no_test_msg));
-                        emit_event(&app_handle, step_count, "Sin suite de tests detectada. Continúa con TOOL_TERMINAL o TOOL_FINISH.", "WARNING");
+                        emit_event(&app_handle, step_count, "Sin suite de tests detectada. Revisa si debes crear los archivos de test primero.", "WARNING");
                     },
                     crate::core::tester::TestResult::Passed(success_msg) => {
                         tester_attempts = 0;
