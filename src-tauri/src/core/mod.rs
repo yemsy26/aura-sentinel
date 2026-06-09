@@ -202,18 +202,30 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
         // Read the package.json to check if a "dev" or "start" script exists.
         // If neither exists, surface a meaningful error so the agent knows to fix it.
         let pkg_content = std::fs::read_to_string(path.join("package.json")).unwrap_or_default();
-        let pkg_json: serde_json::Value = serde_json::from_str(&pkg_content).unwrap_or(serde_json::Value::Null);
-        let has_dev = pkg_json.pointer("/scripts/dev").is_some();
-        let has_start = pkg_json.pointer("/scripts/start").is_some();
-        let has_build = pkg_json.pointer("/scripts/build").is_some();
+        let pkg_json_res = serde_json::from_str::<serde_json::Value>(&pkg_content);
+        match pkg_json_res {
+            Ok(pkg_json) => {
+                let has_dev = pkg_json.pointer("/scripts/dev").is_some();
+                let has_start = pkg_json.pointer("/scripts/start").is_some();
+                let has_build = pkg_json.pointer("/scripts/build").is_some();
 
-        if !has_dev && !has_start && !has_build {
-            return Err(
-                "[NODE_SCRIPTS_MISSING] El package.json existe pero NO tiene scripts 'dev', 'start' ni 'build' definidos. \
-                Esto significa que 'npm run dev' fallará con 'Missing script: dev'. \
-                Debes usar TOOL_PROGRAMMER para agregar los scripts correctos al package.json antes de continuar. \
-                Un archivo .bat que llame a 'npm run dev' sin que el script exista es un trabajo INCOMPLETO.".to_string()
-            );
+                if !has_dev && !has_start && !has_build {
+                    return Err(
+                        "[NODE_SCRIPTS_MISSING] El package.json existe pero NO tiene scripts 'dev', 'start' ni 'build' definidos. \
+                        Esto significa que 'npm run dev' fallará con 'Missing script: dev'. \
+                        Debes usar TOOL_PROGRAMMER para agregar los scripts correctos al package.json antes de continuar. \
+                        Un archivo .bat que llame a 'npm run dev' sin que el script exista es un trabajo INCOMPLETO.".to_string()
+                    );
+                }
+            },
+            Err(e) => {
+                return Err(format!(
+                    "[JSON_SYNTAX_ERROR] El package.json tiene errores de sintaxis (Línea {}): {}. \
+                    RECUERDA: JSON estricto no permite comentarios (ni // ni /* */) ni comas sueltas. \
+                    Usa TOOL_PROGRAMMER para limpiar el package.json y dejarlo como JSON válido.",
+                    e.line(), e
+                ));
+            }
         }
         return Ok(());
     }
