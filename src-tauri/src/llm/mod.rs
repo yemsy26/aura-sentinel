@@ -293,14 +293,19 @@ pub async fn process_user_prompt(user_message: String, workspace_path: String, a
                 // Extract the word(s) after the prefix
                 let rest = lower_msg[lower_msg.find(prefix).unwrap() + prefix.len()..].trim().to_string();
                 // take first token as the folder name (stop at space or special char)
-                let name: String = rest.split_whitespace().next().unwrap_or("").chars()
-                    .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-                    .collect();
-                // Filter out Spanish filler/pronoun words that are NOT valid folder names
                 let filler_words = ["que", "el", "la", "lo", "un", "una", "te", "pedi",
                                     "me", "mi", "tu", "a", "de", "en", "con", "por",
-                                    "para", "como", "al", "del", "se", "le", "les"];
-                if !name.is_empty() && !filler_words.contains(&name.as_str()) {
+                                    "para", "como", "al", "del", "se", "le", "les",
+                                    "nombre", "llamada", "llamado", "llame", "y"];
+                let mut name = String::new();
+                for word in rest.split_whitespace() {
+                    let clean_word: String = word.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+                    if !clean_word.is_empty() && !filler_words.contains(&clean_word.to_lowercase().as_str()) {
+                        name = clean_word;
+                        break;
+                    }
+                }
+                if !name.is_empty() {
                     Some(name)
                 } else {
                     None
