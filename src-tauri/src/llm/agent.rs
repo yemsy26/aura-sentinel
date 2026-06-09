@@ -354,6 +354,7 @@ pub async fn run_agent_loop(
                     };
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 } else {
+                    programmer_cooldown_hits = 0;
                     comandos_ejecutados_historico.insert(comando.clone());
                     emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
                     match execute_terminal_command(&workspace_path, &comando).await {
