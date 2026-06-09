@@ -740,6 +740,9 @@ pub async fn run_agent_loop(
                                                     Err(e) => {
                                                         emit_event(&app_handle, step_count, &format!("Error detectado: {}", e), "ERROR");
                                                         qwen_prompt = format!("El código causó este error:\n{}\nSoluciónalo y genera un nuevo JSON.", e);
+                                                        if e.contains("package.json") && !archivos_vec.contains(&"package.json".to_string()) {
+                                                            archivos_vec.push("package.json".to_string());
+                                                        }
                                                         max_intentos -= 1;
                                                     }
                                                 }
