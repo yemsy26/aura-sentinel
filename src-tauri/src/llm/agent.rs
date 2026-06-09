@@ -237,7 +237,9 @@ pub async fn run_agent_loop(
             - SI TOOL_TERMINAL TIENE ÉXITO y su salida demuestra que cumpliste el último objetivo del usuario, es OBLIGATORIO usar TOOL_FINISH en el siguiente paso. ¡PROHIBIDO repetir el mismo comando de TOOL_TERMINAL si ya funcionó!\n\
             - SI TOOL_TERMINAL falla constantemente, es OBLIGATORIO usar TOOL_FINISH para evitar bucles de comandos infinitos.\n\
             - SI TOOL_ENV_MANAGER TIENE ÉXITO, NO PUEDES volver a usar TOOL_ENV_MANAGER. Debes continuar tu tarea con TOOL_TERMINAL, TOOL_PROGRAMMER o TOOL_TESTER.\n\
-            - SI TOOL_ENV_MANAGER FALLA, es OBLIGATORIO usar TOOL_FINISH en el siguiente paso para pedir intervención manual.\n\n\
+            - SI TOOL_ENV_MANAGER FALLA, es OBLIGATORIO usar TOOL_FINISH en el siguiente paso para pedir intervención manual.\n\
+            - REGLA DE VERIFICACIÓN OBLIGATORIA: Si el mensaje original del usuario contiene palabras como 'prueba', 'pruébalo', 'ejecuta', 'ejecutalo', 'verifica', 'corre', 'abre', 'test', 'comprueba' o 'demuestra', entonces TOOL_TERMINAL ES OBLIGATORIO antes de TOOL_FINISH. No puedes declarar el trabajo terminado sin haber ejecutado físicamente el resultado y comprobado que no produce errores. Si el comando falla, debes corregirlo con TOOL_PROGRAMMER y volver a ejecutar.\n\
+            - REGLA DE BORRADO: Si el usuario pide 'borra', 'elimina', 'borra el archivo X' como parte de la tarea, debes usar TOOL_WORKSPACE_MANAGER para borrar ese archivo PRIMERO antes de crear el nuevo. No puedes asumir que el archivo fue borrado por el historial.\n\n\
             Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {{\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\

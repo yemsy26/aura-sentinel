@@ -40,7 +40,10 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
         Tu única función es leer lo que dice el usuario y clasificar la petición en uno de estos tres tipos, DEVOLVIENDO UN ÚNICO OBJETO JSON VÁLIDO (sin texto extra):\n\n\
         TIPOS DE INTENCIÓN:\n\
         1. \"CONVERSATION\": El usuario solo está saludando, haciendo charla general, haciendo PREGUNTAS BÁSICAS DE CONOCIMIENTO (ej: \"qué es btc\"), o haciendo PETICIONES DE PROGRAMACIÓN MUY AMBIGUAS (ej: \"quiero crear un sistema en python\", \"haz una app\"). Si la petición es tan vaga que no sabes qué programar exactamente, DEBES responder preguntando por más detalles y NO usar AGENTIC_TASK.\n\
-        2. \"FAST_TRACK_OS\": El usuario quiere ejecutar un comando nativo sencillo en la terminal (ej: crear carpeta, listar, ping) que no requiere un agente de programación complejo.\n\
+        2. \"FAST_TRACK_OS\": El usuario quiere ejecutar un comando nativo sencillo en la terminal (ej: crear carpeta, listar, ping) que no requiere un agente de programación complejo. \n\
+        ⚠️ SISTEMA OPERATIVO: WINDOWS. Los comandos 'os_command' DEBEN ser sintaxis CMD de Windows. \n\
+        COMANDOS WINDOWS OBLIGATORIOS: usa 'del' (NO 'rm'), 'type nul >' (NO 'touch'), 'dir' (NO 'ls'), 'copy' (NO 'cp'), 'move' (NO 'mv'), 'rd /s /q' (NO 'rm -rf'). \n\
+        PROHIBIDO usar: rm, touch, chmod, ls, cat, cp, mv, mkdir -p, grep, sudo. \n\
         3. \"AGENTIC_TASK\": El usuario quiere buscar información EN TIEMPO REAL (ej. precios actuales, noticias de hoy, la hora actual), crear código ESPECÍFICO, modificar archivos físicos, analizar sistemas, o solucionar bugs. ¡OBLIGATORIO! Si el mensaje contiene palabras como 'investiga', 'investigue', 'busca', 'buscar', 'busque', 'investigar', siempre clasifica como AGENTIC_TASK aunque el tema sea básico.\\n\
         [NOTA CLAVE]: ¡Para peticiones ambiguas (\"quiero hacer un programa\"), usa CONVERSATION para pedir detalles! ¡Para comandos de terminal usa FAST_TRACK_OS! ¡Para crear archivos ESPECÍFICOS, programar o buscar datos usa AGENTIC_TASK!\\n\\n\\\
         ESTRUCTURA DEL JSON A DEVOLVER (OBLIGATORIA):\n\
@@ -56,6 +59,12 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
         EJEMPLO 2:\n\
         Usuario: hazme una carpeta llamdo prueba pls\n\
         JSON:\n{{\"intent_type\":\"FAST_TRACK_OS\",\"technical_translation\":null,\"os_command\":\"mkdir \\\"prueba\\\"\",\"direct_response\":null}}\n\
+        EJEMPLO 2b:\n\
+        Usuario: borra el archivo test.bat\n\
+        JSON:\n{{\"intent_type\":\"FAST_TRACK_OS\",\"technical_translation\":null,\"os_command\":\"del /f \\\"test.bat\\\"\",\"direct_response\":null}}\n\
+        EJEMPLO 2c:\n\
+        Usuario: lista los archivos\n\
+        JSON:\n{{\"intent_type\":\"FAST_TRACK_OS\",\"technical_translation\":null,\"os_command\":\"dir\",\"direct_response\":null}}\n\
         EJEMPLO 3:\n\
         Usuario: metele un hello world al main viejo\n\
         JSON:\n{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"Modificar el archivo main existente para que imprima 'Hello World' o su equivalente en el lenguaje del proyecto usando TOOL_PROGRAMMER.\",\"os_command\":null,\"direct_response\":null}}\n\n\
