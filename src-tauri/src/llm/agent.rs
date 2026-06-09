@@ -572,11 +572,16 @@ pub async fn run_agent_loop(
             },
             "TOOL_PROGRAMMER" => {
                 let mut ya_editados = true;
-                if archivos_vec.is_empty() { ya_editados = false; }
-                for f in &archivos_vec {
-                    if !archivos_editados_historico.contains(f) {
-                        ya_editados = false;
-                        break;
+                if !archivos_editados_historico.is_empty() && comandos_ejecutados_historico.is_empty() {
+                    // Enforce state machine: cannot program twice in a row without a terminal test.
+                    ya_editados = true;
+                } else {
+                    if archivos_vec.is_empty() { ya_editados = false; }
+                    for f in &archivos_vec {
+                        if !archivos_editados_historico.contains(f) {
+                            ya_editados = false;
+                            break;
+                        }
                     }
                 }
                 
@@ -717,11 +722,11 @@ pub async fn run_agent_loop(
                                                                 }
                                                             }
 
-                                                            let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos, Anti-Stub APROBADO, Integración VERIFICADA. Avanza a la siguiente Micro-Meta.\n\n", archivos_vec);
+                                                            let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos con éxito, Anti-Stub APROBADO.\n⚠️ REGLA DE ESTADO OBLIGATORIA: Ahora DEBES usar 'TOOL_TERMINAL' en tu próximo turno para ejecutar el script o archivo principal y verificar que funciona sin errores. NO repitas TOOL_PROGRAMMER ni uses TOOL_FINISH hasta ver los resultados en la terminal.\n\n", written_files);
                                                             current_context.push_str(&explicit_msg);
                                                             exito_bucle_programador = true;
                                                             comandos_ejecutados_historico.clear();
-                                                            for f in &archivos_vec {
+                                                            for f in &written_files {
                                                                 archivos_editados_historico.insert(f.clone());
                                                             }
                                                         } else {
