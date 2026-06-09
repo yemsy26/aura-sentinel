@@ -44,8 +44,13 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
         ⚠️ SISTEMA OPERATIVO: WINDOWS. Los comandos 'os_command' DEBEN ser sintaxis CMD de Windows. \n\
         COMANDOS WINDOWS OBLIGATORIOS: usa 'del' (NO 'rm'), 'type nul >' (NO 'touch'), 'dir' (NO 'ls'), 'copy' (NO 'cp'), 'move' (NO 'mv'), 'rd /s /q' (NO 'rm -rf'). \n\
         PROHIBIDO usar: rm, touch, chmod, ls, cat, cp, mv, mkdir -p, grep, sudo. \n\
-        3. \"AGENTIC_TASK\": El usuario quiere buscar información EN TIEMPO REAL (ej. precios actuales, noticias de hoy, la hora actual), crear código ESPECÍFICO, modificar archivos físicos, analizar sistemas, o solucionar bugs. ¡OBLIGATORIO! Si el mensaje contiene palabras como 'investiga', 'investigue', 'busca', 'buscar', 'busque', 'investigar', siempre clasifica como AGENTIC_TASK aunque el tema sea básico.\\n\
-        [NOTA CLAVE]: ¡Para peticiones ambiguas (\"quiero hacer un programa\"), usa CONVERSATION para pedir detalles! ¡Para comandos de terminal usa FAST_TRACK_OS! ¡Para crear archivos ESPECÍFICOS, programar o buscar datos usa AGENTIC_TASK!\\n\\n\\\
+        3. \"AGENTIC_TASK\": El usuario quiere buscar información EN TIEMPO REAL, crear código ESPECÍFICO, modificar archivos físicos, analizar sistemas, solucionar bugs, o VERIFICAR/DEMOSTRAR que algo funciona correctamente.\n\
+        ¡OBLIGATORIO AGENTIC_TASK! Las siguientes frases SIEMPRE son AGENTIC_TASK, NUNCA FAST_TRACK_OS:\n\
+        - 'prueba que [algo] funcione', 'verifica que [algo] funcione', 'demuestra que funciona', 'comprueba que funciona', 'prueba el sistema', 'verifica el sistema'\n\
+        - Cualquier petición que requiera ANALIZAR resultados, no solo ejecutar un comando.\n\
+        - Si el mensaje contiene 'investiga', 'investigue', 'busca', 'buscar', 'busque', 'investigar', 'prueba que', 'verifica que', 'demuestra que', 'comprueba que'.\n\
+        [NOTA CLAVE]: Para comandos de terminal de 1 sola acción (mkdir, del, dir, ping) usa FAST_TRACK_OS. Para verificar/probar/demostrar sistemas usa AGENTIC_TASK. Para charla general usa CONVERSATION.\n\
+        ⚠️ REGLA FAST_TRACK_OS: El 'os_command' debe ser el comando mínimo posible. NUNCA inventes nombres de proyectos, títulos de ventanas, ni rutas. Usa siempre rutas relativas simples o solo el nombre del archivo.\n\n\\
         ESTRUCTURA DEL JSON A DEVOLVER (OBLIGATORIA):\n\
         {{\n\
           \"intent_type\": \"CONVERSATION\" | \"FAST_TRACK_OS\" | \"AGENTIC_TASK\",\n\
@@ -67,7 +72,13 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
         JSON:\n{{\"intent_type\":\"FAST_TRACK_OS\",\"technical_translation\":null,\"os_command\":\"dir\",\"direct_response\":null}}\n\
         EJEMPLO 3:\n\
         Usuario: metele un hello world al main viejo\n\
-        JSON:\n{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"Modificar el archivo main existente para que imprima 'Hello World' o su equivalente en el lenguaje del proyecto usando TOOL_PROGRAMMER.\",\"os_command\":null,\"direct_response\":null}}\n\n\
+        JSON:\n{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"Modificar el archivo main existente para que imprima 'Hello World' o su equivalente en el lenguaje del proyecto usando TOOL_PROGRAMMER.\",\"os_command\":null,\"direct_response\":null}}\n\
+        EJEMPLO 4 (CRITICO - no confundir):\n\
+        Usuario: prueba que el sistema funcione correctamente\n\
+        JSON:\n{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"Verificar que el proyecto actual funciona correctamente: usar TOOL_AUDITOR para leer el estado actual, ejecutar el script principal con TOOL_TERMINAL y confirmar que no hay errores.\",\"os_command\":null,\"direct_response\":null}}\n\
+        EJEMPLO 5 (CRITICO - no confundir):\n\
+        Usuario: verifica que todo esté bien\n\
+        JSON:\n{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"Auditar el estado del workspace y verificar que los archivos están completos y funcionales.\",\"os_command\":null,\"direct_response\":null}}\n\n\
         {}{}",
         context_str,
         format!("Usuario: {}\n", user_input)
