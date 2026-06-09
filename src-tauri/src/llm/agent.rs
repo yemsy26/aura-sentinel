@@ -139,6 +139,33 @@ pub async fn run_agent_loop(
     let mut task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::GeneralCode, language: None };
     
     while step_count <= max_steps {
+        // ── PESP: Inject micro-meta progress status into context ─────────────
+        // Tells the LLM exactly where it is in the global project plan every turn.
+        if !journal.micro_metas.is_empty() {
+            let total = journal.micro_metas.len();
+            let progress: String = journal.micro_metas.iter().enumerate().map(|(i, mm)| {
+                let icon = match mm.estado.as_str() {
+                    "VERIFICADA"  => "✅",
+                    "COMPLETADA"  => "✅",
+                    "EN_PROGRESO" => "🔄",
+                    _             => "⏳",
+                };
+                format!("  {} [{}/{}] {} → {}", icon, i + 1, total, mm.descripcion, mm.estado)
+            }).collect::<Vec<_>>().join("\n");
+            let current_mm = journal.micro_metas.get(journal.micro_meta_actual)
+                .map(|mm| mm.descripcion.clone())
+                .unwrap_or_else(|| "(todas completadas)".to_string());
+            let pesp_status = format!(
+                "[ESTADO DE MICRO-METAS DEL PROYECTO — PESP PROTOCOL]\n{}\nMICRO-META ACTUAL: [{}/{}] {}\n\n",
+                progress,
+                journal.micro_meta_actual + 1,
+                total,
+                current_mm
+            );
+            // Prepend to context so it's always at the top
+            let existing = current_context.clone();
+            current_context = format!("{}{}", pesp_status, existing);
+        }
         let agent_prompt = format!(
             "Eres el Cerebro Planificador de Aura-Sentinel. Eres un ingeniero políglota. Actualmente soportas [Python, JS/TS, Rust, Go, C++]. Antes de programar, detecta el lenguaje del proyecto y ajusta tus herramientas de validación al estándar del lenguaje detectado.\n\
             Funcionarás en un bucle autónomo. Analiza el Objetivo, el Contexto y el Historial para decidir UNA ÚNICA HERRAMIENTA a utilizar en este turno.\n\
@@ -146,6 +173,33 @@ pub async fn run_agent_loop(
             Contexto del Proyecto (Archivos): {}\n\
             Historial de Pasos Ejecutados Hasta Ahora:\n{}\n\n\
             REGLA DE ORO: Si ya ejecutaste todas las acciones que pidió el usuario en el Objetivo Original, tu ÚNICA opción válida es usar 'TOOL_FINISH'. NO repitas pasos ni inventes problemas que no existen.\n\n\
+            PROTOCOLO DE INGENIERÍA PROFESIONAL (PESP) — OBLIGATORIO PARA PROYECTOS COMPLEJOS:\n\
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+            SI el objetivo del usuario requiere MÚLTIPLES ARCHIVOS, MÓDULOS o COMPONENTES (ej: un juego, una API, un sistema con UI+lógica+datos):\n\
+            PASO 0 OBLIGATORIO — TOOL_THINK: Antes de cualquier TOOL_PROGRAMMER, debes declarar:\n\
+              a) CONTRATO DEL SISTEMA: lista TODOS los archivos del sistema final con sus firmas de funciones exactas\n\
+              b) GRAFO DE DEPENDENCIAS: quién importa a quién\n\
+              c) MICRO-METAS en orden de dependencias (los módulos más fundamentales primero)\n\
+            REGLA DE MICRO-META: Cada TOOL_PROGRAMMER debe escribir UN SOLO archivo completamente (o 2 si son triviales y relacionados).\n\
+            REGLA ANTI-STUB ABSOLUTA: PROHIBIDO escribir código con funciones vacías. Ejemplos de lo que está PROHIBIDO:\n\
+              - Python: 'pass' como cuerpo de función o método\n\
+              - Python: '# TODO', '# implement', '# Dibujar el tablero' seguido de pass\n\
+              - Python: 'raise NotImplementedError'\n\
+              - Rust: 'todo!()', 'unimplemented!()'\n\
+              - JS/TS: 'throw new Error(\"not implemented\")'\n\
+            CADA FUNCIÓN DEBE TENER LÓGICA REAL. Si no sabes cómo implementarla, pregunta al usuario ANTES de escribir.\n\
+            REGLA DE VERIFICACIÓN DE INTEGRACIÓN: Después de escribir cada archivo, usa TOOL_TERMINAL para verificar que se importa sin errores.\n\
+            EJEMPLO CORRECTO para un juego de ajedrez:\n\
+              Paso 1: TOOL_THINK → Definir contrato de todas las clases\n\
+              Paso 2: TOOL_PROGRAMMER → pieza.py (clase Pieza con propiedades REALES)\n\
+              Paso 3: TOOL_TERMINAL → python -c 'from src.ajedrez.pieza import Pieza; p=Pieza(\"rey\",\"blanco\"); print(p.nombre)' → Verifica OK\n\
+              Paso 4: TOOL_PROGRAMMER → tablero.py (clase Tablero con 64 casillas REALES y método dibujar() que dibuja rectángulos)\n\
+              Paso 5: TOOL_TERMINAL → python -c 'from src.ajedrez.tablero import Tablero' → Verifica OK\n\
+              Paso 6: TOOL_PROGRAMMER → movimientos.py (lógica real de validación de movimientos)\n\
+              Paso 7: TOOL_PROGRAMMER → game.py (bucle pygame REAL con dibujo y eventos)\n\
+              Paso 8: TOOL_TESTER → Prueba integral final\n\
+              Paso 9: TOOL_FINISH\n\
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
             Catálogo de Herramientas (Elige SOLO UNA):\n\
             1. 'TOOL_TERMINAL': Para comandos síncronos y de un solo uso (npm install, pip, cargo build). Rellena 'comando' y 'task_id'.\n\
             2. 'TOOL_BACKGROUND_START': Para arrancar servidores que correrán infinitamente en segundo plano (python -m http.server, npm run dev). Rellena 'comando' y 'task_id'.\n\
@@ -544,7 +598,7 @@ pub async fn run_agent_loop(
                 let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
                 let context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
-                let mut qwen_prompt = format!("Instrucción principal: {}\nDebes crear/modificar los archivos solicitados usando el JSON estructurado.", user_message);
+                let mut qwen_prompt = format!("Instrucción principal: {}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message);
                 let target_model = match crate::llm::router::get_best_model(&task_complexity, &available_models, &app_handle, step_count).await {
                     Ok(m) => m,
                     Err(e) => {
@@ -574,27 +628,113 @@ pub async fn run_agent_loop(
                                     match memory::apply_code_changes(&workspace_path, prog_output.cambios.clone()).await {
                                         Ok(msg) => {
                                             emit_event(&app_handle, step_count, &msg, "SUCCESS");
-                                            emit_event(&app_handle, step_count, "Validando compilación...", "VALIDATING");
-                                            
-                                            match validate_workspace(&workspace_path).await {
-                                                Ok(_) => {
-                                                    emit_event(&app_handle, step_count, "Validación exitosa.", "SUCCESS");
-                                                    let _ = memory::update_last_memory_status(&workspace_path, "COMPILACIÓN_EXITOSA").await;
-                                                    let explicit_msg = format!("Programador: Los archivos {:?} fueron modificados y compilados con éxito. ¡LA TAREA DE ESCRITURA ESTÁ COMPLETA! Ahora DEBES usar TOOL_TESTER o avanzar a la siguiente tarea diferente.\n\n", archivos_vec);
-                                                    current_context.push_str(&explicit_msg);
-                                                    exito_bucle_programador = true;
-                                                    // FIX: Limpiar el historial de comandos fallidos porque el entorno ha cambiado y comandos previos ahora pueden funcionar
-                                                    comandos_ejecutados_historico.clear();
-                                                    for f in &archivos_vec {
-                                                        archivos_editados_historico.insert(f.clone());
-                                                    }
-                                                },
-                                                Err(e) => {
-                                                    emit_event(&app_handle, step_count, &format!("Error detectado: {}", e), "ERROR");
-                                                    qwen_prompt = format!("El código causó este error:\n{}\nSoluciónalo y genera un nuevo JSON.", e);
-                                                    max_intentos -= 1;
+
+                                            // ── CAPA 2: ANTI-STUB ENFORCER ────────────────────────────────────
+                                            // Inspect every file for stub patterns BEFORE running validation.
+                                            let mut stub_rejections: Vec<String> = Vec::new();
+                                            for cambio in &prog_output.cambios {
+                                                let file_path = &cambio.archivo;
+                                                let content = &cambio.reemplazar;
+                                                let report = crate::core::stub_enforcer::detect_stubs(content, file_path);
+                                                if report.has_stubs {
+                                                    stub_rejections.push(report.rejection_message);
                                                 }
                                             }
+
+                                            if !stub_rejections.is_empty() {
+                                                // Stubs found — reject the write and force a rewrite
+                                                let combined = stub_rejections.join("\n\n");
+                                                emit_event(&app_handle, step_count, &format!("[ANTI-STUB] ❌ {} archivo(s) rechazados por código incompleto. Exigiendo reescritura...", stub_rejections.len()), "FATAL");
+                                                // Rollback the written files
+                                                let _ = crate::core::restore_git_backup(&workspace_path).await;
+                                                qwen_prompt = format!(
+                                                    "{}\n\nREESCRIBE COMPLETAMENTE. IMPLEMENTACIÓN REAL OBLIGATORIA.",
+                                                    combined
+                                                );
+                                                max_intentos -= 1;
+                                            } else {
+                                                // Stubs passed — now run full compile validation
+                                                emit_event(&app_handle, step_count, "Validando compilación...", "VALIDATING");
+                                                match validate_workspace(&workspace_path).await {
+                                                    Ok(_) => {
+                                                        emit_event(&app_handle, step_count, "Validación exitosa.", "SUCCESS");
+                                                        let _ = memory::update_last_memory_status(&workspace_path, "COMPILACIÓN_EXITOSA").await;
+
+                                                        // ── CAPA 3: INTEGRATION VERIFIER ─────────────────────────────────────
+                                                        // For Python projects, auto-verify each new module can be imported.
+                                                        let py_modules: Vec<String> = prog_output.cambios.iter()
+                                                            .filter(|c| c.archivo.ends_with(".py") && !c.archivo.contains("test"))
+                                                            .filter_map(|c| {
+                                                                let module = c.archivo
+                                                                    .trim_end_matches(".py")
+                                                                    .replace(['/', '\\'], ".");
+                                                                if module.is_empty() { None } else { Some(module) }
+                                                            })
+                                                            .collect();
+
+                                                        let mut integration_ok = true;
+                                                        for module in &py_modules {
+                                                            let check_cmd = format!("python -c \"import {}; print('INTEGRATION_OK')\"", module);
+                                                            match execute_terminal_command(&workspace_path, &check_cmd).await {
+                                                                Ok(out) if out.contains("INTEGRATION_OK") => {
+                                                                    emit_event(&app_handle, step_count, &format!("✅ [INTEGRACIÓN] Módulo '{}' importado correctamente", module), "SUCCESS");
+                                                                },
+                                                                Ok(out) | Err(out) => {
+                                                                    emit_event(&app_handle, step_count, &format!("⚠️ [INTEGRACIÓN] Módulo '{}' no importable: {}", module, &out[..out.len().min(200)]), "WARNING");
+                                                                    current_context.push_str(&format!(
+                                                                        "[VERIFICACIÓN DE INTEGRACIÓN FALLIDA] El módulo '{}' tiene errores al importarse: {}\nDEBES usar TOOL_AUDITOR para leer el error, y luego TOOL_PROGRAMMER para corregirlo antes de avanzar.\n\n",
+                                                                        module, out
+                                                                    ));
+                                                                    integration_ok = false;
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if integration_ok || py_modules.is_empty() {
+                                                            // ── CAPA 4: Advance micro-meta in journal ───────────────────────
+                                                            let written_files: Vec<String> = prog_output.cambios.iter()
+                                                                .map(|c| c.archivo.clone()).collect();
+                                                            if !journal.micro_metas.is_empty() {
+                                                                if let Some(mm) = journal.micro_metas.get_mut(journal.micro_meta_actual) {
+                                                                    let all_done = mm.archivos.iter().all(|f| {
+                                                                        written_files.iter().any(|w: &String| w.contains(f.as_str()))
+                                                                    });
+                                                                    if all_done {
+                                                                        mm.estado = "VERIFICADA".to_string();
+                                                                        emit_event(&app_handle, step_count, &format!("[PESP] ✅ Micro-Meta [{}/{}] VERIFICADA.", journal.micro_meta_actual + 1, journal.micro_metas.len()), "SUCCESS");
+                                                                        if journal.micro_meta_actual + 1 < journal.micro_metas.len() {
+                                                                            journal.micro_meta_actual += 1;
+                                                                            let next = journal.micro_metas[journal.micro_meta_actual].descripcion.clone();
+                                                                            emit_event(&app_handle, step_count, &format!("[PESP] 🔄 Avanzando a Micro-Meta [{}/{}]: {}", journal.micro_meta_actual + 1, journal.micro_metas.len(), next), "INFO");
+                                                                        }
+                                                                    } else {
+                                                                        mm.estado = "EN_PROGRESO".to_string();
+                                                                    }
+                                                                    crate::core::session_journal::save_journal(&workspace_path, &journal);
+                                                                }
+                                                            }
+
+                                                            let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos, Anti-Stub APROBADO, Integración VERIFICADA. Avanza a la siguiente Micro-Meta.\n\n", archivos_vec);
+                                                            current_context.push_str(&explicit_msg);
+                                                            exito_bucle_programador = true;
+                                                            comandos_ejecutados_historico.clear();
+                                                            for f in &archivos_vec {
+                                                                archivos_editados_historico.insert(f.clone());
+                                                            }
+                                                        } else {
+                                                            // Integration failed — revert and force fix
+                                                            let _ = crate::core::restore_git_backup(&workspace_path).await;
+                                                            archivos_editados_historico.clear();
+                                                            max_intentos -= 1;
+                                                        }
+                                                    },
+                                                    Err(e) => {
+                                                        emit_event(&app_handle, step_count, &format!("Error detectado: {}", e), "ERROR");
+                                                        qwen_prompt = format!("El código causó este error:\n{}\nSoluciónalo y genera un nuevo JSON.", e);
+                                                        max_intentos -= 1;
+                                                    }
+                                                }
+                                            } // end stubs-clean else
                                         },
                                         Err(e) => {
                                             emit_event(&app_handle, step_count, &format!("Error escribiendo archivos: {}", e), "ERROR");

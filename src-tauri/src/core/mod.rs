@@ -7,6 +7,7 @@ pub mod languages;
 pub mod env_manager;
 pub mod session_journal;
 pub mod intent_router;
+pub mod stub_enforcer;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};

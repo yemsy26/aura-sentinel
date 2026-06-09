@@ -1,6 +1,20 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Represents a single atomic unit of work within a complex project.
+/// Each micro-goal maps to one or a few tightly related files.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct MicroMeta {
+    /// Short description of this goal, e.g. "Implement board.py with 64 real squares"
+    pub descripcion: String,
+    /// Files this micro-goal must create or modify
+    pub archivos: Vec<String>,
+    /// Expected interface/contract (function signatures) for verification
+    pub contrato: String,
+    /// Status: "PENDIENTE" | "EN_PROGRESO" | "COMPLETADA" | "VERIFICADA"
+    pub estado: String,
+}
+
 /// Persistent session state saved to `{workspace}/.aura_session.json` after each agent step.
 /// Survives laptop sleep/hibernate/restart cycles.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -24,6 +38,12 @@ pub struct SessionJournal {
     /// Short-term conversational memory to maintain context
     #[serde(default)]
     pub chat_history: Vec<String>,
+    /// List of micro-goals for complex multi-file projects (PESP Protocol)
+    #[serde(default)]
+    pub micro_metas: Vec<MicroMeta>,
+    /// Index of the micro-goal currently in progress (0-based)
+    #[serde(default)]
+    pub micro_meta_actual: usize,
 }
 
 /// File name for the session journal (hidden by convention via leading dot)
