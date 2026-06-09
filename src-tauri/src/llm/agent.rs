@@ -588,10 +588,10 @@ pub async fn run_agent_loop(
                         };
                         return Ok(serde_json::to_string(&final_res).unwrap());
                     } else {
-                        let interception = "[SISTEMA INTERCEPTO] Error Lógico: Ya editaste estos archivos en un turno anterior con éxito. ASUME QUE EL CÓDIGO FUE ESCRITO CORRECTAMENTE. No repitas esta acción. Actualiza tu checklist mental y avanza al siguiente paso (usa TOOL_TESTER) o usa TOOL_FINISH.";
+                        let interception = "[SISTEMA INTERCEPTO] Error Lógico: Ya editaste estos archivos en un turno anterior con éxito. ASUME QUE EL CÓDIGO FUE ESCRITO CORRECTAMENTE. No repitas esta acción. Actualiza tu checklist mental y avanza al siguiente paso ejecutando 'TOOL_TERMINAL' para probar tu script, o 'TOOL_FINISH' si ya completaste el objetivo.";
                         current_context.push_str(&format!("{}\n\n", interception));
                         emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
-                        forced_next_tool = Some("TOOL_TESTER");
+                        forced_next_tool = None;
                     }
                 } else {
                 emit_event(&app_handle, step_count, "Delegando a Qwen para modificar código físico...", "ACTION");
@@ -820,44 +820,28 @@ pub async fn run_agent_loop(
                             }
                         };
 
-                        if no_tests_consecutive >= 3 {
+                        if no_tests_consecutive >= 2 {
                             let force_msg = format!(
                                 "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin detectar tests. \
-                                El sistema cambia de estrategia. En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
-                                Archivos actuales en el workspace:\n{}\n\n\
-                                EJECUTA: Identifica qué framework de testing necesita este proyecto (según su lenguaje) y usa TOOL_TERMINAL para inicializarlo e instalar sus dependencias. Si ya está instalado, ejecuta el comando de pruebas en la terminal.",
+                                El sistema cambia de estrategia. Si esto es un script simple, NO crees tests. \
+                                En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL' para ejecutar el script directamente y ver si funciona, o 'TOOL_FINISH' si ya terminaste el objetivo.\n\
+                                Archivos actuales en el workspace:\n{}\n",
                                 no_tests_consecutive, workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", force_msg));
-                            emit_event(&app_handle, step_count, &format!("[SISTEMA] Cambiando estrategia a TOOL_TERMINAL tras {} intentos.", no_tests_consecutive), "FATAL");
-
-                        } else if no_tests_consecutive >= 2 {
-                            let force_msg = format!(
-                                "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin archivos de test detectados. \
-                                En tu próximo turno DEBES ELEGIR 'TOOL_PROGRAMMER'. \
-                                Archivos actuales en el workspace:\n{}\n\n\
-                                DEBES crear TODOS los archivos que falten para la suite de pruebas del lenguaje en el que estés trabajando.\n\
-                                1) Archivos de configuración (ej: package.json, go.mod, Cargo.toml, hardhat.config.js)\n\
-                                2) El archivo de pruebas correspondiente\n\
-                                3) El código fuente principal a probar\n\
-                                Incluye TODOS estos archivos en 'archivos_a_editar' usando RUTAS RELATIVAS.",
-                                no_tests_consecutive, workspace_listing
-                            );
-                            current_context.push_str(&format!("{}\n\n", force_msg));
-                            emit_event(&app_handle, step_count, &format!("[SISTEMA] TOOL_TESTER bloqueado. Solicitando TOOL_PROGRAMMER con listado de archivos.", ), "WARNING");
+                            emit_event(&app_handle, step_count, &format!("[SISTEMA] Cambiando estrategia a TOOL_TERMINAL tras {} intentos.", no_tests_consecutive), "WARNING");
 
                         } else {
                             // First hit — tell the LLM clearly
                             let no_test_msg = format!(
                                 "[SISTEMA] No se detectaron archivos de test reconocidos para ningún lenguaje soportado. \
                                 Archivos actuales en el workspace:\n{}\n\n\
-                                Si el usuario pidió tests: DEBES usar TOOL_PROGRAMMER para crear los archivos de prueba y configuración del framework adecuado. \
-                                Luego usa TOOL_TERMINAL para instalar dependencias, y después vuelve a usar TOOL_TESTER. \
-                                SOLO usa TOOL_FINISH si el usuario NO pidió tests.",
+                                Si tu proyecto es un script sencillo, NO INTENTES CREAR TESTS. Usa TOOL_TERMINAL para ejecutarlo.\n\
+                                SOLO si el usuario pidió tests explícitamente: usa TOOL_PROGRAMMER para crearlos.",
                                 workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", no_test_msg));
-                            emit_event(&app_handle, step_count, "Sin suite de tests detectada. Revisa si debes crear los archivos de test primero.", "WARNING");
+                            emit_event(&app_handle, step_count, "Sin suite de tests detectada. Usa TOOL_TERMINAL para scripts simples.", "WARNING");
                         }
                     },
                     crate::core::tester::TestResult::Passed(success_msg) => {
