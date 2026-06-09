@@ -121,7 +121,16 @@ Kotlin/Android, Dart/Flutter, PHP, Swift, C, C++, Java
     None
 }
 
-/// Helper: returns true if `s` contains any of the given substrings.
+/// Helper: returns true if `s` is identical to any pattern, or starts with it
+/// and the entire message is short (under 40 chars) to prevent hijacking long prompts.
 fn contains_any(s: &str, patterns: &[&str]) -> bool {
-    patterns.iter().any(|p| s.contains(p))
+    patterns.iter().any(|&p| {
+        if s == p {
+            return true;
+        }
+        if s.starts_with(p) && s.len() < 40 {
+            return true;
+        }
+        false
+    })
 }

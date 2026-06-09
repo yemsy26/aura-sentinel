@@ -48,7 +48,14 @@ pub async fn write_vector_index(workspace_path: &str, index: &Vec<VectorNode>) -
 pub async fn get_workspace_tree_internal(path: String) -> Result<Vec<FileNode>, String> {
     tokio::task::spawn_blocking(move || {
         let mut nodes = Vec::new();
-        let walker = WalkBuilder::new(&path).hidden(true).git_ignore(true).build();
+        let walker = WalkBuilder::new(&path)
+            .hidden(true)
+            .git_ignore(true)
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                name != ".git" && name != "node_modules"
+            })
+            .build();
 
         for result in walker {
             match result {
@@ -346,6 +353,9 @@ pub async fn get_workspace_tree(path: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn init_memory_log(workspace_path: String) -> Result<String, String> {
+    // DOC-FIX #14:
+    // .fenix_memory.json -> Registro semántico y RAG de acciones del agente (cambios de código, comandos).
+    // .fenix_chat.json   -> Historial conversacional puro para renderizado en la UI.
     let memory_file = Path::new(&workspace_path).join(".fenix_memory.json");
     if !memory_file.exists() {
         let empty_logs: Vec<FenixMemoryLog> = vec![];

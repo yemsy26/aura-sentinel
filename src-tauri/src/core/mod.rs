@@ -172,9 +172,13 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
             .arg("-m")
             .arg("compileall")
             .arg("-q")
+            .arg("-x")
+            .arg("node_modules|\\.git|__pycache__|venv|\\.venv")
             .arg(".")
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
             .current_dir(workspace_path)
-        .stdin(Stdio::null())
+            .stdin(Stdio::null())
             .output()
             .await;
 
@@ -318,9 +322,47 @@ pub async fn hide_file_windows(path: &Path) {
 
 /// Executes a synchronous terminal command inside the active workspace.
 pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Result<String, String> {
+    // Resolve 'python' to the correct binary path so it works even when PATH is missing conda/miniconda
+    let resolved_command = {
+        let profile = std::env::var("USERPROFILE").unwrap_or_default();
+        // Try Miniconda3 first, then Anaconda3, then scoop, then fallback to bare 'python'
+        let candidates = vec![
+            std::path::PathBuf::from(&profile).join("Miniconda3").join("python.exe"),
+            std::path::PathBuf::from(&profile).join("Anaconda3").join("python.exe"),
+            std::path::PathBuf::from(&profile).join("miniconda3").join("python.exe"),
+            std::path::PathBuf::from(&profile).join("anaconda3").join("python.exe"),
+            std::path::PathBuf::from(&profile).join("scoop").join("apps").join("python").join("current").join("python.exe"),
+        ];
+        let python_path = candidates.into_iter().find(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned());
+
+        if let Some(py) = python_path {
+            // Replace leading 'python ' or 'python\n' or exact 'python'
+            if command.starts_with("python ") {
+                if py.contains(' ') {
+                    format!("\"{}\" {}", py, &command[7..])
+                } else {
+                    format!("{} {}", py, &command[7..])
+                }
+            } else if command == "python" {
+                if py.contains(' ') {
+                    format!("\"{}\"", py)
+                } else {
+                    format!("{}", py)
+                }
+            } else {
+                command.to_string()
+            }
+        } else {
+            command.to_string()
+        }
+    };
+
     let output = Command::new(get_shell())
-        .args([get_shell_args(), command])
+        .args([get_shell_args(), &resolved_command])
         .current_dir(workspace_path)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null())
         .output()
         .await
@@ -335,6 +377,7 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
         Err(format!("{} {}", stdout, stderr))
     }
 }
+
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let mut dot_product = 0.0;

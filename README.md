@@ -32,23 +32,30 @@ Aura-Sentinel no solo escribe código; lo entiende, lo valida, asegura sus depen
 - **Detección de Errores**: Distingue errores de dependencias (→ `TOOL_TERMINAL` automático) de errores de lógica (→ `TOOL_PROGRAMMER` obligatorio).
 - **Auto-Debugger**: Si los tests fallan por lógica, el sistema obliga al agente a arreglar el código antes de poder volver a testear.
 
-### 5. Inteligencia Híbrida (Router Dinámico) 🧠☁️
+### 5. Razonamiento Lógico Matemático (TOOL_LOGIC_SOLVER) 🧮
+- **Z3 Theorem Prover**: Evalúa matemáticamente la validez del código para detectar bucles infinitos y condiciones inalcanzables.
+- Capacidad de razonamiento avanzado para asegurar la completitud lógica del código antes de compilarlo.
+
+### 6. Autonomía de Entorno (TOOL_WORKSPACE_MANAGER) 🧹
+- **Mantenimiento Autónomo**: El agente limpia activamente su propio workspace, eliminando archivos basura o pruebas temporales tras completar sus tareas.
+
+### 7. Inteligencia Híbrida (Router Dinámico) 🧠☁️
 - **Complejidad Baja**: `deepseek-coder:6.7b` — operaciones rápidas y directas.
 - **Complejidad Media**: `qwen2.5-coder:7b` — lógica de negocio estándar.
 - **Complejidad Alta / Post-Fallo**: `qwen2.5-coder:14b` — debugging complejo, escala automáticamente tras un fallo de tests.
 - **Orquestador**: `llama3.1:8b` — planificación y checklist mental.
 - Compatible con modelos en la nube vía Ollama para tareas que superen la capacidad local.
 
-### 6. Memoria Vectorial Permanente (RAG) 🐘
+### 8. Memoria Vectorial Permanente (RAG) 🐘
 - Código exitoso es vectorizado con `nomic-embed-text` y almacenado en un motor de Similitud de Coseno nativo en Rust puro.
 - En futuras tareas, Aura escanea su historial e inyecta fragmentos relevantes en su contexto antes de programar — evita reinventar la rueda.
 - Memoria aislada y etiquetada por workspace para no contaminar contextos.
 
-### 7. Path Jail (Seguridad Estricta) 🔒
+### 9. Path Jail (Seguridad Estricta) 🔒
 - Intercepta y audita cada intento de lectura/escritura (`is_path_allowed`).
 - Si Aura intenta tocar cualquier archivo fuera del directorio de proyecto, la operación se bloquea bajo `[SECURITY_VIOLATION]`.
 
-### 8. Gestión de Contexto Avanzada 🗜️
+### 10. Gestión de Contexto Avanzada 🗜️
 - Carpetas masivas como `node_modules`, `.git`, `target`, `build`, `vendor` son invisibles para el LLM.
 - En cada turno, el agente recibe un mapa exacto de los archivos que *realmente existen* en el workspace.
 

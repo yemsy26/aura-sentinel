@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const clearChatBtn = document.getElementById('clear-chat-btn');
 
     let currentWorkspace = "Ninguno";
+    let expandedFolders = new Set();
 
     function logSystemThought(message, color = '#00ff00') {
         const p = document.createElement('p');
@@ -166,6 +167,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     function renderTree(nodes, container) {
+        // Guardamos el estado actual antes de limpiar
+        const currentExpanded = new Set();
+        container.querySelectorAll('ul.tree-list ul').forEach(ul => {
+            if (ul.style.display === 'block') {
+                const parentSpan = ul.previousElementSibling;
+                if (parentSpan) {
+                    currentExpanded.add(parentSpan.textContent.trim());
+                }
+            }
+        });
+        
+        // Si ya teníamos carpetas expandidas en memoria, las combinamos
+        expandedFolders.forEach(f => currentExpanded.add(f));
+        expandedFolders = currentExpanded;
+
         container.innerHTML = '';
         
         const nodeMap = {};
@@ -197,17 +213,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             li.title = node.path;
             
             const span = document.createElement('span');
-            span.textContent = (node.is_dir ? '📁 ' : '📄 ') + node.name;
+            const baseText = (node.is_dir ? '📁 ' : '📄 ') + node.name;
+            span.textContent = baseText;
             li.appendChild(span);
 
             if (node.is_dir && node.children.length > 0) {
                 const ul = document.createElement('ul');
                 const isRoot = rootNodes.includes(node);
-                ul.style.display = isRoot ? 'block' : 'none';
+                
+                // Restaurar estado si estaba expandido, o si es la raíz
+                const isExpanded = isRoot || expandedFolders.has('📂 ' + node.name) || expandedFolders.has('📁 ' + node.name);
+                
+                ul.style.display = isExpanded ? 'block' : 'none';
                 ul.style.paddingLeft = '15px';
                 ul.style.listStyleType = 'none';
                 
-                if (isRoot) {
+                if (isExpanded) {
                     span.textContent = '📂 ' + node.name;
                 }
                 
@@ -226,11 +247,35 @@ document.addEventListener('DOMContentLoaded', async () => {
                 span.style.cursor = 'pointer';
                 span.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    ul.style.display = ul.style.display === 'none' ? 'block' : 'none';
-                    span.textContent = (ul.style.display === 'none' ? '📁 ' : '📂 ') + node.name;
+                    const willBeExpanded = ul.style.display === 'none';
+                    ul.style.display = willBeExpanded ? 'block' : 'none';
+                    span.textContent = (willBeExpanded ? '📂 ' : '📁 ') + node.name;
+                    
+                    // Actualizamos memoria global
+                    if (willBeExpanded) {
+                        expandedFolders.add(span.textContent.trim());
+                    } else {
+                        expandedFolders.delete('📂 ' + node.name);
+                        expandedFolders.delete('📁 ' + node.name);
+                    }
                 });
             } else if (node.is_dir) {
                 span.style.cursor = 'pointer';
+                // Even empty directories should toggle icon on click
+                const isExpanded = expandedFolders.has('📂 ' + node.name);
+                if (isExpanded) span.textContent = '📂 ' + node.name;
+                
+                span.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const willBeExpanded = span.textContent.includes('📁');
+                    span.textContent = (willBeExpanded ? '📂 ' : '📁 ') + node.name;
+                    if (willBeExpanded) {
+                        expandedFolders.add(span.textContent.trim());
+                    } else {
+                        expandedFolders.delete('📂 ' + node.name);
+                        expandedFolders.delete('📁 ' + node.name);
+                    }
+                });
             }
             
             return li;
@@ -286,8 +331,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     logSystemThought(`[PASO ${step}] [${status}] ${message}`, color);
                     loadingMsg.innerHTML = `<span style="color: ${color}">[PASO ${step}]</span> ${message}`;
                     
-                    // Si hubo edición de archivos, forzamos refresco del árbol (heurística simple)
-                    if (status === 'SUCCESS' && message.toLowerCase().includes('código')) {
+                    // Forzamos refresco del árbol en cualquier SUCCESS
+                    if (status === 'SUCCESS') {
                         invoke('get_workspace_tree', { path: currentWorkspace }).then(treeJson => {
                             renderTree(JSON.parse(treeJson), workspaceTree);
                         });
@@ -327,7 +372,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    setInterval(() => {
-        document.getElementById('ram-usage').textContent = (Math.random() * 5 + 15).toFixed(1) + ' MB';
+    setInterval(async () => {
+        try {
+            const stats = await invoke('get_system_stats');
+            document.getElementById('ram-usage').textContent = stats;
+        } catch (e) {
+            console.error("Error fetching system stats", e);
+        }
     }, 2000);
 });

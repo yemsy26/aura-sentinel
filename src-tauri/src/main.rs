@@ -4,8 +4,21 @@
 mod core;
 mod memory;
 mod llm;
-pub mod math_utils;
 mod net;
+
+#[tauri::command]
+fn get_system_stats() -> String {
+    use sysinfo::System;
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    if let Ok(pid) = sysinfo::get_current_pid() {
+        if let Some(process) = sys.process(pid) {
+            let used_memory = process.memory() as f64 / 1048576.0; // MB
+            return format!("{:.1} MB", used_memory);
+        }
+    }
+    "0.0 MB".to_string()
+}
 
 fn main() {
     // Aislamiento de hardware: Desactivar GPU en WebView2 (Windows)
@@ -29,7 +42,8 @@ fn main() {
             memory::load_chat_history,
             memory::save_chat_message,
             memory::clear_chat_history,
-            llm::process_user_prompt
+            llm::process_user_prompt,
+            get_system_stats
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

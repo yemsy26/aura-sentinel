@@ -1,8 +1,25 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use crate::memory;
 use crate::core::{execute_terminal_command, start_background_task, read_task_logs, kill_task, validate_workspace, format_system_error};
-use super::{get_embedding, call_ollama, delegate_to_programmer, delegate_to_auditor, ProgrammerOutput};
+use super::{call_ollama, delegate_to_programmer, delegate_to_auditor, delegate_to_logic_solver, ProgrammerOutput};
+
+fn strip_think_tags(mut text: String) -> String {
+    while let (Some(start), Some(end)) = (text.find("<think>"), text.find("</think>")) {
+        if end + 8 <= text.len() {
+            text.replace_range(start..end + 8, "");
+        } else {
+            break;
+        }
+    }
+    
+    // Also strip ```json and ``` if they exist wrapping the whole thing
+    let text = text.trim();
+    let text = text.strip_prefix("```json").unwrap_or(text);
+    let text = text.strip_prefix("```").unwrap_or(text);
+    let text = text.strip_suffix("```").unwrap_or(text);
+    text.trim().to_string()
+}
 
 #[derive(Clone, Serialize)]
 pub struct AgentEvent {
@@ -106,7 +123,7 @@ pub async fn run_agent_loop(
     let mut no_tests_consecutive = 0u32;
     let mut forced_next_tool: Option<&str> = None;
     let mut step_count = 1;
-    let max_steps = 20;
+    let max_steps = 50000;
 
     // ── Session Journal ────────────────────────────────────────
     // Persist mission state to disk so sleep/restart doesn’t lose context.
@@ -119,7 +136,7 @@ pub async fn run_agent_loop(
     crate::core::session_journal::save_journal(&workspace_path, &journal);
     emit_event(&app_handle, 0, "[DIARIO] Misión registrada en diario de sesión.", "INFO");
     
-    let mut task_complexity = crate::llm::router::Complexity::GeneralCode;
+    let mut task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::GeneralCode, language: None };
     
     while step_count <= max_steps {
         let agent_prompt = format!(
@@ -142,7 +159,10 @@ pub async fn run_agent_loop(
             10. 'TOOL_TESTER': Ejecuta suites de pruebas automatizadas SOLO si el proyecto tiene archivos de test (test_*.py, *.test.js, etc.) o configuración de test (pytest.ini, jest.config.js). ¡PELIGRO! Esta herramienta NO ESCRIBE ni implementa pruebas. SOLO LAS EJECUTA. Para scripts simples (como hello.py) SIN archivos de test, usa TOOL_TERMINAL en su lugar. Para escribir o arreglar un test, usa TOOL_PROGRAMMER.\n\
             11. 'TOOL_LEARN': Indexa el conocimiento de un proyecto exitoso en la memoria permanente de Aura. Úsala si el proyecto funciona o después de un TOOL_TESTER exitoso. No requiere argumentos.\n\
             12. 'TOOL_SEARCH': Consulta explícitamente la memoria histórica para buscar cómo resolviste problemas similares antes. Rellena 'url_a_investigar' con el término de búsqueda.\n\
-            13. 'TOOL_ENV_MANAGER': Instala dependencias o lenguajes faltantes en el sistema operativo de forma automática y recarga el PATH en caliente. Rellena 'comando' SOLO con el NOMBRE del paquete (ej. 'go', 'node', 'python'). ¡PROHIBIDO pasar comandos enteros como 'scoop install python' o 'apt-get install'! El sistema lo hará por ti.\n\
+            13. 'TOOL_ENV_MANAGER': Instala dependencias o lenguajes faltantes en el sistema operativo de forma automática y recarga el PATH en caliente. Rellena 'comando' SOLO con el NOMBRE del paquete.\n\
+            14. 'TOOL_LOGIC_SOLVER': Para verificar matemáticamente y de manera lógica si tu código contiene bucles infinitos, dead code o problemas estructurales ANTES de hacer pruebas físicas. Úsalo como un solver z3 preventivo. No requiere argumentos.\n\
+            15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.\n\
+            16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):\n\
@@ -179,7 +199,7 @@ pub async fn run_agent_loop(
         
         emit_event(&app_handle, step_count, "Analizando estado y planificando siguiente paso...", "PLANNING");
         
-        let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::Complexity::Orchestrator, &available_models)
+        let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::Orchestrator, language: None }, &available_models, &app_handle, 0).await
             .unwrap_or_else(|_| ORCHESTRATOR_MODEL.to_string());
 
         let mut agent_res = match call_ollama(&orchestrator_model, &agent_prompt).await {
@@ -197,7 +217,8 @@ pub async fn run_agent_loop(
         if agent_res.ends_with("```") { agent_res = agent_res.trim_end_matches("```").to_string(); }
         agent_res = agent_res.trim().to_string();
         
-        let raw_value: serde_json::Value = match serde_json::from_str(&agent_res) {
+        let clean_agent_res = strip_think_tags(agent_res.clone());
+        let raw_value: serde_json::Value = match serde_json::from_str(&clean_agent_res) {
             Ok(v) => {
                 println!("LLM RAW RESPONSE: {}", agent_res);
                 v
@@ -268,7 +289,7 @@ pub async fn run_agent_loop(
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(&app_handle, step_count, "Comando vacío", "ERROR");
                 } else if comandos_ejecutados_historico.contains(&comando) {
-                    let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito detectado en el terminal. Abortando misión.";
+                    let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás repitiendo un comando fallido. Repetirlo no lo arreglará. Usa TOOL_PROGRAMMER o TOOL_AUDITOR.";
                     emit_event(&app_handle, step_count, res_msg, "FATAL");
                     let final_res = FinalResponse {
                         status: "ERROR".to_string(),
@@ -420,6 +441,78 @@ pub async fn run_agent_loop(
                 current_context.push_str(&format!("Reporte Auditor:\n{}\n\n", reporte));
                 emit_event(&app_handle, step_count, "Auditoría completada.", "SUCCESS");
             },
+            "TOOL_LOGIC_SOLVER" => {
+                emit_event(&app_handle, step_count, "Iniciando Z3-Logic Solver...", "ACTION");
+                let real_files: Vec<String> = {
+                    let hallucinated = archivos_vec.iter().any(|f| {
+                        !std::path::Path::new(&workspace_path).join(f).exists()
+                    });
+                    if hallucinated || archivos_vec.is_empty() {
+                        let mut found = Vec::new();
+                        if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                            for entry in entries.flatten() {
+                                let p = entry.path();
+                                if let Some(ext) = p.extension() {
+                                    let ext = ext.to_string_lossy().to_lowercase();
+                                    if matches!(ext.as_str(), "py"|"rs"|"js"|"ts"|"go"|"c"|"cpp") {
+                                        found.push(p.to_string_lossy().to_string());
+                                    }
+                                }
+                            }
+                        }
+                        found
+                    } else {
+                        archivos_vec.clone()
+                    }
+                };
+                let safe_files = memory::read_files_safely(&workspace_path, real_files).await;
+                let reporte = delegate_to_logic_solver(&safe_files, ORCHESTRATOR_MODEL).await;
+                current_context.push_str(&format!("Reporte de Verificación Formal (Logic Solver):\n{}\n\nRevisa los problemas matemáticos o lógicos detectados antes de programar o testear.\n\n", reporte));
+                emit_event(&app_handle, step_count, "Verificación Lógica completada.", "SUCCESS");
+            },
+            "TOOL_WORKSPACE_MANAGER" => {
+                emit_event(&app_handle, step_count, "Gestionando archivos del workspace...", "ACTION");
+                if archivos_vec.is_empty() {
+                    let err_msg = "Error: TOOL_WORKSPACE_MANAGER requiere una lista de archivos a eliminar.";
+                    current_context.push_str(&format!("{}\n\n", err_msg));
+                    emit_event(&app_handle, step_count, err_msg, "ERROR");
+                } else {
+                    let mut borrados = Vec::new();
+                    let mut errores = Vec::new();
+                    for f in &archivos_vec {
+                        let target_path = std::path::Path::new(&workspace_path).join(f);
+                        if target_path.exists() {
+                            if target_path.is_dir() {
+                                match std::fs::remove_dir_all(&target_path) {
+                                    Ok(_) => borrados.push(f.clone()),
+                                    Err(e) => errores.push(format!("No se pudo borrar {}: {}", f, e)),
+                                }
+                            } else {
+                                match std::fs::remove_file(&target_path) {
+                                    Ok(_) => borrados.push(f.clone()),
+                                    Err(e) => errores.push(format!("No se pudo borrar {}: {}", f, e)),
+                                }
+                            }
+                        } else {
+                            errores.push(format!("El archivo {} no existe.", f));
+                        }
+                    }
+                    let mut res_msg = String::new();
+                    if !borrados.is_empty() {
+                        res_msg.push_str(&format!("Éxito: Se borraron permanentemente los siguientes archivos/carpetas: {:?}\n", borrados));
+                    }
+                    if !errores.is_empty() {
+                        res_msg.push_str(&format!("Errores durante la limpieza: {:?}\n", errores));
+                    }
+                    current_context.push_str(&format!("{}\n\n", res_msg));
+                    emit_event(&app_handle, step_count, &format!("Limpieza finalizada. {} borrados.", borrados.len()), "SUCCESS");
+                }
+            },
+            "TOOL_THINK" => {
+                emit_event(&app_handle, step_count, "Pensando y reflexionando...", "ACTION");
+                current_context.push_str(&format!("Reflexión Interna del Agente: {}\n\n", comando));
+                emit_event(&app_handle, step_count, "Reflexión completada. Puedes continuar ejecutando otra herramienta.", "SUCCESS");
+            },
             "TOOL_PROGRAMMER" => {
                 let mut ya_editados = true;
                 if archivos_vec.is_empty() { ya_editados = false; }
@@ -452,7 +545,7 @@ pub async fn run_agent_loop(
                 let context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
                 let mut qwen_prompt = format!("Instrucción principal: {}\nDebes crear/modificar los archivos solicitados usando el JSON estructurado.", user_message);
-                let target_model = match crate::llm::router::get_best_model(&task_complexity, &available_models) {
+                let target_model = match crate::llm::router::get_best_model(&task_complexity, &available_models, &app_handle, step_count).await {
                     Ok(m) => m,
                     Err(e) => {
                         let msg = format!("[ENV_FAILURE] {}", e);
@@ -469,7 +562,8 @@ pub async fn run_agent_loop(
                 while max_intentos > 0 && !exito_bucle_programador {
                     match delegate_to_programmer(&qwen_prompt, &context_for_qwen, &target_model).await {
                         Ok(json_res) => {
-                            if let Ok(prog_output) = serde_json::from_str::<ProgrammerOutput>(&json_res) {
+                            let clean_json_res = strip_think_tags(json_res.clone());
+                            if let Ok(prog_output) = serde_json::from_str::<ProgrammerOutput>(&clean_json_res) {
                                 if !prog_output.cambios.is_empty() {
                                     emit_event(&app_handle, step_count, "Activando Git-Shield: Creando punto de retorno...", "PLANNING");
                                     if let Err(e) = crate::core::create_git_backup(&workspace_path, "Aura-Sentinel: Git-Shield Auto-Backup").await {
@@ -736,7 +830,7 @@ pub async fn run_agent_loop(
                                         Tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_TERMINAL' con 'npm install' o el instalador adecuado al lenguaje.\n\n",
                                         fail_msg
                                     ));
-                                    forced_next_tool = Some("TOOL_TERMINAL");
+                                    
                                 }
                             } else {
                                 // Dependency error but no specific binary — guide the LLM
@@ -749,7 +843,7 @@ pub async fn run_agent_loop(
                                     REGLA ESTRICTA: Después de ejecutar TOOL_TERMINAL con éxito, tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER.",
                                     fail_msg
                                 ));
-                                forced_next_tool = Some("TOOL_TERMINAL");
+                                
                             }
                             } else {
                                 // Real test logic failure — revert and let Qwen fix the code
@@ -757,7 +851,7 @@ pub async fn run_agent_loop(
                                 let _ = crate::core::restore_git_backup(&workspace_path).await;
                                 archivos_editados_historico.clear();
                                 comandos_ejecutados_historico.clear();
-                                task_complexity = crate::llm::router::Complexity::HighComplexityFix;
+                                task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::HighComplexityFix, language: None };
                                 emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
                                 current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
                                 forced_next_tool = Some("TOOL_PROGRAMMER");

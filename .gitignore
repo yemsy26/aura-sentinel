@@ -27,6 +27,7 @@ workspace/
 .fenix_memory.json
 .fenix_chat.json
 data/memory/vectors.json
+brains.json
 patch_*.py
 fix_*.py
 refactor_*.py

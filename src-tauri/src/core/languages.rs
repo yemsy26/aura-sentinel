@@ -82,7 +82,7 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
         scan_dir_for_go_tests(workspace_path)
     };
 
-    if safe_exists("go.mod") || has_go_test_files {
+    if safe_exists("go.mod") && has_go_test_files {
         // go test ./... exits 0 even with no _test.go files, so this is safe
         return Some(LanguageConfig {
             name: "Go",

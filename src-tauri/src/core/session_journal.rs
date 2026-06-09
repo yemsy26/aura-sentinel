@@ -21,6 +21,9 @@ pub struct SessionJournal {
     pub ultima_actualizacion: String,
     /// Workspace path (so we can reconstruct on boot)
     pub workspace_path: String,
+    /// Short-term conversational memory to maintain context
+    #[serde(default)]
+    pub chat_history: Vec<String>,
 }
 
 /// File name for the session journal (hidden by convention via leading dot)

@@ -167,7 +167,9 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
                 }
             }
             if available_models.is_empty() {
-                errors.push("Ollama está instalado, pero no tienes ningún modelo descargado. Descarga al menos llama3.1:8b.".to_string());
+                errors.push("Ollama está instalado, pero no tienes ningún modelo descargado. Descarga al menos qwen2.5-coder:7b con: ollama pull qwen2.5-coder:7b".to_string());
+            } else if !available_models.iter().any(|m| m.starts_with("nomic-embed-text")) {
+                errors.push("Falta el modelo de embeddings: 'nomic-embed-text'. Necesario para la memoria RAG. Ejecuta: ollama pull nomic-embed-text".to_string());
             }
         }
         Ok(res) => {

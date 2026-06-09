@@ -105,7 +105,20 @@ pub fn check_path(workspace_path: &Path, target_path: &Path) -> Result<(), PathJ
         }
     }
 
-    // Target does not exist yet (new file). Verify syntactic containment.
+    // Target does not exist yet (new file). Verify the first existing parent.
+    let mut parent = target_absolute.parent();
+    while let Some(p) = parent {
+        if p.exists() {
+            if let Ok(parent_canon) = std::fs::canonicalize(p) {
+                if !parent_canon.starts_with(&workspace_canon) {
+                    return Err(PathJailError::OutsideWorkspace);
+                }
+            }
+            break;
+        }
+        parent = p.parent();
+    }
+
     if target_absolute.starts_with(&workspace_canon)
         || target_absolute.starts_with(workspace_path)
     {

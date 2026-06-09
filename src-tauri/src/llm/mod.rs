@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use crate::memory::{self, Cambio};
-use tauri::AppHandle;
+use crate::memory::Cambio;
+
 
 pub mod agent;
 pub mod translator;
@@ -19,29 +19,7 @@ struct OllamaResponse {
     response: String,
 }
 
-#[derive(Deserialize, Serialize)]
-struct OrchestratorOutput {
-    #[serde(default)]
-    intencion: String,
-    #[serde(default)]
-    respuesta_conversacional: String,
-    #[serde(default)]
-    pensamiento: String,
-    #[serde(default)]
-    archivos_a_analizar: Vec<String>,
-    #[serde(default)]
-    modelo_sugerido: String,
-    #[serde(default)]
-    comando_a_ejecutar: Option<String>,
-    #[serde(default)]
-    url_a_investigar: Option<String>,
-    #[serde(default)]
-    comando_background: Option<String>,
-    #[serde(default)]
-    task_id: Option<String>,
-    #[serde(default)]
-    gestionar_background: Option<String>,
-}
+
 
 #[derive(Deserialize, Serialize)]
 struct ProgrammerOutput {
@@ -154,27 +132,42 @@ pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
 
 async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) -> Result<String, String> {
     let system_prompt = format!(
-        "Eres Aura-Sentinel, el Ingeniero Ejecutor. Tu tarea es ESCRIBIR o MODIFICAR el código real basado en la instrucción del usuario y el contexto web/local proporcionado.\n\
+        "Eres Aura-Sentinel, el Ingeniero Ejecutor. Tu tarea es ESCRIBIR o MODIFICAR el código real basado en la instrucción.\n\
         Instrucción: {}\n\n\
-        Contexto proporcionado:\n{}\n\n\
-        REGLA DE ORO 1: NO uses placeholders (ej. 'Aquí va el código', 'Tu código aquí'). Escribe el código real y funcional COMPLETO.\n\
-        REGLA DE RUTAS: USA SOLO RUTAS RELATIVAS (ej. 'src/main.rs', 'test/Test.js'). NUNCA uses rutas absolutas (como C:/Users/...). Si el usuario te pide crear un archivo nuevo en una carpeta específica, usa la ruta relativa. Si la ruta no existe, el sistema la creará automáticamente.\n\
-        REGLA DE CREACIÓN: Si estás creando un archivo completamente nuevo, el campo 'buscar' DEBE estar vacío (\" \") y el campo 'reemplazar' debe contener todo el código fuente desde cero.\n\
-        REGLA DE ORO 3: Escribe el código COMPLETO sin truncar. No cortes el código a la mitad. Asegúrate de cerrar todas las llaves, paréntesis y funciones.\n\
-        REGLA DE ORO 4: Para scripts de Solana en Python, usa SOLO la librería estándar `requests` con `requests.post` (JSON-RPC siempre usa POST), haciendo peticiones HTTP directamente al RPC de Solana en https://api.mainnet-beta.solana.com\n\
-        DEBES responder ÚNICAMENTE con un JSON válido con la siguiente estructura, sin texto fuera del JSON:\n\
+        Contexto del proyecto actual:\n{}\n\n\
+        === REGLAS ABSOLUTAS — LEERLAS ANTES DE GENERAR CÓDIGO ===\n\
+        \n\
+        [REGLA 1 - CÓDIGO COMPLETO]: Escribe el código COMPLETO y FUNCIONAL. CERO placeholders ('# TODO', '...', 'aquí va el código'). El archivo debe ejecutarse tal como lo escribes.\n\
+        \n\
+        [REGLA 2 - RUTAS RELATIVAS]: ÚNICAMENTE usa rutas relativas ('src/main.py', 'main.py'). NUNCA rutas absolutas (C:/...).\n\
+        \n\
+        [REGLA 3 - PYTHON CRÍTICO - LEE ESTO 3 VECES]:\n\
+           a) SIEMPRE añade '# -*- coding: utf-8 -*-' como PRIMERA línea de cada archivo .py.\n\
+           b) Para strings en Python usa EXCLUSIVAMENTE comillas dobles: \"texto\". JAMÁS uses comillas simples dentro de strings.\n\
+           c) Strings multilínea: usa triple comillas dobles: \"\"\"linea1\\nlinea2\"\"\". NUNCA saltos de línea literales dentro de un string.\n\
+           d) SIEMPRE cierra TODOS los paréntesis, corchetes y llaves que abras.\n\
+           e) Ejemplo CORRECTO de print: print(\"Hola mundo\")  ← correcto\n\
+           f) Ejemplo INCORRECTO: print('Hola mundo')  ← PROHIBIDO\n\
+           g) Ejemplo INCORRECTO: print('Juego terminado!'  ← PROHIBIDO (paréntesis sin cerrar)\n\
+        \n\
+        [REGLA 4 - CREACIÓN DE ARCHIVO NUEVO]: Cuando crees un archivo desde cero, el campo 'buscar' debe ser \"\" (vacío).\n\
+        \n\
+        [REGLA 5 - JSON LIMPIO]: Tu respuesta DEBE ser únicamente JSON válido. Sin texto antes ni después del JSON.\n\
+        \n\
+        === FORMATO DE RESPUESTA (JSON EXACTO) ===\n\
         {{\n\
-          \"explicacion_tecnica\": \"Breve resumen de lo creado\",\n\
+          \"explicacion_tecnica\": \"Descripción breve de lo implementado\",\n\
           \"cambios\": [\n\
             {{\n\
-              \"archivo\": \"nombre_del_archivo.py\",\n\
+              \"archivo\": \"ruta/relativa/archivo.py\",\n\
               \"buscar\": \"\",\n\
-              \"reemplazar\": \"código funcional COMPLETO\"\n\
+              \"reemplazar\": \"# -*- coding: utf-8 -*-\\nimport tkinter as tk\\n\\n# ... código completo ...\"\n\
             }}\n\
           ]\n\
         }}",
         task, file_contents
     );
+
 
     call_ollama(model, &system_prompt).await
 }
@@ -199,9 +192,28 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
         .unwrap_or_else(|e| format!("Error en auditoría: {}", e))
 }
 
+pub(crate) async fn delegate_to_logic_solver(file_contents: &str, model: &str) -> String {
+    let solver_prompt = format!(
+        "Eres un Motor de Verificación Formal (Logic Solver). Tu misión es demostrar matemáticamente y de manera lógica si el código adjunto contiene fallos lógicos, bucles infinitos, condiciones inalcanzables o dependencias rotas. \
+        Debes emular un solver z3.\n\n\
+        CÓDIGO A ANALIZAR:\n{}\n\n\
+        INSTRUCCIONES:\n\
+        1. Analiza el flujo de control rigurosamente.\n\
+        2. Identifica cualquier variable que pueda no inicializarse.\n\
+        3. Verifica si existe alguna condición lógica que jamás se pueda cumplir (Dead Code).\n\
+        4. Comprueba los límites de memoria o recursión.\n\
+        5. Devuelve el reporte en formato texto detallado, enfocado en lógica estricta y matemáticas, NO en estilo visual o rendimiento.\n\n\
+        REPORTE Z3-LOGIC:",
+        file_contents
+    );
+    call_ollama_text(model, &solver_prompt).await
+        .unwrap_or_else(|e| format!("Error en verificación lógica: {}", e))
+}
+
 #[tauri::command]
 pub async fn process_user_prompt(user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
     let mut enriched_message = String::new();
+    let mut journal = crate::core::session_journal::load_journal(&workspace_path);
 
     // ── Zero-latency meta-command intercept ──────────────────────────────────
     if let Some(action) = crate::core::intent_router::try_handle_meta_command(&user_message, &workspace_path) {
@@ -224,9 +236,220 @@ pub async fn process_user_prompt(user_message: String, workspace_path: String, a
     }
 
     if enriched_message.is_empty() {
-        let technical_intent = translator::translate_to_technical_intent(&user_message, &app_handle).await;
-        println!("[TRADUCTOR] Input: '{}' -> Intención: '{}'", user_message, technical_intent);
+        let lower_msg = user_message.to_lowercase();
+
+        // ── Context-aware follow-up for folder creation ──────────────────────────
+        let waiting_for_folder_name = journal.chat_history.last().map(|msg| {
+            msg.contains("¿Con qué nombre quieres que cree la carpeta? Dime el nombre exacto")
+        }).unwrap_or(false);
+
+        if waiting_for_folder_name && !user_message.trim().is_empty() {
+            let folder_name: String = user_message.split_whitespace().next().unwrap_or("").chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            
+            if !folder_name.is_empty() {
+                agent::emit_event(&app_handle, 0, &format!("[FAST-TRACK] Creando carpeta (seguimiento): {}", folder_name), "ACTION");
+                let mkdir_cmd = format!("mkdir \"{}\"", folder_name);
+                match crate::core::execute_terminal_command(&workspace_path, &mkdir_cmd).await {
+                    Ok(_) => {
+                        agent::emit_event(&app_handle, 1, &format!("Carpeta '{}' creada exitosamente.", folder_name), "SUCCESS");
+                        let resp_msg = format!("✅ Listo. Carpeta `{}` creada en tu workspace.", folder_name);
+                        journal.chat_history.push(format!("Usuario: {}", user_message));
+                        journal.chat_history.push(format!("Aura: {}", resp_msg));
+                        if journal.chat_history.len() > 6 { journal.chat_history.drain(0..journal.chat_history.len() - 6); }
+                        crate::core::session_journal::save_journal(&workspace_path, &journal);
+                        let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
+                        return Ok(response.to_string());
+                    },
+                    Err(e) => {
+                        let resp_msg = if e.contains("ya existe") || e.contains("already exists") || e.contains("MKDIR") {
+                            format!("ℹ️ La carpeta `{}` ya existe en tu workspace.", folder_name)
+                        } else {
+                            format!("⚠️ No pude crear la carpeta `{}`. Error: {}", folder_name, e)
+                        };
+                        let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
+                        return Ok(response.to_string());
+                    }
+                }
+            }
+        }
+
+        // ── Zero-latency folder creation intercept ─────────────────────────────
+        // Detect "crea una carpeta X", "crear carpeta X", "make a folder X", etc.
+        let mut folder_prefixes = vec![
+            "crea una carpeta con nombre", "crear una carpeta con nombre",
+            "crea la carpeta con nombre", "crear la carpeta con nombre",
+            "crea una carpeta llamada", "crear una carpeta llamada",
+            "crea la carpeta llamada", "crear la carpeta llamada",
+            "crea una carpeta", "crea la carpeta", "crea carpeta", "crear carpeta",
+            "crea el directorio", "crear directorio", "crea directorio",
+            "make a folder", "make folder", "create folder", "create directory"
+        ];
+        // Sort by length descending so longer prefixes match first
+        folder_prefixes.sort_by(|a, b| b.len().cmp(&a.len()));
+        let folder_name_opt: Option<String> = folder_prefixes.iter().find_map(|prefix| {
+            if lower_msg.contains(prefix) {
+                // Extract the word(s) after the prefix
+                let rest = lower_msg[lower_msg.find(prefix).unwrap() + prefix.len()..].trim().to_string();
+                // take first token as the folder name (stop at space or special char)
+                let name: String = rest.split_whitespace().next().unwrap_or("").chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                // Filter out Spanish filler/pronoun words that are NOT valid folder names
+                let filler_words = ["que", "el", "la", "lo", "un", "una", "te", "pedi",
+                                    "me", "mi", "tu", "a", "de", "en", "con", "por",
+                                    "para", "como", "al", "del", "se", "le", "les"];
+                if !name.is_empty() && !filler_words.contains(&name.as_str()) {
+                    Some(name)
+                } else {
+                    None
+                }
+            } else { None }
+        });
+
+        let folder_prefix_found = folder_prefixes.iter().any(|p| lower_msg.contains(p));
+        if let Some(folder_name) = folder_name_opt {
+            agent::emit_event(&app_handle, 0, &format!("[FAST-TRACK] Creando carpeta: {}", folder_name), "ACTION");
+            let mkdir_cmd = format!("mkdir \"{}\"", folder_name);
+            match crate::core::execute_terminal_command(&workspace_path, &mkdir_cmd).await {
+                Ok(_) => {
+                    agent::emit_event(&app_handle, 1, &format!("Carpeta '{}' creada exitosamente.", folder_name), "SUCCESS");
+                    let resp_msg = format!("✅ Listo. Carpeta `{}` creada en tu workspace.", folder_name);
+                    journal.chat_history.push(format!("Usuario: {}", user_message));
+                    journal.chat_history.push(format!("Aura: {}", resp_msg));
+                    if journal.chat_history.len() > 6 { journal.chat_history.drain(0..journal.chat_history.len() - 6); }
+                    crate::core::session_journal::save_journal(&workspace_path, &journal);
+                    let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
+                    return Ok(response.to_string());
+                },
+                Err(e) => {
+                    let resp_msg = if e.contains("ya existe") || e.contains("already exists") || e.contains("MKDIR") {
+                        format!("ℹ️ La carpeta `{}` ya existe en tu workspace.", folder_name)
+                    } else {
+                        format!("⚠️ No pude crear la carpeta `{}`. Error: {}", folder_name, e)
+                    };
+                    let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
+                    return Ok(response.to_string());
+                }
+            }
+        } else if folder_prefix_found {
+            // Prefix was detected but name was a filler word (e.g. "crea la carpeta que te pedí")
+            let resp_msg = "¿Con qué nombre quieres que cree la carpeta? Dime el nombre exacto y la creo al instante.";
+            let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
+            return Ok(response.to_string());
+        }
+
+        // ── Hardcoded keyword intercept (faster than NLU for known search verbs) ──
+        let search_keywords = ["investiga", "investigue", "investig", "busca", "buscar", "busque", "consulta", "consulte"];
+        let forced_search = search_keywords.iter().any(|kw| lower_msg.contains(kw));
+        
+        if forced_search {
+            agent::emit_event(&app_handle, 0, "[INTERCEPT] Verbo de búsqueda detectado. Forzando AGENTIC_TASK.", "INFO");
+            enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: El usuario usó un verbo de búsqueda explícito. DEBES usar TOOL_WEB_SEARCH para investigar en internet y luego usar TOOL_FINISH para responder en el chat.", user_message);
+            
+            journal.chat_history.push(format!("Usuario: {}", user_message));
+            crate::core::session_journal::save_journal(&workspace_path, &journal);
+        } else {
+
+        let chat_json = crate::memory::load_chat_history(workspace_path.clone()).await.unwrap_or_else(|_| "[]".to_string());
+        let mut visual_history = Vec::new();
+        if let Ok(messages) = serde_json::from_str::<Vec<serde_json::Value>>(&chat_json) {
+            for msg in messages.iter().rev().take(8).rev() {
+                let sender = msg.get("sender").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let text = msg.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let prefix = if sender == "user" { "Usuario" } else { "Aura" };
+                visual_history.push(format!("{}: {}", prefix, text));
+            }
+        }
+        
+        let mut combined_history = journal.chat_history.clone();
+        for msg in visual_history {
+            if !combined_history.contains(&msg) {
+                combined_history.push(msg);
+            }
+        }
+        if combined_history.len() > 8 {
+            let skip = combined_history.len() - 8;
+            combined_history = combined_history.into_iter().skip(skip).collect();
+        }
+
+        let mut nlu_response = translator::translate_to_technical_intent(&user_message, &app_handle, &combined_history).await;
+        let start_idx = nlu_response.find('{');
+        let end_idx = nlu_response.rfind('}');
+        if let (Some(s), Some(e)) = (start_idx, end_idx) {
+            if e > s { nlu_response = nlu_response[s..=e].to_string(); }
+        }
+        nlu_response = nlu_response.trim().to_string();
+        println!("[NLU] Input: '{}' -> RAW: '{}'", user_message, nlu_response);
+        
+        let nlu_json: serde_json::Value = serde_json::from_str(&nlu_response).unwrap_or_else(|_| {
+            serde_json::json!({
+                "intent_type": "AGENTIC_TASK",
+                "technical_translation": nlu_response
+            })
+        });
+
+        let mut intent_type = nlu_json.get("intent_type").and_then(|v| v.as_str()).unwrap_or("AGENTIC_TASK");
+
+        let lower_msg = user_message.to_lowercase();
+        if lower_msg.contains("tool_") || lower_msg.contains("script") || lower_msg.contains("reto") || lower_msg.contains("algoritmo") {
+            intent_type = "AGENTIC_TASK";
+        }
+
+        if intent_type == "CONVERSATION" {
+            let direct_response = nlu_json.get("direct_response").and_then(|v| v.as_str()).unwrap_or("¡Hola! ¿En qué puedo ayudarte?");
+            agent::emit_event(&app_handle, 0, "Conversación fluida detectada.", "SUCCESS");
+            
+            // Save to memory
+            journal.chat_history.push(format!("Usuario: {}", user_message));
+            journal.chat_history.push(format!("Aura: {}", direct_response));
+            if journal.chat_history.len() > 6 {
+                journal.chat_history.drain(0..journal.chat_history.len() - 6);
+            }
+            crate::core::session_journal::save_journal(&workspace_path, &journal);
+
+            let response = serde_json::json!({
+                "status": "FINISH",
+                "respuesta_conversacional": direct_response
+            });
+            return Ok(response.to_string());
+        }
+
+        if intent_type == "FAST_TRACK_OS" {
+            if let Some(cmd) = nlu_json.get("os_command").and_then(|v| v.as_str()) {
+                if !cmd.is_empty() && cmd != "null" {
+                    agent::emit_event(&app_handle, 0, &format!("[FAST-TRACK] Ejecutando: {}", cmd), "ACTION");
+                    match crate::core::execute_terminal_command(&workspace_path, cmd).await {
+                        Ok(_) => {
+                            agent::emit_event(&app_handle, 0, "[FAST-TRACK] Comando ejecutado con éxito.", "SUCCESS");
+                            let resp_msg = format!("✅ Listo. Ejecuté: `{}`", cmd);
+                            
+                            journal.chat_history.push(format!("Usuario: {}", user_message));
+                            journal.chat_history.push(format!("Aura: {}", resp_msg));
+                            if journal.chat_history.len() > 6 {
+                                journal.chat_history.drain(0..journal.chat_history.len() - 6);
+                            }
+                            crate::core::session_journal::save_journal(&workspace_path, &journal);
+
+                            let response = serde_json::json!({
+                                "status": "FINISH",
+                                "respuesta_conversacional": resp_msg
+                            });
+                            return Ok(response.to_string());
+                        },
+                        Err(e) => {
+                            agent::emit_event(&app_handle, 0, &format!("[FAST-TRACK] Error: {}. Derivando al Agente...", e), "WARNING");
+                            // Fall through to AGENTIC_TASK
+                        }
+                    }
+                }
+            }
+        }
+
+        let technical_intent = nlu_json.get("technical_translation").and_then(|v| v.as_str()).unwrap_or(&user_message);
         enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: {}", user_message, technical_intent);
+        } // end else (no keyword intercept)
     }
 
     let workspace_tree_nodes = crate::memory::get_workspace_tree_internal(workspace_path.clone()).await?;
