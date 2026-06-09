@@ -197,8 +197,24 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
         }
     }
 
-    // 3. Node.js
+    // 3. Node.js — smoke-test: verify npm scripts are actually defined
     if path.join("package.json").exists() {
+        // Read the package.json to check if a "dev" or "start" script exists.
+        // If neither exists, surface a meaningful error so the agent knows to fix it.
+        let pkg_content = std::fs::read_to_string(path.join("package.json")).unwrap_or_default();
+        let pkg_json: serde_json::Value = serde_json::from_str(&pkg_content).unwrap_or(serde_json::Value::Null);
+        let has_dev = pkg_json.pointer("/scripts/dev").is_some();
+        let has_start = pkg_json.pointer("/scripts/start").is_some();
+        let has_build = pkg_json.pointer("/scripts/build").is_some();
+
+        if !has_dev && !has_start && !has_build {
+            return Err(
+                "[NODE_SCRIPTS_MISSING] El package.json existe pero NO tiene scripts 'dev', 'start' ni 'build' definidos. \
+                Esto significa que 'npm run dev' fallará con 'Missing script: dev'. \
+                Debes usar TOOL_PROGRAMMER para agregar los scripts correctos al package.json antes de continuar. \
+                Un archivo .bat que llame a 'npm run dev' sin que el script exista es un trabajo INCOMPLETO.".to_string()
+            );
+        }
         return Ok(());
     }
 
