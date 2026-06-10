@@ -232,7 +232,7 @@ pub async fn run_agent_loop(
             15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.
             16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
-            REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
+            REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos solicitados (ej. 'crea', 'ejecuta', 'prueba', 'valida') se han ejecutado FÍSICAMENTE en el historial con ÉXITO. Si el usuario pidió 'ejecuta X', y X falló o no se ejecutó, ESTÁ ESTRICTAMENTE PROHIBIDO USAR TOOL_FINISH.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):
             - Omitir Hallucinaciones: NUNCA asumas que el usuario te pidió realizar una acción solo porque leíste una descripción en la lista de herramientas o en este manual. Cíñete ESTRICTAMENTE al 'Objetivo Original'.
             REGLAS ESTRICTAS:
