@@ -222,6 +222,11 @@ pub async fn run_agent_loop(
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):
             - Omitir Hallucinaciones: NUNCA asumas que el usuario te pidió realizar una acción solo porque leíste una descripción en la lista de herramientas o en este manual. Cíñete ESTRICTAMENTE al 'Objetivo Original'.
+            REGLAS ESTRICTAS:
+            1. Escribe los scripts y archivos SIEMPRE en la raíz del proyecto a menos que el usuario especifique una subcarpeta. NUNCA inventes carpetas (ej. no crees 'src/script.py' ni 'scraper/scraper.py', usa 'script.py' directamente).
+            2. Cuando uses TOOL_TERMINAL para ejecutar un script, asegúrate de usar el MISMO NOMBRE exacto del archivo que acabas de crear. No inventes nombres como 'nombre_del_script.py' o 'hello.py'.
+            3. Analiza con cuidado si ya usaste una herramienta y falló. No la repitas ciegamente.
+            4. Si el historial dice que la tarea ya terminó, ignóralo si aún no has escrito y probado el código solicitado.
             - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.
             - Auto-Testing: Si el proyecto es un script simple, ejecuta el script directamente en consola usando TOOL_TERMINAL. Si falla, usa TOOL_PROGRAMMER para repararlo.
             - Instalación de Librerías vs Binarios (CRÍTICO): Usa 'TOOL_TERMINAL' para instalar librerías de tu lenguaje (ej. 'pip install requests', 'npm install express'). Usa 'TOOL_ENV_MANAGER' EXCLUSIVAMENTE para instalar binarios del sistema base (ej. 'python', 'node', 'git') si la consola dice 'is not recognized'. ¡ESTÁ PROHIBIDO usar TOOL_ENV_MANAGER para paquetes de pip o npm!
