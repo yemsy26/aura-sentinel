@@ -441,10 +441,23 @@ pub async fn run_agent_loop(
             },
             "TOOL_BACKGROUND_START" => {
                 if comando.trim().is_empty() {
+                    if comandos_ejecutados_historico.contains(&"__EMPTY_BG_CMD__".to_string()) {
+                        let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás en un bucle infinito de comandos vacíos. Abortando.";
+                        emit_event(&app_handle, step_count, res_msg, "FATAL");
+                        let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Error interno del planificador asíncrono.".to_string() };
+                        return Ok(serde_json::to_string(&final_res).unwrap());
+                    }
+                    comandos_ejecutados_historico.insert("__EMPTY_BG_CMD__".to_string());
                     let err_msg = "Error Crítico: El campo 'comando' está vacío. Debes especificar qué comando ejecutar (ej. 'npm run dev', 'python app.py').";
                     current_context.push_str(&format!("{}\n\n", err_msg));
                     emit_event(&app_handle, step_count, err_msg, "ERROR");
+                } else if comandos_ejecutados_historico.contains(&comando) {
+                    let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás repitiendo un comando de background fallido. Repetirlo no lo arreglará. Usa TOOL_PROGRAMMER.";
+                    emit_event(&app_handle, step_count, res_msg, "FATAL");
+                    let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: format!("Bucle en background con comando: {}", comando) };
+                    return Ok(serde_json::to_string(&final_res).unwrap());
                 } else {
+                    comandos_ejecutados_historico.insert(comando.clone());
                     emit_event(&app_handle, step_count, &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando), "ACTION");
                     match start_background_task(&workspace_path, &task_id, &comando).await {
                         Ok(out) => {
