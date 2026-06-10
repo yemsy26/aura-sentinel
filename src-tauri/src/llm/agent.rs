@@ -215,7 +215,7 @@ pub async fn run_agent_loop(
             10. 'TOOL_TESTER': Ejecuta suites de pruebas automatizadas SOLO si el proyecto tiene archivos de test (test_*.py, *.test.js, etc.) o configuración de test (pytest.ini, jest.config.js). ¡PELIGRO! Esta herramienta NO ESCRIBE ni implementa pruebas. SOLO LAS EJECUTA. Para scripts simples (como hello.py) SIN archivos de test, usa TOOL_TERMINAL en su lugar. Para escribir o arreglar un test, usa TOOL_PROGRAMMER.\n\
             11. 'TOOL_LEARN': Indexa el conocimiento de un proyecto exitoso en la memoria permanente de Aura. Úsala si el proyecto funciona o después de un TOOL_TESTER exitoso. No requiere argumentos.\n\
             12. 'TOOL_SEARCH': Consulta explícitamente la memoria histórica para buscar cómo resolviste problemas similares antes. Rellena 'url_a_investigar' con el término de búsqueda.\n\
-            13. 'TOOL_ENV_MANAGER': Instala dependencias o lenguajes faltantes en el sistema operativo de forma automática y recarga el PATH en caliente. Rellena 'comando' SOLO con el NOMBRE del paquete.\n\
+            13. 'TOOL_ENV_MANAGER': SOLO para instalar programas binarios base del Sistema Operativo (ej. python, node, git). PROHIBIDO usar para paquetes de lenguajes (pip/npm). Rellena 'comando' con el nombre del binario.
             14. 'TOOL_LOGIC_SOLVER': Solo para depuración avanzada de lógica. No requiere argumentos.
             15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.
             16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
