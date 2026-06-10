@@ -215,7 +215,7 @@ pub async fn run_agent_loop(
             10. 'TOOL_LEARN': Indexa el conocimiento de un proyecto exitoso en la memoria permanente de Aura. Úsala si el proyecto funciona o después de un TOOL_TESTER exitoso. No requiere argumentos.\n\
             11. 'TOOL_SEARCH': Consulta explícitamente la memoria histórica para buscar cómo resolviste problemas similares antes. Rellena 'url_a_investigar' con el término de búsqueda.\n\
             12. 'TOOL_ENV_MANAGER': SOLO para instalar programas binarios base del Sistema Operativo (ej. python, node, git). PROHIBIDO usar para paquetes de lenguajes (pip/npm). Rellena 'comando' con el nombre del binario.
-            14. 'TOOL_LOGIC_SOLVER': Solo para depuración avanzada de lógica. No requiere argumentos.
+            14. 'TOOL_LOGIC_SOLVER': Solver Z3 de verificación matemática para encontrar bucles infinitos o dead code. ÚSALO SOLO si has fallado repetidamente al arreglar un código. NUNCA asumas que el usuario te pidió usar esto a menos que haya un error lógico persistente. No requiere argumentos.
             15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.
             16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
