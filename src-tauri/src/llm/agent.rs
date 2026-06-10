@@ -254,10 +254,10 @@ pub async fn run_agent_loop(
             user_message, tree_json, current_context
         );
         
-        emit_event(&app_handle, step_count, "Analizando estado y planificando siguiente paso...", "PLANNING");
-        
         let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::Orchestrator, language: None }, &available_models, &app_handle, 0).await
             .unwrap_or_else(|_| ORCHESTRATOR_MODEL.to_string());
+        
+        emit_event(&app_handle, step_count, &format!("Analizando estado y planificando siguiente paso con {}...", orchestrator_model), "PLANNING");
 
         let mut agent_res = match call_ollama(&orchestrator_model, &agent_prompt).await {
             Ok(res) => res,
@@ -609,7 +609,6 @@ pub async fn run_agent_loop(
                         forced_next_tool = None;
                     }
                 } else {
-                emit_event(&app_handle, step_count, "Delegando a Qwen para modificar código físico...", "ACTION");
                 let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
                 let context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
