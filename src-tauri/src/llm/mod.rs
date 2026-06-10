@@ -398,7 +398,10 @@ pub async fn process_user_prompt(user_message: String, workspace_path: String, a
         let mut intent_type = nlu_json.get("intent_type").and_then(|v| v.as_str()).unwrap_or("AGENTIC_TASK");
 
         let lower_msg = user_message.to_lowercase();
-        if lower_msg.contains("tool_") || lower_msg.contains("script") || lower_msg.contains("reto") || lower_msg.contains("algoritmo") {
+        if lower_msg.contains("tool_") || lower_msg.contains("script") || lower_msg.contains("reto") || lower_msg.contains("algoritmo") 
+        || lower_msg.contains("crea") || lower_msg.contains("procede") || lower_msg.contains("ejecuta") 
+        || lower_msg.contains("proyecto") || lower_msg.contains("backend") || lower_msg.contains("frontend")
+        || lower_msg.contains("programa") || lower_msg.contains("haz") || lower_msg.contains("prueba") || lower_msg.contains("continua") {
             intent_type = "AGENTIC_TASK";
         }
 
