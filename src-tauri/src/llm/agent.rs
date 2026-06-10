@@ -703,7 +703,7 @@ pub async fn run_agent_loop(
 
                                                         let mut integration_ok = true;
                                                         for module in &py_modules {
-                                                            let check_cmd = format!("python -c \"import {}; print('INTEGRATION_OK')\"", module);
+                                                            let check_cmd = format!("echo import {} ; print('INTEGRATION_OK') | python", module);
                                                             match execute_terminal_command(&workspace_path, &check_cmd).await {
                                                                 Ok(out) if out.contains("INTEGRATION_OK") => {
                                                                     emit_event(&app_handle, step_count, &format!("✅ [INTEGRACIÓN] Módulo '{}' importado correctamente", module), "SUCCESS");
