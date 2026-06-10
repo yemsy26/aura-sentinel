@@ -240,7 +240,7 @@ pub async fn run_agent_loop(
             4. Si el historial dice que la tarea ya terminó, ignóralo si aún no has escrito y probado el código solicitado.
             - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.
             - Auto-Testing: Si el proyecto es un script simple, ejecuta el script directamente en consola usando TOOL_TERMINAL. Si falla, usa TOOL_PROGRAMMER para repararlo.
-            - Instalación de Librerías vs Binarios (CRÍTICO): Usa 'TOOL_TERMINAL' para instalar librerías de tu lenguaje (ej. 'pip install requests', 'npm install express'). Usa 'TOOL_ENV_MANAGER' EXCLUSIVAMENTE para instalar binarios del sistema base (ej. 'python', 'node', 'git') si la consola dice 'is not recognized'. ¡ESTÁ PROHIBIDO usar TOOL_ENV_MANAGER para paquetes de pip o npm!
+            - Instalación de Librerías vs Binarios (CRÍTICO): Usa 'TOOL_TERMINAL' para instalar librerías de tu lenguaje (ej. 'pip install paquete_python', 'npm install paquete_node'). Usa 'TOOL_ENV_MANAGER' EXCLUSIVAMENTE para instalar binarios del sistema base (ej. 'python', 'node', 'git') si la consola dice 'is not recognized'. ¡ESTÁ PROHIBIDO usar TOOL_ENV_MANAGER para paquetes de pip o npm!
             - Auto-Healing (Pre-Flight): Si un comando falla por 'is not recognized', usa TOOL_ENV_MANAGER (si es binario base) o TOOL_TERMINAL (si es paquete de código de pip/npm). ¡NUNCA uses TOOL_ENV_MANAGER para errores de código (usa TOOL_PROGRAMMER)!
 
             REGLAS DE ESTADO (STATE MACHINE):
