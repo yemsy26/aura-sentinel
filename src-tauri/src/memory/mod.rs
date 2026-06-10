@@ -140,6 +140,7 @@ pub async fn read_files_safely(workspace_path: &str, files: Vec<String>) -> Stri
 
 pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> Result<String, String> {
     let mut exitosos = 0;
+    let mut exitosos_nombres = Vec::new();
     let mut fuzzy_logs = Vec::new();
     
     for cambio in cambios {
@@ -267,6 +268,7 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
         match fs::write(&full_path, nuevo_contenido).await {
             Ok(_) => {
                 exitosos += 1;
+                exitosos_nombres.push(cambio.archivo.clone());
                 
                 use std::time::{SystemTime, UNIX_EPOCH};
                 let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
@@ -288,7 +290,11 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
         }
     }
     
-    let base_msg = format!("{} archivos modificados exitosamente.", exitosos);
+    let base_msg = if exitosos > 0 {
+        format!("{} archivos modificados exitosamente: {}", exitosos, exitosos_nombres.join(", "))
+    } else {
+        "0 archivos modificados exitosamente.".to_string()
+    };
     if fuzzy_logs.is_empty() {
         Ok(base_msg)
     } else {

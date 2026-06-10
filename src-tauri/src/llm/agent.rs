@@ -121,7 +121,7 @@ pub async fn run_agent_loop(
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
     let mut no_tests_consecutive = 0u32;
-    let mut forced_next_tool: Option<&str> = None;
+    let mut forced_next_tool: Option<(String, String)> = None;
     let mut step_count = 1;
     let max_steps = 50000;
 
@@ -310,16 +310,11 @@ pub async fn run_agent_loop(
         // ── FORCED TOOL OVERRIDE ────────────────────────────────────────────
         // If the system has determined the LLM is stuck in a tool-loop,
         // override its decision and force a specific tool.
-        let tool = if let Some(forced) = forced_next_tool.take() {
-            let override_msg = format!(
-                "[SISTEMA INTERCEPTO] El LLM eligió '{}' pero el sistema lo bloqueó. \
-                Se forzó '{}' porque el proyecto no tiene archivos de test y el usuario los pidió. \
-                DEBES crear los archivos de test ahora con TOOL_PROGRAMMER.",
-                tool, forced
-            );
-            current_context.push_str(&format!("{}\n\n", override_msg));
+        let tool = if let Some((forced, override_msg)) = forced_next_tool.take() {
+            let intercept_log = format!("[SISTEMA INTERCEPTO] El LLM eligió '{}' pero el sistema lo bloqueó. {}", tool, override_msg);
+            current_context.push_str(&format!("{}\n\n", intercept_log));
             emit_event(&app_handle, step_count, &format!("[INTERCEPT] LLM forzado de {} a {}", tool, forced), "WARNING");
-            forced.to_string()
+            forced
         } else {
             tool
         };
@@ -615,7 +610,7 @@ pub async fn run_agent_loop(
                         let interception = "[SISTEMA INTERCEPTO] Error Lógico: Ya editaste estos archivos en un turno anterior con éxito. ASUME QUE EL CÓDIGO FUE ESCRITO CORRECTAMENTE. No repitas esta acción. Actualiza tu checklist mental y avanza al siguiente paso ejecutando 'TOOL_TERMINAL' para probar tu script, o 'TOOL_FINISH' si ya completaste el objetivo.";
                         current_context.push_str(&format!("{}\n\n", interception));
                         emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
-                        forced_next_tool = None;
+                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "Se forzó 'TOOL_TERMINAL' porque ya editaste estos archivos y el código es correcto. DEBES ejecutar el script en la terminal para probarlo ahora mismo.".to_string()));
                     }
                 } else {
                 let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
@@ -856,6 +851,7 @@ pub async fn run_agent_loop(
                             );
                             current_context.push_str(&format!("{}\n\n", force_msg));
                             emit_event(&app_handle, step_count, &format!("[SISTEMA] Cambiando estrategia a TOOL_TERMINAL tras {} intentos.", no_tests_consecutive), "WARNING");
+                            forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "El proyecto no tiene archivos de test. Se forzó TOOL_TERMINAL para que ejecutes el script manualmente en su lugar.".to_string()));
 
                         } else {
                             // First hit — tell the LLM clearly
@@ -1004,7 +1000,7 @@ pub async fn run_agent_loop(
                                 task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::HighComplexityFix, language: None };
                                 emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
                                 current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
-                                forced_next_tool = Some("TOOL_PROGRAMMER");
+                                forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Los tests fallaron estrepitosamente, el sistema forzó TOOL_PROGRAMMER para que generes una nueva y mejor solución.".to_string()));
                             }
                         }
                     }
