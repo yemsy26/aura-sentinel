@@ -301,8 +301,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     chatInput.addEventListener('keypress', async (e) => {
         if (e.key === 'Enter' && chatInput.value.trim() !== '') {
-            const text = chatInput.value.trim();
+            let text = chatInput.value.trim();
             chatInput.value = '';
+            
+            // Sanitizer anti-copy-paste: Si el usuario pegó el historial completo
+            text = text.replace(/^\[USER\]\s*/i, '');
+            const systemIndex = text.indexOf('[SYSTEM]');
+            if (systemIndex !== -1) {
+                text = text.substring(0, systemIndex).trim();
+            }
             
             // Reemplazamos appendMessage por las nuevas funciones
             appendMessageToDOM('user', text);
