@@ -232,12 +232,12 @@ pub async fn run_agent_loop(
             15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.
             16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
-            REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos solicitados (ej. 'crea', 'ejecuta', 'prueba', 'valida') se han ejecutado FÍSICAMENTE en el historial con ÉXITO. Si el usuario pidió 'ejecuta X', y X falló o no se ejecutó, ESTÁ ESTRICTAMENTE PROHIBIDO USAR TOOL_FINISH.\n\n\
+            REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos solicitados (ej. 'crea', 'ejecuta', 'prueba', 'valida') se han ejecutado FÍSICAMENTE en el historial con ÉXITO. Si el usuario pidió 'ejecuta X', y X falló o no se ejecutó, ESTÁ ESTRICTAMENTE PROHIBIDO USAR TOOL_FINISH. En su lugar, debes usar TOOL_PROGRAMMER para arreglar el error y luego TOOL_TERMINAL para volver a probar. NUNCA te rindas.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):
             - Omitir Hallucinaciones: NUNCA asumas que el usuario te pidió realizar una acción solo porque leíste una descripción en la lista de herramientas o en este manual. Cíñete ESTRICTAMENTE al 'Objetivo Original'.
             REGLAS ESTRICTAS:
             1. Escribe los scripts y archivos SIEMPRE en la raíz del proyecto a menos que el usuario especifique una subcarpeta. NUNCA inventes carpetas (ej. no crees 'src/script.py' ni 'scraper/scraper.py', usa 'script.py' directamente).
-            2. Cuando uses TOOL_TERMINAL para ejecutar un script, asegúrate de usar el MISMO NOMBRE exacto del archivo que acabas de crear. No inventes nombres como 'nombre_del_script.py' o 'hello.py'.
+            2. Cuando uses TOOL_TERMINAL para ejecutar un script, DEBES usar el MISMO NOMBRE exacto del archivo que aparece en el Contexto del Proyecto arriba. NUNCA adivines ni inventes nombres de archivos. Lee el Contexto.
             3. Analiza con cuidado si ya usaste una herramienta y falló. No la repitas ciegamente.
             4. Si el historial dice que la tarea ya terminó, ignóralo si aún no has escrito y probado el código solicitado.
             - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.
@@ -250,7 +250,7 @@ pub async fn run_agent_loop(
             - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
             - SI TOOL_TESTER TIENE ÉXITO, estás OBLIGADO a usar TOOL_FINISH en el siguiente paso. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests pasaron.\n\
             - SI TOOL_TERMINAL TIENE ÉXITO y su salida demuestra que cumpliste el último objetivo del usuario, es OBLIGATORIO usar TOOL_FINISH en el siguiente paso. ¡PROHIBIDO repetir el mismo comando de TOOL_TERMINAL si ya funcionó!\n\
-            - SI TOOL_TERMINAL falla constantemente, es OBLIGATORIO usar TOOL_FINISH para evitar bucles de comandos infinitos.\n\
+            - SI TOOL_TERMINAL falla constantemente, NO uses TOOL_FINISH. Debes usar TOOL_PROGRAMMER para investigar por qué falla, agregar logs de depuración (print), y volver a intentar con TOOL_TERMINAL.\n\
             - SI TOOL_ENV_MANAGER TIENE ÉXITO, NO PUEDES volver a usar TOOL_ENV_MANAGER. Debes continuar tu tarea con TOOL_TERMINAL, TOOL_PROGRAMMER o TOOL_TESTER.\n\
             - SI TOOL_ENV_MANAGER FALLA, es OBLIGATORIO usar TOOL_FINISH en el siguiente paso para pedir intervención manual.\n\
             - REGLA DE VERIFICACIÓN OBLIGATORIA: Si el mensaje original del usuario contiene palabras como 'prueba', 'pruébalo', 'ejecuta', 'ejecutalo', 'verifica', 'corre', 'abre', 'test', 'comprueba' o 'demuestra', entonces TOOL_TERMINAL ES OBLIGATORIO antes de TOOL_FINISH. No puedes declarar el trabajo terminado sin haber ejecutado físicamente el resultado y comprobado que no produce errores. Si el comando falla, debes corregirlo con TOOL_PROGRAMMER y volver a ejecutar.\n\
