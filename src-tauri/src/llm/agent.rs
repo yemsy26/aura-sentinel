@@ -216,22 +216,19 @@ pub async fn run_agent_loop(
             11. 'TOOL_LEARN': Indexa el conocimiento de un proyecto exitoso en la memoria permanente de Aura. Úsala si el proyecto funciona o después de un TOOL_TESTER exitoso. No requiere argumentos.\n\
             12. 'TOOL_SEARCH': Consulta explícitamente la memoria histórica para buscar cómo resolviste problemas similares antes. Rellena 'url_a_investigar' con el término de búsqueda.\n\
             13. 'TOOL_ENV_MANAGER': Instala dependencias o lenguajes faltantes en el sistema operativo de forma automática y recarga el PATH en caliente. Rellena 'comando' SOLO con el NOMBRE del paquete.\n\
-            14. 'TOOL_LOGIC_SOLVER': Para verificar matemáticamente y de manera lógica si tu código contiene bucles infinitos, dead code o problemas estructurales ANTES de hacer pruebas físicas. Úsalo como un solver z3 preventivo. No requiere argumentos.\n\
-            15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.\n\
+            14. 'TOOL_LOGIC_SOLVER': Solo para depuración avanzada de lógica. No requiere argumentos.
+            15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.
             16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos y acciones solicitadas por el usuario se han ejecutado con éxito.\n\n\
-            MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):\n\
-            - Omitir Hallucinaciones: NUNCA inicies un proyecto web (Vite/React) ni intentes desplegar a Firebase a menos que el usuario lo haya pedido explícitamente en el turno actual. Resuelve SOLO lo que se pide.\n\
-            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.\n\
-            - Archivos .bat y Scripts de Inicio: REGLA CRÍTICA: Antes de escribir un archivo .bat que contenga un comando (ej. 'npm run dev', 'python app.py'), DEBES primero ejecutar ese comando directamente con TOOL_TERMINAL para verificar que funciona sin errores en la ruta correcta. Si el comando falla (ej. 'Missing script: dev'), corrígelo PRIMERO (instala dependencias, navega al subdirectorio correcto con 'cd subcarpeta && comando') antes de escribir el .bat. El .bat debe incluir el 'cd' necesario para llegar al directorio donde está el package.json o el script. Un .bat que abre una ventana de error es un trabajo INCOMPLETO.\n\
-            - Estrictud JSON (Auto-Debugger): Si recibes una alerta [AUTO-DEBUGGER] tras un fallo de TOOL_TESTER, tu ÚNICA tarea es usar TOOL_PROGRAMMER para re-escribir y arreglar el código defectuoso. ¡PROHIBIDO volver a usar TOOL_TESTER sin antes haber modificado el código!\n\
-            - Modo Arquitecto: Si al usar TOOL_ARCHITECT el campo de confianza es BAJA, no tomes decisiones de refactorización automáticas. Reporta los hallazgos al usuario y solicita confirmación manual.\n\
-            - Auto-Healing (Archivos Perdidos): Si la terminal lanza un error de tipo 'No such file or directory' o 'can\\'t open file', significa que el script o archivo que intentas ejecutar o leer no existe. Debes usar obligatoriamente 'TOOL_PROGRAMMER' para crear el archivo en lugar de usar otras herramientas como TOOL_ENV_MANAGER.\n\
-            - Auto-Testing: Tu objetivo no es solo escribir código, sino entregar sistemas funcionales. Si el proyecto tiene archivos de test (test_*.py, *.spec.js, etc.), valida con TOOL_TESTER. Si el proyecto es un script simple SIN archivos de test (como hello.py), valida con TOOL_TERMINAL ejecutando el script directamente.\n\
-            - Instalación de Librerías vs Binarios (CRÍTICO): Usa 'TOOL_TERMINAL' para instalar librerías de tu lenguaje (ej. 'pip install requests', 'npm install express'). Usa 'TOOL_ENV_MANAGER' EXCLUSIVAMENTE para instalar binarios del sistema base (ej. 'python', 'node', 'git') si la consola dice 'is not recognized'. ¡ESTÁ PROHIBIDO usar TOOL_ENV_MANAGER para paquetes de pip o npm!\n\
-            - Auto-Healing (Pre-Flight): Si un comando falla por 'is not recognized', usa TOOL_ENV_MANAGER (si es binario) o TOOL_TERMINAL (si es paquete de código). ¡NUNCA uses TOOL_ENV_MANAGER para errores de código (usa TOOL_PROGRAMMER)!\n\n\
-            REGLAS DE ESTADO (STATE MACHINE):\n\
+            MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):
+            - Omitir Hallucinaciones: NUNCA asumas que el usuario te pidió realizar una acción solo porque leíste una descripción en la lista de herramientas o en este manual. Cíñete ESTRICTAMENTE al 'Objetivo Original'.
+            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.
+            - Auto-Testing: Si el proyecto es un script simple, ejecuta el script directamente en consola usando TOOL_TERMINAL. Si falla, usa TOOL_PROGRAMMER para repararlo.
+            - Instalación de Librerías vs Binarios (CRÍTICO): Usa 'TOOL_TERMINAL' para instalar librerías de tu lenguaje (ej. 'pip install requests', 'npm install express'). Usa 'TOOL_ENV_MANAGER' EXCLUSIVAMENTE para instalar binarios del sistema base (ej. 'python', 'node', 'git') si la consola dice 'is not recognized'. ¡ESTÁ PROHIBIDO usar TOOL_ENV_MANAGER para paquetes de pip o npm!
+            - Auto-Healing (Pre-Flight): Si un comando falla por 'is not recognized', usa TOOL_ENV_MANAGER (si es binario base) o TOOL_TERMINAL (si es paquete de código de pip/npm). ¡NUNCA uses TOOL_ENV_MANAGER para errores de código (usa TOOL_PROGRAMMER)!
+
+            REGLAS DE ESTADO (STATE MACHINE):
             - DESPUÉS de usar TOOL_PROGRAMMER con éxito, es OBLIGATORIO usar TOOL_TERMINAL o TOOL_TESTER para ejecutar y validar tus cambios. ADEMÁS, DEBES IGNORAR completamente cualquier error previo en el historial, ya que el código acaba de ser reparado.\n\
             - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
             - SI TOOL_TESTER TIENE ÉXITO, estás OBLIGADO a usar TOOL_FINISH en el siguiente paso. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests pasaron.\n\
@@ -371,9 +368,7 @@ pub async fn run_agent_loop(
                             let is_binary_missing = err.contains("is not recognized")
                                 || err.contains("not recognized as an internal")
                                 || err.contains("command not found")
-                                || err.contains("No such file or directory")
-                                || err.contains("cannot find the path")
-                                || err.contains("The term") && err.contains("is not recognized");
+                                || (err.contains("The term") && err.contains("is not recognized"));
 
                             if is_binary_missing {
                                 // Extract likely binary name from the failed command (first word)
