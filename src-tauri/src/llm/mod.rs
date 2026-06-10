@@ -211,7 +211,15 @@ pub(crate) async fn delegate_to_logic_solver(file_contents: &str, model: &str) -
 }
 
 #[tauri::command]
-pub async fn process_user_prompt(user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+pub async fn process_user_prompt(mut user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+    // Sanitizer Backend: Eliminar inyecciones accidentales de historiales pegados.
+    if user_message.to_lowercase().starts_with("[user]") {
+        user_message = user_message[6..].trim().to_string();
+    }
+    if let Some(idx) = user_message.find("[SYSTEM]") {
+        user_message = user_message[..idx].trim().to_string();
+    }
+
     let mut enriched_message = String::new();
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
 
