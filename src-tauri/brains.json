@@ -1,0 +1,23 @@
+{
+  "orchestrator": [
+    "qwen2.5-coder:7b-instruct-q4_K_M",
+    "phi4-mini",
+    "gemma4:e2b"
+  ],
+  "fast_parser": [
+    "qwen2.5-coder:1.5b",
+    "phi4-mini"
+  ],
+  "languages": {
+    "python": ["qwen2.5-coder:7b-instruct-q4_K_M"],
+    "rust": ["qwen2.5-coder:7b-instruct-q4_K_M"],
+    "javascript": ["qwen2.5-coder:7b-instruct-q4_K_M"],
+    "typescript": ["qwen2.5-coder:7b-instruct-q4_K_M"],
+    "solidity": ["qwen2.5-coder:7b-instruct-q4_K_M"],
+    "default": ["qwen2.5-coder:7b-instruct-q4_K_M", "phi4-mini"]
+  },
+  "debugger": [
+    "deepseek-r1:7b",
+    "qwen2.5-coder:7b-instruct-q4_K_M"
+  ]
+}
