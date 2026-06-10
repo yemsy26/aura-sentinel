@@ -166,11 +166,24 @@ pub async fn run_agent_loop(
             let existing = current_context.clone();
             current_context = format!("{}{}", pesp_status, existing);
         }
+        let mut forced_override: Option<(String, String)> = None;
+        if let Some((forced, override_msg)) = forced_next_tool.take() {
+            let intercept_log = format!("[SISTEMA INTERCEPTO] En el turno anterior se decidió forzarte a usar: {}. Razón: {}", forced, override_msg);
+            current_context.push_str(&format!("{}\n\n", intercept_log));
+            forced_override = Some((forced, override_msg));
+        }
+        
+        let mut extra_prompt = String::new();
+        if let Some((forced, _)) = &forced_override {
+            extra_prompt = format!("\n\nREGLA ESTRICTA E INQUEBRANTABLE PARA ESTE TURNO:\nDEBES Y TIENES QUE ELEGIR '{}' COMO TU HERRAMIENTA. NO ELIJAS OTRA O EL SISTEMA FALLARÁ. Ignora cualquier otra regla y genera un JSON válido para la herramienta {}.", forced, forced);
+        }
+
         let agent_prompt = format!(
             "Eres el Cerebro Planificador de Aura-Sentinel. Eres un ingeniero políglota. Actualmente soportas [Python, JS/TS, Rust, Go, C++]. Antes de programar, detecta el lenguaje del proyecto y ajusta tus herramientas de validación al estándar del lenguaje detectado.\n\
             Funcionarás en un bucle autónomo. Analiza el Objetivo, el Contexto y el Historial para decidir UNA ÚNICA HERRAMIENTA a utilizar en este turno.\n\
             Objetivo Original: {}\n\
             Contexto del Proyecto (Archivos Actuales Reales): {}\n\
+            {}\n\
             REGLA DE REALIDAD FÍSICA: La lista de archivos de arriba es la ÚNICA VERDAD. Si un archivo NO aparece en esa lista, significa que NO EXISTE y debes crearlo (ya sea escribiéndolo a mano con TOOL_PROGRAMMER, o generándolo con TOOL_TERMINAL usando comandos como npx, cargo, pip, etc). ¡No asumas que ya existe!\n\
             Historial de Pasos Ejecutados Hasta Ahora:\n{}\n\n\
             REGLA DE ORO: Si ya ejecutaste todas las acciones que pidió el usuario en el Objetivo Original, tu ÚNICA opción válida es usar 'TOOL_FINISH'. NO repitas pasos ni inventes problemas que no existen.\n\n\
@@ -253,7 +266,7 @@ pub async fn run_agent_loop(
               \"archivos_a_editar\": [\"ruta/archivo1\", \"ruta/archivo2\"],\n\
               \"respuesta_conversacional\": \"<respuesta al usuario o null>\"\n\
             }}",
-            user_message, tree_json, current_context
+            user_message, tree_json, extra_prompt, current_context
         );
         
         let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::Orchestrator, language: None }, &available_models, &app_handle, 0).await
@@ -289,12 +302,28 @@ pub async fn run_agent_loop(
                 return Ok(serde_json::to_string(&final_res).unwrap());
             }
         };
-        
         let checklist = raw_value.get("checklist_mental").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let tool = raw_value.get("herramienta").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_uppercase();
         let pensamiento = raw_value.get("pensamiento").and_then(|v| v.as_str()).unwrap_or("Sin pensamiento").to_string();
         let comando = raw_value.get("comando").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let task_id = raw_value.get("task_id").and_then(|v| v.as_str()).unwrap_or("default_task").to_string();
+
+        // ── FORCED TOOL VALIDATION ────────────────────────────────────────────
+        // If the system has determined the LLM is stuck in a tool-loop,
+        // validate its decision against the forced tool constraint.
+        if let Some((forced, override_msg)) = &forced_override {
+            if tool != *forced {
+                let error_msg = format!("[SISTEMA INTERCEPTO] Error Lógico: El sistema te ordenó explícitamente usar la herramienta '{}' por la siguiente razón: '{}'. Sin embargo, tú elegiste '{}'. Corrige tu elección inmediatamente y usa '{}'.", forced, override_msg, tool, forced);
+                current_context.push_str(&format!("{}\n\n", error_msg));
+                emit_event(&app_handle, step_count, &format!("[INTERCEPT] LLM desobedeció orden de usar {}", forced), "WARNING");
+                
+                // Restauramos el forced_next_tool para el próximo ciclo
+                forced_next_tool = forced_override.clone();
+                step_count += 1;
+                continue;
+            }
+        }
+        
         let url = raw_value.get("url_a_investigar").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let respuesta_conv = raw_value.get("respuesta_conversacional").and_then(|v| v.as_str()).unwrap_or("").to_string();
         
@@ -311,17 +340,7 @@ pub async fn run_agent_loop(
             emit_event(&app_handle, step_count, &format!("Checklist Mental: {}", checklist), "PLANNING");
         }
 
-        // ── FORCED TOOL OVERRIDE ────────────────────────────────────────────
-        // If the system has determined the LLM is stuck in a tool-loop,
-        // override its decision and force a specific tool.
-        let tool = if let Some((forced, override_msg)) = forced_next_tool.take() {
-            let intercept_log = format!("[SISTEMA INTERCEPTO] El LLM eligió '{}' pero el sistema lo bloqueó. {}", tool, override_msg);
-            current_context.push_str(&format!("{}\n\n", intercept_log));
-            emit_event(&app_handle, step_count, &format!("[INTERCEPT] LLM forzado de {} a {}", tool, forced), "WARNING");
-            forced
-        } else {
-            tool
-        };
+        // FORCED TOOL OVERRIDE REMOVED. Validation happens above.
 
         emit_event(&app_handle, step_count, &format!("Decisión: {} - {}", tool, pensamiento), "DECISION");
         current_context.push_str(&format!("--- PASO {} ---\nChecklist Mental: {}\nDecidiste: {}\nPensamiento: {}\n", step_count, checklist, tool, pensamiento));
