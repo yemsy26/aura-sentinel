@@ -139,7 +139,7 @@ async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) ->
         \n\
         [REGLA 1 - CÓDIGO COMPLETO]: Escribe el código COMPLETO y FUNCIONAL. CERO placeholders ('# TODO', '...', 'aquí va el código'). El archivo debe ejecutarse tal como lo escribes.\n\
         \n\
-        [REGLA 2 - RUTAS RELATIVAS]: ÚNICAMENTE usa rutas relativas ('src/main.py', 'main.py'). NUNCA rutas absolutas (C:/...).\n\
+        [REGLA 2 - RUTAS RELATIVAS]: ÚNICAMENTE usa rutas relativas ('src/archivo.ext', 'archivo.ext'). NUNCA rutas absolutas (C:/...).\n\
         \n\
         [REGLA 3 - PYTHON CRÍTICO - LEE ESTO 3 VECES]:\n\
            a) SIEMPRE añade '# -*- coding: utf-8 -*-' como PRIMERA línea de cada archivo .py.\n\
@@ -159,9 +159,9 @@ async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) ->
           \"explicacion_tecnica\": \"Descripción breve de lo implementado\",\n\
           \"cambios\": [\n\
             {{\n\
-              \"archivo\": \"ruta/relativa/archivo.py\",\n\
+              \"archivo\": \"ruta/relativa/archivo.ext\",\n\
               \"buscar\": \"\",\n\
-              \"reemplazar\": \"# -*- coding: utf-8 -*-\\nimport tkinter as tk\\n\\n# ... código completo ...\"\n\
+              \"reemplazar\": \"def funcion_real():\\n    return 42\"\n\
             }}\n\
           ]\n\
         }}",

@@ -203,17 +203,15 @@ pub async fn run_agent_loop(
               - JS/TS: 'throw new Error(\"not implemented\")'\n\
             CADA FUNCIÓN DEBE TENER LÓGICA REAL. Si no sabes cómo implementarla, pregunta al usuario ANTES de escribir.\n\
             REGLA ANTI-ALUCINACIÓN ESTRICTA: ¡NO ALUCINES! Nunca asumas que un archivo o backend ha sido creado a menos que VEAS en tu historial que tú mismo usaste explícitamente 'TOOL_PROGRAMMER' o 'TOOL_TERMINAL' (ej. npx/cargo) para crearlo. Planearlo en tu 'Checklist Mental' o usar 'TOOL_THINK' NO crea el código. ¡Debes programarlo físicamente!\n\
+            [EJEMPLO DE CHECKLIST MENTAL CORRECTO]:\n\
+              Paso 1: TOOL_THINK - Analizar dependencias de la tarea.\n\
+              Paso 2: TOOL_PROGRAMMER - Crear el archivo_A del modelo de datos.\n\
+              Paso 3: TOOL_TERMINAL - Ejecutar archivo_A para probar sintaxis.\n\
+              Paso 4: TOOL_PROGRAMMER - Crear el archivo_B de la lógica de negocio.\n\
+              Paso 5: TOOL_TERMINAL - Probar todo el sistema.\n\
+              Paso 6: TOOL_FINISH - Terminar.\n\
+            ¡NUNCA TE SALTES PASOS Y NUNCA USES PLACEHOLDERS!\n\
             REGLA DE VERIFICACIÓN DE INTEGRACIÓN: Después de escribir cada archivo, usa TOOL_TERMINAL para verificar que se importa sin errores.\n\
-            EJEMPLO CORRECTO para un juego de ajedrez:\n\
-              Paso 1: TOOL_THINK → Definir contrato de todas las clases\n\
-              Paso 2: TOOL_PROGRAMMER → pieza.py (clase Pieza con propiedades REALES)\n\
-              Paso 3: TOOL_TERMINAL → python -c 'from src.ajedrez.pieza import Pieza; p=Pieza(\"rey\",\"blanco\"); print(p.nombre)' → Verifica OK\n\
-              Paso 4: TOOL_PROGRAMMER → tablero.py (clase Tablero con 64 casillas REALES y método dibujar() que dibuja rectángulos)\n\
-              Paso 5: TOOL_TERMINAL → python -c 'from src.ajedrez.tablero import Tablero' → Verifica OK\n\
-              Paso 6: TOOL_PROGRAMMER → movimientos.py (lógica real de validación de movimientos)\n\
-              Paso 7: TOOL_PROGRAMMER → game.py (bucle pygame REAL con dibujo y eventos)\n\
-              Paso 8: TOOL_TESTER → Prueba integral final\n\
-              Paso 9: TOOL_FINISH\n\
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
             Catálogo de Herramientas (Elige SOLO UNA):\n\
             1. 'TOOL_TERMINAL': Para comandos síncronos y de un solo uso (npm install, pip, cargo build). Rellena 'comando' y 'task_id'.\n\
