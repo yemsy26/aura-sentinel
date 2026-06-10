@@ -344,12 +344,9 @@ pub async fn run_agent_loop(
                     emit_event(&app_handle, step_count, "Comando vacío", "ERROR");
                 } else if comandos_ejecutados_historico.contains(&comando) {
                     let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás repitiendo un comando fallido. Repetirlo no lo arreglará. Usa TOOL_PROGRAMMER o TOOL_AUDITOR.";
-                    emit_event(&app_handle, step_count, res_msg, "FATAL");
-                    let final_res = FinalResponse {
-                        status: "ERROR".to_string(),
-                        respuesta_conversacional: format!("Se detectó un bucle intentando ejecutar múltiples veces el comando '{}'. Por favor, revisa el entorno o instala las dependencias manualmente.", comando),
-                    };
-                    return Ok(serde_json::to_string(&final_res).unwrap());
+                    emit_event(&app_handle, step_count, res_msg, "WARNING");
+                    current_context.push_str(&format!("{}\n\n", res_msg));
+                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "El comando de terminal se repitió y falló anteriormente. El sistema te ha forzado a usar TOOL_PROGRAMMER para arreglar el script primero.".to_string()));
                 } else {
                     programmer_cooldown_hits = 0;
                     comandos_ejecutados_historico.insert(comando.clone());
