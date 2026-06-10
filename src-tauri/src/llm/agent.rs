@@ -438,15 +438,21 @@ pub async fn run_agent_loop(
                 }
             },
             "TOOL_BACKGROUND_START" => {
-                emit_event(&app_handle, step_count, &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando), "ACTION");
-                match start_background_task(&workspace_path, &task_id, &comando).await {
-                    Ok(out) => {
-                        current_context.push_str(&format!("Resultado: {}\n\n", out));
-                        emit_event(&app_handle, step_count, &out, "SUCCESS");
-                    },
-                    Err(err) => {
-                        current_context.push_str(&format!("Resultado: Error iniciando tarea: {}\n\n", err));
-                        emit_event(&app_handle, step_count, &format!("Error: {}", err), "ERROR");
+                if comando.trim().is_empty() {
+                    let err_msg = "Error Crítico: El campo 'comando' está vacío. Debes especificar qué comando ejecutar (ej. 'npm run dev', 'python app.py').";
+                    current_context.push_str(&format!("{}\n\n", err_msg));
+                    emit_event(&app_handle, step_count, err_msg, "ERROR");
+                } else {
+                    emit_event(&app_handle, step_count, &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando), "ACTION");
+                    match start_background_task(&workspace_path, &task_id, &comando).await {
+                        Ok(out) => {
+                            current_context.push_str(&format!("Resultado: {}\n\n", out));
+                            emit_event(&app_handle, step_count, &out, "SUCCESS");
+                        },
+                        Err(err) => {
+                            current_context.push_str(&format!("Resultado: Error iniciando tarea: {}\n\n", err));
+                            emit_event(&app_handle, step_count, &format!("Error: {}", err), "ERROR");
+                        }
                     }
                 }
             },
