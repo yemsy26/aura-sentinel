@@ -171,7 +171,7 @@ pub async fn run_agent_loop(
             Funcionarás en un bucle autónomo. Analiza el Objetivo, el Contexto y el Historial para decidir UNA ÚNICA HERRAMIENTA a utilizar en este turno.\n\
             Objetivo Original: {}\n\
             Contexto del Proyecto (Archivos Actuales Reales): {}\n\
-            REGLA DE REALIDAD FÍSICA: La lista de archivos de arriba es la ÚNICA VERDAD. Si un archivo (ej. app.py o index.html) NO aparece en esa lista, significa que NO EXISTE y debes crearlo con TOOL_PROGRAMMER. ¡No asumas que ya existe!\n\
+            REGLA DE REALIDAD FÍSICA: La lista de archivos de arriba es la ÚNICA VERDAD. Si un archivo NO aparece en esa lista, significa que NO EXISTE y debes crearlo (ya sea escribiéndolo a mano con TOOL_PROGRAMMER, o generándolo con TOOL_TERMINAL usando comandos como npx, cargo, pip, etc). ¡No asumas que ya existe!\n\
             Historial de Pasos Ejecutados Hasta Ahora:\n{}\n\n\
             REGLA DE ORO: Si ya ejecutaste todas las acciones que pidió el usuario en el Objetivo Original, tu ÚNICA opción válida es usar 'TOOL_FINISH'. NO repitas pasos ni inventes problemas que no existen.\n\n\
             PROTOCOLO DE INGENIERÍA PROFESIONAL (PESP) — OBLIGATORIO PARA PROYECTOS COMPLEJOS:\n\
@@ -189,7 +189,7 @@ pub async fn run_agent_loop(
               - Rust: 'todo!()', 'unimplemented!()'\n\
               - JS/TS: 'throw new Error(\"not implemented\")'\n\
             CADA FUNCIÓN DEBE TENER LÓGICA REAL. Si no sabes cómo implementarla, pregunta al usuario ANTES de escribir.\n\
-            REGLA ANTI-ALUCINACIÓN ESTRICTA: ¡NO ALUCINES! Nunca asumas que un archivo o backend ha sido creado a menos que VEAS en tu historial que tú mismo usaste explícitamente 'TOOL_PROGRAMMER' para crearlo. Planearlo en tu 'Checklist Mental' o usar 'TOOL_THINK' NO crea el código. ¡Debes programarlo físicamente con TOOL_PROGRAMMER!\n\
+            REGLA ANTI-ALUCINACIÓN ESTRICTA: ¡NO ALUCINES! Nunca asumas que un archivo o backend ha sido creado a menos que VEAS en tu historial que tú mismo usaste explícitamente 'TOOL_PROGRAMMER' o 'TOOL_TERMINAL' (ej. npx/cargo) para crearlo. Planearlo en tu 'Checklist Mental' o usar 'TOOL_THINK' NO crea el código. ¡Debes programarlo físicamente!\n\
             REGLA DE VERIFICACIÓN DE INTEGRACIÓN: Después de escribir cada archivo, usa TOOL_TERMINAL para verificar que se importa sin errores.\n\
             EJEMPLO CORRECTO para un juego de ajedrez:\n\
               Paso 1: TOOL_THINK → Definir contrato de todas las clases\n\
