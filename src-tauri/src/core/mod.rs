@@ -63,8 +63,10 @@ pub async fn start_background_task(workspace_path: &str, task_id: &str, command:
         .spawn()
         .map_err(|e| format!("Error starting task {}: {}", task_id, e))?;
 
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let stdout = child.stdout.take()
+        .ok_or_else(|| format!("Error: stdout no está disponible para el task {}", task_id))?;
+    let stderr = child.stderr.take()
+        .ok_or_else(|| format!("Error: stderr no está disponible para el task {}", task_id))?;
 
     let logs = Arc::new(Mutex::new(Vec::new()));
     let logs_clone1 = logs.clone();
@@ -251,12 +253,15 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
 node_modules/\n\
 ";
     if !gitignore_path.exists() {
-        let _ = std::fs::write(&gitignore_path, gitignore_content);
+        if let Err(e) = std::fs::write(&gitignore_path, gitignore_content) {
+            eprintln!("Aura-Sentinel Warning: No se pudo escribir .gitignore - {}", e);
+        }
     } else {
-        // Append our entries if not already present
         if let Ok(existing) = std::fs::read_to_string(&gitignore_path) {
-            if !existing.contains(".aura_session.json") {
-                let _ = std::fs::write(&gitignore_path, format!("{}\n{}", existing.trim_end(), gitignore_content));
+            if !existing.contains(".fenix_memory.json") {
+                if let Err(e) = std::fs::write(&gitignore_path, format!("{}\n{}", existing.trim_end(), gitignore_content)) {
+                    eprintln!("Aura-Sentinel Warning: No se pudo actualizar .gitignore - {}", e);
+                }
             }
         }
     }
