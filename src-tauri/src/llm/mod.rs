@@ -488,17 +488,10 @@ pub async fn process_user_prompt(user_message: String, workspace_path: String, a
             index.clear();
         }
     }
-    let user_embedding = get_embedding(&enriched_message).await.unwrap_or_default();
-    let tree_json = if user_embedding.is_empty() || index.is_empty() {
-        serde_json::to_string(&files_only.iter().map(|n| n.path.clone()).collect::<Vec<String>>()).unwrap_or_default()
-    } else {
-        let mut scored_nodes: Vec<(&crate::memory::VectorNode, f32)> = index.iter().map(|node| {
-            let score = crate::core::cosine_similarity(&user_embedding, &node.embedding);
-            (node, score)
-        }).collect();
-        scored_nodes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let top_10: Vec<String> = scored_nodes.into_iter().take(10).map(|(n, _)| n.path.clone()).collect();
-        serde_json::to_string(&top_10).unwrap_or_default()
-    };
+    // No truncar el árbol de archivos con búsqueda semántica. El agente necesita ver el mapa real.
+    let tree_json = serde_json::to_string(
+        &files_only.iter().take(500).map(|n| n.path.clone()).collect::<Vec<String>>()
+    ).unwrap_or_default();
+    
     agent::run_agent_loop(enriched_message, workspace_path, tree_json, app_handle).await
 }
