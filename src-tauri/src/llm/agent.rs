@@ -393,7 +393,10 @@ pub async fn run_agent_loop(
                                     }
                                 }
                             } else {
-                                let res_msg = format!("Error: {}", err);
+                                let mut res_msg = format!("Error: {}", err);
+                                if err.contains("ModuleNotFoundError") {
+                                    res_msg.push_str("\n\n[SISTEMA INTERNO TIP] Te falta una librería de Python. Usa TOOL_TERMINAL en tu próximo paso para ejecutar 'pip install <nombre_libreria>' y luego vuelve a correr tu script.");
+                                }
                                 current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
                                 emit_event(&app_handle, step_count, &res_msg, "ERROR");
                             }
