@@ -188,6 +188,7 @@ pub async fn run_agent_loop(
               - Rust: 'todo!()', 'unimplemented!()'\n\
               - JS/TS: 'throw new Error(\"not implemented\")'\n\
             CADA FUNCIÓN DEBE TENER LÓGICA REAL. Si no sabes cómo implementarla, pregunta al usuario ANTES de escribir.\n\
+            REGLA ANTI-ALUCINACIÓN ESTRICTA: ¡NO ALUCINES! Nunca asumas que un archivo o backend ha sido creado a menos que VEAS en tu historial que tú mismo usaste explícitamente 'TOOL_PROGRAMMER' para crearlo. Planearlo en tu 'Checklist Mental' o usar 'TOOL_THINK' NO crea el código. ¡Debes programarlo físicamente con TOOL_PROGRAMMER!\n\
             REGLA DE VERIFICACIÓN DE INTEGRACIÓN: Después de escribir cada archivo, usa TOOL_TERMINAL para verificar que se importa sin errores.\n\
             EJEMPLO CORRECTO para un juego de ajedrez:\n\
               Paso 1: TOOL_THINK → Definir contrato de todas las clases\n\
