@@ -236,7 +236,7 @@ pub async fn run_agent_loop(
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):
             - Omitir Hallucinaciones: NUNCA asumas que el usuario te pidió realizar una acción solo porque leíste una descripción en la lista de herramientas o en este manual. Cíñete ESTRICTAMENTE al 'Objetivo Original'.
             REGLAS ESTRICTAS:
-            1. Escribe los scripts y archivos SIEMPRE en la raíz del proyecto a menos que el usuario especifique una subcarpeta. NUNCA inventes carpetas (ej. no crees 'src/script.py' ni 'scraper/scraper.py', usa 'script.py' directamente).
+            1. Escribe los scripts y archivos SIEMPRE en la raíz del proyecto a menos que el usuario especifique una subcarpeta. NUNCA inventes carpetas (ej. no crees subcarpetas innecesarias, escribe los archivos directamente en la raíz).
             2. Cuando uses TOOL_TERMINAL para ejecutar un script, DEBES usar el MISMO NOMBRE exacto del archivo que aparece en el Contexto del Proyecto arriba. NUNCA adivines ni inventes nombres de archivos. Lee el Contexto.
             3. Analiza con cuidado si ya usaste una herramienta y falló. No la repitas ciegamente.
             4. Si el historial dice que la tarea ya terminó, ignóralo si aún no has escrito y probado el código solicitado.
@@ -460,7 +460,7 @@ pub async fn run_agent_loop(
                         return Ok(serde_json::to_string(&final_res).unwrap());
                     }
                     comandos_ejecutados_historico.insert("__EMPTY_BG_CMD__".to_string());
-                    let err_msg = "Error Crítico: El campo 'comando' está vacío. Debes especificar qué comando ejecutar (ej. 'npm run dev', 'python app.py').";
+                    let err_msg = "Error Crítico: El campo 'comando' está vacío. Debes especificar qué comando ejecutar en la terminal.";
                     current_context.push_str(&format!("{}\n\n", err_msg));
                     emit_event(&app_handle, step_count, err_msg, "ERROR");
                 } else if comandos_ejecutados_historico.contains(&comando) {
