@@ -100,6 +100,28 @@ pub async fn run_agent_loop(
                 existing_files.join("\n")
             ));
         }
+
+        // ── Auto TOOL_MAPPER: inject dependency graph for multi-file projects ──
+        // Count source files (py/js/ts/rs/go) to decide if mapping is worthwhile.
+        let source_file_count = existing_files.iter().filter(|f| {
+            let fl = f.to_lowercase();
+            fl.ends_with(".py") || fl.ends_with(".js") || fl.ends_with(".ts")
+            || fl.ends_with(".tsx") || fl.ends_with(".jsx") || fl.ends_with(".rs")
+            || fl.ends_with(".go")
+        }).count();
+
+        if source_file_count >= 3 {
+            emit_event(&app_handle, 0, "🗺️ [AUTO-MAPPER] Proyecto multi-archivo detectado. Generando grafo de dependencias...", "ACTION");
+            let graph = crate::core::dependency_mapper::analyze_workspace(&workspace_path);
+            let report = crate::core::dependency_mapper::format_graph_report(&graph);
+            current_context.push_str(&format!(
+                "[AUTO-MAPPER] Grafo de dependencias generado automáticamente para este proyecto.\n\n{}\n\n",
+                report
+            ));
+            emit_event(&app_handle, 0,
+                &format!("🗺️ Grafo listo: {} archivos | {} dependencias", graph.nodes.len(), graph.edges.len()),
+                "SUCCESS");
+        }
     }
 
     // ── RAG Memory (secondary, clearly labelled) ───────────────────────────
@@ -500,26 +522,50 @@ pub async fn run_agent_loop(
                                     } else {
                                         "<nombre_libreria>"
                                     };
-                                    // Check if pip install was already tried (and failed due to wrong python)
-                                    let pip_was_tried = comandos_ejecutados_historico.iter()
-                                        .any(|c| c.starts_with("pip install") || c.starts_with("pip3 install"));
-                                    if pip_was_tried {
+
+                                    // ── CRITICAL: Distinguish local file vs external package ──────────
+                                    // If module_hint.py EXISTS in the workspace, this is NOT a missing
+                                    // pip package — it's an internal import error inside that local file.
+                                    let local_py_exists = {
+                                        let candidate = std::path::Path::new(&workspace_path)
+                                            .join(format!("{}.py", module_hint));
+                                        candidate.exists()
+                                    };
+
+                                    if local_py_exists {
+                                        // Local file exists but cannot be imported → has internal errors
                                         res_msg.push_str(&format!(
-                                            "\n\n[SISTEMA INTERNO] ADVERTENCIA CRÍTICA: Ya intentaste 'pip install {}' pero el módulo SIGUE SIN ENCONTRARSE. \
-                                            Esto ocurre cuando tienes dos instalaciones de Python en tu máquina (ej. Miniconda + Python del sistema). \
-                                            El pip instaló la librería en una instalación diferente a la que usa 'python'. \
-                                            SOLUCIÓN OBLIGATORIA: En tu SIGUIENTE PASO usa TOOL_TERMINAL con el comando exacto: \
-                                            'python -m pip install {}' — esto garantiza que pip usa el MISMO Python que corre el script.",
-                                            module_hint, module_hint
+                                            "\n\n[SISTEMA INTERNO] ⚠️ ATENCIÓN CRÍTICA: El archivo '{}.py' SÍ EXISTE en el workspace, \
+                                            pero Python no puede importarlo. Esto significa que '{}.py' tiene un \
+                                            ERROR INTERNO: puede ser un SyntaxError, un ImportError dentro de ese archivo, \
+                                            o que importa otro módulo que aún no existe o tiene errores. \
+                                            SOLUCIÓN OBLIGATORIA: Usa TOOL_AUDITOR para leer '{}.py' e identificar \
+                                            qué línea está fallando. NO intentes 'pip install {}' — ese módulo \
+                                            no es una librería externa, es un archivo LOCAL.",
+                                            module_hint, module_hint, module_hint, module_hint
                                         ));
                                     } else {
-                                        res_msg.push_str(&format!(
-                                            "\n\n[SISTEMA INTERNO TIP] Te falta una librería de Python. \
-                                            Usa TOOL_TERMINAL con el comando: 'python -m pip install {}' \
-                                            (NO uses solo 'pip install', usa 'python -m pip install' para garantizar que se instala en el intérprete correcto). \
-                                            Luego vuelve a correr tu script.",
-                                            module_hint
-                                        ));
+                                        // Genuine missing external package
+                                        let pip_was_tried = comandos_ejecutados_historico.iter()
+                                            .any(|c| c.starts_with("pip install") || c.starts_with("pip3 install"));
+                                        if pip_was_tried {
+                                            res_msg.push_str(&format!(
+                                                "\n\n[SISTEMA INTERNO] ADVERTENCIA CRÍTICA: Ya intentaste 'pip install {}' pero el módulo SIGUE SIN ENCONTRARSE. \
+                                                Esto ocurre cuando tienes dos instalaciones de Python en tu máquina (ej. Miniconda + Python del sistema). \
+                                                El pip instaló la librería en una instalación diferente a la que usa 'python'. \
+                                                SOLUCIÓN OBLIGATORIA: En tu SIGUIENTE PASO usa TOOL_TERMINAL con el comando exacto: \
+                                                'python -m pip install {}' — esto garantiza que pip usa el MISMO Python que corre el script.",
+                                                module_hint, module_hint
+                                            ));
+                                        } else {
+                                            res_msg.push_str(&format!(
+                                                "\n\n[SISTEMA INTERNO TIP] Te falta una librería de Python. \
+                                                Usa TOOL_TERMINAL con el comando: 'python -m pip install {}' \
+                                                (NO uses solo 'pip install', usa 'python -m pip install' para garantizar que se instala en el intérprete correcto). \
+                                                Luego vuelve a correr tu script.",
+                                                module_hint
+                                            ));
+                                        }
                                     }
                                 }
                                 current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
