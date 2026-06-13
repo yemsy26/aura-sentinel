@@ -22,10 +22,12 @@ Aura-Sentinel no solo escribe código; lo entiende, lo valida, asegura sus depen
 - **Escalada de 3 Niveles (NoTests)**: Si el agente intenta ejecutar tests en un proyecto vacío: 1) Advierte, 2) Fuerza crear archivos de test, 3) Fuerza instalación del framework de test.
 - **Detección Inteligente de Errores de Dependencias**: Distingue entre `go.mod` ausente (→ `go mod init`) y errores de sintaxis en el código (→ Auto-Debugger). Evita que el agente ejecute `go mod init` repetidamente cuando el problema es lógico.
 
-### 3. Git-Shield (Protección de Integridad) 🛡️
+### 3. Git-Shield y Auto-Sanación Cognitiva (Auto-Heal) 🛡️
 - Antes de cada cambio propuesto por el programador, realiza un `git commit` silencioso.
-- Si el código falla, revierte con `git restore .` preservando el último estado funcional.
-- **Snapshot de Terminal**: Cuando el terminal ejecuta un comando exitoso (ej. `go mod init`), Git-Shield toma un snapshot inmediato para que archivos de configuración como `go.mod` no se pierdan en un revert posterior.
+- Si el código falla por sintaxis o errores lógicos, revierte con `git restore .` preservando el último estado funcional.
+- **Auto-Heal sin Amnesia**: Cuando ocurre un error (ej. `SyntaxError` o fallo en tests), el sistema inyecta el log de error en el prompt del LLM **sin borrar la instrucción original**. El agente recuerda qué estaba construyendo y lo arregla iterativamente.
+- **Motor de Escapado JSON Estricto**: Reglas de serialización reforzadas para evitar que modelos pequeños (como Qwen 7B) rompan el parseo de Rust al generar Expresiones Regulares o strings multilínea en Python.
+- **Snapshot de Terminal**: Cuando el terminal ejecuta un comando exitoso (ej. `go mod init`), Git-Shield toma un snapshot inmediato para que archivos de configuración no se pierdan en un revert posterior.
 
 ### 4. QA Autónomo (TOOL_TESTER & Auto-Debugger) 🧪
 - Detecta el lenguaje del proyecto automáticamente y ejecuta la suite de tests nativa.
@@ -104,12 +106,17 @@ ollama pull nomic-embed-text     # Motor de Memoria Vectorial (RAG)
 
 ### Ejecución
 ```bash
+# 1. Instalar dependencias del frontend
 npm install
+
+# 2. Compilar e iniciar el sistema completo (Frontend + Backend Rust)
 npm run tauri dev
 ```
 
+> **Nota para Actualizaciones:** Si descargas nuevos parches del repositorio (`git pull`), asegúrate de cerrar la consola de Aura Sentinel y volver a ejecutar `npm run tauri dev` para que Rust recompile los binarios con las últimas mejoras.
+
 ### Scripts de Configuración Automática
-- **Windows**: `.\setup.ps1` en PowerShell
+- **Windows**: `.\setup.ps1` en PowerShell (Asegúrate de ejecutar como Administrador si es la primera vez).
 - **Mac/Linux**: `bash setup.sh`
 
 ---
@@ -146,6 +153,16 @@ Crea su test con JUnit. Ejecuta TOOL_TESTER.
 ---
 
 ## 🔧 Historial de Correcciones Críticas (Changelog)
+
+### v0.2.0 — 2026-06-13 (Resiliencia Cognitiva y Auto-Sanación)
+Actualización enfocada en la estabilidad de modelos pequeños (7B/8B) y su capacidad para reprogramarse tras cometer errores, evitando bloqueos y cierres forzados.
+
+| Fix | Problema resuelto |
+|-----|-------------------|
+| **Amnesia del Auto-Sanador** | Durante un `Auto-Heal`, Git-Shield sobreescribía la instrucción original del usuario con el reporte de error. Qwen olvidaba su misión principal. Ahora, el error se concatena al contexto, dándole al LLM memoria completa del objetivo y del fallo. |
+| **Escapado JSON Estricto** | Qwen 2.5 7B generaba rupturas en el `serde_json` de Rust al usar `\n` o `\w` en Regex. Se inyectaron reglas absolutas en el Prompt del sistema exigiendo doble barra invertida (`\\n`), erradicando los `SyntaxError` de literales no terminados en Python. |
+| **Bucle Infinito de Comandos Vacíos** | El LLM a veces enviaba comandos `__EMPTY_CMD__`. Se implementó una barrera en `agent.rs` que intercepta comandos vacíos y advierte al LLM antes de procesarlos. |
+| **Clippy 100% Limpio** | Auditoría y eliminación de todo el *dead code*, importaciones sin uso y variables no leídas en el motor de Rust. |
 
 ### v0.1.0 — 2026-06-07 (Sesión de Estabilización)
 Sesión de ingeniería intensiva que resolvió la cadena de fallos que impedía completar tareas en Go:
