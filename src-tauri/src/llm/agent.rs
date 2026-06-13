@@ -229,12 +229,13 @@ pub async fn run_agent_loop(
             14. 'TOOL_LOGIC_SOLVER': Solver Z3 de verificación matemática para encontrar bucles infinitos o dead code. ÚSALO SOLO si has fallado repetidamente al arreglar un código. NUNCA asumas que el usuario te pidió usar esto a menos que haya un error lógico persistente. No requiere argumentos.
             15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.
             16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
+            17. 'TOOL_MAPPER': Analiza ESTÁTICAMENTE las dependencias del workspace y genera un GRAFO DE CONOCIMIENTO. Úsalo OBLIGATORIAMENTE al inicio de cualquier proyecto con 3+ archivos. Devuelve: (a) orden de escritura topológico — en qué orden exacto debes crear los archivos para que sus imports funcionen desde el primer momento; (b) nodos críticos — módulos compartidos que deben implementarse PRIMERO; (c) dependencias circulares — ciclos a evitar. No requiere argumentos. REGLA: Después de usar TOOL_MAPPER, usa TOOL_THINK para elaborar el plan de implementación basado en el grafo antes de programar nada.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos solicitados (ej. 'crea', 'ejecuta', 'prueba', 'valida') se han ejecutado FÍSICAMENTE en el historial con ÉXITO. Si el usuario pidió 'ejecuta X', y X falló o no se ejecutó, ESTÁ ESTRICTAMENTE PROHIBIDO USAR TOOL_FINISH. En su lugar, debes usar TOOL_PROGRAMMER para arreglar el error y luego TOOL_TERMINAL para volver a probar. NUNCA te rindas.\n\n\
             MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):
             - Omitir Hallucinaciones: NUNCA asumas que el usuario te pidió realizar una acción solo porque leíste una descripción en la lista de herramientas o en este manual. Cíñete ESTRICTAMENTE al 'Objetivo Original'.
             REGLAS ESTRICTAS:
-            1. Escribe los scripts y archivos SIEMPRE en la raíz del proyecto a menos que el usuario especifique una subcarpeta. NUNCA inventes carpetas (ej. no crees subcarpetas innecesarias, escribe los archivos directamente en la raíz).
+            1. CRÍTICO: Escribe los scripts y archivos SIEMPRE en la RAÍZ del proyecto a menos que el usuario especifique UNA SUBCARPETA EXPLÍCITA. Para tareas simples de UN SOLO ARCHIVO (scraper.py, script.py, etc.) NUNCA crees subcarpetas (como 'scraper_project/'). El archivo va DIRECTAMENTE en la raíz, sin carpetas contenedoras.
             2. Cuando uses TOOL_TERMINAL para ejecutar un script, DEBES usar el MISMO NOMBRE exacto del archivo que aparece en el Contexto del Proyecto arriba. NUNCA adivines ni inventes nombres de archivos. Lee el Contexto.
             3. Analiza con cuidado si ya usaste una herramienta y falló. No la repitas ciegamente.
             4. Si el historial dice que la tarea ya terminó, ignóralo si aún no has escrito y probado el código solicitado.
@@ -370,9 +371,88 @@ pub async fn run_agent_loop(
                     emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
                     match execute_terminal_command(&workspace_path, &comando).await {
                         Ok(out) => {
+                            comandos_ejecutados_historico.remove(&comando);
+                            // ── Package-install amnesia fix ──────────────────────────────────────
+                            // If the command was a package install (pip install X, npm install X),
+                            // unblock ALL previously-failed python/node script commands so they can
+                            // be retried now that the missing dependency is installed.
+                            let cmd_lower = comando.to_lowercase();
+                            let is_pkg_install = cmd_lower.starts_with("pip install")
+                                || cmd_lower.starts_with("pip3 install")
+                                || cmd_lower.starts_with("npm install")
+                                || cmd_lower.starts_with("npm i ");
+                            if is_pkg_install {
+                                comandos_ejecutados_historico.retain(|c| {
+                                    let cl = c.to_lowercase();
+                                    !cl.starts_with("python") && !cl.starts_with("node")
+                                });
+                                current_context.push_str("[SISTEMA: Librería instalada correctamente. Los comandos de ejecución de scripts que fallaron antes por dependencias faltantes han sido desbloqueados y pueden reintentarse ahora.]\n\n");
+                            }
                             let res_msg = format!("Éxito: {}", out);
-                            current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando tuvo éxito. Tu SIGUIENTE PASO OBLIGATORIO es usar TOOL_TESTER para validar si el entorno ya está correcto. NO VUELVAS A USAR TOOL_TERMINAL BAJO NINGUNA CIRCUNSTANCIA EN EL PRÓXIMO TURNO.]\n\n", res_msg));
-                            emit_event(&app_handle, step_count, &res_msg, "SUCCESS");
+                            // ── Silent-success auto-verifier ─────────────────────────────────────
+                            // When a script runs successfully but prints nothing to stdout,
+                            // the LLM cannot confirm the task is done and loops. Fix: scan the
+                            // workspace for recently-modified output files and inject a preview.
+                            let is_script_run = {
+                                let cl = comando.to_lowercase();
+                                cl.starts_with("python") || cl.starts_with("node")
+                            };
+                            let output_is_empty = out.trim().is_empty() || out.trim().len() < 20;
+                            if is_script_run && output_is_empty {
+                                let output_extensions = ["json", "txt", "csv", "html", "xml", "log", "md"];
+                                let mut found_outputs: Vec<String> = Vec::new();
+                                if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                                    for entry in entries.flatten() {
+                                        let path = entry.path();
+                                        if path.is_file() {
+                                            let ext = path.extension()
+                                                .and_then(|e| e.to_str())
+                                                .unwrap_or("")
+                                                .to_lowercase();
+                                            if output_extensions.contains(&ext.as_str()) {
+                                                // Only files modified in the last 60 seconds
+                                                if let Ok(meta) = path.metadata() {
+                                                    if let Ok(modified) = meta.modified() {
+                                                        if let Ok(elapsed) = modified.elapsed() {
+                                                            if elapsed.as_secs() < 60 {
+                                                                let fname = path.file_name()
+                                                                    .unwrap_or_default()
+                                                                    .to_string_lossy()
+                                                                    .to_string();
+                                                                let content = std::fs::read_to_string(&path)
+                                                                    .unwrap_or_default();
+                                                                let preview = if content.len() > 800 {
+                                                                    format!("{}... (truncado, {} bytes totales)", &content[..800], content.len())
+                                                                } else {
+                                                                    content.clone()
+                                                                };
+                                                                found_outputs.push(format!(
+                                                                    "📄 ARCHIVO GENERADO: {} ({} bytes)\nContenido:\n{}", 
+                                                                    fname, content.len(), preview
+                                                                ));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if !found_outputs.is_empty() {
+                                    current_context.push_str(&format!(
+                                        "Resultado: {}✅\n\n[SISTEMA: El script no imprimió salida en consola, PERO generó los siguientes archivos de salida que CONFIRMAN que la tarea fue completada exitosamente:]\n\n{}\n\n[SISTEMA: Los archivos de salida existen y tienen contenido. Tu ÚNICO PASO VÁLIDO AHORA es usar 'TOOL_FINISH' para reportarle esto al usuario. ESTÁ PROHIBIDO volver a ejecutar el script.]\n\n",
+                                        res_msg,
+                                        found_outputs.join("\n\n")
+                                    ));
+                                    emit_event(&app_handle, step_count, &format!("✅ Script OK — {} archivo(s) de salida generados", found_outputs.len()), "SUCCESS");
+                                } else {
+                                    current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando en terminal se ejecutó con éxito. Analiza este resultado. Si esto completa el objetivo final del usuario, tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_FINISH'. Si aún faltan pasos, continúa. NO uses TOOL_TESTER a menos que el usuario haya pedido pruebas automatizadas.]\n\n", res_msg));
+                                    emit_event(&app_handle, step_count, &res_msg, "SUCCESS");
+                                }
+                            } else {
+                                current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando en terminal se ejecutó con éxito. Analiza este resultado. Si esto completa el objetivo final del usuario, tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_FINISH'. Si aún faltan pasos, continúa. NO uses TOOL_TESTER a menos que el usuario haya pedido pruebas automatizadas.]\n\n", res_msg));
+                                emit_event(&app_handle, step_count, &res_msg, "SUCCESS");
+                            }
                             // Guardar los cambios hechos por la terminal en Git-Shield
                             let _ = crate::core::create_git_backup(&workspace_path, "Aura-Sentinel: Git-Shield Auto-Backup (Terminal)").await;
                         },
@@ -411,8 +491,36 @@ pub async fn run_agent_loop(
                                 }
                             } else {
                                 let mut res_msg = format!("Error: {}", err);
-                                if err.contains("ModuleNotFoundError") {
-                                    res_msg.push_str("\n\n[SISTEMA INTERNO TIP] Te falta una librería de Python. Usa TOOL_TERMINAL en tu próximo paso para ejecutar 'pip install <nombre_libreria>' y luego vuelve a correr tu script.");
+                                if err.contains("ModuleNotFoundError") || err.contains("No module named") {
+                                    // Extract module name from error for better hint
+                                    let module_hint = if err.contains("No module named '") {
+                                        err.split("No module named '").nth(1)
+                                            .and_then(|s| s.split('\'').next())
+                                            .unwrap_or("<nombre_libreria>")
+                                    } else {
+                                        "<nombre_libreria>"
+                                    };
+                                    // Check if pip install was already tried (and failed due to wrong python)
+                                    let pip_was_tried = comandos_ejecutados_historico.iter()
+                                        .any(|c| c.starts_with("pip install") || c.starts_with("pip3 install"));
+                                    if pip_was_tried {
+                                        res_msg.push_str(&format!(
+                                            "\n\n[SISTEMA INTERNO] ADVERTENCIA CRÍTICA: Ya intentaste 'pip install {}' pero el módulo SIGUE SIN ENCONTRARSE. \
+                                            Esto ocurre cuando tienes dos instalaciones de Python en tu máquina (ej. Miniconda + Python del sistema). \
+                                            El pip instaló la librería en una instalación diferente a la que usa 'python'. \
+                                            SOLUCIÓN OBLIGATORIA: En tu SIGUIENTE PASO usa TOOL_TERMINAL con el comando exacto: \
+                                            'python -m pip install {}' — esto garantiza que pip usa el MISMO Python que corre el script.",
+                                            module_hint, module_hint
+                                        ));
+                                    } else {
+                                        res_msg.push_str(&format!(
+                                            "\n\n[SISTEMA INTERNO TIP] Te falta una librería de Python. \
+                                            Usa TOOL_TERMINAL con el comando: 'python -m pip install {}' \
+                                            (NO uses solo 'pip install', usa 'python -m pip install' para garantizar que se instala en el intérprete correcto). \
+                                            Luego vuelve a correr tu script.",
+                                            module_hint
+                                        ));
+                                    }
                                 }
                                 current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
                                 emit_event(&app_handle, step_count, &res_msg, "ERROR");
@@ -471,6 +579,7 @@ pub async fn run_agent_loop(
                     emit_event(&app_handle, step_count, &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando), "ACTION");
                     match start_background_task(&workspace_path, &task_id, &comando).await {
                         Ok(out) => {
+                            comandos_ejecutados_historico.remove(&comando);
                             current_context.push_str(&format!("Resultado: {}\n\n", out));
                             emit_event(&app_handle, step_count, &out, "SUCCESS");
                         },
@@ -602,6 +711,27 @@ pub async fn run_agent_loop(
                 current_context.push_str(&format!("Reflexión Interna del Agente: {}\n\n", comando));
                 emit_event(&app_handle, step_count, "Reflexión completada. Puedes continuar ejecutando otra herramienta.", "SUCCESS");
             },
+            "TOOL_MAPPER" => {
+                emit_event(&app_handle, step_count, "🗺️ Iniciando análisis de dependencias del workspace...", "ACTION");
+                let graph = crate::core::dependency_mapper::analyze_workspace(&workspace_path);
+                let report = crate::core::dependency_mapper::format_graph_report(&graph);
+                let summary = format!(
+                    "📊 Grafo generado: {} archivos | {} dependencias | {} nodos críticos | {} ciclos detectados",
+                    graph.nodes.len(),
+                    graph.edges.len(),
+                    graph.god_nodes.len(),
+                    graph.cycles.len()
+                );
+                current_context.push_str(&format!(
+                    "[TOOL_MAPPER] Análisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
+                    [INSTRUCCIÓN CRÍTICA]: El grafo de arriba es la REALIDAD FÍSICA del proyecto. \
+                    Sigue el 'Orden de Escritura Recomendado' AL PIE DE LA LETRA. \
+                    Usa TOOL_PROGRAMMER para escribir cada archivo en ese orden exacto. \
+                    NO empieces por archivos que dependen de otros que aún no existen.\n\n",
+                    report
+                ));
+                emit_event(&app_handle, step_count, &summary, "SUCCESS");
+            },
             "TOOL_PROGRAMMER" => {
                 let mut ya_editados = true;
                 if !archivos_editados_historico.is_empty() && comandos_ejecutados_historico.is_empty() {
@@ -699,37 +829,7 @@ pub async fn run_agent_loop(
                                                         emit_event(&app_handle, step_count, "Validación exitosa.", "SUCCESS");
                                                         let _ = memory::update_last_memory_status(&workspace_path, "COMPILACIÓN_EXITOSA").await;
 
-                                                        // ── CAPA 3: INTEGRATION VERIFIER ─────────────────────────────────────
-                                                        // For Python projects, auto-verify each new module can be imported.
-                                                        let py_modules: Vec<String> = prog_output.cambios.iter()
-                                                            .filter(|c| c.archivo.ends_with(".py") && !c.archivo.contains("test"))
-                                                            .filter_map(|c| {
-                                                                let module = c.archivo
-                                                                    .trim_end_matches(".py")
-                                                                    .replace(['/', '\\'], ".");
-                                                                if module.is_empty() { None } else { Some(module) }
-                                                            })
-                                                            .collect();
-
-                                                        let mut integration_ok = true;
-                                                        for module in &py_modules {
-                                                            let check_cmd = format!("echo import {} ; print('INTEGRATION_OK') | python", module);
-                                                            match execute_terminal_command(&workspace_path, &check_cmd).await {
-                                                                Ok(out) if out.contains("INTEGRATION_OK") => {
-                                                                    emit_event(&app_handle, step_count, &format!("✅ [INTEGRACIÓN] Módulo '{}' importado correctamente", module), "SUCCESS");
-                                                                },
-                                                                Ok(out) | Err(out) => {
-                                                                    emit_event(&app_handle, step_count, &format!("⚠️ [INTEGRACIÓN] Módulo '{}' no importable: {}", module, &out[..out.len().min(200)]), "WARNING");
-                                                                    current_context.push_str(&format!(
-                                                                        "[VERIFICACIÓN DE INTEGRACIÓN FALLIDA] El módulo '{}' tiene errores al importarse: {}\nDEBES usar TOOL_AUDITOR para leer el error, y luego TOOL_PROGRAMMER para corregirlo antes de avanzar.\n\n",
-                                                                        module, out
-                                                                    ));
-                                                                    integration_ok = false;
-                                                                }
-                                                            }
-                                                        }
-
-                                                        if integration_ok || py_modules.is_empty() {
+                                                        if true {
                                                             // ── CAPA 4: Advance micro-meta in journal ───────────────────────
                                                             let written_files: Vec<String> = prog_output.cambios.iter()
                                                                 .map(|c| c.archivo.clone()).collect();

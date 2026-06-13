@@ -12,6 +12,7 @@ struct OllamaRequest<'a> {
     prompt: &'a str,
     stream: bool,
     format: &'a str,
+    options: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +43,7 @@ async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
         prompt,
         stream: false,
         format: "json",
+        options: serde_json::json!({ "num_ctx": 16384 }),
     };
 
     let res = client.post(url)
@@ -66,6 +68,7 @@ pub async fn call_ollama_text(model: &str, prompt: &str) -> Result<String, Strin
         model: &'a str,
         prompt: &'a str,
         stream: bool,
+        options: serde_json::Value,
     }
 
     let client = reqwest::Client::builder()
@@ -74,7 +77,7 @@ pub async fn call_ollama_text(model: &str, prompt: &str) -> Result<String, Strin
         .map_err(|e| format!("Error construyendo cliente HTTP (texto): {}", e))?;
     let url = "http://localhost:11434/api/generate";
 
-    let payload = TextRequest { model, prompt, stream: false };
+    let payload = TextRequest { model, prompt, stream: false, options: serde_json::json!({ "num_ctx": 16384 }) };
 
     let res = client.post(url)
         .json(&payload)
