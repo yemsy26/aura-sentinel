@@ -157,7 +157,7 @@ async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) ->
         \n\
         [REGLA 5 - SCRIPTS DE INSTALACIÓN (.bat / .sh)]:\n\
            a) Si creas un script .bat o .sh para arrancar la app, SIEMPRE incluye los comandos para instalar dependencias (`pip install`, `npm install`, etc.) ANTES de ejecutar el programa principal.\n\
-           b) En archivos `.bat`, NUNCA dejes que la consola se cierre sola si ocurre un error. Usa `if %ERRORLEVEL% neq 0 pause` después de comandos críticos, o pon un `pause` al final del script para que el usuario pueda ver qué falló visualmente.\n\
+           b) En archivos `.bat`, NUNCA dejes que la consola se cierre sola. PON SIEMPRE un `pause` absoluto al final del script para que el usuario pueda ver el resultado final (éxito o error). Prohibido usar pausas condicionales como `if errorlevel`.
         \n\
         [REGLA 6 - JSON LIMPIO]: Tu respuesta DEBE ser únicamente JSON válido. Sin texto antes ni después del JSON.\n\
         \n\
