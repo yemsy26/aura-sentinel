@@ -146,6 +146,7 @@ pub async fn run_agent_loop(
     let mut forced_next_tool: Option<(String, String)> = None;
     let mut step_count = 1;
     let max_steps = 50000;
+    let mut json_error_count = 0;
 
     // ── Session Journal ────────────────────────────────────────
     // Persist mission state to disk so sleep/restart doesn’t lose context.
@@ -314,13 +315,21 @@ pub async fn run_agent_loop(
         let raw_value: serde_json::Value = match serde_json::from_str(&clean_agent_res) {
             Ok(v) => {
                 println!("LLM RAW RESPONSE: {}", agent_res);
+                json_error_count = 0; // Reset error count on success
                 v
             },
             Err(e) => {
                 println!("LLM RAW RESPONSE ERROR: {}", agent_res);
-                emit_event(&app_handle, step_count, &format!("Error parseando decisión ({}). Abortando bucle.", e), "ERROR");
-                let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Error interno en el planificador.".to_string() };
-                return Ok(serde_json::to_string(&final_res).unwrap());
+                json_error_count += 1;
+                if json_error_count >= 5 {
+                    emit_event(&app_handle, step_count, &format!("Error parseando decisión ({}). Máximos reintentos (5) alcanzados. Abortando bucle.", e), "ERROR");
+                    let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Fallo crítico persistente en la estructura JSON del planificador.".to_string() };
+                    return Ok(serde_json::to_string(&final_res).unwrap());
+                } else {
+                    emit_event(&app_handle, step_count, &format!("Error de sintaxis JSON (intento {}/5). Reintentando...", json_error_count), "WARNING");
+                    current_context.push_str(&format!("[SISTEMA INTERNO] Tu respuesta anterior no era un JSON válido. Error: {}. Genera SOLO un objeto JSON estrictamente válido según la estructura requerida, sin texto adicional antes o después del JSON.\n\n", e));
+                    continue;
+                }
             }
         };
         let checklist = raw_value.get("checklist_mental").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -779,37 +788,42 @@ pub async fn run_agent_loop(
                 emit_event(&app_handle, step_count, &summary, "SUCCESS");
             },
             "TOOL_PROGRAMMER" => {
-                let mut ya_editados = true;
+                let mut is_cooldown_blocked = false;
+                
+                // Block only if the LLM tries to edit ALREADY-EDITED files TWICE IN A ROW
+                // WITHOUT running any terminal command in between.
                 if !archivos_editados_historico.is_empty() && comandos_ejecutados_historico.is_empty() {
-                    // Enforce state machine: cannot program twice in a row without a terminal test.
-                    ya_editados = true;
-                } else {
-                    if archivos_vec.is_empty() { ya_editados = false; }
+                    is_cooldown_blocked = true;
+                    // If there is at least one NEW file in the list, allow the action
+                    if archivos_vec.is_empty() { is_cooldown_blocked = false; }
                     for f in &archivos_vec {
                         if !archivos_editados_historico.contains(f) {
-                            ya_editados = false;
+                            is_cooldown_blocked = false;
                             break;
                         }
                     }
                 }
                 
-                if ya_editados {
+                if is_cooldown_blocked {
                     programmer_cooldown_hits += 1;
                     if programmer_cooldown_hits >= 3 {
                         let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de TOOL_PROGRAMMER detectado. Abortando misión.";
                         emit_event(&app_handle, step_count, res_msg, "FATAL");
                         let final_res = FinalResponse {
                             status: "ERROR".to_string(),
-                            respuesta_conversacional: format!("Me he quedado atascado editando repetidamente el mismo archivo ({:?}) sin probarlo. He detenido la ejecución por seguridad.", archivos_vec),
+                            respuesta_conversacional: format!("Me he quedado atascado editando repetidamente el mismo archivo ({:?}) sin probarlo en la terminal. He detenido la ejecución por seguridad.", archivos_vec),
                         };
                         return Ok(serde_json::to_string(&final_res).unwrap());
                     } else {
-                        let interception = "[SISTEMA INTERCEPTO] Error Lógico: Ya editaste estos archivos en un turno anterior con éxito. ASUME QUE EL CÓDIGO FUE ESCRITO CORRECTAMENTE. No repitas esta acción. Actualiza tu checklist mental y avanza al siguiente paso ejecutando 'TOOL_TERMINAL' para probar tu script, o 'TOOL_FINISH' si ya completaste el objetivo.";
+                        let interception = "[SISTEMA INTERCEPTO] Error Lógico: Estás intentando editar los mismos archivos por segunda vez consecutiva sin haber probado tu código en la terminal. DEBES ejecutar 'TOOL_TERMINAL' para probar el script y ver los errores antes de seguir programando.";
                         current_context.push_str(&format!("{}\n\n", interception));
                         emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
-                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "Se forzó 'TOOL_TERMINAL' porque ya editaste estos archivos y el código es correcto. DEBES ejecutar el script en la terminal para probarlo ahora mismo.".to_string()));
+                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "Se forzó 'TOOL_TERMINAL'. DEBES ejecutar el script en la terminal para probarlo ahora mismo antes de seguir programando.".to_string()));
                     }
                 } else {
+                    // Valid programming action. 
+                    // Clear the terminal history so the LLM must test again after this programming phase.
+                    comandos_ejecutados_historico.clear();
                 let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
                 let context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
