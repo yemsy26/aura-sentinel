@@ -26,7 +26,7 @@ pub fn detect_package_manager() -> PackageManager {
 
         // 1. Scoop
         let scoop_ok = Command::new("powershell")
-            .args(&[
+            .args([
                 "-NoProfile",
                 "-Command",
                 "Get-Command scoop -ErrorAction SilentlyContinue",
@@ -140,7 +140,7 @@ fn resolve_package_aliases(pkg: &str) -> (String, String) {
 async fn install_with_scoop(package: &str) -> Result<String, String> {
     eprintln!("[ENV_MANAGER] Installing '{}' via Scoop...", package);
     let result = Command::new("powershell")
-        .args(&[
+        .args([
             "-NoProfile",
             "-Command",
             &format!("scoop install {}", package),
@@ -169,7 +169,7 @@ async fn install_with_scoop(package: &str) -> Result<String, String> {
 #[cfg(target_os = "windows")]
 async fn bootstrap_scoop() -> Result<(), String> {
     let result = Command::new("powershell")
-        .args(&["-NoProfile", "-Command", SCOOP_INSTALL_CMD])
+        .args(["-NoProfile", "-Command", SCOOP_INSTALL_CMD])
         .output()
         .map_err(|e| format!("Fallo al bootstrapear Scoop: {}", e))?;
 
@@ -194,7 +194,7 @@ async fn install_with_winget(package_id: &str) -> Result<String, String> {
     eprintln!("[ENV_MANAGER] Installing '{}' via winget...", package_id);
     // --accept-* flags make winget non-interactive
     let result = Command::new("winget")
-        .args(&[
+        .args([
             "install",
             "--id", package_id,
             "--silent",
@@ -276,12 +276,11 @@ fn read_env_var_from_registry(scope: &str) -> String {
         scope
     );
     Command::new("powershell")
-        .args(&["-NoProfile", "-Command", &cmd])
+        .args(["-NoProfile", "-Command", &cmd])
         .output()
         .map(|o| {
             String::from_utf8_lossy(&o.stdout)
-                .replace('\r', "")
-                .replace('\n', "")
+                .replace(['\r', '\n'], "")
                 .trim()
                 .to_string()
         })

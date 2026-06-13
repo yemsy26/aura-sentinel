@@ -44,12 +44,13 @@ pub struct FinalResponse {
 }
 
 pub const ORCHESTRATOR_MODEL: &str = "llama3.1:8b";
+#[allow(dead_code)]
 pub const PROGRAMMER_MODEL: &str = "qwen2.5-coder:7b";
 
 pub async fn run_agent_loop(
     user_message: String,
     workspace_path: String,
-    tree_json: String,
+    _tree_json: String,
     app_handle: AppHandle
 ) -> Result<String, String> {
     
@@ -411,9 +412,11 @@ pub async fn run_agent_loop(
         match tool.as_str() {
             "TOOL_TERMINAL" => {
                 if comando.trim().is_empty() {
-                    let res_msg = "Error: El comando no puede estar vacío. Rellena el campo 'comando'.";
+                    let res_msg = "Error: El comando no puede estar vacío. Rellena el campo 'comando'. Si no sabes qué ejecutar, usa 'ls' o el comando principal de tu lenguaje (ej. 'python script.py').";
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(&app_handle, step_count, "Comando vacío", "ERROR");
+                    comandos_ejecutados_historico.insert("__EMPTY_CMD__".to_string());
+                    programmer_cooldown_hits = 0;
                 } else if comandos_ejecutados_historico.contains(&comando) {
                     let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás repitiendo un comando fallido. Repetirlo no lo arreglará. Usa TOOL_PROGRAMMER o TOOL_AUDITOR.";
                     emit_event(&app_handle, step_count, res_msg, "WARNING");
@@ -637,7 +640,7 @@ pub async fn run_agent_loop(
             },
             "TOOL_BACKGROUND_START" => {
                 if comando.trim().is_empty() {
-                    if comandos_ejecutados_historico.contains(&"__EMPTY_BG_CMD__".to_string()) {
+                    if comandos_ejecutados_historico.contains("__EMPTY_BG_CMD__") {
                         let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás en un bucle infinito de comandos vacíos. Abortando.";
                         emit_event(&app_handle, step_count, res_msg, "FATAL");
                         let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Error interno del planificador asíncrono.".to_string() };
@@ -841,7 +844,7 @@ pub async fn run_agent_loop(
                         let interception = "[SISTEMA INTERCEPTO] Error Lógico: Estás intentando editar los mismos archivos por segunda vez consecutiva sin haber probado tu código en la terminal. DEBES ejecutar 'TOOL_TERMINAL' para probar el script y ver los errores antes de seguir programando.";
                         current_context.push_str(&format!("{}\n\n", interception));
                         emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
-                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "Se forzó 'TOOL_TERMINAL'. DEBES ejecutar el script en la terminal para probarlo ahora mismo antes de seguir programando.".to_string()));
+                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "Se forzó 'TOOL_TERMINAL'. DEBES ejecutar el script en la terminal para probarlo ahora mismo antes de seguir programando. RECUERDA: Debes proporcionar un comando válido en el campo 'comando' (ej. 'python main.py', 'npm start', o 'ls'). NO DEJES EL COMANDO VACÍO.".to_string()));
                     }
                 } else {
                     // Valid programming action. 

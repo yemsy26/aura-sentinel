@@ -373,17 +373,17 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
 
         if let Some(py) = python_path {
             // Replace leading 'python ' or 'python\n' or exact 'python'
-            if command.starts_with("python ") {
+            if let Some(stripped) = command.strip_prefix("python ") {
                 if py.contains(' ') {
-                    format!("\"{}\" {}", py, &command[7..])
+                    format!("\"{}\" {}", py, stripped)
                 } else {
-                    format!("{} {}", py, &command[7..])
+                    format!("{} {}", py, stripped)
                 }
             } else if command == "python" {
                 if py.contains(' ') {
                     format!("\"{}\"", py)
                 } else {
-                    format!("{}", py)
+                    py.to_string()
                 }
             } else {
                 command.to_string()

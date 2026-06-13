@@ -1,12 +1,13 @@
-/// stub_enforcer.rs — Anti-Stub Code Quality Shield
-/// 
-/// Inspects code proposed by the LLM BEFORE it is written to disk.
-/// Rejects any file that contains stub patterns (empty implementations,
-/// TODO markers, or placeholder bodies) and returns detailed feedback
-/// so the orchestrator can demand a complete rewrite.
+//! stub_enforcer.rs — Anti-Stub Code Quality Shield
+//! 
+//! Inspects code proposed by the LLM BEFORE it is written to disk.
+//! Rejects any file that contains stub patterns (empty implementations,
+//! TODO markers, or placeholder bodies) and returns detailed feedback
+//! so the orchestrator can demand a complete rewrite.
 
 pub struct StubReport {
     pub has_stubs: bool,
+    #[allow(dead_code)]
     pub warnings: Vec<String>,
     pub rejection_message: String,
 }

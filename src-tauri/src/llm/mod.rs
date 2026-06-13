@@ -298,7 +298,7 @@ pub async fn process_user_prompt(mut user_message: String, workspace_path: Strin
             "make a folder", "make folder", "create folder", "create directory"
         ];
         // Sort by length descending so longer prefixes match first
-        folder_prefixes.sort_by(|a, b| b.len().cmp(&a.len()));
+        folder_prefixes.sort_by_key(|b| std::cmp::Reverse(b.len()));
         let folder_name_opt: Option<String> = folder_prefixes.iter().find_map(|prefix| {
             if lower_msg.contains(prefix) {
                 // Extract the word(s) after the prefix

@@ -76,6 +76,7 @@ pub async fn fetch_url_text(url: &str) -> Result<String, String> {
     }
 }
 
+#[allow(dead_code)]
 pub async fn search_web(query: &str) -> Result<String, String> {
     let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(query));
     

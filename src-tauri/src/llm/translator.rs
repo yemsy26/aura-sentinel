@@ -79,9 +79,9 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
         EJEMPLO 5 (CRITICO - no confundir):\n\
         Usuario: verifica que todo esté bien\n\
         JSON:\n{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"Auditar el estado del workspace y verificar que los archivos están completos y funcionales.\",\"os_command\":null,\"direct_response\":null}}\n\n\
-        {}{}",
+        {}Usuario: {}\n",
         context_str,
-        format!("Usuario: {}\n", user_input)
+        user_input
     );
     
     emit_event(app_handle, 0, &format!("Analizando intención con {}...", model), "PLANNING");

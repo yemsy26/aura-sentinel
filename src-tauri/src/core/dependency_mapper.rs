@@ -1,11 +1,11 @@
-/// dependency_mapper.rs
-/// Aura-Sentinel TOOL_MAPPER — Static dependency analysis engine.
-///
-/// Scans a workspace for source files and extracts import/dependency relationships
-/// using pattern matching (no LLM needed). Produces:
-///   1. A topologically-sorted build order for the LLM to follow when writing code.
-///   2. A `.aura_graph.json` file persisted on disk for inter-session reuse.
-///   3. A human-readable text report injected into the LLM context.
+//! dependency_mapper.rs
+//! Aura-Sentinel TOOL_MAPPER — Static dependency analysis engine.
+//!
+//! Scans a workspace for source files and extracts import/dependency relationships
+//! using pattern matching (no LLM needed). Produces:
+//!   1. A topologically-sorted build order for the LLM to follow when writing code.
+//!   2. A `.aura_graph.json` file persisted on disk for inter-session reuse.
+//!   3. A human-readable text report injected into the LLM context.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -87,7 +87,7 @@ fn extract_python_imports(content: &str) -> Vec<String> {
         } else if let Some(rest) = line.strip_prefix("import ") {
             // "import os, sys" → split by comma
             for part in rest.split(',') {
-                let module = part.trim().split_whitespace().next().unwrap_or("").to_string();
+                let module = part.split_whitespace().next().unwrap_or("").to_string();
                 if !module.is_empty() {
                     imports.push(module);
                 }
@@ -121,8 +121,8 @@ fn extract_js_imports(content: &str) -> Vec<String> {
         // CJS: require('path')
         if line.contains("require(") {
             let after_require = line.split("require(").nth(1).unwrap_or("");
-            let path = after_require.trim_start().trim_matches(|c| c == '\'' || c == '"');
-            let path = path.split(|c| c == '\'' || c == '"' || c == ')').next().unwrap_or("").trim();
+            // naive regex-less approach: path is usually surrounded by quotes
+            let path = after_require.split(['\'', '"', ')']).next().unwrap_or("").trim();
             if !path.is_empty() {
                 imports.push(path.to_string());
             }
