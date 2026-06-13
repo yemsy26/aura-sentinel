@@ -418,17 +418,16 @@ pub async fn run_agent_loop(
                     comandos_ejecutados_historico.insert("__EMPTY_CMD__".to_string());
                     programmer_cooldown_hits = 0;
                 } else if comandos_ejecutados_historico.contains(&comando) {
-                    let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás repitiendo un comando fallido. Repetirlo no lo arreglará. Usa TOOL_PROGRAMMER o TOOL_AUDITOR.";
-                    emit_event(&app_handle, step_count, res_msg, "WARNING");
+                    let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
+                    emit_event(&app_handle, step_count, "Comando repetido interceptado", "WARNING");
                     current_context.push_str(&format!("{}\n\n", res_msg));
-                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "El comando de terminal se repitió y falló anteriormente. El sistema te ha forzado a usar TOOL_PROGRAMMER para arreglar el script primero.".to_string()));
                 } else {
                     programmer_cooldown_hits = 0;
                     comandos_ejecutados_historico.insert(comando.clone());
                     emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
                     match execute_terminal_command(&workspace_path, &comando).await {
                         Ok(out) => {
-                            comandos_ejecutados_historico.remove(&comando);
+
                             // ── Package-install amnesia fix ──────────────────────────────────────
                             // If the command was a package install (pip install X, npm install X),
                             // unblock ALL previously-failed python/node script commands so they can
@@ -530,7 +529,7 @@ pub async fn run_agent_loop(
                                 match crate::core::env_manager::install_dependency(binary).await {
                                     Ok(install_msg) => {
                                         // Reset command history so the original command can be retried
-                                        comandos_ejecutados_historico.remove(&comando);
+
                                         current_context.push_str(&format!(
                                             "[AUTO-ENV] TOOL_ENV_MANAGER instaló '{}' automáticamente: {}\n\n\
                                              Tu SIGUIENTE PASO OBLIGATORIO es reintentar el comando que falló: '{}'.\n\n",
@@ -660,7 +659,7 @@ pub async fn run_agent_loop(
                     emit_event(&app_handle, step_count, &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando), "ACTION");
                     match start_background_task(&workspace_path, &task_id, &comando).await {
                         Ok(out) => {
-                            comandos_ejecutados_historico.remove(&comando);
+
                             current_context.push_str(&format!("Resultado: {}\n\n", out));
                             emit_event(&app_handle, step_count, &out, "SUCCESS");
                         },
