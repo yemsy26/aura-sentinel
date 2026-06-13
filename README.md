@@ -161,6 +161,8 @@ Actualización enfocada en la estabilidad de modelos pequeños (7B/8B) y su capa
 |-----|-------------------|
 | **Amnesia del Auto-Sanador** | Durante un `Auto-Heal`, Git-Shield sobreescribía la instrucción original del usuario con el reporte de error. Qwen olvidaba su misión principal. Ahora, el error se concatena al contexto, dándole al LLM memoria completa del objetivo y del fallo. |
 | **Escapado JSON Estricto** | Qwen 2.5 7B generaba rupturas en el `serde_json` de Rust al usar `\n` o `\w` en Regex. Se inyectaron reglas absolutas en el Prompt del sistema exigiendo doble barra invertida (`\\n`), erradicando los `SyntaxError` de literales no terminados en Python. |
+| **Anti-Stub Enforcer (Rust)** | Rust ahora audita el código generado *antes* de guardarlo. Si el agente intenta crear scripts de ejecución `.bat` que se cierran silenciosamente y carecen de un `pause` absoluto, el orquestador rechaza el archivo y obliga al LLM a reescribirlo. |
+| **Protección contra Bucles de Éxito** | Si el agente tenía éxito al probar un script en la terminal, repetía el comando exitoso infinitamente al no ver un mensaje de finalización. Se parcheó el núcleo en `agent.rs` para interceptar bucles de comandos exactos y forzar el cierre exitoso de la tarea con `TOOL_FINISH`. |
 | **Bucle Infinito de Comandos Vacíos** | El LLM a veces enviaba comandos `__EMPTY_CMD__`. Se implementó una barrera en `agent.rs` que intercepta comandos vacíos y advierte al LLM antes de procesarlos. |
 | **Clippy 100% Limpio** | Auditoría y eliminación de todo el *dead code*, importaciones sin uso y variables no leídas en el motor de Rust. |
 
