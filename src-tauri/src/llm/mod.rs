@@ -144,14 +144,14 @@ async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) ->
         \n\
         [REGLA 2 - RUTAS RELATIVAS]: ÚNICAMENTE usa rutas relativas ('src/archivo.ext', 'archivo.ext'). NUNCA rutas absolutas (C:/...).\n\
         \n\
-        [REGLA 3 - PYTHON CRÍTICO - LEE ESTO 3 VECES]:\n\
+        [REGLA 3 - PYTHON & JSON CRÍTICO - LEE ESTO 3 VECES]:\n\
            a) SIEMPRE añade '# -*- coding: utf-8 -*-' como PRIMERA línea de cada archivo .py.\n\
            b) Para strings en Python usa EXCLUSIVAMENTE comillas dobles: \"texto\". JAMÁS uses comillas simples dentro de strings.\n\
-           c) Strings multilínea: usa triple comillas dobles: \"\"\"linea1\\nlinea2\"\"\". NUNCA saltos de línea literales dentro de un string.\n\
-           d) SIEMPRE cierra TODOS los paréntesis, corchetes y llaves que abras.\n\
-           e) Ejemplo CORRECTO de print: print(\"Hola mundo\")  ← correcto\n\
-           f) Ejemplo INCORRECTO: print('Hola mundo')  ← PROHIBIDO\n\
-           g) Ejemplo INCORRECTO: print('Juego terminado!'  ← PROHIBIDO (paréntesis sin cerrar)\n\
+           c) ESCAPADO JSON: Si tu código Python necesita un salto de línea (ej. `f\"Hola\\n\"`) o una regex (`re.sub(r\"\\w\", \"\")`), DEBES doble-escapar la barra invertida en el JSON: usa `\\\\n` y `\\\\w`.\n\
+           d) NUNCA incluyas saltos de línea literales dentro de un string de Python. Usa triple comillas dobles para strings multilínea: \"\"\"linea1\\nlinea2\"\"\".\n\
+           e) SIEMPRE cierra TODOS los paréntesis, corchetes y llaves que abras.\n\
+           f) Ejemplo CORRECTO de regex en JSON: \"re.sub(r\\\"[^\\\\w\\\\s]\\\", \\\"\\\", texto)\"\n\
+           g) Ejemplo INCORRECTO: re.sub(r'[^\\w\\s]', '', texto)  ← PROHIBIDO (usa comillas simples y falta doble escape)\n\
         \n\
         [REGLA 4 - CREACIÓN DE ARCHIVO NUEVO]: Cuando crees un archivo desde cero, el campo 'buscar' debe ser \"\" (vacío).\n\
         \n\

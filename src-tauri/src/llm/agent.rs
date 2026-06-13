@@ -903,8 +903,8 @@ pub async fn run_agent_loop(
                                                 // Rollback the written files
                                                 let _ = crate::core::restore_git_backup(&workspace_path).await;
                                                 qwen_prompt = format!(
-                                                    "{}\n\nREESCRIBE COMPLETAMENTE. IMPLEMENTACIÓN REAL OBLIGATORIA.",
-                                                    combined
+                                                    "{}\n\n[ERROR DE REVISIÓN]: Los archivos fueron rechazados por el sistema Anti-Stub:\n{}\n\nREESCRIBE COMPLETAMENTE O CORRIGE EL CÓDIGO. IMPLEMENTACIÓN REAL OBLIGATORIA.",
+                                                    qwen_prompt, combined
                                                 );
                                                 max_intentos -= 1;
                                             } else {
@@ -955,7 +955,7 @@ pub async fn run_agent_loop(
                                                     },
                                                     Err(e) => {
                                                         emit_event(&app_handle, step_count, &format!("Error detectado: {}", e), "ERROR");
-                                                        qwen_prompt = format!("El código causó este error:\n{}\nSoluciónalo y genera un nuevo JSON.", e);
+                                                        qwen_prompt = format!("{}\n\n[ERROR DE COMPILACIÓN/EJECUCIÓN]: El código que generaste causó este error:\n{}\n\nSoluciónalo y genera un nuevo JSON asegurándote de escapar correctamente los strings.", qwen_prompt, e);
                                                         if e.contains("package.json") && !archivos_vec.contains(&"package.json".to_string()) {
                                                             archivos_vec.push("package.json".to_string());
                                                         }
