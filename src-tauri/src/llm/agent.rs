@@ -201,11 +201,34 @@ pub async fn run_agent_loop(
             extra_prompt = format!("\n\nREGLA ESTRICTA E INQUEBRANTABLE PARA ESTE TURNO:\nDEBES Y TIENES QUE ELEGIR '{}' COMO TU HERRAMIENTA. NO ELIJAS OTRA O EL SISTEMA FALLARÁ. Ignora cualquier otra regla y genera un JSON válido para la herramienta {}.", forced, forced);
         }
 
+        let mut live_files = Vec::new();
+        fn scan_live_files(dir: &std::path::Path, files: &mut Vec<String>, depth: usize) {
+            if depth > 5 { return; }
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    if name.starts_with('.') || name == "node_modules" || name == "__pycache__" || name == "target" { continue; }
+                    if path.is_dir() {
+                        scan_live_files(&path, files, depth + 1);
+                    } else {
+                        files.push(path.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+        scan_live_files(std::path::Path::new(&workspace_path), &mut live_files, 0);
+        let live_workspace_context = if live_files.is_empty() {
+            "El proyecto está completamente vacío. Aún no has creado ningún archivo físico.".to_string()
+        } else {
+            live_files.join("\n")
+        };
+
         let agent_prompt = format!(
             "Eres el Cerebro Planificador de Aura-Sentinel. Eres un ingeniero políglota. Actualmente soportas [Python, JS/TS, Rust, Go, C++]. Antes de programar, detecta el lenguaje del proyecto y ajusta tus herramientas de validación al estándar del lenguaje detectado.\n\
             Funcionarás en un bucle autónomo. Analiza el Objetivo, el Contexto y el Historial para decidir UNA ÚNICA HERRAMIENTA a utilizar en este turno.\n\
             Objetivo Original: {}\n\
-            Contexto del Proyecto (Archivos Actuales Reales): {}\n\
+            Contexto del Proyecto (Archivos Actuales Reales FÍSICOS en el disco): {}\n\
             {}\n\
             REGLA DE REALIDAD FÍSICA: La lista de archivos de arriba es la ÚNICA VERDAD. Si un archivo NO aparece en esa lista, significa que NO EXISTE y debes crearlo (ya sea escribiéndolo a mano con TOOL_PROGRAMMER, o generándolo con TOOL_TERMINAL usando comandos como npx, cargo, pip, etc). ¡No asumas que ya existe!\n\
             Historial de Pasos Ejecutados Hasta Ahora:\n{}\n\n\
@@ -288,7 +311,7 @@ pub async fn run_agent_loop(
               \"archivos_a_editar\": [\"ruta/archivo1\", \"ruta/archivo2\"],\n\
               \"respuesta_conversacional\": \"<respuesta al usuario o null>\"\n\
             }}",
-            user_message, tree_json, extra_prompt, current_context
+            user_message, live_workspace_context, extra_prompt, current_context
         );
         
         let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::Orchestrator, language: None }, &available_models, &app_handle, 0).await
