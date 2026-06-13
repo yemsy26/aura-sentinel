@@ -39,6 +39,9 @@ pub fn detect_stubs(content: &str, file_path: &str) -> StubReport {
         "java" | "kt" => {
             check_java_stubs(content, &mut warnings);
         }
+        "bat" | "cmd" => {
+            check_bat_stubs(content, &mut warnings);
+        }
         _ => {
             check_generic_stubs(content, &mut warnings);
         }
@@ -218,6 +221,13 @@ fn check_generic_stubs(content: &str, warnings: &mut Vec<String>) {
         if trimmed.starts_with("# TODO") || trimmed.starts_with("// TODO") {
             warnings.push(format!("Línea {}: TODO sin implementar: '{}'", i + 1, trimmed));
         }
+    }
+}
+
+fn check_bat_stubs(content: &str, warnings: &mut Vec<String>) {
+    let lower_content = content.to_lowercase();
+    if !lower_content.contains("pause") {
+        warnings.push("Script .bat no contiene 'pause'. NUNCA dejes que la consola se cierre sola. Usa 'if %ERRORLEVEL% neq 0 pause' o pon un 'pause' al final.".to_string());
     }
 }
 
