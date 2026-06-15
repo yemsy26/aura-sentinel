@@ -62,9 +62,10 @@ Aura-Sentinel no solo escribe código; lo entiende, lo valida, asegura sus depen
 - En cada turno, el agente recibe un mapa exacto de los archivos que *realmente existen* en el workspace.
 
 ### 11. Zero-Trace Architecture (Agent Workspace) 🧠⚡
-- **Diseño de Sistemas en RAM**: Aura Sentinel puede diseñar e inyectar arquitecturas enteras directamente en la memoria volátil utilizando `TOOL_AST_INJECT` y el motor integrado `Chronos-VFS`.
-- **0-alloc y Latencia O(1)**: Los nodos lógicos (AST) generados por el LLM se mapean dinámicamente en un `AgentWorkspace` soportado por memoria anónima (`memmap2`) y `monoio`.
-- **Ejecución Segura**: Las simulaciones de estrés cognitivo o código experimental (como parsers HFT) se procesan puramente en RAM y se limpian sin dejar rastro en el disco físico al terminar el ciclo, protegiendo la vida útil del SSD.
+- **Diseño de Sistemas en RAM (Pensamiento Autónomo)**: Antes de escribir código físico, Aura Sentinel usa obligatoriamente `TOOL_AST_INJECT` para estructurar la arquitectura del sistema directamente en la memoria volátil utilizando el motor integrado `Chronos-VFS`.
+- **0-alloc y Latencia O(1)**: Los nodos lógicos generados por el LLM se mapean dinámicamente en un `AgentWorkspace` de 1 millón de slots soportado por memoria anónima (`memmap2`) y `monoio`.
+- **Salto Físico Obligatorio**: La Máquina de Estados prohíbe terminar la tarea después de pensar en RAM. Obliga al agente a usar `TOOL_PROGRAMMER` para transcribir su diseño mental al disco duro.
+- **Ejecución Segura**: Protege tu disco SSD de operaciones I/O masivas e inútiles mientras la IA piensa y corrige sus propios diseños.
 
 ---
 
@@ -108,6 +109,11 @@ ollama pull deepseek-coder:6.7b  # Ingeniero Rápido
 ollama pull qwen2.5-coder:14b    # Ingeniero Experto (Auto-Debugger)
 ollama pull nomic-embed-text     # Motor de Memoria Vectorial (RAG)
 ```
+
+### ⚙️ Configuración Crítica de Ollama (¡MUY IMPORTANTE!)
+Para que Aura Sentinel funcione a su máxima capacidad y no sufra de "Amnesia" o errores de parseo (EOF), debes configurar la UI de Ollama (o su archivo de entorno) de la siguiente manera:
+1. **Context Length (Longitud de Contexto)**: Ajústalo **mínimo a 16k, idealmente 32k**. Si lo dejas en 4k, el LLM olvidará tus instrucciones y no podrá generar archivos grandes.
+2. **Cloud Models (Opcional pero Recomendado)**: Si activas esta opción, el Router Dinámico en Rust podrá escalar las tareas de extrema complejidad a modelos gigantes (como `qwen2.5-coder:32b` o `llama3.3:70b`) usando tu PC local como proxy. Tu VRAM descansará y obtendrás inteligencia nivel GPT-4.
 
 ### Ejecución
 ```bash
@@ -158,6 +164,16 @@ Crea su test con JUnit. Ejecuta TOOL_TESTER.
 ---
 
 ## 🔧 Historial de Correcciones Críticas (Changelog)
+
+### v0.3.0 — 2026-06-14 (Chronos-VFS Zero-Trace & State Machine)
+Actualización masiva que convierte al Agente en un ente de pensamiento autónomo antes de la escritura física, integrando el motor RAM O(1).
+
+| Fix | Problema resuelto |
+|-----|-------------------|
+| **Pánico de Memoria (Ring Buffer)** | `AgentWorkspace` crasheaba silenciosamente al recibir capacidades que no fueran potencias de 2. Corregido instanciando `new(1_048_576)`. |
+| **Amnesia de Contexto (Ollama Limit)** | Documentada la restricción de 4k de contexto en Ollama que causaba cortes a mitad de JSON (EOF Parsing Error) y olvido de comandos. |
+| **Pensamiento Autónomo Forzado** | Añadida una regla al Prompt Maestro que obliga al LLM a usar `TOOL_AST_INJECT` (planear en RAM) para sistemas nuevos en lugar de saltar directo a escribir al disco. |
+| **Prevención de Terminación Prematura** | El modelo usaba `TOOL_FINISH` tras inyectar en RAM sin crear archivos físicos. Se bloqueó estrictamente esta acción en la Máquina de Estados. |
 
 ### v0.2.0 — 2026-06-13 (Resiliencia Cognitiva y Auto-Sanación)
 Actualización enfocada en la estabilidad de modelos pequeños (7B/8B) y su capacidad para reprogramarse tras cometer errores, evitando bloqueos y cierres forzados.
