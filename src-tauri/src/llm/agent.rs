@@ -144,7 +144,9 @@ pub async fn run_agent_loop(
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
     let mut no_tests_consecutive = 0u32;
+    let mut think_consecutive = 0u32;
     let mut forced_next_tool: Option<(String, String)> = None;
+    let agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_000_000).unwrap();
     let mut step_count = 1;
     let max_steps = 50000;
     let mut json_error_count = 0;
@@ -225,6 +227,17 @@ pub async fn run_agent_loop(
             live_files.join("\n")
         };
 
+        // --- EVITAR DESBORDAMIENTO DE CONTEXTO ---
+        // Si el historial es demasiado largo, el modelo se colapsará e intentará devolver JSONs cortados (EOF).
+        if current_context.len() > 10000 {
+            let offset = current_context.len() - 10000;
+            if let Some(cut) = current_context[offset..].find("PASO") {
+                current_context = format!("...[HISTORIAL RECORTADO POR LÍMITE DE MEMORIA]...\n{}", &current_context[offset + cut..]);
+            } else {
+                current_context = format!("...[HISTORIAL RECORTADO]...\n{}", &current_context[offset..]);
+            }
+        }
+
         let agent_prompt = format!(
             "Eres el Cerebro Planificador de Aura-Sentinel. Eres un ingeniero políglota. Actualmente soportas [Python, JS/TS, Rust, Go, C++]. Antes de programar, detecta el lenguaje del proyecto y ajusta tus herramientas de validación al estándar del lenguaje detectado.\n\
             Funcionarás en un bucle autónomo. Analiza el Objetivo, el Contexto y el Historial para decidir UNA ÚNICA HERRAMIENTA a utilizar en este turno.\n\
@@ -276,6 +289,7 @@ pub async fn run_agent_loop(
             14. 'TOOL_LOGIC_SOLVER': Solver Z3 de verificación matemática para encontrar bucles infinitos o dead code. ÚSALO SOLO si has fallado repetidamente al arreglar un código. NUNCA asumas que el usuario te pidió usar esto a menos que haya un error lógico persistente. No requiere argumentos.
             15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.
             16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
+            18. 'TOOL_AST_INJECT': [ZERO-TRACE ARCHITECTURE] Inyecta un nodo AST (código, lógica, abstracción) directamente en la memoria RAM (AgentWorkspace) sin tocar el disco físico. Úsala para construir sistemas en memoria cuando se requiera O(1) alloc. Rellena 'ast_nodes' con los nodos a inyectar.\n\
             17. 'TOOL_MAPPER': Analiza ESTÁTICAMENTE las dependencias del workspace y genera un GRAFO DE CONOCIMIENTO. Úsalo OBLIGATORIAMENTE al inicio de cualquier proyecto con 3+ archivos. Devuelve: (a) orden de escritura topológico — en qué orden exacto debes crear los archivos para que sus imports funcionen desde el primer momento; (b) nodos críticos — módulos compartidos que deben implementarse PRIMERO; (c) dependencias circulares — ciclos a evitar. No requiere argumentos. REGLA: Después de usar TOOL_MAPPER, usa TOOL_THINK para elaborar el plan de implementación basado en el grafo antes de programar nada.\n\
             Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
             REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos solicitados (ej. 'crea', 'ejecuta', 'prueba', 'valida') se han ejecutado FÍSICAMENTE en el historial con ÉXITO. Si el usuario pidió 'ejecuta X', y X falló o no se ejecutó, ESTÁ ESTRICTAMENTE PROHIBIDO USAR TOOL_FINISH. En su lugar, debes usar TOOL_PROGRAMMER para arreglar el error y luego TOOL_TERMINAL para volver a probar. NUNCA te rindas.\n\n\
@@ -310,6 +324,7 @@ pub async fn run_agent_loop(
               \"task_id\": \"<id_de_la_tarea o null>\",\n\
               \"url_a_investigar\": \"<url o null>\",\n\
               \"archivos_a_editar\": [\"ruta/archivo1\", \"ruta/archivo2\"],\n\
+              \"ast_nodes\": [{{\"intent\": \"<código>\", \"parent_id\": 0, \"opcode\": 2}}],\n\
               \"respuesta_conversacional\": \"<respuesta al usuario o null>\"\n\
             }}",
             user_message, live_workspace_context, extra_prompt, current_context
@@ -390,6 +405,18 @@ pub async fn run_agent_loop(
             }
         }
         
+        let mut ast_nodes_vec = Vec::new();
+        if let Some(arr) = raw_value.get("ast_nodes").and_then(|v| v.as_array()) {
+            for item in arr {
+                if let Some(obj) = item.as_object() {
+                    let intent = obj.get("intent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let parent_id = obj.get("parent_id").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let opcode = obj.get("opcode").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
+                    ast_nodes_vec.push((intent, parent_id, opcode));
+                }
+            }
+        }
+        
         if !checklist.is_empty() {
             emit_event(&app_handle, step_count, &format!("Checklist Mental: {}", checklist), "PLANNING");
         }
@@ -409,6 +436,11 @@ pub async fn run_agent_loop(
             &workspace_path,
         );
         crate::core::session_journal::save_journal(&workspace_path, &journal);
+        
+        if tool.as_str() != "TOOL_THINK" {
+            think_consecutive = 0;
+        }
+
         match tool.as_str() {
             "TOOL_TERMINAL" => {
                 if comando.trim().is_empty() {
@@ -787,9 +819,16 @@ pub async fn run_agent_loop(
                 }
             },
             "TOOL_THINK" => {
-                emit_event(&app_handle, step_count, "Pensando y reflexionando...", "ACTION");
-                current_context.push_str(&format!("Reflexión Interna del Agente: {}\n\n", comando));
-                emit_event(&app_handle, step_count, "Reflexión completada. Puedes continuar ejecutando otra herramienta.", "SUCCESS");
+                think_consecutive += 1;
+                if think_consecutive > 3 {
+                    emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown (Think)", "WARNING");
+                    current_context.push_str(&format!("PASO {}:\nAcción: TOOL_THINK\nResultado: [SISTEMA INTERCEPTO] Error: Has usado TOOL_THINK demasiadas veces seguidas sin actuar (Bucle Infinito). Tu única opción válida ahora es usar TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ARCHITECT o TOOL_FINISH para detenerte.\n\n", step_count));
+                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Se forzó 'TOOL_PROGRAMMER' para romper el bucle infinito de reflexión. Debes programar algo útil basándote en tu última reflexión.".to_string()));
+                } else {
+                    emit_event(&app_handle, step_count, "Pensando y reflexionando...", "ACTION");
+                    current_context.push_str(&format!("Reflexión Interna del Agente: {}\n\n", comando));
+                    emit_event(&app_handle, step_count, "Reflexión completada. Puedes continuar ejecutando otra herramienta.", "SUCCESS");
+                }
             },
             "TOOL_MAPPER" => {
                 emit_event(&app_handle, step_count, "🗺️ Iniciando análisis de dependencias del workspace...", "ACTION");
@@ -1204,13 +1243,35 @@ pub async fn run_agent_loop(
                                 archivos_editados_historico.clear();
                                 comandos_ejecutados_historico.clear();
                                 task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::HighComplexityFix, language: None };
-                                emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
+                            emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
                                 current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
                                 forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Los tests fallaron estrepitosamente, el sistema forzó TOOL_PROGRAMMER para que generes una nueva y mejor solución.".to_string()));
                             }
                         }
                     }
                 }
+            },
+            "TOOL_AST_INJECT" => {
+                emit_event(&app_handle, step_count, "Inyectando nodos AST en Memoria Lógica (Zero-Trace)...", "ACTION");
+                let mut report = String::new();
+                for (idx, (intent, parent_id, opcode)) in ast_nodes_vec.iter().enumerate() {
+                    let node_id = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64) + idx as u64;
+                    let meta = [0u8; 16];
+                    let node = chronos_vfs::aura_bridge::AuraIntentTranslator::tokenize_intent(
+                        (*opcode).into(),
+                        *parent_id,
+                        node_id,
+                        intent,
+                        meta,
+                    );
+                    if let Err(_) = agent_workspace.push_node(node) {
+                        report.push_str(&format!("- Error crítico: Buffer Zero-Trace lleno al insertar nodo {}\n", node_id));
+                        break;
+                    }
+                    report.push_str(&format!("- Inyectado: NodeID={} Hash={}\n  Opcode: {:?}\n  Contenido: {}\n", node.node_id, node.content_hash, node.opcode, intent));
+                }
+                current_context.push_str(&format!("PASO {}:\nAcción: TOOL_AST_INJECT\nResultado:\n{}\n\n", step_count, report));
+                emit_event(&app_handle, step_count, &format!("{} nodos AST inyectados exitosamente en RAM.", ast_nodes_vec.len()), "SUCCESS");
             },
             "TOOL_LEARN" => {
                 emit_event(&app_handle, step_count, "Guardando conocimiento en la Memoria Permanente (RAG)...", "ACTION");
