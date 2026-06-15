@@ -146,7 +146,7 @@ pub async fn run_agent_loop(
     let mut no_tests_consecutive = 0u32;
     let mut think_consecutive = 0u32;
     let mut forced_next_tool: Option<(String, String)> = None;
-    let agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_000_000).unwrap();
+    let agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
     let mut step_count = 1;
     let max_steps = 50000;
     let mut json_error_count = 0;
