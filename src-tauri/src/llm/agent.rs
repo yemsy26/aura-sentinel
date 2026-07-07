@@ -352,86 +352,23 @@ pub async fn run_agent_loop(
             }";
 
         let agent_prompt = match current_role {
-            // ─────────────────── PLANNER ──────────────────────────────────
+            // Planner - compressed to <200 tokens
             AgentRole::Planner => format!(
-                "🧠 [ROL ACTIVO: PLANIFICADOR ARQUITECTÓNICO]\n\
-                Tu ÚNICO propósito es DISEÑAR la arquitectura en Memoria Lógica (RAM).\n\
-                PROHIBIDO usar TOOL_PROGRAMMER o cualquier herramienta que escriba en disco.\n\n\
-                Objetivo Original: {}\n\
-                Archivos físicos actuales: {}\n\
-                {}\n\
-                Historial:\n{}\n\n\
-                HERRAMIENTAS DEL PLANIFICADOR (solo estas):\n\
-                - TOOL_AST_INJECT: Estructura el sistema en RAM. OBLIGATORIO para proyectos complejos.\n\
-                - TOOL_MAPPER: Genera el grafo de dependencias del workspace existente.\n\
-                - TOOL_THINK: Razona y planifica. Usa 'comando' para definir el CONTRATO DE ACEPTACIÓN: \"Tarea lista cuando: [X, Y, Z]\".\n\
-                - TOOL_WORKSPACE_MANAGER: Limpia archivos basura antes de empezar.\n\
-                - TOOL_AUDITOR: Lee archivos para entender el contexto antes de planificar.\n\
-                - TOOL_SEARCH: Consulta memoria histórica para recuperar patrones similares.\n\
-                - TOOL_FINISH: Úsalo EXCLUSIVAMENTE si el usuario pidió un \"análisis\", \"revisión\" o pregunta teórica y NO hay que escribir código físico.\n\n\
-                PROTOCOLO DE ARQUITECTURA:\n\
-                  a) CONTRATO DEL SISTEMA: lista TODOS los archivos finales con firmas de funciones exactas\n\
-                  b) GRAFO DE DEPENDENCIAS: quién importa a quién (orden topológico)\n\
-                  c) MICRO-METAS: divide el sistema en unidades de un solo archivo, de menor a mayor dependencia\n\n\
-                Cuando el plan este listo, el sistema te pasara automaticamente al rol EJECUTOR.\n\n\
-                {}{}\n\
-                {}",
-                user_message, live_workspace_context, extra_prompt, current_context, critic_feedback_block, analysis_fast_path, json_schema
+                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\n{}{}{}",
+                user_message, live_workspace_context, extra_prompt, current_context,
+                critic_feedback_block, analysis_fast_path, json_schema
             ),
-
-            // ─────────────────── EXECUTOR ──────────────────────────────────
+            // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "⚙️ [ROL ACTIVO: EJECUTOR DE CÓDIGO]\n\
-                Tu ÚNICO propósito es ESCRIBIR o CORREGIR código físico en disco.\n\
-                PROHIBIDO usar TOOL_TESTER, TOOL_FINISH, o TOOL_ARCHITECT.\n\n\
-                Objetivo Original: {}\n\
-                Archivos físicos actuales: {}\n\
-                {}\n\
-                Historial:\n{}\n\n\
-                HERRAMIENTAS DEL EJECUTOR (solo estas):\n\
-                - TOOL_PROGRAMMER: Escribe/modifica código en disco. ACCIÓN PRINCIPAL.\n\
-                - TOOL_TERMINAL: Instala dependencias o ejecuta scaffolding.\n\
-                - TOOL_BACKGROUND_START/READ/KILL: Gestiona servidores de larga duración.\n\
-                - TOOL_ENV_MANAGER: Instala SOLO binarios del sistema (python, node, git).\n\
-                - TOOL_ASSET_MANAGER: Descarga recursos gráficos necesarios.\n\
-                - TOOL_AUDITOR: Lee archivos existentes antes de modificarlos.\n\n\
-                REGLAS DEL EJECUTOR:\n\
-                1. ANTI-STUB: PROHIBIDO 'pass', 'TODO', 'todo!()', funciones vacías.\n\
-                2. ANTI-ALUCINACIÓN: Si un archivo NO está en la lista, NO existe. Debes crearlo.\n\
-                3. UN ARCHIVO POR TURNO por llamada a TOOL_PROGRAMMER.\n\
-                4. Usa el MISMO NOMBRE exacto del archivo del contexto para TOOL_TERMINAL.\n\n\
-                Tras pasar Anti-Stub y compilar, pasaras automaticamente al CRITICO.\n\n\
-                {}\n\
-                {}",
-                user_message, live_workspace_context, extra_prompt, current_context, critic_feedback_block, json_schema
+                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH.\n\n{}{}",
+                user_message, live_workspace_context, extra_prompt, current_context,
+                critic_feedback_block, json_schema
             ),
-
-            // ─────────────────── CRITIC ────────────────────────────────────
+            // Critic - compressed to <200 tokens
             AgentRole::Critic => format!(
-                "🔬 [ROL ACTIVO: CRÍTICO Y VALIDADOR]\n\
-                Tu ÚNICO propósito es PROBAR y VALIDAR el código del Ejecutor.\n\
-                PROHIBIDO usar TOOL_PROGRAMMER o herramientas de escritura de archivos.\n\n\
-                Objetivo Original: {}\n\
-                Archivos físicos actuales: {}\n\
-                {}\n\
-                Historial:\n{}\n\n\
-                HERRAMIENTAS DEL CRÍTICO (solo estas):\n\
-                - TOOL_TESTER: Ejecuta pruebas automatizadas. ACCIÓN PRINCIPAL si hay test files.\n\
-                - TOOL_TERMINAL: Ejecuta el programa para verificar que funciona en runtime.\n\
-                - TOOL_VISION_EVALUATOR: OBLIGATORIO para GUI/juego. Captura y evalúa calidad.\n\
-                - TOOL_LOGIC_SOLVER: Analiza matemáticamente si sospechas de bucles infinitos.\n\
-                - TOOL_AUDITOR: Revisa código estáticamente antes de ejecutar.\n\
-                - TOOL_LEARN: Si todo pasa, indexa el proyecto en memoria permanente.\n\
-                - TOOL_FINISH: SOLO cuando TODA la validación sea exitosa al 100%.\n\n\
-                REGLAS DEL CRÍTICO:\n\
-                1. Si hay errores: describe el problema detalladamente. El sistema te devuelve al EJECUTOR.\n\
-                2. GUI/juego: TOOL_VISION_EVALUATOR es OBLIGATORIO antes de TOOL_FINISH.\n\
-                3. Todo pasa: usa TOOL_FINISH con resumen completo.\n\
-                4. NUNCA uses TOOL_FINISH si hay errores sin resolver.\n\
-                5. Si TOOL_TESTER paso: ve directo a TOOL_FINISH.\n\n\
-                {}\n\
-                {}",
-                user_message, live_workspace_context, extra_prompt, current_context, contract_block, json_schema
+                "[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos. Solo TOOL_FINISH si todo pasa al 100%%.\n\n{}{}",
+                user_message, live_workspace_context, extra_prompt, current_context,
+                contract_block, json_schema
             ),
         };
 
@@ -1243,6 +1180,26 @@ pub async fn run_agent_loop(
                             current_context.push_str(&format!("Error en Arquitecto: {}\n\n", e));
                             emit_event(&app_handle, step_count, &e, "ERROR");
                         }
+                    }
+                }
+            },
+            "TOOL_VISION_EVALUATOR" => {
+                emit_event(&app_handle, step_count, "[VISION] Capturando pantalla y evaluando calidad visual...", "ACTION");
+                // Sprint 3: Connect evaluate_vision from core::vision
+                let vision_prompt = if !comando.trim().is_empty() {
+                    comando.clone()
+                } else {
+                    format!("Evalua la calidad visual de esta pantalla. Describe: 1) Si la UI se ve correcta, 2) Errores visibles, 3) Elementos faltantes. Objetivo original: {}", user_message)
+                };
+                match crate::core::vision::evaluate_vision(&vision_prompt, false).await {
+                    Ok(vision_result) => {
+                        current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n", vision_result));
+                        emit_event(&app_handle, step_count, &format!("[VISION] Evaluacion completada: {}", &vision_result.chars().take(120).collect::<String>()), "SUCCESS");
+                    },
+                    Err(e) => {
+                        let msg = format!("[VISION] Error al capturar pantalla: {}. Verifica que haya una ventana abierta.", e);
+                        current_context.push_str(&format!("{}\n\n", &msg));
+                        emit_event(&app_handle, step_count, &msg, "ERROR");
                     }
                 }
             },
