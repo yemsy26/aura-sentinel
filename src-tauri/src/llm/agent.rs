@@ -538,7 +538,39 @@ pub async fn run_agent_loop(
         if let Some(arr) = raw_value.get("archivos_a_editar").and_then(|v| v.as_array()) {
             for item in arr {
                 if let Some(s) = item.as_str() {
-                    archivos_vec.push(s.to_string());
+                    // ── Workspace Contamination Sanitizer (Fix 3) ──────────────────────
+                    // The LLM sometimes injects paths from a previous workspace
+                    // (e.g. "proxy-stack-windows") or absolute paths outside the current
+                    // workspace. Normalize them to bare filenames so TOOL_PROGRAMMER
+                    // always writes into the active workspace.
+                    let normalized = {
+                        let p = std::path::Path::new(s);
+                        // If it's an absolute path AND doesn't start with current workspace,
+                        // extract only the filename part.
+                        if p.is_absolute() {
+                            let inside_workspace = s.starts_with(&workspace_path) ||
+                                s.replace('/', "\\").starts_with(&workspace_path) ||
+                                s.replace('\\', "/").starts_with(&workspace_path.replace('\\', "/"));
+                            if inside_workspace {
+                                // Strip workspace prefix → relative path
+                                let stripped = s.trim_start_matches(&workspace_path)
+                                    .trim_start_matches('/')
+                                    .trim_start_matches('\\');
+                                stripped.to_string()
+                            } else {
+                                // Foreign workspace — keep only the filename
+                                p.file_name()
+                                    .map(|f| f.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| s.to_string())
+                            }
+                        } else {
+                            // Already relative — use as-is
+                            s.to_string()
+                        }
+                    };
+                    if !normalized.is_empty() {
+                        archivos_vec.push(normalized);
+                    }
                 }
             }
         }

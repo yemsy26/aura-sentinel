@@ -384,27 +384,49 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
         // 3. `start file:///C:/path/with spaces/file.html`
         //    Windows `start` cannot handle file:// URLs with spaces.
         //    Convert: strip file://, unquote, re-quote properly.
+        // Also handles: `start chrome/firefox/edge <path>` → `start "" "<path>"`
         let trimmed = if trimmed.to_lowercase().starts_with("start") {
-            // Check if it contains file:/// and fix it
-            if trimmed.contains("file:///") {
-                let after_start = trimmed["start".len()..].trim();
-                // Remove optional leading title arg (already quoted like `"" `)
-                let after_start = after_start.trim_start_matches("\"\"").trim();
-                // Strip file:/// prefix
-                let path_raw = after_start.trim_matches('"').trim_matches('\'');
-                let path_raw = if path_raw.starts_with("file:///") {
-                    &path_raw["file:///".len()..]
-                } else if path_raw.starts_with("file://") {
-                    &path_raw["file://".len()..]
+            // 3a. Browser-prefixed open: `start chrome C:\path\file.html`
+            let browsers = ["chrome", "firefox", "edge", "msedge", "iexplore"];
+            let after_start = trimmed["start".len()..].trim();
+            let browser_stripped = browsers.iter().find_map(|b| {
+                let lower = after_start.to_lowercase();
+                if lower.starts_with(b) && after_start.len() > b.len() && after_start.as_bytes().get(b.len()) == Some(&b' ') {
+                    Some(after_start[b.len()..].trim())
                 } else {
-                    path_raw
-                };
-                // Normalize slashes to backslash
-                let path_fixed = path_raw.replace('/', "\\");
-                format!("start \"\" \"{}\"", path_fixed)
+                    None
+                }
+            });
+
+            if let Some(raw_path) = browser_stripped {
+                // Strip file:// if present
+                let raw_path = raw_path.trim_matches('"').trim_matches('\'');
+                let raw_path = if raw_path.starts_with("file:///") { &raw_path[8..] }
+                               else if raw_path.starts_with("file://") { &raw_path[7..] }
+                               else { raw_path };
+                let fixed = raw_path.replace('/', "\\");
+                // Heal underscores→spaces if the exact path doesn't exist
+                let healed = if !std::path::Path::new(&fixed).exists() {
+                    let candidate = fixed.replace('_', " ");
+                    if std::path::Path::new(&candidate).exists() { candidate } else { fixed }
+                } else { fixed };
+                format!("start \"\" \"{}\"", healed)
+            } else if trimmed.contains("file:///") {
+                // 3b. file:/// URL (no browser prefix)
+                let after_start = after_start.trim_start_matches("\"\"").trim();
+                let path_raw = after_start.trim_matches('"').trim_matches('\'');
+                let path_raw = if path_raw.starts_with("file:///") { &path_raw[8..] }
+                               else if path_raw.starts_with("file://") { &path_raw[7..] }
+                               else { path_raw };
+                let fixed = path_raw.replace('/', "\\");
+                // Heal underscores→spaces
+                let healed = if !std::path::Path::new(&fixed).exists() {
+                    let candidate = fixed.replace('_', " ");
+                    if std::path::Path::new(&candidate).exists() { candidate } else { fixed }
+                } else { fixed };
+                format!("start \"\" \"{}\"", healed)
             } else {
-                // `start index.html` with relative path — wrap in quotes if not already
-                let after_start = trimmed["start".len()..].trim();
+                // 3c. Relative path with spaces: `start index.html` or `start some file.html`
                 if !after_start.starts_with('"') && after_start.contains(' ') {
                     format!("start \"\" \"{}\"", after_start)
                 } else {
