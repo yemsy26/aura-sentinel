@@ -208,6 +208,7 @@ pub async fn run_agent_loop(
     };
     let mut mandatory_tools_executed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut forced_next_tool: Option<(String, String)> = None;
+    let mut intercept_consecutive: u32 = 0; 
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
 
     // ── Multi-Agent Role State Machine ─────────────────────────────────────
@@ -229,7 +230,7 @@ pub async fn run_agent_loop(
     let mut acceptance_contract: Option<String> = None;
 
     let mut step_count = 1;
-    let max_steps = 50000;
+    let max_steps = 50;
     let mut json_error_count = 0;
 
     // ── Session Journal ────────────────────────────────────────
@@ -247,6 +248,26 @@ pub async fn run_agent_loop(
     let mut task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::GeneralCode, language: None };
     
     while step_count <= max_steps {
+        // ── EMERGENCY EXIT: step budget exhausted ────────────────────────
+        if step_count == max_steps {
+            let emergency_msg = format!(
+                "[SISTEMA EMERGENCIA] El agente ha consumido {} pasos sin terminar la tarea. \
+                Esto indica un bucle irrecuperable. Se fuerza terminación automática.",
+                max_steps
+            );
+            emit_event(&app_handle, step_count, &emergency_msg, "FATAL");
+            let final_res = FinalResponse {
+                status: "FINISH".to_string(),
+                respuesta_conversacional: format!(
+                    "La tarea fue interrumpida tras {} pasos sin converger. \
+                    Los archivos creados hasta ahora están en el workspace. \
+                    Por favor revisa manualmente el resultado y reintenta con instrucciones más simples.",
+                    max_steps
+                ),
+            };
+            return Ok(serde_json::to_string(&final_res).unwrap());
+        }
+
         // ── PESP: Inject micro-meta progress status into context ─────────────
         // Tells the LLM exactly where it is in the global project plan every turn.
         if !journal.micro_metas.is_empty() {
@@ -473,14 +494,36 @@ pub async fn run_agent_loop(
         // validate its decision against the forced tool constraint.
         if let Some((forced, override_msg)) = &forced_override {
             if tool != *forced {
-                let error_msg = format!("[SISTEMA INTERCEPTO] Error Lógico: El sistema te ordenó explícitamente usar la herramienta '{}' por la siguiente razón: '{}'. Sin embargo, tú elegiste '{}'. Corrige tu elección inmediatamente y usa '{}'.", forced, override_msg, tool, forced);
+                intercept_consecutive += 1;
+                let release = intercept_consecutive >= 3;
+                let extra = if release {
+                    "MÁXIMO ALCANZADO: orden cancelada, usa la herramienta que prefieras."
+                } else {
+                    "Corrige tu elección y usa la herramienta indicada."
+                };
+                let error_msg = format!(
+                    "[INTERCEPT {}/3] Se te ordenó usar '{}' (razón: '{}'). Elegiste '{}'. {}",
+                    intercept_consecutive, forced, override_msg, tool, extra
+                );
                 current_context.push_str(&format!("{}\n\n", error_msg));
-                emit_event(&app_handle, step_count, &format!("[INTERCEPT] LLM desobedeció orden de usar {}", forced), "WARNING");
-                
-                // Restauramos el forced_next_tool para el próximo ciclo
-                forced_next_tool = forced_override.clone();
+                emit_event(&app_handle, step_count,
+                    &format!("[INTERCEPT {}/3] LLM desobedeció orden de usar {}", intercept_consecutive, forced),
+                    "WARNING");
+
+                if release {
+                    // Give up forcing — let the agent choose freely
+                    forced_next_tool = None;
+                    intercept_consecutive = 0;
+                    emit_event(&app_handle, step_count,
+                        "[INTERCEPT] Orden cancelada tras 3 intentos. Agente libre.", "WARNING");
+                } else {
+                    forced_next_tool = forced_override.clone();
+                }
                 step_count += 1;
                 continue;
+            } else {
+                // LLM obeyed — reset counter
+                intercept_consecutive = 0;
             }
         }
 
