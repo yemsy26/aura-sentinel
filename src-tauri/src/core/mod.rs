@@ -489,6 +489,117 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
             trimmed
         };
 
+        // 5. Prose/sentence detector — reject natural-language strings in the comando field.
+        //    The LLM sometimes writes instructions like "Para verificar los archivos, ejecuta 'dir'"
+        //    instead of a real command. Detect this and return an empty string so the caller
+        //    triggers the empty-command handler (which has its own guidance loop).
+        let trimmed = {
+            let first_word = trimmed.split_whitespace().next().unwrap_or("").to_lowercase();
+            // Spanish/English prose markers that are never valid shell commands
+            let prose_starters = [
+                "para", "por", "el", "la", "los", "las", "se", "si", "en",
+                "ejecuta", "verifica", "abre", "asegurate", "navega",
+                "hemos", "he", "ahora", "luego", "primero", "luego",
+                "please", "run", "note", "make", "ensure", "check",
+            ];
+            // Also reject if the string contains `: ` (looks like "command: explanation")
+            let has_colon_explanation = trimmed.contains(": ") && trimmed.len() > 40;
+            if prose_starters.contains(&first_word.as_str()) || has_colon_explanation {
+                // Try to extract a real command from inside quotes or after a colon
+                let extracted = if let Some(after_colon) = trimmed.split("ejecuta:").nth(1)
+                    .or_else(|| trimmed.split("command:").nth(1))
+                    .or_else(|| trimmed.split("run:").nth(1))
+                {
+                    // Extract first quoted or unquoted token after the colon
+                    let candidate = after_colon.trim().trim_matches(|c| c == '\'' || c == '"');
+                    let first_cmd = candidate.split_whitespace().next().unwrap_or("");
+                    if first_cmd.len() > 1 { first_cmd.to_string() } else { String::new() }
+                } else {
+                    String::new()
+                };
+                eprintln!("[PROSE_DETECTOR] Rejected prose comando: '{}' -> extracted: '{}'", &trimmed[..trimmed.len().min(60)], extracted);
+                extracted
+            } else {
+                trimmed
+            }
+        };
+
+        // 6. Path-splitter healer — detects when the LLM replaced spaces with backslashes
+        //    in a Windows path, e.g. `explorer carpeta\de\prueba\10` instead of
+        //    `explorer "carpeta de prueba 10"`. Heals by trying space-joined variants.
+        let trimmed = {
+            // Only applies to commands that open files/folders: explorer, start, code, notepad, etc.
+            let openers = ["explorer", "start", "code", "notepad", "chrome", "firefox"];
+            let first_word = trimmed.split_whitespace().next().unwrap_or("").to_lowercase();
+            if openers.contains(&first_word.as_str()) {
+                // Extract the path argument (everything after the first word)
+                let rest = trimmed[first_word.len()..].trim().trim_matches('"').trim_matches('\'');
+                // Check if the path doesn't exist but a space-joined version does
+                // Pattern: detect sequences like `\de\`, `\preuba\`, `\de ` etc.
+                // Strategy: try converting each `\word\` that's a short lowercase word (likely a space) back to ` word `
+                let needs_healing = rest.contains('\\') && !std::path::Path::new(rest).exists() && !rest.starts_with('"');
+                if needs_healing {
+                    // Attempt 1: replace ALL backslashes with spaces and see if a variant exists
+                    let space_path = rest.replace('\\', " ");
+                    // Now try to find a valid prefix that is a real absolute Windows path
+                    // e.g. "C: Users yemsy OneDrive..." → doesn't help
+                    // Attempt 2: Split on `\` and for each token that is a short (<=4 char) lowercase word, 
+                    // try merging with the previous token with a space.
+                    let parts: Vec<&str> = rest.split('\\').collect();
+                    let mut healed = String::new();
+                    let mut i = 0;
+                    while i < parts.len() {
+                        let part = parts[i];
+                        // If it looks like a drive root (C:), keep as path separator
+                        if part.ends_with(':') || part.is_empty() {
+                            if !healed.is_empty() { healed.push('\\'); }
+                            healed.push_str(part);
+                            i += 1;
+                        } else if i + 1 < parts.len() {
+                            // Check if concatenating current + space + next gives a real directory
+                            let merged = format!("{} {}", part, parts[i + 1]);
+                            let candidate_path = if healed.is_empty() {
+                                merged.clone()
+                            } else {
+                                format!("{}\\{}", healed, merged)
+                            };
+                            if std::path::Path::new(&candidate_path).exists() {
+                                if !healed.is_empty() { healed.push('\\'); }
+                                healed.push_str(&merged);
+                                i += 2; // consumed both parts
+                            } else {
+                                if !healed.is_empty() { healed.push('\\'); }
+                                healed.push_str(part);
+                                i += 1;
+                            }
+                        } else {
+                            if !healed.is_empty() { healed.push('\\'); }
+                            healed.push_str(part);
+                            i += 1;
+                        }
+                    }
+                    // Prefer healed path if the final candidate exists, otherwise use space_path
+                    let final_path = if std::path::Path::new(&healed).exists() {
+                        healed
+                    } else if std::path::Path::new(&space_path).exists() {
+                        space_path
+                    } else {
+                        rest.to_string()
+                    };
+                    if final_path != rest {
+                        eprintln!("[PATH_SPLIT_HEAL] '{}' -> '{}'", rest, final_path);
+                        format!("{} \"{}\"", first_word, final_path)
+                    } else {
+                        trimmed
+                    }
+                } else {
+                    trimmed
+                }
+            } else {
+                trimmed
+            }
+        };
+
         trimmed
     };
     let command = &command;

@@ -353,18 +353,23 @@ pub async fn run_agent_loop(
         // ── Acceptance Contract injection ────────────────────────────────────────────────
         let contract_block = acceptance_contract.as_deref().map(|c| format!("[CONTRATO DE ACEPTACION DEL PLANIFICADOR]\n{}\n", c)).unwrap_or_default();
 
-        let json_schema = "Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
-            {\n\
-              \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
+        let json_schema = format!("Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON (sin markdown, sin texto extra):\n\
+            {{\n\
+              \"checklist_mental\": \"<tareas cumplidas vs faltantes>\",\n\
               \"herramienta\": \"<NOMBRE_HERRAMIENTA>\",\n\
-              \"pensamiento\": \"Breve razonamiento lógico de tu decisión actual\",\n\
-              \"comando\": \"<comando_a_ejecutar o null>\",\n\
-              \"task_id\": \"<id_de_la_tarea o null>\",\n\
-              \"url_a_investigar\": \"<url o null>\",\n\
-              \"archivos_a_editar\": [\"ruta/archivo1\", \"ruta/archivo2\"],\n\
-              \"ast_nodes\": [{\"intent\": \"<código>\", \"parent_id\": 0, \"opcode\": 2}],\n\
-              \"respuesta_conversacional\": \"<respuesta al usuario o null>\"\n\
-            }";
+              \"pensamiento\": \"Razonamiento lógico de tu decisión\",\n\
+              \"comando\": \"<COMANDO_REAL o null>\",\n\
+              \"task_id\": null,\n\
+              \"url_a_investigar\": null,\n\
+              \"archivos_a_editar\": [\"index.html\", \"styles.css\", \"script.js\"],\n\
+              \"ast_nodes\": [{{\"intent\": \"<código>\", \"parent_id\": 0, \"opcode\": 2}}],\n\
+              \"respuesta_conversacional\": \"<respuesta o null>\"\n\
+            }}\n\
+            REGLAS CRITICAS DEL JSON:\n\
+            1. 'comando' = UN SOLO comando de shell real. NUNCA prosa/descripción. Ejemplos: 'dir', 'start index.html', 'node app.js'.\n\
+            2. 'archivos_a_editar' = SOLO nombres de archivo relativos (sin rutas absolutas). Ej: ['index.html'] NO ['C:\\Users\\...\\index.html'].\n\
+            3. El workspace actual es: {ws}. NUNCA uses rutas de proyectos anteriores (proxy-stack-windows, etc).",
+            ws = workspace_path);
 
         let agent_prompt = match current_role {
             // Planner - compressed to <200 tokens
@@ -385,6 +390,29 @@ pub async fn run_agent_loop(
                 user_message, live_workspace_context, extra_prompt, current_context,
                 contract_block, json_schema
             ),
+        };
+
+        // ── Context Sanitizer: strip any reference to foreign workspaces ────────
+        // Prevents the LLM from re-learning stale workspace paths from its own
+        // history (e.g. "proxy-stack-windows" from a previous session).
+        let mut current_context = {
+            let stale_markers = [
+                "proxy-stack-windows",
+                "proxy-stack",
+                "\\proxy-",
+                "/proxy-",
+            ];
+            let mut ctx = current_context.clone();
+            for marker in &stale_markers {
+                if ctx.contains(marker) {
+                    // Remove entire lines that contain the marker
+                    ctx = ctx.lines()
+                        .filter(|line| !line.contains(marker))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                }
+            }
+            ctx
         };
 
         let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::Orchestrator, language: None }, &available_models, &app_handle, 0).await
