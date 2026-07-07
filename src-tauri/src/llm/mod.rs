@@ -439,6 +439,27 @@ pub async fn process_user_prompt(mut user_message: String, workspace_path: Strin
             return Ok(response.to_string());
         }
 
+        // ── NEEDS_CLARIFICATION: El agente pregunta antes de actuar ──────────
+        if intent_type == "NEEDS_CLARIFICATION" {
+            let question = nlu_json.get("clarification_question")
+                .and_then(|v| v.as_str())
+                .unwrap_or("¿Puedes darme más detalles sobre lo que necesitas? Quiero asegurarme de entenderte bien antes de empezar.");
+            agent::emit_event(&app_handle, 0, "[NLU] Mandato ambiguo — solicitando clarificación al usuario.", "WARNING");
+            
+            journal.chat_history.push(format!("Usuario: {}", user_message));
+            journal.chat_history.push(format!("Aura: {}", question));
+            if journal.chat_history.len() > 6 {
+                journal.chat_history.drain(0..journal.chat_history.len() - 6);
+            }
+            crate::core::session_journal::save_journal(&workspace_path, &journal);
+
+            let response = serde_json::json!({
+                "status": "FINISH",
+                "respuesta_conversacional": question
+            });
+            return Ok(response.to_string());
+        }
+
         if intent_type == "FAST_TRACK_OS" {
             if let Some(cmd) = nlu_json.get("os_command").and_then(|v| v.as_str()) {
                 if !cmd.is_empty() && cmd != "null" {
@@ -471,7 +492,11 @@ pub async fn process_user_prompt(mut user_message: String, workspace_path: Strin
         }
 
         let technical_intent = nlu_json.get("technical_translation").and_then(|v| v.as_str()).unwrap_or(&user_message);
-        enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: {}", user_message, technical_intent);
+        // Include both the original (for user reference) and the cleaned technical intent
+        enriched_message = format!(
+            "Petición Original del Usuario: {}\n\nGuía de Traducción Técnica (generada por NLU): {}",
+            user_message, technical_intent
+        );
         } // end else (no keyword intercept)
     }
 

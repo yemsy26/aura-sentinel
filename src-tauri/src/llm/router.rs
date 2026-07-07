@@ -6,6 +6,7 @@ use tokio::process::Command;
 use tauri::AppHandle;
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum TaskType {
     FastTrack,
     GeneralCode,
