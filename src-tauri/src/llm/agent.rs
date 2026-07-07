@@ -43,6 +43,51 @@ pub struct FinalResponse {
     pub respuesta_conversacional: String,
 }
 
+/// ── Multi-Agent Role FSM ──────────────────────────────────────────────────
+/// Aura Sentinel operates in a three-phase cycle:
+///   Planner  → designs the architecture in RAM (TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK)
+///   Executor → writes physical code to disk (TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ENV_MANAGER)
+///   Critic   → validates correctness (TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH)
+#[derive(Debug, Clone, PartialEq)]
+enum AgentRole {
+    Planner,
+    Executor,
+    Critic,
+}
+
+/// ── Mission Type Classifier ───────────────────────────────────────────────
+/// Classifies the user intent BEFORE entering the LLM loop.
+/// ANALYSIS tasks never enter the Executor — they resolve via TOOL_FINISH from the Planner.
+#[derive(Debug, Clone, PartialEq)]
+enum MissionType {
+    Analysis,      // "analiza", "describe", "explica", "qué hay"
+    Construction,  // "crea", "implementa", "build"
+    Refactor,      // "mejora", "optimiza", "refactoriza"
+    Debug,         // "arregla", "bug", "error", "fix"
+}
+
+fn classify_mission(msg: &str) -> MissionType {
+    let m = msg.to_lowercase();
+    let analysis = ["analiza", "analisa", "analice", "analisis", "que hay", "qué hay", "que sistema",
+                    "qué sistema", "describe", "explica", "muéstrame", "muestrame", "que tiene",
+                    "qué tiene", "que contiene", "qué contiene", "inspect", "analyze", "show me",
+                    "que es", "qué es", "que tipo", "qué tipo", "que hace", "qué hace",
+                    "analisa este", "analiza este", "revisa este"];
+    let debug = ["arregla", "corrige", "bug", "falla", "fallo", "fix", "debug", "broken",
+                 "no funciona", "no compila", "sale error", "hay un error"];
+    let refactor = ["refactoriza", "refactorizar", "mejora", "optimiza", "limpia el", "reorganiza", "simplifica"];
+
+    if analysis.iter().any(|w| m.contains(w)) { return MissionType::Analysis; }
+    if debug.iter().any(|w| m.contains(w))    { return MissionType::Debug; }
+    if refactor.iter().any(|w| m.contains(w)) { return MissionType::Refactor; }
+    MissionType::Construction
+}
+
+/// Formats the acceptance contract from the Planner's TOOL_THINK 'comando' field.
+fn formato_contrato(cmd: &str) -> String {
+    format!("CRITERIOS DE EXITO DEFINIDOS POR EL PLANIFICADOR:\n{}", cmd)
+}
+
 pub const ORCHESTRATOR_MODEL: &str = "llama3.1:8b";
 #[allow(dead_code)]
 pub const PROGRAMMER_MODEL: &str = "qwen2.5-coder:7b";
@@ -145,8 +190,29 @@ pub async fn run_agent_loop(
     let mut programmer_cooldown_hits = 0;
     let mut no_tests_consecutive = 0u32;
     let mut think_consecutive = 0u32;
+    let mut auditor_consecutive = 0u32;
+    let mut learn_consecutive = 0u32;
     let mut forced_next_tool: Option<(String, String)> = None;
-    let agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
+    let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
+
+    // ── Multi-Agent Role State Machine ─────────────────────────────────────
+    let mut current_role = AgentRole::Planner;
+    let mut critic_feedback: Option<String> = None;
+
+    // ── Mission Type Classifier ─────────────────────────────────────────────
+    let mission_type = classify_mission(&user_message);
+    let mission_label = match &mission_type {
+        MissionType::Analysis     => "🔍 ANÁLISIS",
+        MissionType::Construction => "🏗️ CONSTRUCCIÓN",
+        MissionType::Refactor     => "♻️ REFACTORING",
+        MissionType::Debug        => "🐛 DEBUG",
+    };
+
+    // ── Acceptance Contract ─────────────────────────────────────────────────
+    // Defined by the Planner when it calls TOOL_THINK.
+    // The Critic uses this to know exactly when the task is complete.
+    let mut acceptance_contract: Option<String> = None;
+
     let mut step_count = 1;
     let max_steps = 50000;
     let mut json_error_count = 0;
@@ -161,6 +227,7 @@ pub async fn run_agent_loop(
     journal.archivos_tocados.clear();
     crate::core::session_journal::save_journal(&workspace_path, &journal);
     emit_event(&app_handle, 0, "[DIARIO] Misión registrada en diario de sesión.", "INFO");
+    emit_event(&app_handle, 0, &format!("[MISIÓN] Tipo clasificado: {} — El agente operará en modo apropiado.", mission_label), "INFO");
     
     let mut task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::GeneralCode, language: None };
     
@@ -192,6 +259,20 @@ pub async fn run_agent_loop(
             let existing = current_context.clone();
             current_context = format!("{}{}", pesp_status, existing);
         }
+        // ── Context Compression: every 10 steps, summarize history to prevent saturation ──
+        if step_count > 1 && step_count % 10 == 1 && current_context.len() > 4000 {
+            emit_event(&app_handle, step_count, "[MEMORIA] Comprimiendo historial para liberar ventana de contexto...", "INFO");
+            let compress_prompt = format!(
+                "Resume en maximo 5 bullet points el siguiente historial. Conserva SOLO: objetivo original, archivos creados/modificados, errores criticos pendientes, ultimo estado. Responde SOLO con el resumen.\n\nHISTORIAL:\n{}",
+                &current_context[..current_context.len().min(8000)]
+            );
+            if let Ok(summary) = call_ollama(ORCHESTRATOR_MODEL, &compress_prompt).await {
+                let compressed = format!("[CONTEXTO COMPRIMIDO EN PASO {}]\n{}\n\n", step_count, summary);
+                current_context = compressed;
+                emit_event(&app_handle, step_count, "[MEMORIA] Contexto comprimido exitosamente.", "SUCCESS");
+            }
+        }
+
         let mut forced_override: Option<(String, String)> = None;
         if let Some((forced, override_msg)) = forced_next_tool.take() {
             let intercept_log = format!("[SISTEMA INTERCEPTO] En el turno anterior se decidió forzarte a usar: {}. Razón: {}", forced, override_msg);
@@ -237,88 +318,32 @@ pub async fn run_agent_loop(
                 current_context = format!("...[HISTORIAL RECORTADO]...\n{}", &current_context[offset..]);
             }
         }
+        // ── Critic → Executor feedback block ──────────────────────────────────
+        let critic_feedback_block = if let Some(ref fb) = critic_feedback {
+            format!("\n\n[REPORTE DEL CRÍTICO — DEBES CORREGIR ESTOS PROBLEMAS ANTES DE CONTINUAR]:\n{}\n", fb)
+        } else {
+            String::new()
+        };
 
-        let agent_prompt = format!(
-            "Eres el Cerebro Planificador de Aura-Sentinel. Eres un ingeniero políglota. Actualmente soportas [Python, JS/TS, Rust, Go, C++]. Antes de programar, detecta el lenguaje del proyecto y ajusta tus herramientas de validación al estándar del lenguaje detectado.\n\
-            Funcionarás en un bucle autónomo. Analiza el Objetivo, el Contexto y el Historial para decidir UNA ÚNICA HERRAMIENTA a utilizar en este turno.\n\
-            Objetivo Original: {}\n\
-            Contexto del Proyecto (Archivos Actuales Reales FÍSICOS en el disco): {}\n\
-            {}\n\
-            REGLA DE REALIDAD FÍSICA: La lista de archivos de arriba es la ÚNICA VERDAD. Si un archivo NO aparece en esa lista, significa que NO EXISTE y debes crearlo (ya sea escribiéndolo a mano con TOOL_PROGRAMMER, o generándolo con TOOL_TERMINAL usando comandos como npx, cargo, pip, etc). ¡No asumas que ya existe!\n\
-            Historial de Pasos Ejecutados Hasta Ahora:\n{}\n\n\
-            REGLA DE ORO: Si ya ejecutaste todas las acciones que pidió el usuario en el Objetivo Original, tu ÚNICA opción válida es usar 'TOOL_FINISH'. NO repitas pasos ni inventes problemas que no existen.\n\n\
-            PROTOCOLO DE INGENIERÍA PROFESIONAL (PESP) — OBLIGATORIO PARA PROYECTOS COMPLEJOS:\n\
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
-            SI el objetivo del usuario requiere MÚLTIPLES ARCHIVOS, MÓDULOS o COMPONENTES (ej: un juego, una API, un sistema con UI+lógica+datos):\n\
-            PASO 0 OBLIGATORIO — TOOL_THINK: Antes de cualquier TOOL_PROGRAMMER, debes declarar:\n\
-              a) CONTRATO DEL SISTEMA: lista TODOS los archivos del sistema final con sus firmas de funciones exactas\n\
-              b) GRAFO DE DEPENDENCIAS: quién importa a quién\n\
-              c) MICRO-METAS en orden de dependencias (los módulos más fundamentales primero)\n\
-            REGLA DE MICRO-META: Cada TOOL_PROGRAMMER debe escribir UN SOLO archivo completamente (o 2 si son triviales y relacionados).\n\
-            REGLA ANTI-STUB ABSOLUTA: PROHIBIDO escribir código con funciones vacías. Ejemplos de lo que está PROHIBIDO:\n\
-              - Python: 'pass' como cuerpo de función o método\n\
-              - Python: '# TODO', '# implement', '# Dibujar el tablero' seguido de pass\n\
-              - Python: 'raise NotImplementedError'\n\
-              - Rust: 'todo!()', 'unimplemented!()'\n\
-              - JS/TS: 'throw new Error(\"not implemented\")'\n\
-            CADA FUNCIÓN DEBE TENER LÓGICA REAL. Si no sabes cómo implementarla, pregunta al usuario ANTES de escribir.\n\
-            REGLA ANTI-ALUCINACIÓN ESTRICTA: ¡NO ALUCINES! Nunca asumas que un archivo o backend ha sido creado a menos que VEAS en tu historial que tú mismo usaste explícitamente 'TOOL_PROGRAMMER' o 'TOOL_TERMINAL' (ej. npx/cargo) para crearlo. Planearlo en tu 'Checklist Mental' o usar 'TOOL_THINK' NO crea el código. ¡Debes programarlo físicamente!\n\
-            [EJEMPLO DE CHECKLIST MENTAL CORRECTO]:\n\
-              Paso 1: TOOL_THINK - Analizar dependencias de la tarea.\n\
-              Paso 2: TOOL_PROGRAMMER - Crear el archivo_A del modelo de datos.\n\
-              Paso 3: TOOL_TERMINAL - Ejecutar archivo_A para probar sintaxis.\n\
-              Paso 4: TOOL_PROGRAMMER - Crear el archivo_B de la lógica de negocio.\n\
-              Paso 5: TOOL_TERMINAL - Probar todo el sistema.\n\
-              Paso 6: TOOL_FINISH - Terminar.\n\
-            ¡NUNCA TE SALTES PASOS Y NUNCA USES PLACEHOLDERS!\n\
-            REGLA DE VERIFICACIÓN DE INTEGRACIÓN: Después de escribir cada archivo, usa TOOL_TERMINAL para verificar que se importa sin errores.\n\
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
-            Catálogo de Herramientas (Elige SOLO UNA):\n\
-            1. 'TOOL_TERMINAL': Para comandos síncronos y de un solo uso (npm install, pip, cargo build). Rellena 'comando' y 'task_id'.\n\
-            2. 'TOOL_BACKGROUND_START': Para arrancar servidores que correrán infinitamente en segundo plano (python -m http.server, npm run dev). Rellena 'comando' y 'task_id'.\n\
-            3. 'TOOL_BACKGROUND_READ': Para leer los logs en vivo de un servidor asíncrono. Rellena 'task_id'.\n\
-            4. 'TOOL_BACKGROUND_KILL': Para apagar un servidor asíncrono. Rellena 'task_id'.\n\
-            5. 'TOOL_PROGRAMMER': Para escribir o modificar código fuente físico en el disco. Rellena 'archivos_a_editar' con la lista de archivos.\n\
-            6. 'TOOL_AUDITOR': Para auditar código estático o leer archivos locales si no sabes cómo están hechos. Rellena 'archivos_a_editar'.\n\
-            7. 'TOOL_FINISH': Cuando el objetivo principal se haya completado con éxito, o si es imposible continuar. Rellena 'respuesta_conversacional' con la respuesta final para el usuario. ¡USALA SIEMPRE QUE HAYAS TERMINADO!\n\
-            8. 'TOOL_ARCHITECT': Analiza la estructura y dependencias. No rellena argumentos. REGLA: Después de usarla, DEBES usar TOOL_FINISH obligatoriamente para resumirle los hallazgos al usuario.\n\
-            9. 'TOOL_TESTER': Ejecuta suites de pruebas automatizadas SOLO si el proyecto tiene archivos de test (test_*.py, *.test.js, etc.) o configuración de test (pytest.ini, jest.config.js). ¡PELIGRO! Esta herramienta NO ESCRIBE ni implementa pruebas. SOLO LAS EJECUTA. Para scripts simples SIN archivos de test, usa TOOL_TERMINAL en su lugar. Para escribir o arreglar un test, usa TOOL_PROGRAMMER.\n\
-            10. 'TOOL_LEARN': Indexa el conocimiento de un proyecto exitoso en la memoria permanente de Aura. Úsala si el proyecto funciona o después de un TOOL_TESTER exitoso. No requiere argumentos.\n\
-            11. 'TOOL_SEARCH': Consulta explícitamente la memoria histórica para buscar cómo resolviste problemas similares antes. Rellena 'url_a_investigar' con el término de búsqueda.\n\
-            12. 'TOOL_ENV_MANAGER': SOLO para instalar programas binarios base del Sistema Operativo (ej. python, node, git). PROHIBIDO usar para paquetes de lenguajes (pip/npm). Rellena 'comando' con el nombre del binario.
-            14. 'TOOL_LOGIC_SOLVER': Solver Z3 de verificación matemática para encontrar bucles infinitos o dead code. ÚSALO SOLO si has fallado repetidamente al arreglar un código. NUNCA asumas que el usuario te pidió usar esto a menos que haya un error lógico persistente. No requiere argumentos.
-            15. 'TOOL_WORKSPACE_MANAGER': Para borrar permanentemente archivos basura o temporales físicos del proyecto y mantener todo impecable. Rellena 'archivos_a_editar' con los archivos a borrar.
-            16. 'TOOL_THINK': Para razonar internamente, pausar y planificar el siguiente paso sin afectar el entorno. Rellena 'comando' con tu pensamiento.\n\
-            18. 'TOOL_AST_INJECT': [ZERO-TRACE ARCHITECTURE] Inyecta un nodo AST (código, lógica, abstracción) directamente en la memoria RAM (AgentWorkspace) sin tocar el disco físico. Úsala para construir sistemas en memoria cuando se requiera O(1) alloc. Rellena 'ast_nodes' con los nodos a inyectar.\n\
-            17. 'TOOL_MAPPER': Analiza ESTÁTICAMENTE las dependencias del workspace y genera un GRAFO DE CONOCIMIENTO. Úsalo OBLIGATORIAMENTE al inicio de cualquier proyecto con 3+ archivos. Devuelve: (a) orden de escritura topológico — en qué orden exacto debes crear los archivos para que sus imports funcionen desde el primer momento; (b) nodos críticos — módulos compartidos que deben implementarse PRIMERO; (c) dependencias circulares — ciclos a evitar. No requiere argumentos. REGLA: Después de usar TOOL_MAPPER, usa TOOL_THINK para elaborar el plan de implementación basado en el grafo antes de programar nada.\n\
-            Antes de tomar tu decisión, DEBES rellenar el campo 'checklist_mental'. En este campo, enumera mentalmente todos los pasos que pidió el usuario, qué pasos ya se han cumplido en el historial, y cuál es el paso exacto que falta ahora mismo. \n\
-            REGLA DE ORO DE FINALIZACIÓN: NUNCA puedes elegir la herramienta 'TOOL_FINISH' a menos que tu 'checklist_mental' confirme explícitamente que el 100% de los verbos solicitados (ej. 'crea', 'ejecuta', 'prueba', 'valida') se han ejecutado FÍSICAMENTE en el historial con ÉXITO. Si el usuario pidió 'ejecuta X', y X falló o no se ejecutó, ESTÁ ESTRICTAMENTE PROHIBIDO USAR TOOL_FINISH. En su lugar, debes usar TOOL_PROGRAMMER para arreglar el error y luego TOOL_TERMINAL para volver a probar. NUNCA te rindas.\n\n\
-            MANUAL DE OPERACIONES ANTIGRAVITY (DOMAIN KNOWLEDGE):
-            - Omitir Hallucinaciones: NUNCA asumas que el usuario te pidió realizar una acción solo porque leíste una descripción en la lista de herramientas o en este manual. Cíñete ESTRICTAMENTE al 'Objetivo Original'.
-            REGLAS ESTRICTAS:
-            1. CRÍTICO: Escribe los scripts y archivos SIEMPRE en la RAÍZ del proyecto a menos que el usuario especifique UNA SUBCARPETA EXPLÍCITA. Para tareas simples de UN SOLO ARCHIVO (scraper.py, script.py, etc.) NUNCA crees subcarpetas (como 'scraper_project/'). El archivo va DIRECTAMENTE en la raíz, sin carpetas contenedoras.
-            2. Cuando uses TOOL_TERMINAL para ejecutar un script, DEBES usar el MISMO NOMBRE exacto del archivo que aparece en el Contexto del Proyecto arriba. NUNCA adivines ni inventes nombres de archivos. Lee el Contexto.
-            3. Analiza con cuidado si ya usaste una herramienta y falló. No la repitas ciegamente.
-            4. Si el historial dice que la tarea ya terminó, ignóralo si aún no has escrito y probado el código solicitado.
-            - Resolución de Errores: Si un comando falla, lee los logs o la consola, usa 'TOOL_PROGRAMMER' para arreglar el código, y vuelve a intentar.
-            - Auto-Testing: Si el proyecto es un script simple, ejecuta el script directamente en consola usando TOOL_TERMINAL. Si falla, usa TOOL_PROGRAMMER para repararlo.
-            - Instalación de Librerías vs Binarios (CRÍTICO): Usa 'TOOL_TERMINAL' para instalar librerías de tu lenguaje (ej. 'pip install paquete_python', 'npm install paquete_node'). Usa 'TOOL_ENV_MANAGER' EXCLUSIVAMENTE para instalar binarios del sistema base (ej. 'python', 'node', 'git') si la consola dice 'is not recognized'. ¡ESTÁ PROHIBIDO usar TOOL_ENV_MANAGER para paquetes de pip o npm!
-            - Auto-Healing (Pre-Flight): Si un comando falla por 'is not recognized', usa TOOL_ENV_MANAGER (si es binario base) o TOOL_TERMINAL (si es paquete de código de pip/npm). ¡NUNCA uses TOOL_ENV_MANAGER para errores de código (usa TOOL_PROGRAMMER)!
+        // ── Analysis Fast Path: inject into Planner context ─────────────────────────────
+        let analysis_fast_path = if mission_type == MissionType::Analysis {
+            "\n\n⚡ [MODO ANÁLISIS PURO ACTIVADO]: El usuario pidió SOLO un análisis. \
+            NO debes crear archivos nuevos. NO debes ir al Ejecutor. \
+            Tu único flujo permitido es: TOOL_AUDITOR → TOOL_MAPPER → TOOL_THINK → TOOL_FINISH. \
+            Cuando tengas suficiente información, usa TOOL_FINISH con un análisis completo del sistema.".to_string()
+        } else {
+            String::new()
+        };
 
-            REGLAS DE ESTADO (STATE MACHINE):
-            - DESPUÉS de usar TOOL_PROGRAMMER con éxito, es OBLIGATORIO usar TOOL_TERMINAL o TOOL_TESTER para ejecutar y validar tus cambios. ADEMÁS, DEBES IGNORAR completamente cualquier error previo en el historial, ya que el código acaba de ser reparado.\n\
-            - SI TOOL_TESTER FALLA, es OBLIGATORIO usar TOOL_PROGRAMMER en el siguiente paso para arreglar el código. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests fallan.\n\
-            - SI TOOL_TESTER TIENE ÉXITO, estás OBLIGADO a usar TOOL_FINISH en el siguiente paso. ESTÁ PROHIBIDO usar TOOL_TESTER dos veces seguidas si los tests pasaron.\n\
-            - SI TOOL_TERMINAL TIENE ÉXITO y su salida demuestra que cumpliste el último objetivo del usuario, es OBLIGATORIO usar TOOL_FINISH en el siguiente paso. ¡PROHIBIDO repetir el mismo comando de TOOL_TERMINAL si ya funcionó!\n\
-            - SI TOOL_TERMINAL falla constantemente, NO uses TOOL_FINISH. Debes usar TOOL_PROGRAMMER para investigar por qué falla, agregar logs de depuración (print), y volver a intentar con TOOL_TERMINAL.\n\
-            - SI USAS TOOL_AST_INJECT, está ESTRICTAMENTE PROHIBIDO usar TOOL_FINISH inmediatamente después. Debes continuar tu proceso cognitivo usando TOOL_MAPPER, TOOL_PROGRAMMER o TOOL_TESTER para materializar la arquitectura pensada en código físico.\n\
-            - SI TOOL_ENV_MANAGER TIENE ÉXITO, NO PUEDES volver a usar TOOL_ENV_MANAGER. Debes continuar tu tarea con TOOL_TERMINAL, TOOL_PROGRAMMER o TOOL_TESTER.\n\
-            - SI TOOL_ENV_MANAGER FALLA, es OBLIGATORIO usar TOOL_FINISH en el siguiente paso para pedir intervención manual.\n\
-            - REGLA DE VERIFICACIÓN OBLIGATORIA: Si el mensaje original del usuario contiene palabras como 'prueba', 'pruébalo', 'ejecuta', 'ejecutalo', 'verifica', 'corre', 'abre', 'test', 'comprueba' o 'demuestra', entonces TOOL_TERMINAL ES OBLIGATORIO antes de TOOL_FINISH. No puedes declarar el trabajo terminado sin haber ejecutado físicamente el resultado y comprobado que no produce errores. Si el comando falla, debes corregirlo con TOOL_PROGRAMMER y volver a ejecutar.\n\
-            - REGLA ZERO-TRACE (PENSAMIENTO AUTÓNOMO): Si el objetivo del usuario implica crear un sistema nuevo, una aplicación, o resolver una arquitectura compleja desde cero, es OBLIGATORIO que tu PRIMER paso sea usar TOOL_AST_INJECT para planificar la estructura de los componentes lógicos en RAM. Nunca empieces usando TOOL_PROGRAMMER sin haber estructurado primero el sistema en la Memoria Lógica.\n\
-            - REGLA DE BORRADO: Si el usuario pide 'borra', 'elimina', 'borra el archivo X' como parte de la tarea, debes usar TOOL_WORKSPACE_MANAGER para borrar ese archivo PRIMERO antes de crear el nuevo. No puedes asumir que el archivo fue borrado por el historial.\n\n\
-            Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
-            {{\n\
+        // ── Acceptance Contract injection ────────────────────────────────────────────────
+        let contract_block = if let Some(ref contract) = acceptance_contract {
+            format!("\n\n📋 [CONTRATO DE ACEPTACIÓN DEFINIDO POR EL PLANIFICADOR — TU CRITERIO DE ÉXITO]:\n{}\nSolo usa TOOL_FINISH cuando estos criterios estén cumplidos al 100%.", contract)
+        } else {
+            String::new()
+        };
+
+        let json_schema = "Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
+            {\n\
               \"checklist_mental\": \"<Análisis de tareas cumplidas vs faltantes>\",\n\
               \"herramienta\": \"<NOMBRE_HERRAMIENTA>\",\n\
               \"pensamiento\": \"Breve razonamiento lógico de tu decisión actual\",\n\
@@ -326,16 +351,104 @@ pub async fn run_agent_loop(
               \"task_id\": \"<id_de_la_tarea o null>\",\n\
               \"url_a_investigar\": \"<url o null>\",\n\
               \"archivos_a_editar\": [\"ruta/archivo1\", \"ruta/archivo2\"],\n\
-              \"ast_nodes\": [{{\"intent\": \"<código>\", \"parent_id\": 0, \"opcode\": 2}}],\n\
+              \"ast_nodes\": [{\"intent\": \"<código>\", \"parent_id\": 0, \"opcode\": 2}],\n\
               \"respuesta_conversacional\": \"<respuesta al usuario o null>\"\n\
-            }}",
-            user_message, live_workspace_context, extra_prompt, current_context
-        );
-        
+            }";
+
+        let agent_prompt = match current_role {
+            // ─────────────────── PLANNER ──────────────────────────────────
+            AgentRole::Planner => format!(
+                "🧠 [ROL ACTIVO: PLANIFICADOR ARQUITECTÓNICO]\n\
+                Tu ÚNICO propósito es DISEÑAR la arquitectura en Memoria Lógica (RAM).\n\
+                PROHIBIDO usar TOOL_PROGRAMMER o cualquier herramienta que escriba en disco.\n\n\
+                Objetivo Original: {}\n\
+                Archivos físicos actuales: {}\n\
+                {}\n\
+                Historial:\n{}\n\n\
+                HERRAMIENTAS DEL PLANIFICADOR (solo estas):\n\
+                - TOOL_AST_INJECT: Estructura el sistema en RAM. OBLIGATORIO para proyectos complejos.\n\
+                - TOOL_MAPPER: Genera el grafo de dependencias del workspace existente.\n\
+                - TOOL_THINK: Razona y planifica. Usa 'comando' para definir el CONTRATO DE ACEPTACIÓN: \"Tarea lista cuando: [X, Y, Z]\".\n\
+                - TOOL_WORKSPACE_MANAGER: Limpia archivos basura antes de empezar.\n\
+                - TOOL_AUDITOR: Lee archivos para entender el contexto antes de planificar.\n\
+                - TOOL_SEARCH: Consulta memoria histórica para recuperar patrones similares.\n\
+                - TOOL_FINISH: Úsalo EXCLUSIVAMENTE si el usuario pidió un \"análisis\", \"revisión\" o pregunta teórica y NO hay que escribir código físico.\n\n\
+                PROTOCOLO DE ARQUITECTURA:\n\
+                  a) CONTRATO DEL SISTEMA: lista TODOS los archivos finales con firmas de funciones exactas\n\
+                  b) GRAFO DE DEPENDENCIAS: quién importa a quién (orden topológico)\n\
+                  c) MICRO-METAS: divide el sistema en unidades de un solo archivo, de menor a mayor dependencia\n\n\
+                Cuando el plan este listo, el sistema te pasara automaticamente al rol EJECUTOR.\n\n\
+                {}{}\n\
+                {}",
+                user_message, live_workspace_context, extra_prompt, current_context, critic_feedback_block, analysis_fast_path, json_schema
+            ),
+
+            // ─────────────────── EXECUTOR ──────────────────────────────────
+            AgentRole::Executor => format!(
+                "⚙️ [ROL ACTIVO: EJECUTOR DE CÓDIGO]\n\
+                Tu ÚNICO propósito es ESCRIBIR o CORREGIR código físico en disco.\n\
+                PROHIBIDO usar TOOL_TESTER, TOOL_FINISH, o TOOL_ARCHITECT.\n\n\
+                Objetivo Original: {}\n\
+                Archivos físicos actuales: {}\n\
+                {}\n\
+                Historial:\n{}\n\n\
+                HERRAMIENTAS DEL EJECUTOR (solo estas):\n\
+                - TOOL_PROGRAMMER: Escribe/modifica código en disco. ACCIÓN PRINCIPAL.\n\
+                - TOOL_TERMINAL: Instala dependencias o ejecuta scaffolding.\n\
+                - TOOL_BACKGROUND_START/READ/KILL: Gestiona servidores de larga duración.\n\
+                - TOOL_ENV_MANAGER: Instala SOLO binarios del sistema (python, node, git).\n\
+                - TOOL_ASSET_MANAGER: Descarga recursos gráficos necesarios.\n\
+                - TOOL_AUDITOR: Lee archivos existentes antes de modificarlos.\n\n\
+                REGLAS DEL EJECUTOR:\n\
+                1. ANTI-STUB: PROHIBIDO 'pass', 'TODO', 'todo!()', funciones vacías.\n\
+                2. ANTI-ALUCINACIÓN: Si un archivo NO está en la lista, NO existe. Debes crearlo.\n\
+                3. UN ARCHIVO POR TURNO por llamada a TOOL_PROGRAMMER.\n\
+                4. Usa el MISMO NOMBRE exacto del archivo del contexto para TOOL_TERMINAL.\n\n\
+                Tras pasar Anti-Stub y compilar, pasaras automaticamente al CRITICO.\n\n\
+                {}\n\
+                {}",
+                user_message, live_workspace_context, extra_prompt, current_context, critic_feedback_block, json_schema
+            ),
+
+            // ─────────────────── CRITIC ────────────────────────────────────
+            AgentRole::Critic => format!(
+                "🔬 [ROL ACTIVO: CRÍTICO Y VALIDADOR]\n\
+                Tu ÚNICO propósito es PROBAR y VALIDAR el código del Ejecutor.\n\
+                PROHIBIDO usar TOOL_PROGRAMMER o herramientas de escritura de archivos.\n\n\
+                Objetivo Original: {}\n\
+                Archivos físicos actuales: {}\n\
+                {}\n\
+                Historial:\n{}\n\n\
+                HERRAMIENTAS DEL CRÍTICO (solo estas):\n\
+                - TOOL_TESTER: Ejecuta pruebas automatizadas. ACCIÓN PRINCIPAL si hay test files.\n\
+                - TOOL_TERMINAL: Ejecuta el programa para verificar que funciona en runtime.\n\
+                - TOOL_VISION_EVALUATOR: OBLIGATORIO para GUI/juego. Captura y evalúa calidad.\n\
+                - TOOL_LOGIC_SOLVER: Analiza matemáticamente si sospechas de bucles infinitos.\n\
+                - TOOL_AUDITOR: Revisa código estáticamente antes de ejecutar.\n\
+                - TOOL_LEARN: Si todo pasa, indexa el proyecto en memoria permanente.\n\
+                - TOOL_FINISH: SOLO cuando TODA la validación sea exitosa al 100%.\n\n\
+                REGLAS DEL CRÍTICO:\n\
+                1. Si hay errores: describe el problema detalladamente. El sistema te devuelve al EJECUTOR.\n\
+                2. GUI/juego: TOOL_VISION_EVALUATOR es OBLIGATORIO antes de TOOL_FINISH.\n\
+                3. Todo pasa: usa TOOL_FINISH con resumen completo.\n\
+                4. NUNCA uses TOOL_FINISH si hay errores sin resolver.\n\
+                5. Si TOOL_TESTER paso: ve directo a TOOL_FINISH.\n\n\
+                {}\n\
+                {}",
+                user_message, live_workspace_context, extra_prompt, current_context, contract_block, json_schema
+            ),
+        };
+
         let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::Orchestrator, language: None }, &available_models, &app_handle, 0).await
             .unwrap_or_else(|_| ORCHESTRATOR_MODEL.to_string());
-        
-        emit_event(&app_handle, step_count, &format!("Analizando estado y planificando siguiente paso con {}...", orchestrator_model), "PLANNING");
+        // Cache the model name for context compression (avoids re-resolving every 10 steps)
+
+        let role_label = match current_role {
+            AgentRole::Planner  => "🧠 PLANIFICADOR",
+            AgentRole::Executor => "⚙️ EJECUTOR",
+            AgentRole::Critic   => "🔬 CRÍTICO",
+        };
+        emit_event(&app_handle, step_count, &format!("[{}] Pensando con {}...", role_label, orchestrator_model), "PLANNING");
 
         let mut agent_res = match call_ollama(&orchestrator_model, &agent_prompt).await {
             Ok(res) => res,
@@ -394,6 +507,33 @@ pub async fn run_agent_loop(
                 continue;
             }
         }
+
+        // ── ROLE HARD LOCKS (FSM ENFORCEMENT) ─────────────────────────────────
+        if current_role == AgentRole::Planner {
+            if ["TOOL_PROGRAMMER", "TOOL_TESTER", "TOOL_TERMINAL", "TOOL_BACKGROUND_START", "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL", "TOOL_ENV_MANAGER", "TOOL_ASSET_MANAGER", "TOOL_VISION_EVALUATOR"].contains(&tool.as_str()) {
+                let error_msg = format!("[ACCESO DENEGADO]: Eres el Planificador. No tienes permiso para usar {}. Tu rol es solo diseñar la arquitectura. Usa TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK o herramientas de lectura.", tool);
+                current_context.push_str(&format!("{}\n\n", error_msg));
+                emit_event(&app_handle, step_count, &format!("[FSM LOCK] Planificador intentó usar {}", tool), "WARNING");
+                step_count += 1;
+                continue;
+            }
+        } else if current_role == AgentRole::Executor {
+            if ["TOOL_TESTER", "TOOL_FINISH", "TOOL_VISION_EVALUATOR", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
+                let error_msg = format!("[ACCESO DENEGADO]: Eres el Ejecutor. No tienes permiso para usar {}. Tu rol es escribir código. Si terminaste, asegúrate de que tu código esté listo y pasa Anti-Stub. El motor te pasará al Crítico automáticamente.", tool);
+                current_context.push_str(&format!("{}\n\n", error_msg));
+                emit_event(&app_handle, step_count, &format!("[FSM LOCK] Ejecutor intentó usar {}", tool), "WARNING");
+                step_count += 1;
+                continue;
+            }
+        } else if current_role == AgentRole::Critic {
+            if ["TOOL_PROGRAMMER", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
+                let error_msg = format!("[ACCESO DENEGADO]: Eres el Crítico. No tienes permiso para usar {}. No puedes escribir código físico. Si el código falla, usa TOOL_TERMINAL, y si hay errores, el sistema te regresará al Ejecutor. NO uses TOOL_PROGRAMMER.", tool);
+                current_context.push_str(&format!("{}\n\n", error_msg));
+                emit_event(&app_handle, step_count, &format!("[FSM LOCK] Crítico intentó usar {}", tool), "WARNING");
+                step_count += 1;
+                continue;
+            }
+        }
         
         let url = raw_value.get("url_a_investigar").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let respuesta_conv = raw_value.get("respuesta_conversacional").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -439,9 +579,10 @@ pub async fn run_agent_loop(
         );
         crate::core::session_journal::save_journal(&workspace_path, &journal);
         
-        if tool.as_str() != "TOOL_THINK" {
-            think_consecutive = 0;
-        }
+        // Reset loop counters
+        if tool != "TOOL_THINK" { think_consecutive = 0; }
+        if tool != "TOOL_AUDITOR" { auditor_consecutive = 0; }
+        if tool != "TOOL_LEARN" { learn_consecutive = 0; }
 
         match tool.as_str() {
             "TOOL_TERMINAL" => {
@@ -638,6 +779,13 @@ pub async fn run_agent_loop(
                                 }
                                 current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
                                 emit_event(&app_handle, step_count, &res_msg, "ERROR");
+                                
+                                // ── FSM Transition: Critic → Executor on Terminal Failure ──
+                                if current_role == AgentRole::Critic {
+                                    current_role = AgentRole::Executor;
+                                    critic_feedback = Some(res_msg.clone());
+                                    emit_event(&app_handle, step_count, "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Error en terminal, devolviendo al Ejecutor.", "WARNING");
+                                }
                             }
                         }
                     }
@@ -747,11 +895,18 @@ pub async fn run_agent_loop(
                 }
             },
             "TOOL_AUDITOR" => {
-                emit_event(&app_handle, step_count, "Auditando archivos locales...", "ACTION");
-                let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
-                let reporte = delegate_to_auditor(&safe_files, ORCHESTRATOR_MODEL).await;
-                current_context.push_str(&format!("Reporte Auditor:\n{}\n\n", reporte));
-                emit_event(&app_handle, step_count, "Auditoría completada.", "SUCCESS");
+                auditor_consecutive += 1;
+                if auditor_consecutive > 2 {
+                    let msg = "[SISTEMA INTERNO]: Loop de auditoría detectado. Estás auditando demasiadas veces seguidas sin actuar. DEBES proceder a usar TOOL_THINK o TOOL_PROGRAMMER en el siguiente turno.";
+                    current_context.push_str(&format!("{}\n\n", msg));
+                    emit_event(&app_handle, step_count, msg, "WARNING");
+                } else {
+                    emit_event(&app_handle, step_count, "Auditando archivos locales...", "ACTION");
+                    let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
+                    let reporte = delegate_to_auditor(&safe_files, ORCHESTRATOR_MODEL).await;
+                    current_context.push_str(&format!("Reporte Auditor:\n{}\n\n", reporte));
+                    emit_event(&app_handle, step_count, "Auditoría completada.", "SUCCESS");
+                }
             },
             "TOOL_LOGIC_SOLVER" => {
                 emit_event(&app_handle, step_count, "Iniciando Z3-Logic Solver...", "ACTION");
@@ -830,6 +985,21 @@ pub async fn run_agent_loop(
                     emit_event(&app_handle, step_count, "Pensando y reflexionando...", "ACTION");
                     current_context.push_str(&format!("Reflexión Interna del Agente: {}\n\n", comando));
                     emit_event(&app_handle, step_count, "Reflexión completada. Puedes continuar ejecutando otra herramienta.", "SUCCESS");
+                    // ── FSM Transition: Planner → Executor (only for non-Analysis missions) ──
+                    if current_role == AgentRole::Planner {
+                        if mission_type == MissionType::Analysis {
+                            // Analysis mode: Planner stays as Planner — must use TOOL_FINISH directly
+                            emit_event(&app_handle, step_count, "[FSM] 🔍 MODO ANÁLISIS: El Planificador no transiciona al Ejecutor. Usa TOOL_FINISH para entregar el análisis.", "INFO");
+                        } else {
+                            // Capture the TOOL_THINK 'comando' as the Acceptance Contract
+                            if !comando.trim().is_empty() {
+                                acceptance_contract = Some(formato_contrato(&comando));
+                                emit_event(&app_handle, step_count, &format!("[CONTRATO] Criterios de aceptación definidos: {}", &comando[..comando.len().min(120)]), "INFO");
+                            }
+                            current_role = AgentRole::Executor;
+                            emit_event(&app_handle, step_count, "[FSM] 🧠 PLANIFICADOR → ⚙️ EJECUTOR: Plan definido, iniciando ejecución.", "INFO");
+                        }
+                    }
                 }
             },
             "TOOL_MAPPER" => {
@@ -983,6 +1153,10 @@ pub async fn run_agent_loop(
                                                             current_context.push_str(&explicit_msg);
                                                             exito_bucle_programador = true;
                                                             comandos_ejecutados_historico.clear();
+                                                            // ── FSM Transition: Executor → Critic ──
+                                                            current_role = AgentRole::Critic;
+                                                            critic_feedback = None;
+                                                            emit_event(&app_handle, step_count, "[FSM] ⚙️ EJECUTOR → 🔬 CRÍTICO: Código aceptado, pasando a validación.", "INFO");
                                                             for f in &written_files {
                                                                 archivos_editados_historico.insert(f.clone());
                                                             }
@@ -1246,6 +1420,9 @@ pub async fn run_agent_loop(
                                 comandos_ejecutados_historico.clear();
                                 task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::HighComplexityFix, language: None };
                             emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
+                                current_role = AgentRole::Executor;
+                                critic_feedback = Some(fail_msg.clone());
+                                emit_event(&app_handle, step_count, "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Tests fallaron, enviando feedback al Ejecutor.", "WARNING");
                                 current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
                                 forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Los tests fallaron estrepitosamente, el sistema forzó TOOL_PROGRAMMER para que generes una nueva y mejor solución.".to_string()));
                             }
@@ -1266,25 +1443,37 @@ pub async fn run_agent_loop(
                         intent,
                         meta,
                     );
+                    // Clone the display fields before node is moved into push_node
+                    let node_id_display   = node.node_id;
+                    let node_hash_display = node.content_hash.clone();
+                    let node_op_display   = node.opcode.clone();
                     if let Err(_) = agent_workspace.push_node(node) {
                         report.push_str(&format!("- Error crítico: Buffer Zero-Trace lleno al insertar nodo {}\n", node_id));
                         break;
                     }
-                    report.push_str(&format!("- Inyectado: NodeID={} Hash={}\n  Opcode: {:?}\n  Contenido: {}\n", node.node_id, node.content_hash, node.opcode, intent));
+                    report.push_str(&format!("- Inyectado: NodeID={} Hash={}\n  Opcode: {:?}\n  Contenido: {}\n", node_id_display, node_hash_display, node_op_display, intent));
                 }
                 current_context.push_str(&format!("PASO {}:\nAcción: TOOL_AST_INJECT\nResultado:\n{}\n\n", step_count, report));
                 emit_event(&app_handle, step_count, &format!("{} nodos AST inyectados exitosamente en RAM.", ast_nodes_vec.len()), "SUCCESS");
             },
             "TOOL_LEARN" => {
-                emit_event(&app_handle, step_count, "Guardando conocimiento en la Memoria Permanente (RAG)...", "ACTION");
-                match crate::core::memory::index_project(&workspace_path).await {
-                    Ok(msg) => {
-                        current_context.push_str(&format!("Resultado TOOL_LEARN: {}\n\n", msg));
-                        emit_event(&app_handle, step_count, "Memoria indexada correctamente.", "SUCCESS");
-                    },
-                    Err(err) => {
-                        current_context.push_str(&format!("Error en TOOL_LEARN: {}\n\n", err));
-                        emit_event(&app_handle, step_count, &err, "ERROR");
+                learn_consecutive += 1;
+                if learn_consecutive > 1 {
+                    let msg = "[SISTEMA INTERNO]: Ya has aprendido este proyecto (loop infinito TOOL_LEARN detectado). DEBES USAR TOOL_FINISH INMEDIATAMENTE PARA TERMINAR LA TAREA.";
+                    forced_next_tool = Some(("TOOL_FINISH".to_string(), "La memoria ya está indexada, finalizando tarea obligatoriamente.".to_string()));
+                    current_context.push_str(&format!("{}\n\n", msg));
+                    emit_event(&app_handle, step_count, "Bucle de TOOL_LEARN detectado, forzando finalización.", "WARNING");
+                } else {
+                    emit_event(&app_handle, step_count, "Guardando conocimiento en la Memoria Permanente (RAG)...", "ACTION");
+                    match crate::core::memory::index_project(&workspace_path).await {
+                        Ok(msg) => {
+                            current_context.push_str(&format!("Resultado TOOL_LEARN: {}\n\n", msg));
+                            emit_event(&app_handle, step_count, "Memoria indexada correctamente.", "SUCCESS");
+                        },
+                        Err(err) => {
+                            current_context.push_str(&format!("Error en TOOL_LEARN: {}\n\n", err));
+                            emit_event(&app_handle, step_count, &err, "ERROR");
+                        }
                     }
                 }
             },
