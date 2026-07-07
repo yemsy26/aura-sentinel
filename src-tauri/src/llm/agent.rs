@@ -208,7 +208,8 @@ pub async fn run_agent_loop(
     };
     let mut mandatory_tools_executed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut forced_next_tool: Option<(String, String)> = None;
-    let mut intercept_consecutive: u32 = 0; 
+    let mut intercept_consecutive: u32 = 0; // track consecutive LLM disobedience
+    let mut retry_tracker = crate::core::error_classifier::RetryTracker::new();
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
 
     // ── Multi-Agent Role State Machine ─────────────────────────────────────
@@ -924,12 +925,56 @@ pub async fn run_agent_loop(
                                 }
                                 current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
                                 emit_event(&app_handle, step_count, &res_msg, "ERROR");
-                                
+
+                                // ── SELF-REPAIR LOOP (ReAct pattern) ───────────────────
+                                // Classify the error type and choose the appropriate recovery strategy.
+                                // Professional agents (SWE-agent, Claude) never retry blindly.
+                                let error_type = crate::core::error_classifier::classify_error(
+                                    &err, &res_msg, 1);
+                                let should_escalate = retry_tracker.record_failure("TOOL_TERMINAL", &error_type);
+
+                                if should_escalate {
+                                    // Too many retries — ask the user for help
+                                    let escalation_msg = format!(
+                                        "[SELF-REPAIR] Múltiples intentos fallidos en TOOL_TERMINAL. \
+                                        El agente no puede resolver este error solo.\n\
+                                        Error: {}\n\
+                                        Debes usar TOOL_ASK_USER (o TOOL_FINISH si la tarea está parcialmente completa) \
+                                        para explicar al usuario qué está bloqueado y qué necesita.",
+                                        err
+                                    );
+                                    current_context.push_str(&format!("{}\n\n", escalation_msg));
+                                    emit_event(&app_handle, step_count,
+                                        "[SELF-REPAIR] Escalando al usuario tras múltiples fallos", "WARNING");
+                                } else {
+                                    // Inject specific repair guidance based on error type
+                                    let repair_msg = crate::core::error_classifier::repair_prompt(
+                                        &error_type, "TOOL_TERMINAL", &comando, &err,
+                                        retry_tracker.transient_retries.max(retry_tracker.logic_retries)
+                                    );
+                                    current_context.push_str(&format!("{}\n\n", repair_msg));
+                                    emit_event(&app_handle, step_count,
+                                        &format!("[SELF-REPAIR] Error {:?} — guiando al agente con estrategia de reparación",
+                                            error_type),
+                                        "WARNING");
+
+                                    // For Logic errors: force a THINK step before the next retry
+                                    if error_type == crate::core::error_classifier::ErrorType::Logic {
+                                        forced_next_tool = Some((
+                                            "TOOL_THINK".to_string(),
+                                            format!("Analiza el error: '{}'. Propone la corrección exacta antes de reintentar.", &err[..err.len().min(100)])
+                                        ));
+                                        intercept_consecutive = 0;
+                                    }
+                                }
+
                                 // ── FSM Transition: Critic → Executor on Terminal Failure ──
                                 if current_role == AgentRole::Critic {
                                     current_role = AgentRole::Executor;
                                     critic_feedback = Some(res_msg.clone());
-                                    emit_event(&app_handle, step_count, "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Error en terminal, devolviendo al Ejecutor.", "WARNING");
+                                    emit_event(&app_handle, step_count,
+                                        "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Error en terminal, devolviendo al Ejecutor.",
+                                        "WARNING");
                                 }
                             }
                         }
