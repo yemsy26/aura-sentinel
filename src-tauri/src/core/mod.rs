@@ -437,6 +437,27 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
             trimmed
         };
 
+        // 4. Detect blocking server commands and short-circuit them
+        //    Commands like `python -m http.server`, `npx serve`, `npm start` etc.
+        //    block the terminal forever. For static web projects just open the file.
+        let trimmed_lower = trimmed.to_lowercase();
+        let is_blocking_server = 
+            trimmed_lower.contains("-m http.server") ||
+            trimmed_lower.contains("-m httpserver") ||
+            trimmed_lower.starts_with("npx serve") ||
+            trimmed_lower.starts_with("npx http-server") ||
+            trimmed_lower == "npm start" ||
+            trimmed_lower.starts_with("serve ") || trimmed_lower == "serve" ||
+            trimmed_lower.starts_with("live-server") ||
+            trimmed_lower.starts_with("php -s");
+        // Mark blocking commands so the caller can return early
+        let trimmed = if is_blocking_server {
+            // Return a synthetic echo so the terminal handler gets a fast OK
+            format!("echo [SERVIDOR OMITIDO] '{}' es un servidor bloqueante. Para proyectos web estaticos usa 'start index.html' directamente.", trimmed)
+        } else {
+            trimmed
+        };
+
         trimmed
     };
     let command = &command;
@@ -458,14 +479,35 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
         if let Some(py) = python_path {
             // Replace leading 'python ' or 'python\n' or exact 'python'
             if let Some(stripped) = command.strip_prefix("python ") {
+                // Quote any absolute path argument that contains spaces
+                let stripped_fixed = {
+                    let args: Vec<&str> = stripped.splitn(2, ' ').collect();
+                    if args.len() == 2 {
+                        let script_arg = args[0].trim_matches('"').trim_matches('\'');
+                        let rest = args[1];
+                        let script_fixed = if std::path::Path::new(script_arg).is_absolute() && script_arg.contains(' ') {
+                            format!("\"{}\" {}", script_arg, rest)
+                        } else if script_arg.contains(' ') && !script_arg.starts_with('"') {
+                            format!("\"{}\" {}", script_arg, rest)
+                        } else {
+                            stripped.to_string()
+                        };
+                        script_fixed
+                    } else if stripped.contains(' ') && !stripped.starts_with('-') && !stripped.starts_with('"') {
+                        // Single argument with spaces — likely a path without quotes
+                        format!("\"{}\"", stripped)
+                    } else {
+                        stripped.to_string()
+                    }
+                };
                 if py.contains(' ') {
-                    format!("\"{}\" {}", py, stripped)
+                    format!("\"{}\" {}", py, stripped_fixed)
                 } else {
-                    format!("{} {}", py, stripped)
+                    format!("{} {}", py, stripped_fixed)
                 }
             } else if *command == "python" {
                 if py.contains(' ') {
-                    format!("\"{}\"", py)
+                    format!("\"{}\" ", py)
                 } else {
                     py.to_string()
                 }

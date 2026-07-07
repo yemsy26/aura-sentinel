@@ -152,7 +152,53 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
         };
 
         if !crate::core::security::is_path_allowed(Path::new(workspace_path), &full_path) {
-            return Err(format!("[SECURITY_VIOLATION] Acceso no permitido fuera del entorno de trabajo para el archivo: {}", cambio.archivo));
+            // ── Path healing: instead of hard-failing, extract the filename and
+            // write to the current workspace. This fixes LLM contamination from
+            // previous sessions (e.g. "proxy-stack-windows\index.html").
+            let filename = full_path.file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| cambio.archivo.clone());
+            let healed_path = Path::new(workspace_path).join(&filename);
+            // Re-run the loop iteration with the healed path by reconstructing cambio
+            // We log the healing so it's visible in debug output.
+            eprintln!("[PATH_HEAL] Redirecting '{}' -> '{}'", cambio.archivo, healed_path.display());
+            // Swap the path and continue with healed_path below
+            let full_path = healed_path;
+            let path_obj = full_path.as_path();
+            // now drop through — the code below will use full_path correctly
+            let _ = path_obj; // suppress unused warning
+            // We need to redo the security check with the healed path — it must now pass.
+            // If it still fails (shouldn't happen), skip with a warning.
+            if !crate::core::security::is_path_allowed(Path::new(workspace_path), &full_path) {
+                eprintln!("[SECURITY_VIOLATION] Even healed path is outside workspace: {}", full_path.display());
+                continue;
+            }
+            // Continue with healed full_path
+            let mut contenido_original = String::new();
+            let file_exists = full_path.exists();
+            if file_exists {
+                match fs::read_to_string(&full_path).await {
+                    Ok(c) => contenido_original = c,
+                    Err(e) => { eprintln!("Aura-Sentinel: Error leyendo {}: {}", full_path.display(), e); continue; }
+                }
+            } else {
+                if let Some(parent) = full_path.parent() {
+                    if let Err(e) = fs::create_dir_all(parent).await {
+                        eprintln!("Aura-Sentinel: Error creando directorio {:?}: {}", parent, e); continue;
+                    }
+                }
+            }
+            // Apply the search/replace (or write fresh content if buscar is empty)
+            let nuevo_contenido = if cambio.buscar.is_empty() {
+                cambio.reemplazar.clone()
+            } else {
+                contenido_original.replacen(&cambio.buscar, &cambio.reemplazar, 1)
+            };
+            match fs::write(&full_path, &nuevo_contenido).await {
+                Ok(_) => { exitosos += 1; exitosos_nombres.push(filename); }
+                Err(e) => eprintln!("Error escribiendo {}: {}", full_path.display(), e),
+            }
+            continue;
         }
         
         let mut contenido_original = String::new();
