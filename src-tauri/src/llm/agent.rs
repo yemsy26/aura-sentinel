@@ -193,8 +193,20 @@ pub async fn run_agent_loop(
     let mut auditor_consecutive = 0u32;
     let mut mapper_consecutive = 0u32;
     let mut critic_fsm_lock_consecutive = 0u32;
-    let mut workspace_manager_error_consecutive = 0u32; // breaks Planner stuck on WORKSPACE_MANAGER loop
+    let mut workspace_manager_error_consecutive = 0u32;
     let mut learn_consecutive = 0u32;
+
+    // ── Mandatory Tool Checklist (Bug 1 fix) ──────────────────────────────────
+    // Parse user_message for required tools and enforce them before TOOL_FINISH.
+    let mandatory_tools_required: std::collections::HashSet<String> = {
+        let mut required = std::collections::HashSet::new();
+        let msg_upper = user_message.to_uppercase();
+        if msg_upper.contains("TOOL_TESTER") { required.insert("TOOL_TESTER".to_string()); }
+        if msg_upper.contains("TOOL_VISION_EVALUATOR") { required.insert("TOOL_VISION_EVALUATOR".to_string()); }
+        if msg_upper.contains("TOOL_AUDITOR") { required.insert("TOOL_AUDITOR".to_string()); }
+        required
+    };
+    let mut mandatory_tools_executed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut forced_next_tool: Option<(String, String)> = None;
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
 
@@ -629,7 +641,13 @@ pub async fn run_agent_loop(
                             // workspace for recently-modified output files and inject a preview.
                             let is_script_run = {
                                 let cl = comando.to_lowercase();
-                                cl.starts_with("python") || cl.starts_with("node")
+                                // Bug 3 fix: only trigger for python scripts or node scripts
+                                // that are NOT browser-JS (browser JS has no require/import of node modules)
+                                let is_node = cl.starts_with("node ") || cl == "node app.js" || cl == "node index.js";
+                                let is_python = cl.starts_with("python") || cl.starts_with("python3");
+                                // For node, skip auto-verifier if it's a browser project (index.html exists)
+                                let is_browser_project = std::path::Path::new(&workspace_path).join("index.html").exists();
+                                (is_python) || (is_node && !is_browser_project)
                             };
                             let output_is_empty = out.trim().is_empty() || out.trim().len() < 20;
                             if is_script_run && output_is_empty {
@@ -923,22 +941,50 @@ pub async fn run_agent_loop(
             "TOOL_AUDITOR" => {
                 auditor_consecutive += 1;
                 if auditor_consecutive > 2 {
-                    let msg = "[SISTEMA INTERNO]: Loop de auditorÃ­a detectado. EstÃ¡s auditando demasiadas veces seguidas sin actuar. FORZANDO TOOL_THINK en el siguiente turno.";
+                    let msg = "[SISTEMA INTERNO]: Loop de auditoría detectado. Estás auditando demasiadas veces seguidas sin actuar. FORZANDO TOOL_THINK en el siguiente turno.";
                     current_context.push_str(&format!("{}\n\n", msg));
                     emit_event(&app_handle, step_count, msg, "WARNING");
-                    forced_next_tool = Some(("TOOL_THINK".to_string(), "Analizar auditorias previas y decidir siguiente paso (TOOL_MAPPER o TOOL_FINISH)".to_string()));
+                    forced_next_tool = Some(("TOOL_THINK".to_string(), "Analizar auditorias previas y decidir siguiente paso. Si los archivos ya existen usa TOOL_PROGRAMMER para mejorarlos o TOOL_FINISH si todo está correcto.".to_string()));
                 } else {
                     emit_event(&app_handle, step_count, "Auditando archivos locales...", "ACTION");
-                    let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
+                    // Bug 2 fix: always scan workspace directly instead of relying on archivos_vec
+                    // archivos_vec may be empty if the LLM didn't populate it, causing "0 archivos"
+                    let files_to_audit = if archivos_vec.is_empty() {
+                        // Auto-discover all source files in workspace
+                        let mut discovered = Vec::new();
+                        if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                            for entry in entries.flatten() {
+                                let p = entry.path();
+                                if p.is_file() {
+                                    if let Some(ext) = p.extension() {
+                                        let ext = ext.to_string_lossy().to_lowercase();
+                                        if matches!(ext.as_str(), "html"|"css"|"js"|"ts"|"py"|"rs"|"go"|"json"|"md") {
+                                            if let Some(name) = p.file_name() {
+                                                let fname = name.to_string_lossy().to_string();
+                                                // Skip hidden/internal files
+                                                if !fname.starts_with('.') {
+                                                    discovered.push(fname);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        discovered
+                    } else {
+                        archivos_vec.clone()
+                    };
+                    let safe_files = memory::read_files_safely(&workspace_path, files_to_audit.clone()).await;
                     let raw_reporte = delegate_to_auditor(&safe_files, ORCHESTRATOR_MODEL).await;
-                    // Sprint 2: Structured JSON auditor output
                     let struct_prompt = format!("Convierte este reporte a un JSON con campos: archivos, problema, accion_sugerida. Responde SOLO el JSON. REPORTE:\n{}", &raw_reporte);
                     let structured = call_ollama(ORCHESTRATOR_MODEL, &struct_prompt).await
                         .unwrap_or_else(|_| raw_reporte.clone());
                     let structured = structured.trim().to_string();
                     current_context.push_str(&format!("[REPORTE AUDITOR ESTRUCTURADO]\n{}\n\n", structured));
-                    emit_event(&app_handle, step_count, &format!("Auditoria completada. {} archivos.", archivos_vec.len()), "SUCCESS");
+                    emit_event(&app_handle, step_count, &format!("Auditoria completada. {} archivos.", files_to_audit.len()), "SUCCESS");
                 }
+                mandatory_tools_executed.insert("TOOL_AUDITOR".to_string());
             },
             "TOOL_LOGIC_SOLVER" => {
                 emit_event(&app_handle, step_count, "Iniciando Z3-Logic Solver...", "ACTION");
@@ -1322,9 +1368,13 @@ pub async fn run_agent_loop(
                         emit_event(&app_handle, step_count, &msg, "ERROR");
                     }
                 }
+                // Mark as executed for mandatory checklist (whether it succeeded or not)
+                mandatory_tools_executed.insert("TOOL_VISION_EVALUATOR".to_string());
             },
             "TOOL_TESTER" => {
                 emit_event(&app_handle, step_count, "Ejecutando suite de pruebas automatizadas...", "ACTION");
+                // Mark as executed for mandatory checklist regardless of result
+                mandatory_tools_executed.insert("TOOL_TESTER".to_string());
                 match crate::core::tester::run_tests(&workspace_path).await {
                     crate::core::tester::TestResult::NoTests => {
                         no_tests_consecutive += 1;
@@ -1581,6 +1631,28 @@ pub async fn run_agent_loop(
                 }
             },
             "TOOL_FINISH" => {
+                // ── Mandatory Tool Checklist enforcement (Bug 1 fix) ─────────────────
+                // If the user's prompt required specific tools (TOOL_TESTER, TOOL_VISION_EVALUATOR)
+                // and they haven't been executed yet, block TOOL_FINISH and instruct the agent.
+                let missing_mandatory: Vec<&String> = mandatory_tools_required
+                    .iter()
+                    .filter(|t| !mandatory_tools_executed.contains(*t))
+                    .collect();
+                if !missing_mandatory.is_empty() {
+                    let missing_list: Vec<&str> = missing_mandatory.iter().map(|s| s.as_str()).collect();
+                    let block_msg = format!(
+                        "[SISTEMA]: TOOL_FINISH BLOQUEADO. El mandato del usuario exige que ejecutes \
+                        las siguientes herramientas ANTES de finalizar: {:?}. \
+                        Debes ejecutarlas ahora. No puedes usar TOOL_FINISH hasta que todas estén completas.",
+                        missing_list
+                    );
+                    current_context.push_str(&format!("{}\n\n", block_msg));
+                    emit_event(&app_handle, step_count,
+                        &format!("[FINISH BLOQUEADO] Faltan herramientas obligatorias: {:?}", missing_list),
+                        "WARNING");
+                    step_count += 1;
+                    continue;
+                }
                 emit_event(&app_handle, step_count, "Bucle completado exitosamente.", "FINISH");
                 // ── Journal: mark completed ──
                 crate::core::session_journal::close_journal(&mut journal, "COMPLETADO", &workspace_path);
