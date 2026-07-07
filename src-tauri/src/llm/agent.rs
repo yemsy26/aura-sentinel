@@ -191,6 +191,7 @@ pub async fn run_agent_loop(
     let mut no_tests_consecutive = 0u32;
     let mut think_consecutive = 0u32;
     let mut auditor_consecutive = 0u32;
+    let mut mapper_consecutive = 0u32;
     let mut learn_consecutive = 0u32;
     let mut forced_next_tool: Option<(String, String)> = None;
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
@@ -354,7 +355,7 @@ pub async fn run_agent_loop(
         let agent_prompt = match current_role {
             // Planner - compressed to <200 tokens
             AgentRole::Planner => format!(
-                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_WORKSPACE_MANAGER, TOOL_SEARCH.\n{}{}{}",
+                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_WORKSPACE_MANAGER, TOOL_SEARCH.\nREGLA: Cuando tu plan este listo y debas empezar a programar, DEBES usar TOOL_THINK para transferir el control al Ejecutor.\n{}{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, analysis_fast_path, json_schema
             ),
@@ -964,25 +965,33 @@ pub async fn run_agent_loop(
                     }
             },
             "TOOL_MAPPER" => {
-                emit_event(&app_handle, step_count, "🗺️ Iniciando análisis de dependencias del workspace...", "ACTION");
-                let graph = crate::core::dependency_mapper::analyze_workspace(&workspace_path);
-                let report = crate::core::dependency_mapper::format_graph_report(&graph);
-                let summary = format!(
-                    "📊 Grafo generado: {} archivos | {} dependencias | {} nodos críticos | {} ciclos detectados",
-                    graph.nodes.len(),
-                    graph.edges.len(),
-                    graph.god_nodes.len(),
-                    graph.cycles.len()
-                );
-                current_context.push_str(&format!(
-                    "[TOOL_MAPPER] Análisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
-                    [INSTRUCCIÓN CRÍTICA]: El grafo de arriba es la REALIDAD FÍSICA del proyecto. \
-                    Sigue el 'Orden de Escritura Recomendado' AL PIE DE LA LETRA. \
-                    Usa TOOL_PROGRAMMER para escribir cada archivo en ese orden exacto. \
-                    NO empieces por archivos que dependen de otros que aún no existen.\n\n",
-                    report
-                ));
-                emit_event(&app_handle, step_count, &summary, "SUCCESS");
+                mapper_consecutive += 1;
+                if mapper_consecutive > 2 {
+                    let msg = "[SISTEMA INTERNO]: Loop de TOOL_MAPPER detectado. El workspace no cambiara magicamente. FORZANDO TOOL_THINK en el siguiente turno.";
+                    current_context.push_str(&format!("{}\n\n", msg));
+                    emit_event(&app_handle, step_count, msg, "WARNING");
+                    forced_next_tool = Some(("TOOL_THINK".to_string(), "El mapper ha terminado. Iniciar ejecución de plan.".to_string()));
+                } else {
+                    emit_event(&app_handle, step_count, "🗺️ Iniciando análisis de dependencias del workspace...", "ACTION");
+                    let graph = crate::core::dependency_mapper::analyze_workspace(&workspace_path);
+                    let report = crate::core::dependency_mapper::format_graph_report(&graph);
+                    let summary = format!(
+                        "📊 Grafo generado: {} archivos | {} dependencias | {} nodos críticos | {} ciclos detectados",
+                        graph.nodes.len(),
+                        graph.edges.len(),
+                        graph.god_nodes.len(),
+                        graph.cycles.len()
+                    );
+                    current_context.push_str(&format!(
+                        "[TOOL_MAPPER] Análisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
+                        [INSTRUCCIÓN CRÍTICA]: El grafo de arriba es la REALIDAD FÍSICA del proyecto. \
+                        Sigue el 'Orden de Escritura Recomendado' AL PIE DE LA LETRA. \
+                        Usa TOOL_PROGRAMMER para escribir cada archivo en ese orden exacto. \
+                        NO empieces por archivos que dependen de otros que aún no existen.\n\n",
+                        report
+                    ));
+                    emit_event(&app_handle, step_count, &summary, "SUCCESS");
+                }
             },
             "TOOL_PROGRAMMER" => {
                 let mut is_cooldown_blocked = false;
