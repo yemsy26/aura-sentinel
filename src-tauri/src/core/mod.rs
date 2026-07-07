@@ -358,6 +358,67 @@ pub async fn hide_file_windows(path: &Path) {
 
 /// Executes a synchronous terminal command inside the active workspace.
 pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Result<String, String> {
+    // ── Windows Command Normalizer ────────────────────────────────────────────
+    // Translates Unix-style commands and fixes common Windows path issues so
+    // the LLM doesn't have to know the exact Windows syntax every time.
+    let command = {
+        let trimmed = command.trim();
+
+        // 1. `ls [args]` → `dir [args]`
+        let trimmed = if trimmed == "ls" {
+            "dir".to_string()
+        } else if let Some(rest) = trimmed.strip_prefix("ls ") {
+            format!("dir {}", rest)
+        } else {
+            trimmed.to_string()
+        };
+
+        // 2. `open <path>` → `start "" "<path>"`  (macOS/Linux compat)
+        let trimmed = if let Some(path) = trimmed.strip_prefix("open ") {
+            let p = path.trim().trim_matches('"').trim_matches('\'');
+            format!("start \"\" \"{}\"", p)
+        } else {
+            trimmed
+        };
+
+        // 3. `start file:///C:/path/with spaces/file.html`
+        //    Windows `start` cannot handle file:// URLs with spaces.
+        //    Convert: strip file://, unquote, re-quote properly.
+        let trimmed = if trimmed.to_lowercase().starts_with("start") {
+            // Check if it contains file:/// and fix it
+            if trimmed.contains("file:///") {
+                let after_start = trimmed["start".len()..].trim();
+                // Remove optional leading title arg (already quoted like `"" `)
+                let after_start = after_start.trim_start_matches("\"\"").trim();
+                // Strip file:/// prefix
+                let path_raw = after_start.trim_matches('"').trim_matches('\'');
+                let path_raw = if path_raw.starts_with("file:///") {
+                    &path_raw["file:///".len()..]
+                } else if path_raw.starts_with("file://") {
+                    &path_raw["file://".len()..]
+                } else {
+                    path_raw
+                };
+                // Normalize slashes to backslash
+                let path_fixed = path_raw.replace('/', "\\");
+                format!("start \"\" \"{}\"", path_fixed)
+            } else {
+                // `start index.html` with relative path — wrap in quotes if not already
+                let after_start = trimmed["start".len()..].trim();
+                if !after_start.starts_with('"') && after_start.contains(' ') {
+                    format!("start \"\" \"{}\"", after_start)
+                } else {
+                    trimmed
+                }
+            }
+        } else {
+            trimmed
+        };
+
+        trimmed
+    };
+    let command = &command;
+
     // Resolve 'python' to the correct binary path so it works even when PATH is missing conda/miniconda
     let resolved_command = {
         let profile = std::env::var("USERPROFILE").unwrap_or_default();
@@ -380,7 +441,7 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
                 } else {
                     format!("{} {}", py, stripped)
                 }
-            } else if command == "python" {
+            } else if *command == "python" {
                 if py.contains(' ') {
                     format!("\"{}\"", py)
                 } else {
