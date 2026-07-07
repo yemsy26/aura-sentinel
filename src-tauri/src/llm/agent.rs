@@ -336,11 +336,7 @@ pub async fn run_agent_loop(
         };
 
         // ── Acceptance Contract injection ────────────────────────────────────────────────
-        let contract_block = if let Some(ref contract) = acceptance_contract {
-            format!("\n\n📋 [CONTRATO DE ACEPTACIÓN DEFINIDO POR EL PLANIFICADOR — TU CRITERIO DE ÉXITO]:\n{}\nSolo usa TOOL_FINISH cuando estos criterios estén cumplidos al 100%.", contract)
-        } else {
-            String::new()
-        };
+        let contract_block = acceptance_contract.as_deref().map(|c| format!("[CONTRATO DE ACEPTACION DEL PLANIFICADOR]\n{}\n", c)).unwrap_or_default();
 
         let json_schema = "Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON con esta estructura exacta (sin markdown extra):\n\
             {\n\
@@ -903,9 +899,14 @@ pub async fn run_agent_loop(
                 } else {
                     emit_event(&app_handle, step_count, "Auditando archivos locales...", "ACTION");
                     let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
-                    let reporte = delegate_to_auditor(&safe_files, ORCHESTRATOR_MODEL).await;
-                    current_context.push_str(&format!("Reporte Auditor:\n{}\n\n", reporte));
-                    emit_event(&app_handle, step_count, "Auditoría completada.", "SUCCESS");
+                    let raw_reporte = delegate_to_auditor(&safe_files, ORCHESTRATOR_MODEL).await;
+                    // Sprint 2: Structured JSON auditor output
+                    let struct_prompt = format!("Convierte este reporte a un JSON con campos: archivos, problema, accion_sugerida. Responde SOLO el JSON. REPORTE:\n{}", &raw_reporte);
+                    let structured = call_ollama(ORCHESTRATOR_MODEL, &struct_prompt).await
+                        .unwrap_or_else(|_| raw_reporte.clone());
+                    let structured = structured.trim().to_string();
+                    current_context.push_str(&format!("[REPORTE AUDITOR ESTRUCTURADO]\n{}\n\n", structured));
+                    emit_event(&app_handle, step_count, &format!("Auditoria completada. {} archivos.", archivos_vec.len()), "SUCCESS");
                 }
             },
             "TOOL_LOGIC_SOLVER" => {
@@ -976,31 +977,30 @@ pub async fn run_agent_loop(
                 }
             },
             "TOOL_THINK" => {
-                think_consecutive += 1;
-                if think_consecutive > 3 {
-                    emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown (Think)", "WARNING");
-                    current_context.push_str(&format!("PASO {}:\nAcción: TOOL_THINK\nResultado: [SISTEMA INTERCEPTO] Error: Has usado TOOL_THINK demasiadas veces seguidas sin actuar (Bucle Infinito). Tu única opción válida ahora es usar TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ARCHITECT o TOOL_FINISH para detenerte.\n\n", step_count));
-                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Se forzó 'TOOL_PROGRAMMER' para romper el bucle infinito de reflexión. Debes programar algo útil basándote en tu última reflexión.".to_string()));
-                } else {
-                    emit_event(&app_handle, step_count, "Pensando y reflexionando...", "ACTION");
-                    current_context.push_str(&format!("Reflexión Interna del Agente: {}\n\n", comando));
-                    emit_event(&app_handle, step_count, "Reflexión completada. Puedes continuar ejecutando otra herramienta.", "SUCCESS");
-                    // ── FSM Transition: Planner → Executor (only for non-Analysis missions) ──
-                    if current_role == AgentRole::Planner {
-                        if mission_type == MissionType::Analysis {
-                            // Analysis mode: Planner stays as Planner — must use TOOL_FINISH directly
-                            emit_event(&app_handle, step_count, "[FSM] 🔍 MODO ANÁLISIS: El Planificador no transiciona al Ejecutor. Usa TOOL_FINISH para entregar el análisis.", "INFO");
-                        } else {
-                            // Capture the TOOL_THINK 'comando' as the Acceptance Contract
-                            if !comando.trim().is_empty() {
-                                acceptance_contract = Some(formato_contrato(&comando));
-                                emit_event(&app_handle, step_count, &format!("[CONTRATO] Criterios de aceptación definidos: {}", &comando[..comando.len().min(120)]), "INFO");
+                    think_consecutive += 1;
+                    if think_consecutive > 3 {
+                        emit_event(&app_handle, step_count, "[COOLDOWN] Bucle TOOL_THINK interceptado. Usa otra herramienta.", "WARNING");
+                        current_context.push_str(&format!("PASO {}:\nTOOL_THINK bloqueado: bucle detectado. DEBES usar TOOL_PROGRAMMER, TOOL_TERMINAL o TOOL_FINISH.\n\n", step_count));
+                        forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Forzado para romper bucle de reflexion. Escribe codigo real.".to_string()));
+                    } else {
+                        emit_event(&app_handle, step_count, "Pensando y planificando...", "ACTION");
+                        current_context.push_str(&format!("Reflexion Interna del Agente: {}\n\n", &comando));
+                        emit_event(&app_handle, step_count, "Reflexion completada.", "SUCCESS");
+                        // Sprint 1+2 FSM: Planner -> Executor on TOOL_THINK (except Analysis missions)
+                        if current_role == AgentRole::Planner {
+                            if mission_type == MissionType::Analysis {
+                                emit_event(&app_handle, step_count, "[FSM] MODO ANALISIS: Planificador permanece activo. Usa TOOL_FINISH para responder.", "INFO");
+                            } else {
+                                if !comando.trim().is_empty() {
+                                    acceptance_contract = Some(formato_contrato(&comando));
+                                    emit_event(&app_handle, step_count, &format!("[CONTRATO] Criterios definidos: {}", comando.chars().take(80).collect::<String>()), "INFO");
+                                }
+                                current_role = AgentRole::Executor;
+                                critic_feedback = None;
+                                emit_event(&app_handle, step_count, "[FSM] PLANIFICADOR -> EJECUTOR: Plan aprobado. Iniciando escritura de codigo.", "INFO");
                             }
-                            current_role = AgentRole::Executor;
-                            emit_event(&app_handle, step_count, "[FSM] 🧠 PLANIFICADOR → ⚙️ EJECUTOR: Plan definido, iniciando ejecución.", "INFO");
                         }
                     }
-                }
             },
             "TOOL_MAPPER" => {
                 emit_event(&app_handle, step_count, "🗺️ Iniciando análisis de dependencias del workspace...", "ACTION");
@@ -1153,10 +1153,23 @@ pub async fn run_agent_loop(
                                                             current_context.push_str(&explicit_msg);
                                                             exito_bucle_programador = true;
                                                             comandos_ejecutados_historico.clear();
-                                                            // ── FSM Transition: Executor → Critic ──
-                                                            current_role = AgentRole::Critic;
-                                                            critic_feedback = None;
-                                                            emit_event(&app_handle, step_count, "[FSM] ⚙️ EJECUTOR → 🔬 CRÍTICO: Código aceptado, pasando a validación.", "INFO");
+                                                            // Sprint 2: Micrometa-gated Executor->Critic transition
+                                                            let all_metas_done = journal.micro_metas.is_empty()
+                                                                || journal.micro_metas.iter().all(|mm| mm.estado == "VERIFICADA");
+                                                            if all_metas_done {
+                                                                current_role = AgentRole::Critic;
+                                                                critic_feedback = None;
+                                                                emit_event(&app_handle, step_count, "[FSM] EJECUTOR -> CRITICO: Todas las micro-metas completadas. Iniciando validacion.", "INFO");
+                                                            } else {
+                                                                let pending: Vec<String> = journal.micro_metas.iter()
+                                                                    .filter(|mm| mm.estado != "VERIFICADA")
+                                                                    .map(|mm| mm.descripcion.clone())
+                                                                    .collect();
+                                                                let pending_str = pending.join(", ");
+                                                                let msg = format!("[FSM] Ejecutor permanece activo. Micro-metas pendientes: {}. Completa todos los archivos antes de pasar al Critico.", pending_str);
+                                                                current_context.push_str(&format!("{}\n\n", &msg));
+                                                                emit_event(&app_handle, step_count, &msg, "INFO");
+                                                            }
                                                             for f in &written_files {
                                                                 archivos_editados_historico.insert(f.clone());
                                                             }
