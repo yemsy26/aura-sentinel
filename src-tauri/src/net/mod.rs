@@ -1,3 +1,4 @@
+pub mod asset_fetcher;
 use scraper::Html;
 use reqwest::header::USER_AGENT;
 use std::time::Duration;

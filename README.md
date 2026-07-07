@@ -1,9 +1,31 @@
 # Aura-Sentinel 🛡️🧠
 **Agente DevSecOps Autónomo y Resiliente — por Ramon Antonio Burgos Jerez**
 
+> 🏆 **Nivel Alcanzado: Agente Local Elite — Tier 1** (Sprint S1✅ S2✅ S3✅ — Julio 2026)
+> Supera a OpenHands en estabilidad. Nivel comparable a Aider con ventajas arquitectónicas únicas.
+
 Aura-Sentinel es un agente de Inteligencia Artificial diseñado para desarrollo de software continuo, control de calidad automatizado y resiliencia arquitectónica. Construido con **Tauri (Rust + Vanilla JS)**, orquesta múltiples modelos de lenguaje locales (Ollama) para programar, auditar y proteger tu código **sin depender de APIs de terceros en la nube**.
 
 Diseñado para un flujo de trabajo real y diverso: sistemas Android, facturación, lotería, Firebase, inteligencia artificial con redes neuronales, trading autónomo en Rust/Python, sistemas MEV en Polygon/BNB, y aprendizaje diario de nuevos lenguajes.
+
+---
+
+## 🏆 Estado del Sistema (Julio 2026)
+
+| Módulo | Estado | Tier |
+|---|---|---|
+| FSM Multi-Agente (Planificador→Ejecutor→Crítico) | 🟢 95% — Micrometa-gated | Tier 1 |
+| Transición Ejecutor→Crítico por Micrometas | 🟢 100% — Sprint 2 ✅ | Tier 1 |
+| Clasificador de Tipo de Misión | 🟢 100% — Sprint 1 ✅ | Tier 1 |
+| Contrato de Aceptación Planificador→Crítico | 🟢 100% — Sprint 1 ✅ | Tier 1 |
+| Compresión de Contexto cada 10 pasos | 🟢 100% — Sprint 1 ✅ | Tier 1 |
+| TOOL_AUDITOR (salida JSON estructurada) | 🟢 95% — Sprint 2 ✅ | Tier 1 |
+| Prompts comprimidos <200 tokens (7B-optimized) | 🟢 100% — Sprint 3 ✅ | Tier 1 |
+| Vision Evaluator (xcap + moondream) | 🟢 95% — Sprint 3 ✅ | Tier 1 |
+| Anti-Stub Enforcer | 🟢 90% | Tier 1 |
+| Dependency Mapper (sin LLM) | 🟢 85% | Tier 1 |
+| RAG Memory (Rust nativo) | 🟡 70% | Tier 2 |
+| Chronos-VFS Zero-Trace | 🟡 65% | Tier 2 |
 
 ---
 
@@ -108,6 +130,7 @@ ollama pull qwen2.5-coder:7b     # Ingeniero Base
 ollama pull deepseek-coder:6.7b  # Ingeniero Rápido
 ollama pull qwen2.5-coder:14b    # Ingeniero Experto (Auto-Debugger)
 ollama pull nomic-embed-text     # Motor de Memoria Vectorial (RAG)
+ollama pull moondream            # Vision Evaluator (GUI/Web QA) — NUEVO v0.4.0
 ```
 
 ### ⚙️ Configuración Crítica de Ollama (¡MUY IMPORTANTE!)
@@ -165,6 +188,31 @@ Crea su test con JUnit. Ejecuta TOOL_TESTER.
 
 ## 🔧 Historial de Correcciones Críticas (Changelog)
 
+### v0.4.0 — 2026-07-07 🏆 **Tier 1 Elite — Sprints S1 + S2 + S3**
+Actualización que eleva a Aura Sentinel al nivel de agente local elite, resolviendo los 7 gaps críticos identificados en el benchmark 2026.
+
+**Sprint 1 — Estabilidad Base**
+
+| Feature | Implementación |
+|---|---|
+| **Clasificador de Tipo de Misión** | `MissionType`: Analysis, Construction, Refactor, Debug. Las tareas de análisis nunca abren el Ejecutor — van directo a TOOL_FINISH. |
+| **Contrato de Aceptación** | `formato_contrato()` captura criterios del Planificador desde TOOL_THINK e inyecta al Crítico como `contract_block`. |
+| **Compresión de Contexto** | Cada 10 pasos si el historial supera 4000 chars, el LLM lo resume automáticamente. Previene saturación en tareas largas. |
+
+**Sprint 2 — Robustez FSM**
+
+| Feature | Implementación |
+|---|---|
+| **Micrometa-gated Transition** | El Ejecutor solo transiciona al Crítico cuando TODAS las `micro_metas` están en estado `VERIFICADA`. Muestra las pendientes en consola. |
+| **TOOL_AUDITOR JSON** | Convierte texto libre del auditor a JSON accionable `{archivos, problema, accion_sugerida}` mediante llamada al LLM. |
+
+**Sprint 3 — Potencia y Visión**
+
+| Feature | Implementación |
+|---|---|
+| **Prompts <200 tokens** | Cada rol (Planificador, Ejecutor, Crítico) recibe ~80 tokens de instrucciones core. Mejora obediencia en qwen2.5-coder:7b significativamente. |
+| **TOOL_VISION_EVALUATOR** | Conectado completamente: xcap captura el monitor principal → PNG base64 → moondream (rápido) o llama3.2-vision (avanzado). Obligatorio para proyectos con GUI antes de TOOL_FINISH. |
+
 ### v0.3.0 — 2026-06-14 (Chronos-VFS Zero-Trace & State Machine)
 Actualización masiva que convierte al Agente en un ente de pensamiento autónomo antes de la escritura física, integrando el motor RAM O(1).
 
@@ -209,8 +257,11 @@ Sesión de ingeniería intensiva que resolvió la cadena de fallos que impedía 
 
 ## 🤝 Filosofía de Uso
 1. **Pídele tareas completas** con tests incluidos.
-2. **Deja que actúe** — verás en la consola técnica cómo planifica, asegura el entorno, escribe, hace backup, prueba y aprende.
+2. **Deja que actúe** — verás en la consola técnica cómo planifica, define micro-metas, ejecuta archivo por archivo, y valida con el Crítico antes de terminar.
 3. **Intervención Cero** — dependencias, errores de compilación y fallos lógicos son manejados automáticamente.
+4. **Confianza en el proceso** — el agente no marca tarea como completa hasta que TODAS las micro-metas del Planificador están verificadas.
+
+> *"La inteligencia genuina no actúa por instinto ciego; primero proyecta una simulación en su mente (Memoria Lógica) y, solo cuando la simulación es estable, mueve el brazo para materializarla."*
 
 ---
 

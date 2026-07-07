@@ -9,6 +9,7 @@ pub mod session_journal;
 pub mod intent_router;
 pub mod stub_enforcer;
 pub mod dependency_mapper;
+pub mod vision;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};
