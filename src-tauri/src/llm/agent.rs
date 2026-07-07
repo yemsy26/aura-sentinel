@@ -192,7 +192,8 @@ pub async fn run_agent_loop(
     let mut think_consecutive = 0u32;
     let mut auditor_consecutive = 0u32;
     let mut mapper_consecutive = 0u32;
-    let mut critic_fsm_lock_consecutive = 0u32; // breaks Critic stuck-on-FSM-LOCK loop
+    let mut critic_fsm_lock_consecutive = 0u32;
+    let mut workspace_manager_error_consecutive = 0u32; // breaks Planner stuck on WORKSPACE_MANAGER loop
     let mut learn_consecutive = 0u32;
     let mut forced_next_tool: Option<(String, String)> = None;
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
@@ -356,7 +357,7 @@ pub async fn run_agent_loop(
         let agent_prompt = match current_role {
             // Planner - compressed to <200 tokens
             AgentRole::Planner => format!(
-                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_WORKSPACE_MANAGER, TOOL_SEARCH.\nREGLA: Cuando tu plan este listo y debas empezar a programar, DEBES usar TOOL_THINK para transferir el control al Ejecutor.\n{}{}{}",
+                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS PLANNER: TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_SEARCH.\nPROHIBIDO: TOOL_WORKSPACE_MANAGER (no borres archivos), TOOL_PROGRAMMER, TOOL_TERMINAL.\nREGLA CRITICA: Cuando tu plan este listo, usa TOOL_THINK para transferir el control al Ejecutor.\n{}{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, analysis_fast_path, json_schema
             ),
@@ -445,8 +446,18 @@ pub async fn run_agent_loop(
 
         // ── ROLE HARD LOCKS (FSM ENFORCEMENT) ─────────────────────────────────
         if current_role == AgentRole::Planner {
-            if ["TOOL_PROGRAMMER", "TOOL_TESTER", "TOOL_TERMINAL", "TOOL_BACKGROUND_START", "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL", "TOOL_ENV_MANAGER", "TOOL_ASSET_MANAGER", "TOOL_VISION_EVALUATOR"].contains(&tool.as_str()) {
-                let error_msg = format!("[ACCESO DENEGADO]: Eres el Planificador. No tienes permiso para usar {}. Tu rol es solo diseñar la arquitectura. Usa TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK o herramientas de lectura.", tool);
+            // TOOL_WORKSPACE_MANAGER is explicitly blocked: in a real test (prueba 4, paso 1)
+            // the Planner called it without parameters and deleted the freshly-created project files.
+            if ["TOOL_PROGRAMMER", "TOOL_TESTER", "TOOL_TERMINAL", "TOOL_BACKGROUND_START",
+                "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL", "TOOL_ENV_MANAGER",
+                "TOOL_ASSET_MANAGER", "TOOL_VISION_EVALUATOR", "TOOL_WORKSPACE_MANAGER"].contains(&tool.as_str()) {
+                let error_msg = format!(
+                    "[ACCESO DENEGADO]: Eres el Planificador. No tienes permiso para usar {}. \
+                    Tu rol es SOLO diseñar la arquitectura. \
+                    NUNCA borres archivos existentes. \
+                    Usa TOOL_THINK para transferir el control al Ejecutor cuando estés listo.",
+                    tool
+                );
                 current_context.push_str(&format!("{}\n\n", error_msg));
                 emit_event(&app_handle, step_count, &format!("[FSM LOCK] Planificador intentó usar {}", tool), "WARNING");
                 step_count += 1;
@@ -961,10 +972,28 @@ pub async fn run_agent_loop(
             "TOOL_WORKSPACE_MANAGER" => {
                 emit_event(&app_handle, step_count, "Gestionando archivos del workspace...", "ACTION");
                 if archivos_vec.is_empty() {
-                    let err_msg = "Error: TOOL_WORKSPACE_MANAGER requiere una lista de archivos a eliminar.";
+                    workspace_manager_error_consecutive += 1;
+                    let err_msg = if workspace_manager_error_consecutive >= 3 {
+                        // Force the agent out of the loop by injecting a strong directive
+                        think_consecutive = 0;
+                        mapper_consecutive = 0;
+                        forced_next_tool = Some((
+                            "TOOL_THINK".to_string(),
+                            "Llevas varios intentos fallidos con TOOL_WORKSPACE_MANAGER sin proveer archivos. El workspace no necesita limpieza. Procede directamente a crear los archivos necesarios con TOOL_PROGRAMMER.".to_string()
+                        ));
+                        workspace_manager_error_consecutive = 0;
+                        "[SISTEMA]: Bucle de TOOL_WORKSPACE_MANAGER detectado. No hay archivos que eliminar. \
+                        El workspace ya está listo. DEBES usar TOOL_THINK ahora para planificar \
+                        la creación de los archivos del proyecto con TOOL_PROGRAMMER."
+                    } else {
+                        "Error: TOOL_WORKSPACE_MANAGER requiere una lista de archivos a eliminar. \
+                        Si el workspace está vacío o no necesitas borrar nada, usa TOOL_THINK \
+                        para avanzar al siguiente paso."
+                    };
                     current_context.push_str(&format!("{}\n\n", err_msg));
                     emit_event(&app_handle, step_count, err_msg, "ERROR");
                 } else {
+                    workspace_manager_error_consecutive = 0;
                     let mut borrados = Vec::new();
                     let mut errores = Vec::new();
                     for f in &archivos_vec {
