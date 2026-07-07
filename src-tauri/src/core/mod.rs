@@ -364,11 +364,42 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
     let command = {
         let trimmed = command.trim();
 
-        // 1. `ls [args]` → `dir [args]`
+        // 1. Unix → Windows command translations
+        // ls → dir
         let trimmed = if trimmed == "ls" {
             "dir".to_string()
         } else if let Some(rest) = trimmed.strip_prefix("ls ") {
             format!("dir {}", rest)
+        // cat → type
+        } else if let Some(rest) = trimmed.strip_prefix("cat ") {
+            let path = rest.trim().trim_matches('"').trim_matches('\'');
+            format!("type \"{}\"", path)
+        // touch → echo (create empty file)
+        } else if let Some(rest) = trimmed.strip_prefix("touch ") {
+            format!("echo. > \"{}\"", rest.trim())
+        // rm → del
+        } else if let Some(rest) = trimmed.strip_prefix("rm -rf ") {
+            format!("rd /s /q \"{}\" 2>nul & del /f /q \"{}\" 2>nul", rest.trim(), rest.trim())
+        } else if let Some(rest) = trimmed.strip_prefix("rm ") {
+            format!("del /f \"{}\"", rest.trim())
+        // cp → copy
+        } else if let Some(rest) = trimmed.strip_prefix("cp ") {
+            format!("copy {}", rest)
+        // mv → move
+        } else if let Some(rest) = trimmed.strip_prefix("mv ") {
+            format!("move {}", rest)
+        // pwd → cd (print working dir)
+        } else if trimmed == "pwd" {
+            "cd".to_string()
+        // mkdir -p → mkdir
+        } else if let Some(rest) = trimmed.strip_prefix("mkdir -p ") {
+            format!("mkdir \"{}\"", rest.trim())
+        // grep → findstr
+        } else if let Some(rest) = trimmed.strip_prefix("grep ") {
+            format!("findstr {}", rest)
+        // clear → cls
+        } else if trimmed == "clear" {
+            "cls".to_string()
         } else {
             trimmed.to_string()
         };

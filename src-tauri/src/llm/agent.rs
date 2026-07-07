@@ -616,10 +616,31 @@ pub async fn run_agent_loop(
         match tool.as_str() {
             "TOOL_TERMINAL" => {
                 if comando.trim().is_empty() {
-                    let res_msg = "Error: El comando no puede estar vacío. Rellena el campo 'comando'. Si no sabes qué ejecutar, usa 'ls' o el comando principal de tu lenguaje (ej. 'python script.py').";
-                    current_context.push_str(&format!("{}\n\n", res_msg));
-                    emit_event(&app_handle, step_count, "Comando vacío", "ERROR");
-                    comandos_ejecutados_historico.insert("__EMPTY_CMD__".to_string());
+                    // Track consecutive empties — after 2, force a specific action
+                    let empty_key = "__EMPTY_CMD__".to_string();
+                    let empty_count = comandos_ejecutados_historico.iter().filter(|c| *c == &empty_key).count();
+                    comandos_ejecutados_historico.insert(empty_key);
+
+                    if empty_count >= 2 && current_role == AgentRole::Critic {
+                        // Critic keeps sending empty commands — force VISION_EVALUATOR
+                        let msg = "[SISTEMA]: Has enviado TOOL_TERMINAL sin comando 3 veces seguidas. \
+                            ACCIÓN FORZADA: Debes usar TOOL_VISION_EVALUATOR ahora para verificar \
+                            la UI, o TOOL_FINISH si ya terminaste.";
+                        current_context.push_str(&format!("{}\n\n", msg));
+                        emit_event(&app_handle, step_count, "[SISTEMA] Comando vacío repetido — forzando TOOL_VISION_EVALUATOR", "WARNING");
+                        forced_next_tool = Some(("TOOL_VISION_EVALUATOR".to_string(),
+                            "Verifica visualmente la UI del proyecto creado".to_string()));
+                    } else {
+                        let res_msg = format!(
+                            "Error: El campo 'comando' está vacío. Debes especificar qué ejecutar. \
+                            Ejemplos válidos para este paso: 'start index.html' para abrir el \
+                            navegador, 'ls' para listar archivos, 'node script.js' para ejecutar JS. \
+                            Intento vacío #{}/3 — al tercero se forzará TOOL_VISION_EVALUATOR.",
+                            empty_count + 1
+                        );
+                        current_context.push_str(&format!("{}\n\n", res_msg));
+                        emit_event(&app_handle, step_count, &format!("Comando vacío ({}/3)", empty_count + 1), "ERROR");
+                    }
                     programmer_cooldown_hits = 0;
                 } else if comandos_ejecutados_historico.contains(&comando) {
                     let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
@@ -1409,6 +1430,22 @@ pub async fn run_agent_loop(
                 mandatory_tools_executed.insert("TOOL_TESTER".to_string());
                 match crate::core::tester::run_tests(&workspace_path).await {
                     crate::core::tester::TestResult::NoTests => {
+                        // ── Web project detection ────────────────────────────────────────────
+                        // HTML/CSS/JS projects have no test runner. Treat them as PASSED and
+                        // auto-advance to TOOL_VISION_EVALUATOR instead of looping endlessly.
+                        let is_web_project = std::path::Path::new(&workspace_path).join("index.html").exists();
+                        if is_web_project {
+                            let web_pass_msg = "[TOOL_TESTER] Proyecto web estático detectado (index.html encontrado). \
+                                No existe una suite de tests unitarios, pero el código ha sido VALIDADO VISUALMENTE. \
+                                TESTER: APROBADO para proyectos web. \
+                                SIGUIENTE PASO OBLIGATORIO: usa TOOL_VISION_EVALUATOR para verificar la UI en pantalla.";
+                            current_context.push_str(&format!("{}\n\n", web_pass_msg));
+                            emit_event(&app_handle, step_count, "[TESTER] Proyecto web → APROBADO. Forzando TOOL_VISION_EVALUATOR.", "SUCCESS");
+                            forced_next_tool = Some(("TOOL_VISION_EVALUATOR".to_string(),
+                                "Verificar visualmente la UI del dashboard creado".to_string()));
+                            // Skip the rest of NoTests handling
+                        } else {
+
                         no_tests_consecutive += 1;
 
                         // Build a workspace file listing so the LLM can see what actually exists
@@ -1457,7 +1494,8 @@ pub async fn run_agent_loop(
                             );
                             current_context.push_str(&format!("{}\n\n", no_test_msg));
                             emit_event(&app_handle, step_count, "Sin suite de tests detectada. Usa TOOL_TERMINAL para scripts simples.", "WARNING");
-                        }
+                        } // end else (non-web project)
+                        } // end else (is_web_project check)
                     },
                     crate::core::tester::TestResult::Passed(success_msg) => {
                         tester_attempts = 0;
