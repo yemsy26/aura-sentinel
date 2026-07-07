@@ -830,9 +830,10 @@ pub async fn run_agent_loop(
             "TOOL_AUDITOR" => {
                 auditor_consecutive += 1;
                 if auditor_consecutive > 2 {
-                    let msg = "[SISTEMA INTERNO]: Loop de auditoría detectado. Estás auditando demasiadas veces seguidas sin actuar. DEBES proceder a usar TOOL_THINK o TOOL_PROGRAMMER en el siguiente turno.";
+                    let msg = "[SISTEMA INTERNO]: Loop de auditorÃ­a detectado. EstÃ¡s auditando demasiadas veces seguidas sin actuar. FORZANDO TOOL_THINK en el siguiente turno.";
                     current_context.push_str(&format!("{}\n\n", msg));
                     emit_event(&app_handle, step_count, msg, "WARNING");
+                    forced_next_tool = Some(("TOOL_THINK".to_string(), "Analizar auditorias previas y decidir siguiente paso (TOOL_MAPPER o TOOL_FINISH)".to_string()));
                 } else {
                     emit_event(&app_handle, step_count, "Auditando archivos locales...", "ACTION");
                     let safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
