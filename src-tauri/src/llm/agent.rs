@@ -360,7 +360,7 @@ pub async fn run_agent_loop(
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ENV_MANAGER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH.\n\n{}{}",
+                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START. Usa TOOL_ENV_MANAGER *SOLO* para instalar binarios scoop, NO para comandos bash/mkdir/touch.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
@@ -720,6 +720,29 @@ pub async fn run_agent_loop(
                                     emit_event(&app_handle, step_count, "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Error en terminal, devolviendo al Ejecutor.", "WARNING");
                                 }
                             }
+                        }
+                    }
+                }
+            },
+            "TOOL_ASSET_MANAGER" => {
+                let parts: Vec<&str> = comando.split('|').collect();
+                if parts.len() != 2 {
+                    let err = "Error: El comando para TOOL_ASSET_MANAGER debe tener el formato 'query|output_path'";
+                    current_context.push_str(&format!("{}\n\n", err));
+                    emit_event(&app_handle, step_count, err, "ERROR");
+                } else {
+                    let query = parts[0].trim();
+                    let output_path = std::path::Path::new(&workspace_path).join(parts[1].trim());
+                    let out_str = output_path.to_string_lossy().to_string();
+                    emit_event(&app_handle, step_count, &format!("Generando asset '{}'...", query), "ACTION");
+                    match crate::net::asset_fetcher::download_asset(query, &out_str).await {
+                        Ok(msg) => {
+                            current_context.push_str(&format!("Resultado TOOL_ASSET_MANAGER: {}\n\n", msg));
+                            emit_event(&app_handle, step_count, "Asset descargado correctamente.", "SUCCESS");
+                        },
+                        Err(e) => {
+                            current_context.push_str(&format!("Error TOOL_ASSET_MANAGER: {}\n\n", e));
+                            emit_event(&app_handle, step_count, &format!("Error: {}", e), "ERROR");
                         }
                     }
                 }
