@@ -192,6 +192,7 @@ pub async fn run_agent_loop(
     let mut think_consecutive = 0u32;
     let mut auditor_consecutive = 0u32;
     let mut mapper_consecutive = 0u32;
+    let mut critic_fsm_lock_consecutive = 0u32; // breaks Critic stuck-on-FSM-LOCK loop
     let mut learn_consecutive = 0u32;
     let mut forced_next_tool: Option<(String, String)> = None;
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
@@ -461,12 +462,50 @@ pub async fn run_agent_loop(
             }
         } else if current_role == AgentRole::Critic {
             if ["TOOL_PROGRAMMER", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
+                critic_fsm_lock_consecutive += 1;
                 let error_msg = format!("[ACCESO DENEGADO]: Eres el Crítico. No tienes permiso para usar {}. No puedes escribir código físico. Si el código falla, usa TOOL_TERMINAL, y si hay errores, el sistema te regresará al Ejecutor. NO uses TOOL_PROGRAMMER.", tool);
                 current_context.push_str(&format!("{}\n\n", error_msg));
                 emit_event(&app_handle, step_count, &format!("[FSM LOCK] Crítico intentó usar {}", tool), "WARNING");
+
+                // ── Anti-bucle del Crítico: si lleva demasiados FSM LOCKs
+                // seguidos, significa que el modelo está atascado intentando
+                // escribir archivos que faltan. Forzamos retorno al Ejecutor
+                // con un mensaje de feedback específico.
+                if critic_fsm_lock_consecutive >= 3 {
+                    // Scan workspace for common project entry files that might be missing.
+                    // archivos_vec is not yet parsed at this point, so we scan directly.
+                    let required_files = ["index.html", "style.css", "app.js",
+                        "main.py", "app.py", "main.rs", "main.go",
+                        "main.ts", "main.js", "index.js", "package.json"];
+                    let missing: Vec<&str> = required_files.iter()
+                        .filter(|f| !std::path::Path::new(&workspace_path).join(f).exists())
+                        .cloned()
+                        .collect();
+                    let feedback = format!(
+                        "[REPORTE DEL CRÍTICO]: Bucle detectado. \
+                        Aun faltan archivos por crear o hay archivos incompletos: {:?}. \
+                        El Ejecutor debe continuar la escritura de código para los archivos faltantes \
+                        usando TOOL_PROGRAMMER. Únicamente cuando TODOS los archivos existan \
+                        físicamente el Crítico podrá validar.",
+                        missing
+                    );
+                    critic_feedback = Some(feedback.clone());
+                    current_role = AgentRole::Executor;
+                    critic_fsm_lock_consecutive = 0;
+                    think_consecutive = 0;
+                    mapper_consecutive = 0;
+                    comandos_ejecutados_historico.clear(); // allow fresh terminal commands
+                    emit_event(&app_handle, step_count, 
+                        "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Archivos incompletos detectados. Reactivando escritura.", 
+                        "WARNING");
+                    current_context.push_str(&format!("{}\n\n", feedback));
+                }
+
                 step_count += 1;
                 continue;
             }
+            // Reset lock counter when Critic does something valid
+            critic_fsm_lock_consecutive = 0;
         }
         
         let url = raw_value.get("url_a_investigar").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -516,6 +555,7 @@ pub async fn run_agent_loop(
         // Reset loop counters
         if tool != "TOOL_THINK" { think_consecutive = 0; }
         if tool != "TOOL_AUDITOR" { auditor_consecutive = 0; }
+        if tool != "TOOL_MAPPER" { mapper_consecutive = 0; }
         if tool != "TOOL_LEARN" { learn_consecutive = 0; }
 
         match tool.as_str() {
@@ -529,7 +569,25 @@ pub async fn run_agent_loop(
                 } else if comandos_ejecutados_historico.contains(&comando) {
                     let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
                     emit_event(&app_handle, step_count, "Comando repetido interceptado", "WARNING");
-                    current_context.push_str(&format!("{}\n\n", res_msg));
+                    // If Critic is stuck repeating the same dir/ls command, force it back to Executor
+                    if current_role == AgentRole::Critic {
+                        let feedback = "[REPORTE DEL CRÍTICO]: Bucle de terminal detectado en el Crítico. \
+                            El agente sigue repitiendo el mismo comando sin avanzar. \
+                            El Ejecutor debe retomar el control y usar TOOL_PROGRAMMER para \
+                            crear o completar los archivos que faltan.".to_string();
+                        critic_feedback = Some(feedback.clone());
+                        current_role = AgentRole::Executor;
+                        critic_fsm_lock_consecutive = 0;
+                        think_consecutive = 0;
+                        mapper_consecutive = 0;
+                        comandos_ejecutados_historico.clear();
+                        emit_event(&app_handle, step_count,
+                            "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Bucle de terminal en Crítico. Reactivando escritura.",
+                            "WARNING");
+                        current_context.push_str(&format!("{}\n\n", feedback));
+                    } else {
+                        current_context.push_str(&format!("{}\n\n", res_msg));
+                    }
                 } else {
                     programmer_cooldown_hits = 0;
                     comandos_ejecutados_historico.insert(comando.clone());
