@@ -1071,10 +1071,9 @@ pub async fn run_agent_loop(
                     current_context.push_str(&format!("{}\n\n", err_msg));
                     emit_event(&app_handle, step_count, err_msg, "ERROR");
                 } else if comandos_ejecutados_historico.contains(&comando) {
-                    let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás repitiendo un comando de background fallido. Repetirlo no lo arreglará. Usa TOOL_PROGRAMMER.";
-                    emit_event(&app_handle, step_count, res_msg, "FATAL");
-                    let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: format!("Bucle en background con comando: {}", comando) };
-                    return Ok(serde_json::to_string(&final_res).unwrap());
+                    let res_msg = "[SISTEMA INTERNO]: Advertencia: Este servidor o proceso YA ESTÁ EN EJECUCIÓN en segundo plano. NO necesitas volver a iniciarlo. Usa TOOL_VISION_EVALUATOR o TOOL_FINISH.";
+                    current_context.push_str(&format!("{}\n\n", res_msg));
+                    emit_event(&app_handle, step_count, "Servidor ya en ejecución (bucle evitado).", "WARNING");
                 } else {
                     comandos_ejecutados_historico.insert(comando.clone());
                     emit_event(&app_handle, step_count, &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando), "ACTION");
