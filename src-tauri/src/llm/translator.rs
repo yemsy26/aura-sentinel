@@ -127,11 +127,21 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
     match call_ollama_text(&model, &system_prompt).await {
         Ok(mut res) => {
             res = res.trim().to_string();
-            // Limpiar markdown json tags
-            if res.starts_with("```json") { res = res.trim_start_matches("```json").to_string(); }
-            else if res.starts_with("```") { res = res.trim_start_matches("```").to_string(); }
-            if res.ends_with("```") { res = res.trim_end_matches("```").to_string(); }
-            res = res.trim().to_string();
+            // Extract JSON from the first { to the last }
+            let mut clean_text = res.trim().to_string();
+            if let Some(start) = clean_text.find('{') {
+                if let Some(end) = clean_text.rfind('}') {
+                    clean_text = clean_text[start..end + 1].to_string();
+                }
+            }
+            
+            // Validate that it is actual JSON
+            if serde_json::from_str::<serde_json::Value>(&clean_text).is_err() {
+                emit_event(app_handle, 0, "NLU Output Invalid JSON. Fallback to AGENTIC_TASK.", "WARNING");
+                return format!("{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"{}\",\"os_command\":null,\"direct_response\":null,\"clarification_question\":null}}", corrected_input.replace('"', "\\\""));
+            }
+            
+            res = clean_text;
 
             if res.is_empty() {
                 emit_event(app_handle, 0, "Fallo cognitivo en NLU (Vacío). Forzando tarea agente.", "WARNING");
