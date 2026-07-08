@@ -188,6 +188,12 @@ pub async fn run_agent_loop(
     let mut tester_attempts = 0;
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
+    let original_prompt_parsed = if let Some(idx) = user_message.find("\n\nGuía de Traducción Técnica") {
+        let text = &user_message[..idx];
+        text.replace("Petición Original del Usuario: ", "").trim().to_string()
+    } else {
+        user_message.clone()
+    };
     let mut no_tests_consecutive = 0u32;
     let mut think_consecutive = 0u32;
     let mut auditor_consecutive = 0u32;
@@ -201,7 +207,7 @@ pub async fn run_agent_loop(
     // Parse user_message for required tools and enforce them before TOOL_FINISH.
     let mandatory_tools_required: std::collections::HashSet<String> = {
         let mut required = std::collections::HashSet::new();
-        let msg_upper = user_message.to_uppercase();
+        let msg_upper = original_prompt_parsed.to_uppercase();
         if msg_upper.contains("TOOL_TESTER") { required.insert("TOOL_TESTER".to_string()); }
         if msg_upper.contains("TOOL_VISION_EVALUATOR") { required.insert("TOOL_VISION_EVALUATOR".to_string()); }
         if msg_upper.contains("TOOL_AUDITOR") { required.insert("TOOL_AUDITOR".to_string()); }
@@ -218,7 +224,7 @@ pub async fn run_agent_loop(
     let mut critic_feedback: Option<String> = None;
 
     // ── Mission Type Classifier ─────────────────────────────────────────────
-    let mission_type = classify_mission(&user_message);
+    let mission_type = classify_mission(&original_prompt_parsed);
     let mission_label = match &mission_type {
         MissionType::Analysis     => "🔍 ANÁLISIS",
         MissionType::Construction => "🏗️ CONSTRUCCIÓN",
