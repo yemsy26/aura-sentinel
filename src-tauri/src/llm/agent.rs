@@ -701,12 +701,10 @@ pub async fn run_agent_loop(
             "TOOL_TERMINAL" => {
                 let cmd_lower = comando.to_lowercase();
                 if cmd_lower.contains("http-server") || cmd_lower.contains("npm start") || cmd_lower.contains("npm run dev") || cmd_lower.contains("python -m http.server") || cmd_lower.contains("flask run") || cmd_lower.contains("uvicorn") {
-                    let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, debes usar TOOL_BACKGROUND_START (solo permitido para el Ejecutor, no para el Crítico).";
+                    let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, DEBES usar TOOL_BACKGROUND_START. [SISTEMA: Redirigiendo automticamente a TOOL_BACKGROUND_START...]";
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(&app_handle, step_count, "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
-                    programmer_cooldown_hits = 0;
-                    // FIX: Do NOT insert blocked server command into history, 
-                    // otherwise TOOL_BACKGROUND_START will reject it as a loop!
+                    programmer_cooldown_hits = 0; forced_next_tool = Some(("TOOL_BACKGROUND_START".to_string(), comando.clone()));
                 } else if comando.trim().is_empty() {
                     // Track consecutive empties — after 2, force a specific action
                     let empty_key = "__EMPTY_CMD__".to_string();
@@ -759,12 +757,10 @@ pub async fn run_agent_loop(
                 } else {
                     let cmd_lower = comando.to_lowercase();
                     if cmd_lower.contains("http-server") || cmd_lower.contains("npm start") || cmd_lower.contains("npm run dev") || cmd_lower.contains("python -m http.server") || cmd_lower.contains("flask run") || cmd_lower.contains("uvicorn") {
-                        let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, debes usar TOOL_BACKGROUND_START (solo permitido para el Ejecutor, no para el Crítico).";
+                        let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, DEBES usar TOOL_BACKGROUND_START. [SISTEMA: Redirigiendo automticamente a TOOL_BACKGROUND_START...]";
                         current_context.push_str(&format!("{}\n\n", res_msg));
                         emit_event(&app_handle, step_count, "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
-                        programmer_cooldown_hits = 0;
-                        // FIX: Do NOT insert blocked server command into history, 
-                        // otherwise TOOL_BACKGROUND_START will reject it as a loop!
+                        programmer_cooldown_hits = 0; forced_next_tool = Some(("TOOL_BACKGROUND_START".to_string(), comando.clone()));
                     } else {
                         programmer_cooldown_hits = 0;
                         comandos_ejecutados_historico.insert(comando.clone());
@@ -1954,3 +1950,4 @@ pub async fn run_agent_loop(
     };
     Ok(serde_json::to_string(&final_res).unwrap())
 }
+
