@@ -195,6 +195,7 @@ pub async fn run_agent_loop(
     let mut critic_fsm_lock_consecutive = 0u32;
     let mut workspace_manager_error_consecutive = 0u32;
     let mut learn_consecutive = 0u32;
+    let mut unknown_tool_consecutive = 0u32;
 
     // ── Mandatory Tool Checklist (Bug 1 fix) ──────────────────────────────────
     // Parse user_message for required tools and enforce them before TOOL_FINISH.
@@ -383,7 +384,7 @@ pub async fn run_agent_loop(
               \"comando\": \"<COMANDO_REAL o null>\",\n\
               \"task_id\": null,\n\
               \"url_a_investigar\": null,\n\
-              \"archivos_a_editar\": [\"index.html\", \"styles.css\", \"script.js\"],\n\
+              \"archivos_a_editar\": [\"archivo.ext\", \"otro_archivo.ext\"],\n\
               \"ast_nodes\": [{{\"intent\": \"<código>\", \"parent_id\": 0, \"opcode\": 2}}],\n\
               \"respuesta_conversacional\": \"<respuesta o null>\"\n\
             }}\n\
@@ -417,7 +418,9 @@ pub async fn run_agent_loop(
         // ── Context Sanitizer: strip any reference to foreign workspaces ────────
         // Prevents the LLM from re-learning stale workspace paths from its own
         // history (e.g. "proxy-stack-windows" from a previous session).
-        let mut current_context = {
+        // FALLO #5 FIX: reassign outer `current_context` directly (no shadow).
+        // Previously `let mut current_context` created a shadow that was discarded at loop end.
+        current_context = {
             let stale_markers = [
                 "proxy-stack-windows",
                 "proxy-stack",
@@ -529,7 +532,8 @@ pub async fn run_agent_loop(
         }
 
         // ── ROLE HARD LOCKS (FSM ENFORCEMENT) ─────────────────────────────────
-        if current_role == AgentRole::Planner {
+        let is_forced_and_obeyed = forced_override.as_ref().map_or(false, |(f, _)| f == &tool);
+        if !is_forced_and_obeyed && current_role == AgentRole::Planner {
             // TOOL_WORKSPACE_MANAGER is explicitly blocked: in a real test (prueba 4, paso 1)
             // the Planner called it without parameters and deleted the freshly-created project files.
             if ["TOOL_PROGRAMMER", "TOOL_TESTER", "TOOL_TERMINAL", "TOOL_BACKGROUND_START",
@@ -547,7 +551,7 @@ pub async fn run_agent_loop(
                 step_count += 1;
                 continue;
             }
-        } else if current_role == AgentRole::Executor {
+        } else if !is_forced_and_obeyed && current_role == AgentRole::Executor {
             if ["TOOL_TESTER", "TOOL_FINISH", "TOOL_VISION_EVALUATOR", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
                 let error_msg = format!("[ACCESO DENEGADO]: Eres el Ejecutor. No tienes permiso para usar {}. Tu rol es escribir código. Si terminaste, asegúrate de que tu código esté listo y pasa Anti-Stub. El motor te pasará al Crítico automáticamente.", tool);
                 current_context.push_str(&format!("{}\n\n", error_msg));
@@ -555,7 +559,7 @@ pub async fn run_agent_loop(
                 step_count += 1;
                 continue;
             }
-        } else if current_role == AgentRole::Critic {
+        } else if !is_forced_and_obeyed && current_role == AgentRole::Critic {
             if ["TOOL_PROGRAMMER", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
                 critic_fsm_lock_consecutive += 1;
                 let error_msg = format!("[ACCESO DENEGADO]: Eres el Crítico. No tienes permiso para usar {}. No puedes escribir código físico. Si el código falla, usa TOOL_TERMINAL, y si hay errores, el sistema te regresará al Ejecutor. NO uses TOOL_PROGRAMMER.", tool);
@@ -686,8 +690,7 @@ pub async fn run_agent_loop(
         if tool != "TOOL_LEARN" { learn_consecutive = 0; }
 
         match tool.as_str() {
-            "TOOL_TERMINAL" => {
-                if comando.trim().is_empty() {
+
                     // Track consecutive empties — after 2, force a specific action
                     let empty_key = "__EMPTY_CMD__".to_string();
                     let empty_count = comandos_ejecutados_historico.iter().filter(|c| *c == &empty_key).count();
@@ -737,10 +740,18 @@ pub async fn run_agent_loop(
                         current_context.push_str(&format!("{}\n\n", res_msg));
                     }
                 } else {
-                    programmer_cooldown_hits = 0;
-                    comandos_ejecutados_historico.insert(comando.clone());
-                    emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
-                    match execute_terminal_command(&workspace_path, &comando).await {
+                    let cmd_lower = comando.to_lowercase();
+                    if cmd_lower.contains("http-server") || cmd_lower.contains("npm start") || cmd_lower.contains("npm run dev") || cmd_lower.contains("python -m http.server") || cmd_lower.contains("flask run") || cmd_lower.contains("uvicorn") {
+                        let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, debes usar TOOL_BACKGROUND_START (solo permitido para el Ejecutor, no para el Crítico).";
+                        current_context.push_str(&format!("{}\n\n", res_msg));
+                        emit_event(&app_handle, step_count, "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
+                        programmer_cooldown_hits = 0;
+                        comandos_ejecutados_historico.insert(comando.clone());
+                    } else {
+                        programmer_cooldown_hits = 0;
+                        comandos_ejecutados_historico.insert(comando.clone());
+                        emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
+                        match execute_terminal_command(&workspace_path, &comando).await {
                         Ok(out) => {
 
                             // ── Package-install amnesia fix ──────────────────────────────────────
@@ -979,6 +990,7 @@ pub async fn run_agent_loop(
                             }
                         }
                     }
+                  }
                 }
             },
             "TOOL_ASSET_MANAGER" => {
@@ -1311,6 +1323,16 @@ pub async fn run_agent_loop(
                         }
                     }
                 }
+                  // FALLO FIX: Limit frontend cooldown exemption to max 2 cycles.
+                  let mut is_all_frontend = true;
+                  for f in &archivos_vec {
+                      if !f.ends_with(".html") && !f.ends_with(".css") && !f.ends_with(".js") {
+                          is_all_frontend = false;
+                      }
+                  }
+                  if is_cooldown_blocked && is_all_frontend && !archivos_vec.is_empty() && programmer_cooldown_hits < 2 {
+                      is_cooldown_blocked = false;
+                  }
                 
                 if is_cooldown_blocked {
                     programmer_cooldown_hits += 1;
@@ -1454,7 +1476,7 @@ pub async fn run_agent_loop(
                                                     },
                                                     Err(e) => {
                                                         emit_event(&app_handle, step_count, &format!("Error detectado: {}", e), "ERROR");
-                                                        qwen_prompt = format!("{}\n\n[ERROR DE COMPILACIÓN/EJECUCIÓN]: El código que generaste causó este error:\n{}\n\nSoluciónalo y genera un nuevo JSON asegurándote de escapar correctamente los strings.", qwen_prompt, e);
+                                                        qwen_prompt = format!("{}\n\n[ERROR DE COMPILACIÓN/EJECUCIÓN]: El código que generaste causó este error:\n{}\n\nSoluciónalo y genera un nuevo JSON asegurándote de escapar correctamente los strings. REGLA ESTRICTA: DEBES RESPONDER ÚNICAMENTE CON UN JSON VÁLIDO (sin texto fuera del JSON).", qwen_prompt, e);
                                                         if e.contains("package.json") && !archivos_vec.contains(&"package.json".to_string()) {
                                                             archivos_vec.push("package.json".to_string());
                                                         }
@@ -1488,9 +1510,10 @@ pub async fn run_agent_loop(
                     }
                 }
                 
-                if !exito_bucle_programador && max_intentos == 0 {
-                    emit_event(&app_handle, step_count, "Max intentos de auto-sanación alcanzado. Fallo físico.", "FATAL");
-                    current_context.push_str("Programador: Fracasó tras múltiples intentos.\n\n");
+                if !exito_bucle_programador {
+                    emit_event(&app_handle, step_count, "El programador devolvió JSON inválido o falló completamente. Forzando fin.", "FATAL");
+                    current_context.push_str("Programador: Fracasó tras múltiples intentos o JSON inválido. [SISTEMA] FORZANDO TOOL_FINISH.\n\n");
+                    forced_next_tool = Some(("TOOL_FINISH".to_string(), "El programador no pudo resolver los errores de sintaxis tras varios intentos.".to_string()));
                 } else if exito_bucle_programador {
                     // TOOL_PROGRAMMER succeeded — reset the NoTests loop counter
                     // so TOOL_TESTER can be used again to verify the newly created test files
@@ -1528,7 +1551,7 @@ pub async fn run_agent_loop(
                 };
                 match crate::core::vision::evaluate_vision(&vision_prompt, false).await {
                     Ok(vision_result) => {
-                        current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n", vision_result));
+                        current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LA VALIDACIÓN VISUAL HA SIDO COMPLETADA. SI EL MANDATO DEL USUARIO FUE CUMPLIDO, EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS HERRAMIENTAS DE VALIDACIÓN.\n\n", vision_result));
                         emit_event(&app_handle, step_count, &format!("[VISION] Evaluacion completada: {}", &vision_result.chars().take(120).collect::<String>()), "SUCCESS");
                     },
                     Err(e) => {
@@ -1804,8 +1827,10 @@ pub async fn run_agent_loop(
                 }
             },
             "TOOL_SEARCH" => {
-                emit_event(&app_handle, step_count, &format!("Consultando Memoria Permanente para: {}", url), "ACTION");
-                match crate::core::memory::query_memory(&url).await {
+                // FALLO #6 FIX: use `comando` as query first, fall back to `url_a_investigar`.
+                let search_query = if !comando.trim().is_empty() { comando.clone() } else { url.clone() };
+                emit_event(&app_handle, step_count, &format!("Consultando Memoria Permanente para: {}", search_query), "ACTION");
+                match crate::core::memory::query_memory(&search_query).await {
                     Ok(msg) => {
                         current_context.push_str(&format!("Resultado TOOL_SEARCH:\n{}\n\n", msg));
                         emit_event(&app_handle, step_count, "Búsqueda en memoria completada.", "SUCCESS");
@@ -1813,6 +1838,34 @@ pub async fn run_agent_loop(
                     Err(err) => {
                         current_context.push_str(&format!("Error en TOOL_SEARCH: {}\n\n", err));
                         emit_event(&app_handle, step_count, &err, "ERROR");
+                    }
+                }
+            },
+            "TOOL_ASK_USER" => {
+                emit_event(&app_handle, step_count, "Solicitando información al usuario...", "ACTION");
+                let mut question = comando.clone();
+                if question.trim().is_empty() {
+                    question = raw_value.get("respuesta_conversacional")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                }
+                if question.trim().is_empty() {
+                    question = raw_value.get("pensamiento")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("El sistema se atascó o completó una tarea, pero no dejó un mensaje. ¿Cómo deseas proceder?")
+                        .to_string();
+                }
+
+                let options = vec![];
+                match crate::core::ask_user::ask_user_async(&app_handle, question.clone(), options, current_context.clone()).await {
+                    Ok(answer) => {
+                        current_context.push_str(&format!("Pregunta al usuario: {}\nRespuesta del usuario: {}\n\n", question, answer));
+                        emit_event(&app_handle, step_count, "Respuesta del usuario recibida.", "SUCCESS");
+                    },
+                    Err(e) => {
+                        current_context.push_str(&format!("Error al consultar al usuario: {}\n\n", e));
+                        emit_event(&app_handle, step_count, &format!("Error ASK_USER: {}", e), "ERROR");
                     }
                 }
             },
@@ -1849,8 +1902,19 @@ pub async fn run_agent_loop(
                 return Ok(serde_json::to_string(&final_res).unwrap());
             },
             _ => {
+                unknown_tool_consecutive += 1;
                 emit_event(&app_handle, step_count, &format!("Herramienta desconocida: {}", tool), "WARNING");
-                current_context.push_str(&format!("Advertencia: Intentaste usar herramienta desconocida '{}'.\n\n", tool));
+                if unknown_tool_consecutive >= 3 {
+                    forced_next_tool = Some((
+                        "TOOL_THINK".to_string(),
+                        "El sistema bloqueó mi acceso porque intenté usar herramientas inventadas que no existen en el prompt. Transfiero el control para evitar bucles de alucinación.".to_string()
+                    ));
+                    unknown_tool_consecutive = 0;
+                    current_context.push_str(&format!("Error crítico: uso de herramienta desconocida '{}'. [FSM FORZANDO TOOL_THINK]\n\n", tool));
+                    emit_event(&app_handle, step_count, "[FSM] Agente inventando herramientas. Forzando TOOL_THINK.", "WARNING");
+                } else {
+                    current_context.push_str(&format!("Advertencia: Intentaste usar herramienta desconocida '{}'. Usa solo herramientas del catálogo.\n\n", tool));
+                }
             }
         }
         
