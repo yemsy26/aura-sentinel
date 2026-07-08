@@ -1564,6 +1564,24 @@ pub async fn run_agent_loop(
                 } else {
                     format!("Evalua la calidad visual de esta pantalla. Describe: 1) Si la UI se ve correcta, 2) Errores visibles, 3) Elementos faltantes. Objetivo original: {}", user_message)
                 };
+
+                // Auto-open URL if found in comando or user_message
+                let text_to_search = format!("{} {}", comando, user_message);
+                let text_lower = text_to_search.to_lowercase();
+                if let Some(idx) = text_lower.find("http://").or_else(|| text_lower.find("https://")) {
+                    let end_idx = text_to_search[idx..].find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`').unwrap_or(text_to_search.len() - idx);
+                    let url = &text_to_search[idx..idx + end_idx];
+                    emit_event(&app_handle, step_count, &format!("[VISION] Abriendo navegador en {}", url), "ACTION");
+                    
+                    #[cfg(target_os = "windows")]
+                    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+                    #[cfg(not(target_os = "windows"))]
+                    let _ = std::process::Command::new("open").arg(url).spawn();
+                    
+                    // Wait for browser to open and render
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+
                 match crate::core::vision::evaluate_vision(&vision_prompt, false).await {
                     Ok(vision_result) => {
                         current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LA VALIDACIÓN VISUAL HA SIDO COMPLETADA. SI EL MANDATO DEL USUARIO FUE CUMPLIDO, EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS HERRAMIENTAS DE VALIDACIÓN.\n\n", vision_result));
