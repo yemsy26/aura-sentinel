@@ -13,12 +13,14 @@ fn strip_think_tags(mut text: String) -> String {
         }
     }
     
-    // Also strip ```json and ``` if they exist wrapping the whole thing
-    let text = text.trim();
-    let text = text.strip_prefix("```json").unwrap_or(text);
-    let text = text.strip_prefix("```").unwrap_or(text);
-    let text = text.strip_suffix("```").unwrap_or(text);
-    text.trim().to_string()
+    let mut clean_text = text.trim().to_string();
+    if let Some(start) = clean_text.find('{') {
+        if let Some(end) = clean_text.rfind('}') {
+            clean_text = clean_text[start..end + 1].to_string();
+        }
+    }
+    
+    clean_text
 }
 
 #[derive(Clone, Serialize)]
