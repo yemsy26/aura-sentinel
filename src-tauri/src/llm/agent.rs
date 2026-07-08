@@ -690,7 +690,15 @@ pub async fn run_agent_loop(
         if tool != "TOOL_LEARN" { learn_consecutive = 0; }
 
         match tool.as_str() {
-
+            "TOOL_TERMINAL" => {
+                let cmd_lower = comando.to_lowercase();
+                if cmd_lower.contains("http-server") || cmd_lower.contains("npm start") || cmd_lower.contains("npm run dev") || cmd_lower.contains("python -m http.server") || cmd_lower.contains("flask run") || cmd_lower.contains("uvicorn") {
+                    let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, debes usar TOOL_BACKGROUND_START (solo permitido para el Ejecutor, no para el Crítico).";
+                    current_context.push_str(&format!("{}\n\n", res_msg));
+                    emit_event(&app_handle, step_count, "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
+                    programmer_cooldown_hits = 0;
+                    comandos_ejecutados_historico.insert(comando.clone());
+                } else if comando.trim().is_empty() {
                     // Track consecutive empties — after 2, force a specific action
                     let empty_key = "__EMPTY_CMD__".to_string();
                     let empty_count = comandos_ejecutados_historico.iter().filter(|c| *c == &empty_key).count();
