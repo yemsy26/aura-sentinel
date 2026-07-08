@@ -1085,7 +1085,8 @@ pub async fn run_agent_loop(
                     match start_background_task(&workspace_path, &task_id, &comando).await {
                         Ok(out) => {
 
-                            current_context.push_str(&format!("Resultado: {}\n\n", out));
+                            let sys_guidance = "[SISTEMA INTERNO]: El proceso en segundo plano ha sido INICIADO EXITOSAMENTE. NO repitas este comando. Ahora DEBES continuar con la misin usando otras herramientas (por ejemplo, TOOL_VISION_EVALUATOR, TOOL_TESTER, o TOOL_FINISH si has terminado).";
+                            current_context.push_str(&format!("Resultado: {}\n{}\n\n", out, sys_guidance));
                             emit_event(&app_handle, step_count, &out, "SUCCESS");
                         },
                         Err(err) => {
