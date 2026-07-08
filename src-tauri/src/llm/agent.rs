@@ -705,7 +705,8 @@ pub async fn run_agent_loop(
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(&app_handle, step_count, "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
                     programmer_cooldown_hits = 0;
-                    comandos_ejecutados_historico.insert(comando.clone());
+                    // FIX: Do NOT insert blocked server command into history, 
+                    // otherwise TOOL_BACKGROUND_START will reject it as a loop!
                 } else if comando.trim().is_empty() {
                     // Track consecutive empties — after 2, force a specific action
                     let empty_key = "__EMPTY_CMD__".to_string();
@@ -762,7 +763,8 @@ pub async fn run_agent_loop(
                         current_context.push_str(&format!("{}\n\n", res_msg));
                         emit_event(&app_handle, step_count, "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
                         programmer_cooldown_hits = 0;
-                        comandos_ejecutados_historico.insert(comando.clone());
+                        // FIX: Do NOT insert blocked server command into history, 
+                        // otherwise TOOL_BACKGROUND_START will reject it as a loop!
                     } else {
                         programmer_cooldown_hits = 0;
                         comandos_ejecutados_historico.insert(comando.clone());
