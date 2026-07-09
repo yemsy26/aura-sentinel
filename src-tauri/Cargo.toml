@@ -37,3 +37,4 @@ urlencoding = "2.1.3"
 xcap = "0.9.6"
 base64 = "0.22.1"
 image = "0.25.6"
+uuid = { version = "1.20.0", features = ["v4"] }

@@ -45,12 +45,22 @@ pub struct FinalResponse {
     pub respuesta_conversacional: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AgentState {
+    current_role: AgentRole,
+    critic_feedback: Option<String>,
+    acceptance_contract: Option<String>,
+    step_count: u32,
+    current_context: String,
+}
+
+
 /// ── Multi-Agent Role FSM ──────────────────────────────────────────────────
 /// Aura Sentinel operates in a three-phase cycle:
 ///   Planner  → designs the architecture in RAM (TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK)
 ///   Executor → writes physical code to disk (TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ENV_MANAGER)
 ///   Critic   → validates correctness (TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 enum AgentRole {
     Planner,
     Executor,
@@ -246,6 +256,14 @@ pub async fn run_agent_loop(
     // ── Session Journal ────────────────────────────────────────
     // Persist mission state to disk so sleep/restart doesn’t lose context.
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
+    
+    // Si la sesión anterior terminó o falló, limpiamos las fases para que el Arquitecto pueda crear un plan nuevo para esta nueva misión.
+    if journal.status == "COMPLETADO" || journal.status == "ERROR" || journal.status == "FINISH" {
+        journal.plan_generado = false;
+        journal.fases.clear();
+        journal.fase_actual = 0;
+    }
+
     journal.objetivo = user_message.clone();
     journal.workspace_path = workspace_path.clone();
     journal.status = "EN_PROGRESO".to_string();
@@ -255,9 +273,54 @@ pub async fn run_agent_loop(
     emit_event(&app_handle, 0, "[DIARIO] Misión registrada en diario de sesión.", "INFO");
     emit_event(&app_handle, 0, &format!("[MISIÓN] Tipo clasificado: {} — El agente operará en modo apropiado.", mission_label), "INFO");
     
+
+    // =======================================================
+    // PESP v2 — Generación del Plan de Fases (Paso 0)
+    // =======================================================
+    if !journal.plan_generado && (mission_type == MissionType::Construction || mission_type == MissionType::Refactor) {
+        emit_event(&app_handle, 0, "🏗️ [ARQUITECTO DE FASES] Analizando tarea para dividirla en fases...", "PLANNING");
+        let model_for_planner = "qwen2.5-coder:7b";
+        let fases = crate::llm::phase_planner::generate_phase_plan(&original_prompt_parsed, model_for_planner).await;
+        
+        journal.fases = fases.clone();
+        journal.fase_actual = 0;
+        journal.plan_generado = true;
+        crate::core::session_journal::save_journal(&workspace_path, &journal);
+        
+        let plan_desc = fases.iter().map(|f| format!("Fase {}: {}", f.numero, f.descripcion)).collect::<Vec<_>>().join(" | ");
+        emit_event(&app_handle, 0, &format!("🗺️ Plan generado: {}", plan_desc), "SUCCESS");
+    }
     let mut task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::GeneralCode, language: None };
     
+    
+    // ── SESSION PERSISTENCE (LOAD) ──
+    let session_file = std::path::Path::new(&workspace_path).join(".aura_session.json");
+    if session_file.exists() {
+        if let Ok(state_json) = std::fs::read_to_string(&session_file) {
+            if let Ok(state) = serde_json::from_str::<AgentState>(&state_json) {
+                current_role = state.current_role;
+                critic_feedback = state.critic_feedback;
+                acceptance_contract = state.acceptance_contract;
+                step_count = state.step_count;
+                current_context = state.current_context;
+                emit_event(&app_handle, step_count, "[SESSION RESTORED] El agente ha recuperado su estado anterior.", "SYSTEM");
+            }
+        }
+    }
+
     while step_count <= max_steps {
+
+        // ── SESSION PERSISTENCE (SAVE) ──
+        let state = AgentState {
+            current_role: current_role.clone(),
+            critic_feedback: critic_feedback.clone(),
+            acceptance_contract: acceptance_contract.clone(),
+            step_count,
+            current_context: current_context.clone(),
+        };
+        if let Ok(state_json) = serde_json::to_string_pretty(&state) {
+            let _ = std::fs::write(std::path::Path::new(&workspace_path).join(".aura_session.json"), state_json);
+        }
         // ── EMERGENCY EXIT: step budget exhausted ────────────────────────
         if step_count == max_steps {
             let emergency_msg = format!(
@@ -280,7 +343,31 @@ pub async fn run_agent_loop(
 
         // ── PESP: Inject micro-meta progress status into context ─────────────
         // Tells the LLM exactly where it is in the global project plan every turn.
-        if !journal.micro_metas.is_empty() {
+
+        // ── PESP v2: Inject phase progress status into context ─────────────
+        // Tells the LLM exactly where it is in the global project plan every turn.
+        if !journal.fases.is_empty() {
+            let total = journal.fases.len();
+            let progress: String = journal.fases.iter().enumerate().map(|(i, f)| {
+                let icon = match f.estado.as_str() {
+                    "COMPLETADA"  => "✅",
+                    "EN_PROGRESO" => "🔄",
+                    "FALLIDA"     => "❌",
+                    _             => "⏳",
+                };
+                format!("  {} [{}/{}] {} → {}", icon, i + 1, total, f.descripcion, f.estado)
+            }).collect::<Vec<_>>().join("\n");
+            let current_f = journal.fases.get(journal.fase_actual)
+                .map(|f| format!("(Fase {}/{}) {}\n    Criterio de Éxito: {}", f.numero, total, f.descripcion, f.criterio_de_exito))
+                .unwrap_or_else(|| "(todas completadas)".to_string());
+            let pesp_status = format!(
+                "[ESTADO DE FASES DEL PROYECTO — PESP PROTOCOL]\n{}\n\n📍 FASE ACTUAL EN EJECUCIÓN:\n{}\n\n",
+                progress,
+                current_f
+            );
+            let existing = current_context.clone();
+            current_context = format!("{}\n{}", pesp_status, existing);
+        } else if !journal.micro_metas.is_empty() {
             let total = journal.micro_metas.len();
             let progress: String = journal.micro_metas.iter().enumerate().map(|(i, mm)| {
                 let icon = match mm.estado.as_str() {
@@ -305,12 +392,13 @@ pub async fn run_agent_loop(
             let existing = current_context.clone();
             current_context = format!("{}{}", pesp_status, existing);
         }
-        // ── Context Compression: every 10 steps, summarize history to prevent saturation ──
-        if step_count > 1 && step_count % 10 == 1 && current_context.len() > 4000 {
+        // ── Context Compression: every 7 steps, summarize to prevent LLM saturation ──
+        // SPRINT 1 FIX: Compress more aggressively. At >3000 chars the LLM starts hallucinating.
+        if step_count > 1 && step_count % 7 == 1 && current_context.len() > 3000 {
             emit_event(&app_handle, step_count, "[MEMORIA] Comprimiendo historial para liberar ventana de contexto...", "INFO");
             let compress_prompt = format!(
                 "Resume en maximo 5 bullet points el siguiente historial. Conserva SOLO: objetivo original, archivos creados/modificados, errores criticos pendientes, ultimo estado. Responde SOLO con el resumen.\n\nHISTORIAL:\n{}",
-                &current_context[..current_context.len().min(8000)]
+                &current_context[..current_context.len().min(6000)]
             );
             if let Ok(summary) = call_ollama(ORCHESTRATOR_MODEL, &compress_prompt).await {
                 let compressed = format!("[CONTEXTO COMPRIMIDO EN PASO {}]\n{}\n\n", step_count, summary);
@@ -354,12 +442,12 @@ pub async fn run_agent_loop(
             live_files.join("\n")
         };
 
-        // --- EVITAR DESBORDAMIENTO DE CONTEXTO ---
-        // Si el historial es demasiado largo, el modelo se colapsará e intentará devolver JSONs cortados (EOF).
-        if current_context.len() > 10000 {
-            let offset = current_context.len() - 10000;
+        // --- EVITAR DESBORDAMIENTO DE CONTEXTO (SPRINT 1: limite estricto 6000) ---
+        // Reducido de 10000 a 6000: los modelos locales se saturan antes y alucinan.
+        if current_context.len() > 6000 {
+            let offset = current_context.len() - 6000;
             if let Some(cut) = current_context[offset..].find("PASO") {
-                current_context = format!("...[HISTORIAL RECORTADO POR LÍMITE DE MEMORIA]...\n{}", &current_context[offset + cut..]);
+                current_context = format!("...[HISTORIAL RECORTADO POR LIMITE DE MEMORIA - solo ultimos pasos]...\n{}", &current_context[offset + cut..]);
             } else {
                 current_context = format!("...[HISTORIAL RECORTADO]...\n{}", &current_context[offset..]);
             }
@@ -373,10 +461,19 @@ pub async fn run_agent_loop(
 
         // ── Analysis Fast Path: inject into Planner context ─────────────────────────────
         let analysis_fast_path = if mission_type == MissionType::Analysis {
-            "\n\n⚡ [MODO ANÁLISIS PURO ACTIVADO]: El usuario pidió SOLO un análisis. \
-            NO debes crear archivos nuevos. NO debes ir al Ejecutor. \
-            Tu único flujo permitido es: TOOL_AUDITOR → TOOL_MAPPER → TOOL_THINK → TOOL_FINISH. \
-            Cuando tengas suficiente información, usa TOOL_FINISH con un análisis completo del sistema.".to_string()
+            if live_files.is_empty() {
+                "
+
+⚡ [MODO ANÁLISIS]: EL WORKSPACE ESTÁ COMPLETAMENTE VACÍO. \
+                Si el usuario pide analizar el código local, NO INVENTES UN REPORTE ni crees archivos simulados. \
+                Usa TOOL_FINISH inmediatamente indicando: 'El proyecto está vacío, no hay archivos para analizar.'".to_string()
+            } else {
+                "
+
+⚡ [MODO ANÁLISIS PURO ACTIVADO]: El usuario pidió un análisis. \
+                REGLA ESTRICTA: El resultado de tu análisis DEBE guardarse físicamente en un archivo (ej. 'informe_analisis.md') usando TOOL_PROGRAMMER. NO pongas el reporte gigante en la respuesta conversacional. \
+                Al terminar, usa TOOL_FINISH e indica la ruta exacta del archivo generado para que el usuario pueda abrirlo.".to_string()
+            }
         } else {
             String::new()
         };
@@ -405,19 +502,19 @@ pub async fn run_agent_loop(
         let agent_prompt = match current_role {
             // Planner - compressed to <200 tokens
             AgentRole::Planner => format!(
-                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS PLANNER: TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_SEARCH.\nPROHIBIDO: TOOL_WORKSPACE_MANAGER (no borres archivos), TOOL_PROGRAMMER, TOOL_TERMINAL.\nREGLA CRITICA: Cuando tu plan este listo, usa TOOL_THINK para transferir el control al Ejecutor.\n{}{}{}",
+                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS PLANNER: TOOL_FINISH, TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_SEARCH, TOOL_ASK_USER.\nPROHIBIDO: TOOL_WORKSPACE_MANAGER (no borres archivos), TOOL_PROGRAMMER, TOOL_TERMINAL.\nREGLA CRITICA DE REPETICION: Si el objetivo ya se encuentra 100% implementado en el Workspace (los archivos ya existen y tienen el codigo), DEBES usar INMEDIATAMENTE TOOL_FINISH para abortar. NUNCA reescribas codigo que ya existe. Si no esta completado, cuando tu plan este listo, usa TOOL_THINK.\n{}{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, analysis_fast_path, json_schema
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START. Usa TOOL_ENV_MANAGER *SOLO* para instalar binarios scoop, NO para comandos bash/mkdir/touch.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH.\n\n{}{}",
+                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START, TOOL_ASK_USER. Usa TOOL_ENV_MANAGER *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH. REGLA DE SENTIDO COMUN: Si el usuario te pide crear/escribir un archivo pero ya existe y esta completo en el Workspace, NO USES TOOL_PROGRAMMER para reescribirlo. Ignora esa parte y continua con el resto de la tarea.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
             // Critic - compressed to <200 tokens
             AgentRole::Critic => format!(
-                "[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos. Solo TOOL_FINISH si todo pasa al 100%%.\n\n{}{}",
+                "[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos. Solo TOOL_FINISH si todo pasa al 100%%. Usa TOOL_ASK_USER si necesitas que el usuario revise o confirme algo.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 contract_block, json_schema
             ),
@@ -487,6 +584,7 @@ pub async fn run_agent_loop(
                 if json_error_count >= 5 {
                     emit_event(&app_handle, step_count, &format!("Error parseando decisión ({}). Máximos reintentos (5) alcanzados. Abortando bucle.", e), "ERROR");
                     let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Fallo crítico persistente en la estructura JSON del planificador.".to_string() };
+                    crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 } else {
                     emit_event(&app_handle, step_count, &format!("Error de sintaxis JSON (intento {}/5). Reintentando...", json_error_count), "WARNING");
@@ -579,23 +677,39 @@ pub async fn run_agent_loop(
                 // escribir archivos que faltan. Forzamos retorno al Ejecutor
                 // con un mensaje de feedback específico.
                 if critic_fsm_lock_consecutive >= 3 {
-                    // Scan workspace for common project entry files that might be missing.
-                    // archivos_vec is not yet parsed at this point, so we scan directly.
-                    let required_files = ["index.html", "style.css", "app.js",
-                        "main.py", "app.py", "main.rs", "main.go",
-                        "main.ts", "main.js", "index.js", "package.json"];
-                    let missing: Vec<&str> = required_files.iter()
-                        .filter(|f| !std::path::Path::new(&workspace_path).join(f).exists())
-                        .cloned()
-                        .collect();
-                    let feedback = format!(
-                        "[REPORTE DEL CRÍTICO]: Bucle detectado. \
-                        Aun faltan archivos por crear o hay archivos incompletos: {:?}. \
-                        El Ejecutor debe continuar la escritura de código para los archivos faltantes \
-                        usando TOOL_PROGRAMMER. Únicamente cuando TODOS los archivos existan \
-                        físicamente el Crítico podrá validar.",
-                        missing
-                    );
+                    // SPRINT 1 FIX: Validación Dinámica FSM.
+                    // archivos_vec is declared later in the loop; here we do a live scan
+                    // of the workspace to find what's actually on disk, and use current_context
+                    // to detect what the LLM intended to produce.
+                    let mut ws_files: Vec<String> = Vec::new();
+                    fn scan_ws(dir: &std::path::Path, out: &mut Vec<String>, depth: u8) {
+                        if depth > 3 { return; }
+                        if let Ok(rd) = std::fs::read_dir(dir) {
+                            for entry in rd.flatten() {
+                                let p = entry.path();
+                                if p.is_dir() {
+                                    let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                    if !name.starts_with('.') && name != "node_modules" && name != "target" {
+                                        scan_ws(&p, out, depth + 1);
+                                    }
+                                } else {
+                                    out.push(p.file_name().unwrap_or_default().to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                    scan_ws(std::path::Path::new(&workspace_path), &mut ws_files, 0);
+
+                    let feedback = if ws_files.is_empty() {
+                        "[REPORTE DEL CRITICO]: Bucle detectado y el workspace esta completamente VACIO. \
+                        El Ejecutor no ha creado ningun archivo fisico todavia. Usa TOOL_PROGRAMMER para empezar.".to_string()
+                    } else {
+                        format!(
+                            "[REPORTE DEL CRITICO]: Bucle detectado. Archivos actualmente en disco: {:?}. \
+                            Si faltan archivos, crealos con TOOL_PROGRAMMER. Si todos existen, verifica con TOOL_TERMINAL.",
+                            ws_files
+                        )
+                    };
                     critic_feedback = Some(feedback.clone());
                     current_role = AgentRole::Executor;
                     critic_fsm_lock_consecutive = 0;
@@ -603,7 +717,7 @@ pub async fn run_agent_loop(
                     mapper_consecutive = 0;
                     comandos_ejecutados_historico.clear(); // allow fresh terminal commands
                     emit_event(&app_handle, step_count, 
-                        "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Archivos incompletos detectados. Reactivando escritura.", 
+                        "[FSM] CRITICO -> EJECUTOR: Bucle detectado, validacion dinamica aplicada.", 
                         "WARNING");
                     current_context.push_str(&format!("{}\n\n", feedback));
                 }
@@ -1042,6 +1156,7 @@ pub async fn run_agent_loop(
                         status: "FINISH".to_string(), // Frontend safe format
                         respuesta_conversacional: format!("Se detectó un bucle intentando instalar múltiples veces el paquete '{}'. La instalación ya se ejecutó en este turno. Misión abortada.", comando),
                     };
+                    crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 } else {
                     paquetes_instalados_historico.insert(comando.clone());
@@ -1064,6 +1179,7 @@ pub async fn run_agent_loop(
                         let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás en un bucle infinito de comandos vacíos. Abortando.";
                         emit_event(&app_handle, step_count, res_msg, "FATAL");
                         let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Error interno del planificador asíncrono.".to_string() };
+                        crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
                         return Ok(serde_json::to_string(&final_res).unwrap());
                     }
                     comandos_ejecutados_historico.insert("__EMPTY_BG_CMD__".to_string());
@@ -1357,6 +1473,7 @@ pub async fn run_agent_loop(
                             status: "ERROR".to_string(),
                             respuesta_conversacional: format!("Me he quedado atascado editando repetidamente el mismo archivo ({:?}) sin probarlo en la terminal. He detenido la ejecución por seguridad.", archivos_vec),
                         };
+                        crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
                         return Ok(serde_json::to_string(&final_res).unwrap());
                     } else {
                         let interception = "[SISTEMA INTERCEPTO] Error Lógico: Estás intentando editar los mismos archivos por segunda vez consecutiva sin haber probado tu código en la terminal. DEBES ejecutar 'TOOL_TERMINAL' para probar el script y ver los errores antes de seguir programando.";
@@ -1401,6 +1518,14 @@ pub async fn run_agent_loop(
                                     match memory::apply_code_changes(&workspace_path, prog_output.cambios.clone()).await {
                                         Ok(msg) => {
                                             emit_event(&app_handle, step_count, &msg, "SUCCESS");
+                                            
+                                            // SPRINT 3: Emit file-updated for Hot Reloading
+                                            for cambio in &prog_output.cambios {
+                                                let full_path = std::path::Path::new(&workspace_path).join(&cambio.archivo);
+                                                let _ = app_handle.emit("file-updated", serde_json::json!({
+                                                    "path": full_path.to_string_lossy().to_string()
+                                                }));
+                                            }
 
                                             // ── CAPA 2: ANTI-STUB ENFORCER ────────────────────────────────────
                                             // Inspect every file for stub patterns BEFORE running validation.
@@ -1581,7 +1706,7 @@ pub async fn run_agent_loop(
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
 
-                match crate::core::vision::evaluate_vision(&vision_prompt, false).await {
+                match crate::core::vision::evaluate_vision(&vision_prompt, false, None).await {
                     Ok(vision_result) => {
                         current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LA VALIDACIÓN VISUAL HA SIDO COMPLETADA. SI EL MANDATO DEL USUARIO FUE CUMPLIDO, EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS HERRAMIENTAS DE VALIDACIÓN.\n\n", vision_result));
                         emit_event(&app_handle, step_count, &format!("[VISION] Evaluacion completada: {}", &vision_result.chars().take(120).collect::<String>()), "SUCCESS");
@@ -1646,13 +1771,13 @@ pub async fn run_agent_loop(
                             let force_msg = format!(
                                 "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin detectar tests. \
                                 El sistema cambia de estrategia. Si esto es un script simple, NO crees tests. \
-                                En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL' para ejecutar el script directamente y ver si funciona, o 'TOOL_FINISH' si ya terminaste el objetivo.\n\
+                                En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL' para probar manualmente, o 'TOOL_FINISH' si ya terminaste y confirmaste que todo funciona (especialmente si es HTML).\n\
                                 Archivos actuales en el workspace:\n{}\n",
                                 no_tests_consecutive, workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", force_msg));
                             emit_event(&app_handle, step_count, &format!("[SISTEMA] Cambiando estrategia a TOOL_TERMINAL tras {} intentos.", no_tests_consecutive), "WARNING");
-                            forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "El proyecto no tiene archivos de test. Se forzó TOOL_TERMINAL para que ejecutes el script manualmente en su lugar.".to_string()));
+                            forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "El proyecto no tiene archivos de test. Se forzó TOOL_TERMINAL para que ejecutes el script manualmente (ej. 'python script.py' o 'start index.html'). NUNCA uses 'node' para ejecutar archivos .html. Si es un archivo HTML web o ya lo verificaste, puedes simplemente no hacer nada y prepararte para terminar.".to_string()));
 
                         } else {
                             // First hit — tell the LLM clearly
@@ -1677,6 +1802,7 @@ pub async fn run_agent_loop(
                                 status: "FINISH".to_string(),
                                 respuesta_conversacional: "Los tests ya pasaron con éxito, pero me quedé atascado ejecutándolos en bucle. He detenido el proceso para evitar un ciclo infinito. Misión cumplida.".to_string(),
                             };
+                            crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
                             return Ok(serde_json::to_string(&final_res).unwrap());
                         } else {
                             tester_success_hits += 1;
@@ -1697,6 +1823,7 @@ pub async fn run_agent_loop(
                                 status: "FINISH".to_string(),
                                 respuesta_conversacional: "He alcanzado el límite máximo de fallos de pruebas. El código era inviable. He restaurado el proyecto a su último estado funcional (Rollback). Por favor, revisa mi código y ayuda a solucionar los tests.".to_string(),
                             };
+                            crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
                             return Ok(serde_json::to_string(&final_res).unwrap());
                         } else {
                             // ── Detect dependency/install errors vs logic errors ─────────────
@@ -1924,6 +2051,32 @@ pub async fn run_agent_loop(
                     step_count += 1;
                     continue;
                 }
+
+                // =======================================================
+                // PESP v2 — Intercept TOOL_FINISH for Phase Advancement
+                // =======================================================
+                if !journal.fases.is_empty() && journal.fase_actual < journal.fases.len() - 1 {
+                    emit_event(&app_handle, step_count, &format!("✅ [FASE {} COMPLETADA] Avanzando a la siguiente...", journal.fases[journal.fase_actual].numero), "SUCCESS");
+                    
+                    // Mark current phase as completed
+                    journal.fases[journal.fase_actual].estado = "COMPLETADA".to_string();
+                    // Advance to next phase
+                    journal.fase_actual += 1;
+                    journal.fases[journal.fase_actual].estado = "EN_PROGRESO".to_string();
+                    crate::core::session_journal::save_journal(&workspace_path, &journal);
+                    
+                    let new_phase_msg = format!(
+                        "[SISTEMA PESP] Fase anterior completada. Iniciando Fase {}/{}: {}\nUsa TOOL_PROGRAMMER o TOOL_THINK para comenzar el trabajo de esta nueva fase.",
+                        journal.fase_actual + 1, journal.fases.len(), journal.fases[journal.fase_actual].descripcion
+                    );
+                    current_context.push_str(&format!("{}\n\n", new_phase_msg));
+                    current_role = AgentRole::Planner; // Reset role
+                    
+                    step_count += 1;
+                    continue; // Do NOT terminate the agent loop
+                } else if !journal.fases.is_empty() && journal.fase_actual == journal.fases.len() - 1 {
+                    journal.fases[journal.fase_actual].estado = "COMPLETADA".to_string();
+                }
                 emit_event(&app_handle, step_count, "Bucle completado exitosamente.", "FINISH");
                 // ── Journal: mark completed ──
                 crate::core::session_journal::close_journal(&mut journal, "COMPLETADO", &workspace_path);
@@ -1931,6 +2084,7 @@ pub async fn run_agent_loop(
                     status: "FINISH".to_string(),
                     respuesta_conversacional: respuesta_conv,
                 };
+                crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
                 return Ok(serde_json::to_string(&final_res).unwrap());
             },
             _ => {

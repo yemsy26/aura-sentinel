@@ -132,6 +132,7 @@ dependencies = [
  "tauri-plugin-log",
  "tokio",
  "urlencoding",
+ "uuid",
  "xcap",
 ]
 

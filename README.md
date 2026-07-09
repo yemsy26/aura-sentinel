@@ -268,3 +268,11 @@ Sesión de ingeniería intensiva que resolvió la cadena de fallos que impedía 
 ## ⚖️ Legal & Licensing
 Distribuido bajo la [Licencia MIT](LICENSE).  
 Copyright (c) 2026 Ramon Antonio Burgos Jerez.
+
+
+## 🛡️ Mejoras de Estabilidad y Seguridad (Actualización V3/V4)
+Aura Sentinel incluye protecciones contra bucles infinitos y falsos positivos de evaluación LLM:
+
+1. **Gestión de Sesión Anti-Atascos:** El núcleo de Rust persiste el estado del agente y el índice de pasos (`current_step`, `current_role`, `critic_feedback`) en `.aura_session.json` en tiempo real. En caso de interrupción crítica o reinicio, el agente restaura su memoria EXACTAMENTE donde se quedó sin repetir planeación.
+2. **QA Visual Reforzada:** En `vision.rs`, el navegador invisible incluye un `--virtual-time-budget=3000` para permitir el renderizado de interfaces pesadas o juegos en HTML5 Canvas antes de tomar la captura. Además, el sistema **no simula éxito** si el navegador falla; ahora retorna errores fatales, forzando la corrección.
+3. **Validación Exhaustiva de HTML/JS:** La función `validate_workspace` escanea y extrae automáticamente los scripts Javascript embebidos dentro de archivos `.html`, comprobando su sintaxis de forma nativa (`node --check`). Esto cierra el punto ciego de validación estática para proyectos monolíticos.

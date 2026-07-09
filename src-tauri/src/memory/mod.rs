@@ -508,5 +508,34 @@ pub async fn clear_chat_history(workspace_path: String) -> Result<(), String> {
     // Escribir un array vacío inmediatamente
     let _ = fs::write(&chat_file, "[]").await;
     crate::core::hide_file_windows(&chat_file).await;
+
+    // PESP: También limpiamos el diario de sesión para que el agente empiece misiones limpias
+    let journal_file = Path::new(&workspace_path).join(".aura_sentinel").join("session_journal.json");
+    if journal_file.exists() {
+        let _ = fs::remove_file(&journal_file).await;
+    }
+
     Ok(())
+}
+
+
+#[tauri::command]
+pub async fn read_file_content(path: String) -> Result<String, String> {
+    let file_path = Path::new(&path);
+    if !file_path.exists() {
+        return Err("El archivo no existe.".to_string());
+    }
+    match fs::read_to_string(&file_path).await {
+        Ok(content) => Ok(content),
+        Err(e) => Err(format!("Error al leer archivo: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub async fn save_file_content(path: String, content: String) -> Result<(), String> {
+    let file_path = Path::new(&path);
+    match fs::write(&file_path, content).await {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Error al guardar archivo: {}", e)),
+    }
 }

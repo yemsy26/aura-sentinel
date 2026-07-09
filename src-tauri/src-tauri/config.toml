@@ -1,0 +1,329 @@
+// Rust Configuration System (Global)
+
+// Architecture Fingerprint
+[environment]
+name = "Aura Sentinel"
+target = "native"
+backend = "tauri-rs"
+frontend = "vanilla-js"
+language = "rust"
+
+// Component Dependencies (Controlled)
+[dependencies]
+chronos_vfs = "0.1.0"
+tauri = "2.11.2"
+tauri-plugin-log = "2.0"
+tokio = { version = "1.52.3", features = ["full"] }
+reqwest = "0.13.3"
+regex = "1.12.3"
+scraper = "0.27.0"
+egotiate = "0.0"
+audio = "0.1.0"
+
+// Autonomic Control Systems
+[systems.autonomic]
+rustc_enabled = true
+sink_tolerant = "spectrum"
+learning_rate = "adaptive"
+max_memory_mb = "512"
+
+// SHIELD Protection Layer
+[systems.protection]
+path_jail = "strict"
+git_shield = "enabled"
+ant_stub = "strict"
+anomaly_detector = "enabled"
+coherence_monitor = "enabled"
+
+// AI Model Router Configuration
+[models.router]
+primary = { name = "llama3.1:8b", purpose = "orchestration" }
+fast = { name = "deepseek-coder:6.7b", purpose = "quick" }
+standard = { name = "qwen2.5-coder:7b", purpose = "code-gen" }
+expert = { name = "qwen2.5-coder:14b", purpose = "complex-fix" }
+vision = { name = "llava", purpose = "gui-qa" }
+embedding = { name = "nomic-embed-text", purpose = "rag" }
+solver = { name = "z3-solver", purpose = "formal-verification" }
+
+// Performance Tuning Options
+[performance]
+max_tokens_per_prompt = "200"
+context_compression_threshold = "4096"
+step_limit_per_task = "50"
+batch_size = "8"
+priority_locking = "enabled"
+
+// Tool Registry
+[tools]
+tool_tester = {language_detection = "native", multi_lang_framework = "supported" }
+tool_programmer = {language_switch = "dynamic", model_routing = "contextual" }
+tool_logic_solver = {formal_verification = "enabled", anti_hallucination = "strict" }
+tool_workspace_manager = {auto_clean = "enabled", intelligent_lock = "enabled" }
+tool_environment_manager = {auto_install = "scoop-or-winget", path_jail = "strict" }
+tool_vision_evaluator = {capture = "xcap", engine = "moondream" }
+tool_auditor = {structured_json = "required", anti_stub = "enabled" }
+
+// Learning Systems
+[learning]
+rags = "enabled"
+policies = "rust-native"
+training_frequency = "continuous"
+knowledge_capacity_mb = "2048"
+augmentation_enabled = "yes"
+
+// Event Listeners
+[listeners]
+agent_step = "rust-native"
+agent_ask_user = "reqwest"
+agent_finish = "tauri"
+
+// Security Configuration
+[security]
+path_allowlist_type = "strict"
+git_shield_events = "all"
+anti_stub_detection = "proactive"
+replay_protection = "enabled"
+memory_lock = "hardened"
+
+// API Configuration
+[api]
+tauri_version = "2.x"
+frontend_runtime = "vanilla-js"
+backend_runtime = "rust"
+webview_mode = "enhanced"
+
+// Configuration for Testing and Environment Detection
+[testing]
+supported_languages = [
+    "rust",
+    "python",
+    "javascript",
+    "typescript",
+    "go",
+    "java",
+    "kotlin",
+    "php",
+    "dart",
+    "swift",
+    "cpp",
+    "c",
+    "csharp",
+    "ruby",
+    "scala",
+    "haskell",
+    "erlang",
+    "elixir",
+    "lua",
+    "r",
+    "julia",
+    "racket",
+    "scheme",
+    "clojure",
+    "fsharp",
+    "cobol",
+    "fortran",
+    "assembly",
+    "batch"
+]
+
+// Language Commands Configuration
+[languages.rs.test_command]
+command = "cargo test"
+language_name = "Rust"
+file_pattern = "*.rs"
+
+[languages.python.test_command]
+command = "python -m pytest"
+language_name = "Python"
+file_pattern = "*test*.py"
+
+[languages.javascript.test_command]
+command = "npm test"
+language_name = "JavaScript"
+file_pattern = "*.test.js"
+
+[languages.typescript.test_command]
+command = "npm test"
+language_name = "TypeScript"
+file_pattern = "*.test.ts"
+
+[languages.go.test_command]
+command = "go test ./..."
+language_name = "Go"
+file_pattern = "*_test.go"
+
+[languages.java.test_command]
+command = "mvn test -q"
+language_name = "Java"
+file_pattern = "*Test.java"
+
+[languages.kotlin.test_command]
+command = "gradlew test"
+language_name = "Kotlin"
+file_pattern = "*Test.kt"
+
+[languages.php.test_command]
+command = "php vendor/bin/phpunit"
+language_name = "PHP"
+file_pattern = "*Test.php"
+
+[languages.dart.test_command]
+command = "dart test"
+language_name = "Dart"
+file_pattern = "test_*.dart"
+
+[languages.swift.test_command]
+command = "swift test"
+language_name = "Swift"
+file_pattern = "*Test.swift"
+
+[languages.cpp.test_command]
+command = "make test"
+language_name = "C++"
+file_pattern = "*test*.cpp"
+
+[languages.c.test_command]
+command = "gcc -o test test.c && ./test"
+language_name = "C"
+file_pattern = "*test.c"
+
+[languages.solidity.test_command]
+command = "npx hardhat test"
+language_name = "Solidity"
+file_pattern = "*test*.js"
+
+// Framework Detection Configuration
+[language_detection]
+framework_mapping = [
+    { language = "rust", file = "Cargo.toml", trigger = true },
+    { language = "python", file = "requirements.txt", trigger = true },
+    { language = "python", file = "pyproject.toml", trigger = true },
+    { language = "javascript", file = "package.json", trigger = true },
+    { language = "go", file = "go.mod", trigger = true },
+    { language = "java", file = "pom.xml", trigger = true },
+    { language = "java", file = "build.gradle", trigger = true },
+    { language = "kotlin", file = "build.gradle.kts", trigger = true },
+    { language = "kotlin", file = "AndroidManifest.xml", trigger = true },
+    { language = "php", file = "composer.json", trigger = true },
+    { language = "dart", file = "pubspec.yaml", trigger = true },
+    { language = "swift", file = "Package.swift", trigger = true },
+    { language = "cpp", file = "CMakeLists.txt", trigger = true },
+    { language = "c", file = "Makefile", trigger = true },
+    { language = "solidity", file = "hardhat.config.js", trigger = true },
+    { language = "solidity", file = "hardhat.config.ts", trigger = true },
+    { language = "solidity", file = "foundry.toml", trigger = true }
+]
+
+// Error Classification Configuration
+[error_classification]
+error_patterns = [
+    { pattern = "not found in path", type = "blocked" },
+    { pattern = "access denied", type = "blocked" },
+    { pattern = "permission denied", type = "blocked" },
+    { pattern = "timeout", type = "transient" },
+    { pattern = "connection refused", type = "transient" },
+    { pattern = "locked", type = "transient" },
+    { pattern = "no such file or directory", type = "logic" },
+    { pattern = "module not found", type = "logic" },
+    { pattern = "undefined variable", type = "logic" },
+    { pattern = "parameter missing", type = "logic" }
+]
+
+// Environment Pre-Flight Check Configuration
+[environment_checks]
+required_tools = ["git", "cargo", "python", "npm", "node", "go", "java", "rustc", "gcc"]
+recommended_tools = ["scoop", "winget", "curl", "wget", "docker", "tmux"]
+optional_tools = ["vim", "git", "jq", "yq"]
+
+// Ollama Model Requirements
+[ollama.model_requirements]
+minimum_models = ["llama3.1:8b", "nomic-embed-text"]
+recommended_models = ["qwen2.5-coder:14b", "deepseek-coder:6.7b", "llava", "moondream", "llama3.2-vision"]
+vision_models = ["llava", "moondream", "llama3.2-vision", "bakllava"]
+embedding_models = ["nomic-embed-text", "mxbai-embed-large", "snowflake-arctic-embed"]
+
+// Performance Monitoring Configuration
+[performance_monitoring]
+monitor_memory_mb = true
+monitor_cpu_percent = true
+monitor_token_usage = true
+monitor_step_count = true
+monitor_file_operations = true
+monitor_api_calls = true
+monitor_llm_calls = true
+
+// Memory and Context Configuration
+[memory_management]
+max_context_tokens = "10000"
+compression_threshold = "4096"
+global_memory_capacity_mb = "2048"
+message_history_size = "100"
+file_history_size = "50"
+code_examples_cache_size = "20"
+
+// Agent Role Configuration
+[agent_roles]
+planner = { priority = 1, max_tokens = 200, focus = "architecture" }
+executor = { priority = 2, max_tokens = 200, focus = "implementation" }
+critic = { priority = 3, max_tokens = 200, focus = "validation" }
+
+// FSM Protocol Configuration
+[fsm.protocol]
+planner_to_executor_transition = "approval_contract_signed"
+executor_to_critic_transition = "all_micro_meta_completed"
+critic_to_executor_transition = "validation_failed"
+planning_phase = "structured"
+execution_phase = "sequential"
+validation_phase = "rigorous"
+
+// Session Management Configuration
+[session_management]
+auto_save_interval_seconds = 30
+max_session_history = "1000"
+journal_file = ".aura_session.json"
+workspace_scanning_depth = "6"
+isolation_level = "strict"
+
+// Configuration for Network Operations
+[network_operations]
+ollama_host = "127.0.0.1:11434"
+web_crawl_timeout_seconds = "30"
+download_timeout_seconds = "60"
+api_request_timeout_seconds = "120"
+max_retries = "3"
+retry_delay_ms = "1000"
+
+// Configuration for Tool Usage
+[tool_usage]
+tool_tester_max_runtime_seconds = "3600"
+tool_programmer_max_runtime_seconds = "1800"
+tool_vision_evaluator_max_runtime_seconds = "60"
+tool_auditor_max_runtime_seconds = "30"
+tool_logic_solver_max_runtime_seconds = "120"
+
+// Configuration for Security Measures
+[security_controls]
+path_jail_strict = true
+allow_symlinks = false
+disallow_absolute_paths = true
+disallow_directory_traversal = true
+scan_for_malicious_content = true
+log_all_file_operations = true
+enable_audit_logs = true
+
+// Configuration for Auto-Saving
+[auto_save]
+enabled = true
+interval_seconds = 30
+max_backups = "10"
+backup_directory = ".aura_backups"
+compression_enabled = true
+encrypted_backups = true
+
+// Configuration for Restart Recovery
+[restart_recovery]
+enabled = true
+auto_restore_on_startup = true
+journal_file = ".aura_session.json"
+backup_directory = ".aura_backups"
+recovery_threshold_seconds = "300"

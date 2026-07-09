@@ -11,6 +11,7 @@ pub mod stub_enforcer;
 pub mod dependency_mapper;
 pub mod vision;
 pub mod error_classifier;
+pub mod ask_user;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};
@@ -23,6 +24,20 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 pub struct BackgroundTask {
     pub child: tokio::process::Child,
     pub logs: Arc<Mutex<Vec<String>>>,
+}
+
+pub async fn get_active_tasks_snapshot() -> Vec<serde_json::Value> {
+    let mut snapshot = Vec::new();
+    if let Some(registry) = BACKGROUND_TASKS.get() {
+        let tasks = registry.lock().await;
+        for (id, _) in tasks.iter() {
+            snapshot.push(serde_json::json!({
+                "id": id,
+                "command": format!("Background Task {}", id)
+            }));
+        }
+    }
+    snapshot
 }
 
 /// Global registry for active background tasks.
@@ -233,6 +248,110 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
             }
         }
         return Ok(());
+    }
+
+    // 3a. Node.js / HTML Syntax Check (escanear scripts embebidos y archivos JS)
+    let has_js_or_html = || -> bool {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                if let Some(ext) = entry.path().extension() {
+                    if ext == "js" || ext == "ts" || ext == "html" { return true; }
+                }
+            }
+        }
+        false
+    };
+
+    if has_js_or_html() {
+        let mut js_files = Vec::new();
+        let mut html_files = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                if let Some(ext) = entry.path().extension() {
+                    if ext == "js" || ext == "ts" {
+                        js_files.push(entry.path().to_string_lossy().to_string());
+                    } else if ext == "html" {
+                        html_files.push(entry.path().to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+
+        for js_file in js_files {
+            let output = Command::new("node")
+                .arg("--check")
+                .arg(&js_file)
+                .current_dir(workspace_path)
+                .stdin(Stdio::null())
+                .output()
+                .await;
+
+            if let Ok(out) = output {
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    return Err(format!("[NODE_SYNTAX_ERROR] Archivo {}: {}", js_file, stderr).trim().to_string());
+                }
+            }
+        }
+
+        for html_file in html_files {
+            if let Ok(content) = std::fs::read_to_string(&html_file) {
+                let mut scripts = String::new();
+                let mut in_script = false;
+                for line in content.lines() {
+                    let l_lower = line.to_lowercase();
+                    if l_lower.contains("<script") && !l_lower.contains("src=") {
+                        in_script = true;
+                        if let Some(idx) = l_lower.find("script>") {
+                            let extracted = &line[idx + 7..];
+                            if !extracted.trim().is_empty() {
+                                scripts.push_str(extracted);
+                                scripts.push('\n');
+                            }
+                        }
+                        if l_lower.contains("</script>") {
+                            in_script = false;
+                        }
+                        continue;
+                    }
+                    if l_lower.contains("</script>") {
+                        if in_script {
+                            if let Some(idx) = l_lower.find("</script>") {
+                                scripts.push_str(&line[..idx]);
+                                scripts.push('\n');
+                            }
+                        }
+                        in_script = false;
+                        continue;
+                    }
+                    if in_script {
+                        scripts.push_str(line);
+                        scripts.push('\n');
+                    }
+                }
+
+                if !scripts.trim().is_empty() {
+                    let tmp_path = path.join(".tmp_validate.js");
+                    if std::fs::write(&tmp_path, &scripts).is_ok() {
+                        let output = Command::new("node")
+                            .arg("--check")
+                            .arg(".tmp_validate.js")
+                            .current_dir(workspace_path)
+                            .stdin(Stdio::null())
+                            .output()
+                            .await;
+                        let _ = std::fs::remove_file(&tmp_path);
+
+                        if let Ok(out) = output {
+                            if !out.status.success() {
+                                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                                return Err(format!("[NODE_SYNTAX_ERROR] Script en {}: {}", html_file, stderr).trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // 4. Generic Fallback

@@ -15,12 +15,24 @@ body, html {
 
 .grid-container {
     display: grid;
-    grid-template-columns: 280px 1fr 250px;
+    /* grid-template-columns overriden */ /* 3 Columnas: Tree, Editor, Right Stack */
     height: 100vh;
     gap: 2px;
     background-color: #30363d;
     padding: 2px;
 }
+
+.panel-editor {
+    display: flex;
+    flex-direction: column;
+}
+
+.panel-right-stack {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
 
 .panel {
     background-color: #161b22;
@@ -164,4 +176,148 @@ ul.tree-list li {
 
 .tree-file {
     color: #8b949e;
+}
+/* --- SPRINT 3: TABS --- */
+.editor-tabs-header {
+    background-color: #010409 !important;
+    border-bottom: 1px solid #30363d !important;
+}
+
+.editor-tab {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 12px;
+    background-color: #0d1117;
+    border-right: 1px solid #30363d;
+    border-top: 2px solid transparent;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 13px;
+    user-select: none;
+    min-width: 100px;
+    justify-content: space-between;
+}
+
+.editor-tab:hover {
+    background-color: #161b22;
+}
+
+.editor-tab.active {
+    background-color: #0d1117;
+    border-top: 2px solid #58a6ff;
+    color: #c9d1d9;
+}
+
+.editor-tab .close-btn {
+    margin-left: 8px;
+    border-radius: 4px;
+    padding: 2px 4px;
+    font-size: 10px;
+}
+
+.editor-tab .close-btn:hover {
+    background-color: #30363d;
+    color: #ff7b72;
+}
+
+.editor-tab.dirty::after {
+    content: '?';
+    color: #e3b341;
+    font-size: 10px;
+    margin-left: 5px;
+}
+
+/* Tree hover styles */
+ul.tree-list li span:hover {
+    background-color: #21262d;
+    border-radius: 3px;
+}
+ul.tree-list li span {
+    padding: 2px 4px;
+    display: inline-block;
+    width: max-content;
+}
+
+:root {
+    --left-panel-width: 280px;
+    --right-panel-width: 400px;
+    --transition-speed: 0.2s;
+}
+
+.grid-container {
+    grid-template-columns: var(--left-panel-width) 4px 1fr 4px var(--right-panel-width) !important;
+}
+
+/* Splitters / Gutters */
+.gutter {
+    background-color: #21262d;
+    background-repeat: no-repeat;
+    background-position: 50%;
+    cursor: col-resize;
+    z-index: 10;
+    transition: background-color 0.2s;
+}
+.gutter:hover, .gutter.active {
+    background-color: #58a6ff;
+}
+
+/* Minimized States */
+.panel {
+    transition: flex var(--transition-speed), min-height var(--transition-speed), max-height var(--transition-speed);
+}
+
+.panel-controls {
+    display: flex;
+    gap: 4px;
+}
+
+.panel-controls .min-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.panel-controls .min-btn:hover {
+    background: #30363d;
+    color: #c9d1d9;
+}
+
+/* Vertical minimize (Chat, Console, Telemetry) */
+.panel.minimized-v {
+    flex: 0 0 35px !important;
+    min-height: 35px !important;
+    max-height: 35px !important;
+    overflow: hidden;
+}
+
+/* Horizontal minimize (Workspace, Right Stack) */
+.panel.minimized-h {
+    overflow: hidden;
+}
+
+/* Hide content when minimized */
+.panel.minimized-v .panel-content,
+.panel.minimized-v .chat-input-container {
+    display: none !important;
+}
+
+.panel-left.minimized-h .panel-content {
+    display: none !important;
+}
+
+.panel-left.minimized-h .panel-header {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    padding: 10px 4px;
+    align-items: center;
+    justify-content: space-between;
+}
+.panel-left.minimized-h .panel-header > div:first-child {
+    display: none !important; /* Hide title text to save space */
 }

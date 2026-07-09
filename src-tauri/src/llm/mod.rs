@@ -5,13 +5,14 @@ use crate::memory::Cambio;
 pub mod agent;
 pub mod translator;
 pub mod router;
+pub mod phase_planner;
 
 #[derive(Serialize)]
 struct OllamaRequest<'a> {
     model: &'a str,
     prompt: &'a str,
     stream: bool,
-    format: &'a str,
+    format: serde_json::Value,
     options: serde_json::Value,
 }
 
@@ -24,15 +25,31 @@ struct OllamaResponse {
 
 #[derive(Deserialize, Serialize)]
 struct ProgrammerOutput {
+    pensamiento: Option<String>,
     explicacion_tecnica: String,
     cambios: Vec<Cambio>,
 }
 
 
 
-async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
+
+fn get_safe_num_ctx() -> u32 {
+    use sysinfo::System;
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    let total_mem = sys.total_memory() as f64;
+    let used_mem = sys.used_memory() as f64;
+    if total_mem > 0.0 {
+        if (used_mem / total_mem) > 0.85 {
+            return 8192; // OOM Safe Mode
+        }
+    }
+    16384
+}
+
+pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
+        .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| format!("Error construyendo cliente HTTP: {}", e))?;
     let url = "http://localhost:11434/api/generate";
@@ -42,8 +59,8 @@ async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
         model,
         prompt,
         stream: false,
-        format: "json",
-        options: serde_json::json!({ "num_ctx": 16384 }),
+        format: serde_json::json!("json"),
+        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }),
     };
 
     let res = client.post(url)
@@ -52,6 +69,36 @@ async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("Error conectando a Ollama: {}", e))?;
 
+    if res.status().is_success() {
+        let ollama_res: OllamaResponse = res.json().await
+            .map_err(|e| format!("Error parseando la respuesta JSON: {}", e))?;
+        Ok(ollama_res.response)
+    } else {
+        Err(format!("Error de Ollama. Status: {}", res.status()))
+    }
+}
+
+pub async fn call_ollama_with_schema(model: &str, prompt: &str, schema: serde_json::Value) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("Error construyendo cliente HTTP: {}", e))?;
+    let url = "http://localhost:11434/api/generate";
+    
+    let payload = OllamaRequest {
+        model,
+        prompt,
+        stream: false,
+        format: schema,
+        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }),
+    };
+
+    let res = client.post(url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Error conectando a Ollama: {}", e))?;
+    
     if res.status().is_success() {
         let ollama_res: OllamaResponse = res.json().await
             .map_err(|e| format!("Error parseando la respuesta JSON: {}", e))?;
@@ -72,12 +119,12 @@ pub async fn call_ollama_text(model: &str, prompt: &str) -> Result<String, Strin
     }
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
+        .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| format!("Error construyendo cliente HTTP (texto): {}", e))?;
     let url = "http://localhost:11434/api/generate";
 
-    let payload = TextRequest { model, prompt, stream: false, options: serde_json::json!({ "num_ctx": 16384 }) };
+    let payload = TextRequest { model, prompt, stream: false, options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }) };
 
     let res = client.post(url)
         .json(&payload)
@@ -176,7 +223,28 @@ async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) ->
     );
 
 
-    call_ollama(model, &system_prompt).await
+    let programmer_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "pensamiento": { "type": "string", "maxLength": 300, "description": "Razona brevemente (máx 300 chars) sobre la lógica antes de escribir el código." },
+            "explicacion_tecnica": { "type": "string" },
+            "cambios": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "archivo": { "type": "string" },
+                        "buscar": { "type": "string" },
+                        "reemplazar": { "type": "string" }
+                    },
+                    "required": ["archivo", "buscar", "reemplazar"]
+                }
+            }
+        },
+        "required": ["pensamiento", "explicacion_tecnica", "cambios"]
+    });
+
+    call_ollama_with_schema(model, &system_prompt, programmer_schema).await
 }
 
 async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
@@ -217,8 +285,37 @@ pub(crate) async fn delegate_to_logic_solver(file_contents: &str, model: &str) -
         .unwrap_or_else(|e| format!("Error en verificación lógica: {}", e))
 }
 
+
+
+struct AgentLockGuard;
+impl AgentLockGuard {
+    fn try_lock() -> Option<Self> {
+        if !AGENT_RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            Some(AgentLockGuard)
+        } else {
+            None
+        }
+    }
+}
+impl Drop for AgentLockGuard {
+    fn drop(&mut self) {
+        AGENT_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+static AGENT_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[tauri::command]
 pub async fn process_user_prompt(mut user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+    let _guard = match AgentLockGuard::try_lock() {
+        Some(g) => g,
+        None => {
+            return Ok(serde_json::json!({
+                "status": "FINISH",
+                "respuesta_conversacional": "⚠️ Sistema Ocupado: AuraSentinel ya está ejecutando una misión. Por favor, espera a que termine antes de enviar otra instrucción."
+            }).to_string());
+        }
+    };
+
     // Sanitizer Backend: Eliminar inyecciones accidentales de historiales pegados.
     if user_message.to_lowercase().starts_with("[user]") {
         user_message = user_message[6..].trim().to_string();
@@ -393,6 +490,10 @@ pub async fn process_user_prompt(mut user_message: String, workspace_path: Strin
             let skip = combined_history.len() - 8;
             combined_history = combined_history.into_iter().skip(skip).collect();
         }
+
+        // FIX #2: Synchronize the journal's chat history before NLU so the Agent Loop inherits it
+        journal.chat_history = combined_history.clone();
+        crate::core::session_journal::save_journal(&workspace_path, &journal);
 
         let mut nlu_response = translator::translate_to_technical_intent(&user_message, &app_handle, &combined_history).await;
         let start_idx = nlu_response.find('{');

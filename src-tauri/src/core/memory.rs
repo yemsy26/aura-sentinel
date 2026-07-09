@@ -96,7 +96,7 @@ pub async fn index_project(workspace_path: &str) -> Result<String, String> {
     let project_mem = ProjectMemory {
         workspace_path: workspace_path.to_string(),
         timestamp,
-        chunks,
+        chunks: chunks.clone(),
     };
     
     // 4. Añadir a la base global
@@ -106,6 +106,9 @@ pub async fn index_project(workspace_path: &str) -> Result<String, String> {
     global_mem.push(project_mem);
     
     save_global_memory(&global_mem).await?;
+    
+    // SPRINT 2: Silently consolidate knowledge after indexing
+    let _ = consolidate_knowledge(workspace_path, &chunks).await;
     
     Ok(format!("Proyecto '{}' indexado exitosamente en la memoria permanente.", workspace_path))
 }
@@ -136,6 +139,27 @@ pub async fn query_memory(query: &str) -> Result<String, String> {
     
     // Tomar los top 5 más relevantes
     let mut context_result = String::from("[CONTEXTO HISTÓRICO RECUPERADO]\n\n");
+    
+    // SPRINT 2: Load and prepend synthesized knowledge (Lessons Learned)
+    let knowledge = load_knowledge_index().await;
+    let mut lessons_added = 0;
+    for entry in &knowledge {
+        // Simple heuristic: if query contains keywords from lessons or just dump top generic lessons
+        // For this sprint, we just add the first 5 lessons across projects to guide the LLM
+        for lesson in &entry.lessons {
+            if lessons_added == 0 {
+                context_result.push_str("💡 [LECCIONES APRENDIDAS DE PROYECTOS SIMILARES]:\n");
+            }
+            context_result.push_str(&format!("- {}\n", lesson));
+            lessons_added += 1;
+            if lessons_added >= 5 { break; }
+        }
+        if lessons_added >= 5 { break; }
+    }
+    if lessons_added > 0 {
+        context_result.push_str("\n");
+    }
+
     let mut added = 0;
     
     for (chunk, workspace, score) in scored_chunks {
@@ -156,4 +180,91 @@ pub async fn query_memory(query: &str) -> Result<String, String> {
     } else {
         Ok(context_result)
     }
+}
+
+
+// ─── Sprint 2: Memory Consolidation ──────────────────────────────────────────
+// In addition to raw vector chunks, we synthesize "lessons learned".
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct KnowledgeEntry {
+    pub workspace_path: String,
+    pub lessons: Vec<String>,
+    pub timestamp: String,
+}
+
+async fn get_knowledge_file_path() -> String {
+    let current = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+
+    let project_root = if current.ends_with("src-tauri") || current.ends_with("src-tauri\\") {
+        Path::new(&current)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(current)
+    } else {
+        current
+    };
+
+    let mem_dir = Path::new(&project_root).join("data").join("memory");
+    let _ = fs::create_dir_all(&mem_dir).await;
+    mem_dir.join("knowledge_index.json").to_string_lossy().to_string()
+}
+
+pub async fn load_knowledge_index() -> Vec<KnowledgeEntry> {
+    let path = get_knowledge_file_path().await;
+    if let Ok(content) = fs::read_to_string(&path).await {
+        if let Ok(data) = serde_json::from_str(&content) {
+            return data;
+        }
+    }
+    vec![]
+}
+
+pub async fn save_knowledge_index(knowledge: &Vec<KnowledgeEntry>) -> Result<(), String> {
+    let path = get_knowledge_file_path().await;
+    let json = serde_json::to_string_pretty(knowledge).map_err(|e| format!("Error serializando knowledge: {}", e))?;
+    fs::write(&path, json).await.map_err(|e| format!("Error escribiendo knowledge: {}", e))?;
+    Ok(())
+}
+
+/// Analiza los chunks crudos de un proyecto y sintetiza reglas generales (lecciones).
+pub async fn consolidate_knowledge(workspace_path: &str, chunks: &[MemoryChunk]) -> Result<(), String> {
+    if chunks.is_empty() { return Ok(()); }
+    
+    // Tomar solo una muestra para no saturar al LLM
+    let sample_size = chunks.len().min(5);
+    let mut sample_content = String::new();
+    for i in 0..sample_size {
+        sample_content.push_str(&format!("Archivo: {}\n{}\n\n", chunks[i].file_path, &chunks[i].content[..chunks[i].content.len().min(1000)]));
+    }
+    
+    let prompt = format!(
+        "Basandote en el codigo de este proyecto, extrae 3 lecciones clave o patrones arquitectonicos utiles para el futuro. Responde SOLO con una lista de bullet points.\n\nCODIGO:\n{}",
+        sample_content
+    );
+    
+    // Usamos el ORCHESTRATOR_MODEL (asumiendo phi3/llama3) para sintetizar
+    if let Ok(synthesis) = crate::llm::call_ollama(crate::llm::agent::ORCHESTRATOR_MODEL, &prompt).await {
+        let lessons: Vec<String> = synthesis.lines()
+            .map(|l| l.trim().trim_start_matches("-").trim_start_matches("*").trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+            
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
+        
+        let mut index = load_knowledge_index().await;
+        index.retain(|e| e.workspace_path != workspace_path);
+        index.push(KnowledgeEntry {
+            workspace_path: workspace_path.to_string(),
+            lessons,
+            timestamp,
+        });
+        
+        let _ = save_knowledge_index(&index).await;
+    }
+    
+    Ok(())
 }
