@@ -305,7 +305,7 @@ impl Drop for AgentLockGuard {
 static AGENT_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[tauri::command]
-pub async fn process_user_prompt(mut user_message: String, workspace_path: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+pub async fn process_user_prompt(mut user_message: String, workspace_path: String, orchestrator_model: String, programmer_model: String, app_handle: tauri::AppHandle) -> Result<String, String> {
     let _guard = match AgentLockGuard::try_lock() {
         Some(g) => g,
         None => {
@@ -634,5 +634,5 @@ pub async fn process_user_prompt(mut user_message: String, workspace_path: Strin
         &files_only.iter().take(500).map(|n| n.path.clone()).collect::<Vec<String>>()
     ).unwrap_or_default();
     
-    agent::run_agent_loop(enriched_message, workspace_path, tree_json, app_handle).await
+    agent::run_agent_loop(enriched_message, workspace_path, tree_json, orchestrator_model, programmer_model, app_handle).await
 }

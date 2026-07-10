@@ -1,4 +1,3 @@
-pub mod architect;
 pub mod tester;
 pub mod env_check;
 pub mod memory;
@@ -12,6 +11,8 @@ pub mod dependency_mapper;
 pub mod vision;
 pub mod error_classifier;
 pub mod ask_user;
+pub mod command_trail;
+pub mod runner_generator;
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};

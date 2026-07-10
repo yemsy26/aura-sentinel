@@ -7,7 +7,6 @@
 ///  - LOGIC     → change approach (syntax error, missing file, wrong command)
 ///  - BLOCKED   → escalate to user (missing credential, not installed, permission)
 ///
-use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ErrorType {
@@ -145,7 +144,7 @@ impl RetryTracker {
         }
     }
 
-    pub fn reset(&mut self) {
+    pub fn _reset(&mut self) {
         self.transient_retries = 0;
         self.logic_retries = 0;
     }

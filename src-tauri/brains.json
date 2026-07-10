@@ -37,21 +37,5 @@
   "debugger": ["qwen2.5-coder:14b", "llama3.1:8b"],
   "quality_assessor": ["qwen2.5-coder:7b"],
   "vision": ["moondream", "llama3.2-vision"],
-  "embeddings": ["nomic-embed-text"],
-  "artificery": ["tabi"],
-  "autotyper": ["qwq"],
-  "architect": ["claude-3-5-sonnet"],
-  "orchestra": ["cogvideo"],
-  "langdetect": ["nanoid"],
-  "encodern": ["posthog"],
-  "helics": ["aurateam"],
-  "tune": ["optuna"],
-  "search": ["exa"],
-  "guess": ["guess"],
-  "dija": ["openai"],
-  "spike": ["phabricator"],
-  "ghost": ["git-secret"],
-  "chroma": ["chromadb"],
-  "intent": ["openai"],
-  "hyper": ["gpu"]
+  "embeddings": ["nomic-embed-text"]
 }

@@ -1,6 +1,38 @@
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
 
+
+async function loadOllamaModels() {
+    try {
+        const models = await invoke('get_ollama_models').then(list => list.map(name => ({name})));
+        
+        const orchestratorSelect = document.getElementById('orchestrator-select');
+        const programmerSelect = document.getElementById('programmer-select');
+        
+        orchestratorSelect.innerHTML = '';
+        programmerSelect.innerHTML = '';
+        
+        models.forEach(m => {
+            const opt1 = document.createElement('option');
+            opt1.value = m.name;
+            opt1.textContent = m.name;
+            const opt2 = document.createElement('option');
+            opt2.value = m.name;
+            opt2.textContent = m.name;
+            
+            orchestratorSelect.appendChild(opt1);
+            programmerSelect.appendChild(opt2);
+        });
+        
+        // Default selections
+        if(models.some(m => m.name.includes("llama3.1:8b"))) orchestratorSelect.value = "llama3.1:8b";
+        if(models.some(m => m.name.includes("qwen2.5-coder:14b"))) programmerSelect.value = "qwen2.5-coder:14b";
+        
+    } catch (e) {
+        console.error("No se pudieron cargar los modelos de Ollama", e);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     const chatInput = document.getElementById('chat-input');
     const chatMessages = document.getElementById('chat-messages');
@@ -51,6 +83,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (!tab.isDirty) {
                         tab.isDirty = true;
                         renderTabs();
+    loadOllamaModels();
                     }
                 }
             });
@@ -68,6 +101,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         tab.model.pushEditOperations([], [{ range: fullRange, text: newContent }], () => null);
                         tab.isDirty = false;
                         renderTabs();
+    loadOllamaModels();
                     } catch (e) {
                         console.error("Hot-reload error:", e);
                     }
@@ -162,6 +196,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             else { activeTabPath = null; renderTabs(); }
         } else {
             renderTabs();
+    loadOllamaModels();
         }
     }
 
@@ -177,6 +212,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (tab.viewState) window.editor.restoreViewState(tab.viewState);
         window.editor.focus();
         renderTabs();
+    loadOllamaModels();
     }
 
     async function saveActiveTab() {
@@ -186,6 +222,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             await invoke('save_file_content', { path: activeTabPath, content: tab.model.getValue() });
             tab.isDirty = false;
             renderTabs();
+    loadOllamaModels();
             logSystemThought(`[GUARDADO] ${activeTabPath.split(/[\\\/]/).pop()}`, '#3fb950');
         } catch (e) {
             logSystemThought(`[ERROR] No se pudo guardar: ${e}`, '#f85149');
@@ -302,6 +339,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 openTabs.clear();
                 activeTabPath = null;
                 renderTabs();
+    loadOllamaModels();
 
                 const initResult = await invoke('init_memory_log', { workspacePath: currentWorkspace });
                 logSystemThought(`[MEM] ${initResult}`, '#6e7681');
@@ -486,7 +524,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 const responseString = await invoke('process_user_prompt', {
                     userMessage: text,
-                    workspacePath: currentWorkspace
+                    workspacePath: currentWorkspace,
+                    orchestratorModel: document.getElementById('orchestrator-select').value || "llama3.1:8b",
+                    programmerModel: document.getElementById('programmer-select').value || "qwen2.5-coder:14b"
                 });
 
                 unlisten();
@@ -517,62 +557,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // ─────────────────────────────────────────────
-    // MODAL: ASK USER
-    // ─────────────────────────────────────────────
-    window.__TAURI__.event.listen('agent-ask-user', (event) => {
-        const payload = event.payload;
-        const overlay = document.createElement('div');
-        Object.assign(overlay.style, {
-            position:'fixed', top:'0', left:'0', width:'100vw', height:'100vh',
-            backgroundColor:'rgba(1,4,9,0.88)', display:'flex',
-            justifyContent:'center', alignItems:'center', zIndex:'9999'
-        });
-        const modal = document.createElement('div');
-        Object.assign(modal.style, {
-            backgroundColor:'#161b22', border:'1px solid #30363d',
-            borderRadius:'10px', padding:'28px', width:'520px',
-            maxWidth:'92%', color:'#c9d1d9', boxShadow:'0 8px 32px rgba(0,0,0,0.6)'
-        });
-        const title = document.createElement('h3');
-        title.innerText = '\ud83e\udd16 Aura-Sentinel requiere informacion';
-        title.style.cssText = 'color:#58a6ff;margin-top:0;font-size:15px;';
-        const questionText = document.createElement('p');
-        questionText.innerText = payload.question;
-        questionText.style.cssText = 'margin-bottom:20px;line-height:1.6;';
-        const inputField = document.createElement('input');
-        inputField.type = 'text';
-        Object.assign(inputField.style, {
-            width:'100%', padding:'10px 12px', marginBottom:'16px',
-            boxSizing:'border-box', backgroundColor:'#0d1117',
-            border:'1px solid #30363d', color:'#c9d1d9',
-            borderRadius:'6px', fontSize:'13px', outline:'none'
-        });
-        const submitBtn = document.createElement('button');
-        submitBtn.innerText = 'Responder \u2192';
-        Object.assign(submitBtn.style, {
-            padding:'8px 20px', backgroundColor:'#238636', color:'white',
-            border:'none', borderRadius:'6px', cursor:'pointer',
-            fontSize:'13px', fontWeight:'bold'
-        });
-        submitBtn.onclick = () => {
-            const answer = inputField.value.trim();
-            if (!answer) return;
-            invoke('submit_user_answer', { id: payload.id, answer }).then(() => {
-                document.body.removeChild(overlay);
-                logSystemThought(`[USER INPUT] ${answer}`, '#e3b341');
-            });
-        };
-        inputField.addEventListener('keypress', (e) => { if (e.key === 'Enter') submitBtn.click(); });
-        modal.appendChild(title);
-        modal.appendChild(questionText);
-        modal.appendChild(inputField);
-        modal.appendChild(submitBtn);
-        overlay.appendChild(modal);
-        document.body.appendChild(overlay);
-        inputField.focus();
-    });
-
-    // ─────────────────────────────────────────────
     // TELEMETRY
     // ─────────────────────────────────────────────
     setInterval(async () => {
@@ -584,6 +568,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initialize tabs bar
     renderTabs();
+    loadOllamaModels();
 
     // ─────────────────────────────────────────────
     // UI IMPROVEMENTS: RESIZING & COLLAPSING

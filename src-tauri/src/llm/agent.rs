@@ -1,7 +1,12 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use crate::memory;
-use crate::core::{execute_terminal_command, start_background_task, read_task_logs, kill_task, validate_workspace, format_system_error};
+use crate::core::{
+    execute_terminal_command, start_background_task, read_task_logs, kill_task,
+    validate_workspace, format_system_error,
+    runner_generator::generate_standard_runners,
+    command_trail::{CommandTrail, StepResult},
+};
 use super::{call_ollama, delegate_to_programmer, delegate_to_auditor, delegate_to_logic_solver, ProgrammerOutput};
 
 fn strip_think_tags(mut text: String) -> String {
@@ -100,6 +105,182 @@ fn formato_contrato(cmd: &str) -> String {
     format!("CRITERIOS DE EXITO DEFINIDOS POR EL PLANIFICADOR:\n{}", cmd)
 }
 
+/// Auto-genera runners (test, build, dev, lint) para el proyecto detectando el lenguaje
+async fn generate_project_runners(workspace_path: &str, prompt: &str) -> Vec<std::path::PathBuf> {
+    use std::path::Path;
+    
+    let project_root = Path::new(workspace_path);
+    let _all_generated: Vec<std::path::PathBuf> = Vec::new();
+    
+    // Detectar lenguaje por archivos existentes
+    let language = detect_project_language(workspace_path);
+    if language == "unknown" {
+        // Intentar inferir del prompt
+        let prompt_lower = prompt.to_lowercase();
+        if prompt_lower.contains("rust") || prompt_lower.contains("cargo") {
+            return generate_for_language("rust", project_root).await;
+        } else if prompt_lower.contains("python") || prompt_lower.contains("django") || prompt_lower.contains("flask") || prompt_lower.contains("fastapi") {
+            return generate_for_language("python", project_root).await;
+        } else if prompt_lower.contains("javascript") || prompt_lower.contains("node") || prompt_lower.contains("react") || prompt_lower.contains("vue") || prompt_lower.contains("npm") {
+            return generate_for_language("javascript", project_root).await;
+        } else if prompt_lower.contains("typescript") || prompt_lower.contains("tsx") || prompt_lower.contains("ts ") {
+            return generate_for_language("typescript", project_root).await;
+        } else if prompt_lower.contains("go ") || prompt_lower.contains("golang") {
+            return generate_for_language("go", project_root).await;
+        } else if prompt_lower.contains("java") || prompt_lower.contains("spring") || prompt_lower.contains("maven") || prompt_lower.contains("gradle") {
+            return generate_for_language("java", project_root).await;
+        } else if prompt_lower.contains("kotlin") || prompt_lower.contains("android") {
+            return generate_for_language("kotlin", project_root).await;
+        } else if prompt_lower.contains("php") || prompt_lower.contains("laravel") {
+            return generate_for_language("php", project_root).await;
+        } else if prompt_lower.contains("dart") || prompt_lower.contains("flutter") {
+            return generate_for_language("dart", project_root).await;
+        } else if prompt_lower.contains("swift") || prompt_lower.contains("ios") {
+            return generate_for_language("swift", project_root).await;
+        } else if prompt_lower.contains("c#") || prompt_lower.contains("csharp") || prompt_lower.contains(".net") {
+            return generate_for_language("csharp", project_root).await;
+        } else if prompt_lower.contains("ruby") || prompt_lower.contains("rails") {
+            return generate_for_language("ruby", project_root).await;
+        } else if prompt_lower.contains("swift") || prompt_lower.contains("ios") {
+            return generate_for_language("swift", project_root).await;
+        } else if prompt_lower.contains("dart") || prompt_lower.contains("flutter") {
+            return generate_for_language("dart", project_root).await;
+        } else if prompt_lower.contains("c#") || prompt_lower.contains("csharp") || prompt_lower.contains(".net") {
+            return generate_for_language("csharp", project_root).await;
+        } else if prompt_lower.contains("ruby") || prompt_lower.contains("rails") {
+            return generate_for_language("ruby", project_root).await;
+        } else if prompt_lower.contains("solidity") || prompt_lower.contains("foundry") || prompt_lower.contains("hardhat") {
+            return generate_for_language("solidity", project_root).await;
+        }
+        return Vec::new();
+    }
+    
+    generate_for_language(&language, project_root).await
+}
+
+async fn generate_for_language(language: &str, _project_root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let (_test_cmd, _build_cmd, _dev_cmd, _lint_cmd) = match language {
+        "rust" => (
+            Some("cargo test".to_string()),
+            Some("cargo build".to_string()),
+            Some("cargo run".to_string()),
+            Some("cargo clippy".to_string()),
+        ),
+        "python" => (
+            Some("python -m pytest".to_string()),
+            Some("python -m py_compile src/**/*.py".to_string()),
+            Some("python main.py".to_string()),
+            Some("ruff check .".to_string()),
+        ),
+        "javascript" | "typescript" => (
+            Some("npm test".to_string()),
+            Some("npm run build".to_string()),
+            Some("npm run dev".to_string()),
+            Some("npm run lint".to_string()),
+        ),
+        "go" => (
+            Some("go test ./...".to_string()),
+            Some("go build".to_string()),
+            Some("go run main.go".to_string()),
+            Some("golangci-lint run".to_string()),
+        ),
+        "java" => (
+            Some("mvn test".to_string()),
+            Some("mvn compile".to_string()),
+            Some("mvn spring-boot:run".to_string()),
+            Some("mvn checkstyle:check".to_string()),
+        ),
+        "kotlin" => (
+            Some("./gradlew test".to_string()),
+            Some("./gradlew build".to_string()),
+            Some("./gradlew run".to_string()),
+            Some("./gradlew detekt".to_string()),
+        ),
+        "php" => (
+            Some("./vendor/bin/phpunit".to_string()),
+            Some("composer install".to_string()),
+            Some("php artisan serve".to_string()),
+            Some("./vendor/bin/phpcs".to_string()),
+        ),
+        "dart" => (
+            Some("flutter test".to_string()),
+            Some("flutter build".to_string()),
+            Some("flutter run".to_string()),
+            Some("flutter analyze".to_string()),
+        ),
+        "swift" => (
+            Some("swift test".to_string()),
+            Some("swift build".to_string()),
+            Some("swift run".to_string()),
+            Some("swiftlint".to_string()),
+        ),
+        "csharp" => (
+            Some("dotnet test".to_string()),
+            Some("dotnet build".to_string()),
+            Some("dotnet run".to_string()),
+            Some("dotnet format".to_string()),
+        ),
+        "ruby" => (
+            Some("rspec".to_string()),
+            Some("bundle install".to_string()),
+            Some("rails server".to_string()),
+            Some("rubocop".to_string()),
+        ),
+        "solidity" => (
+            Some("forge test".to_string()),
+            Some("forge build".to_string()),
+            Some("anvil".to_string()),
+            Some("forge fmt".to_string()),
+        ),
+        _ => (None, None, None, None),
+    };
+    
+    match generate_standard_runners(
+        std::path::Path::new("."),
+        "rust",
+        Some("cargo test".to_string()),
+        Some("cargo build".to_string()),
+        Some("cargo run".to_string()),
+        Some("cargo clippy".to_string()),
+    ).await {
+        Ok(paths) => paths,
+        Err(_) => Vec::new(),
+    }
+}
+
+// Helper para detectar lenguaje del proyecto
+fn detect_project_language(workspace_path: &str) -> String {
+    use std::path::Path;
+    let path = Path::new(workspace_path);
+    
+    if path.join("Cargo.toml").exists() { return "rust".to_string(); }
+    if path.join("package.json").exists() {
+        // Verificar si es TypeScript
+        if Path::new(workspace_path).join("tsconfig.json").exists() {
+            return "typescript".to_string();
+        }
+        return "javascript".to_string();
+    }
+    if path.join("requirements.txt").exists() || path.join("pyproject.toml").exists() || path.join("main.py").exists() {
+        return "python".to_string();
+    }
+    if path.join("go.mod").exists() { return "go".to_string(); }
+    if path.join("pom.xml").exists() { return "java".to_string(); }
+    if path.join("build.gradle").exists() || path.join("build.gradle.kts").exists() { return "kotlin".to_string(); }
+    if path.join("composer.json").exists() { return "php".to_string(); }
+    if path.join("pubspec.yaml").exists() { return "dart".to_string(); }
+    if path.join("Package.swift").exists() { return "swift".to_string(); }
+    if path.join("Cargo.toml").exists() { return "rust".to_string(); }
+    if path.join("*.csproj").exists() || std::fs::read_dir(workspace_path).map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().extension().map(|ext| ext == "csproj").unwrap_or(false))).unwrap_or(false) {
+        return "csharp".to_string();
+    }
+    if path.join("Gemfile").exists() { return "ruby".to_string(); }
+    if path.join("foundry.toml").exists() || path.join("hardhat.config.js").exists() || path.join("hardhat.config.ts").exists() {
+        return "solidity".to_string();
+    }
+    "unknown".to_string()
+}
+
 pub const ORCHESTRATOR_MODEL: &str = "llama3.1:8b";
 #[allow(dead_code)]
 pub const PROGRAMMER_MODEL: &str = "qwen2.5-coder:7b";
@@ -108,6 +289,8 @@ pub async fn run_agent_loop(
     user_message: String,
     workspace_path: String,
     _tree_json: String,
+    orchestrator_model: String,
+    programmer_model: String,
     app_handle: AppHandle
 ) -> Result<String, String> {
     
@@ -269,11 +452,22 @@ pub async fn run_agent_loop(
     journal.status = "EN_PROGRESO".to_string();
     journal.herramientas_usadas.clear();
     journal.archivos_tocados.clear();
-    crate::core::session_journal::save_journal(&workspace_path, &journal);
+crate::core::session_journal::save_journal(&workspace_path, &journal);
     emit_event(&app_handle, 0, "[DIARIO] Misión registrada en diario de sesión.", "INFO");
     emit_event(&app_handle, 0, &format!("[MISIÓN] Tipo clasificado: {} — El agente operará en modo apropiado.", mission_label), "INFO");
     
-
+    // ─── COMMAND TRAIL (registro estructurado de pasos) ───
+    use crate::core::command_trail::CommandTrail;
+    let mut command_trail = CommandTrail::load_or_new(&workspace_path, &original_prompt_parsed);
+    command_trail.save(&workspace_path);
+    
+    // ─── AUTO-GENERATE RUNNERS (test, build, dev, lint) ───
+    // Detectar lenguaje y generar scripts de ejecución si no existen
+    let runners_generated = generate_project_runners(&workspace_path, &original_prompt_parsed).await;
+    if !runners_generated.is_empty() {
+        emit_event(&app_handle, 0, &format!("🏃 Runners generados: {}", runners_generated.iter().map(|p| p.file_name().unwrap().to_string_lossy()).collect::<Vec<_>>().join(", ")), "SUCCESS");
+    }
+    
     // =======================================================
     // PESP v2 — Generación del Plan de Fases (Paso 0)
     // =======================================================
@@ -290,7 +484,7 @@ pub async fn run_agent_loop(
         let plan_desc = fases.iter().map(|f| format!("Fase {}: {}", f.numero, f.descripcion)).collect::<Vec<_>>().join(" | ");
         emit_event(&app_handle, 0, &format!("🗺️ Plan generado: {}", plan_desc), "SUCCESS");
     }
-    let mut task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::GeneralCode, language: None };
+    let mut _task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::GeneralCode, language: None };
     
     
     // ── SESSION PERSISTENCE (LOAD) ──
@@ -400,7 +594,7 @@ pub async fn run_agent_loop(
                 "Resume en maximo 5 bullet points el siguiente historial. Conserva SOLO: objetivo original, archivos creados/modificados, errores criticos pendientes, ultimo estado. Responde SOLO con el resumen.\n\nHISTORIAL:\n{}",
                 &current_context[..current_context.len().min(6000)]
             );
-            if let Ok(summary) = call_ollama(ORCHESTRATOR_MODEL, &compress_prompt).await {
+            if let Ok(summary) = call_ollama(&orchestrator_model, &compress_prompt).await {
                 let compressed = format!("[CONTEXTO COMPRIMIDO EN PASO {}]\n{}\n\n", step_count, summary);
                 current_context = compressed;
                 emit_event(&app_handle, step_count, "[MEMORIA] Contexto comprimido exitosamente.", "SUCCESS");
@@ -514,7 +708,7 @@ pub async fn run_agent_loop(
             ),
             // Critic - compressed to <200 tokens
             AgentRole::Critic => format!(
-                "[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos. Solo TOOL_FINISH si todo pasa al 100%%. Usa TOOL_ASK_USER si necesitas que el usuario revise o confirme algo.\n\n{}{}",
+                "[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos. Solo TOOL_FINISH si todo pasa al 100%%. Usa TOOL_ASK_USER si necesitas que el usuario revise o confirme algo.\n[REGLA FRONTEND]: Si hay un index.html, es frontend. NO uses `node script.js` ni comandos terminales backend. Usa TOOL_VISION_EVALUATOR o simplemente TOOL_FINISH.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 contract_block, json_schema
             ),
@@ -546,7 +740,7 @@ pub async fn run_agent_loop(
         };
 
         let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::Orchestrator, language: None }, &available_models, &app_handle, 0).await
-            .unwrap_or_else(|_| ORCHESTRATOR_MODEL.to_string());
+            .unwrap_or_else(|_| orchestrator_model.to_string());
         // Cache the model name for context compression (avoids re-resolving every 10 steps)
 
         let role_label = match current_role {
@@ -851,20 +1045,10 @@ pub async fn run_agent_loop(
                     emit_event(&app_handle, step_count, "Comando repetido interceptado", "WARNING");
                     // If Critic is stuck repeating the same dir/ls command, force it back to Executor
                     if current_role == AgentRole::Critic {
-                        let feedback = "[REPORTE DEL CRÍTICO]: Bucle de terminal detectado en el Crítico. \
-                            El agente sigue repitiendo el mismo comando sin avanzar. \
-                            El Ejecutor debe retomar el control y usar TOOL_PROGRAMMER para \
-                            crear o completar los archivos que faltan.".to_string();
-                        critic_feedback = Some(feedback.clone());
-                        current_role = AgentRole::Executor;
-                        critic_fsm_lock_consecutive = 0;
-                        think_consecutive = 0;
-                        mapper_consecutive = 0;
-                        comandos_ejecutados_historico.clear();
-                        emit_event(&app_handle, step_count,
-                            "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Bucle de terminal en Crítico. Reactivando escritura.",
-                            "WARNING");
-                        current_context.push_str(&format!("{}\n\n", feedback));
+                        let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el Crítico. Estás repitiendo el mismo comando. Esto suele significar que la prueba ya tuvo éxito y no hay más errores. El sistema está FORZANDO la acción TOOL_FINISH para terminar la tarea o la fase actual de forma segura.";
+                        emit_event(&app_handle, step_count, "[SISTEMA] Bucle de Terminal en Crítico -> Forzando FINISH", "WARNING");
+                        forced_next_tool = Some(("TOOL_FINISH".to_string(), "Las pruebas parecen haber concluido. Usa TOOL_FINISH.".to_string()));
+                        current_context.push_str(&format!("{}\n\n", msg));
                     } else {
                         current_context.push_str(&format!("{}\n\n", res_msg));
                     }
@@ -1287,9 +1471,9 @@ pub async fn run_agent_loop(
                         archivos_vec.clone()
                     };
                     let safe_files = memory::read_files_safely(&workspace_path, files_to_audit.clone()).await;
-                    let raw_reporte = delegate_to_auditor(&safe_files, ORCHESTRATOR_MODEL).await;
+                    let raw_reporte = delegate_to_auditor(&safe_files, &orchestrator_model).await;
                     let struct_prompt = format!("Convierte este reporte a un JSON con campos: archivos, problema, accion_sugerida. Responde SOLO el JSON. REPORTE:\n{}", &raw_reporte);
-                    let structured = call_ollama(ORCHESTRATOR_MODEL, &struct_prompt).await
+                    let structured = call_ollama(&orchestrator_model, &struct_prompt).await
                         .unwrap_or_else(|_| raw_reporte.clone());
                     let structured = structured.trim().to_string();
                     current_context.push_str(&format!("[REPORTE AUDITOR ESTRUCTURADO]\n{}\n\n", structured));
@@ -1322,7 +1506,7 @@ pub async fn run_agent_loop(
                     }
                 };
                 let safe_files = memory::read_files_safely(&workspace_path, real_files).await;
-                let reporte = delegate_to_logic_solver(&safe_files, ORCHESTRATOR_MODEL).await;
+                let reporte = delegate_to_logic_solver(&safe_files, &orchestrator_model).await;
                 current_context.push_str(&format!("Reporte de Verificación Formal (Logic Solver):\n{}\n\nRevisa los problemas matemáticos o lógicos detectados antes de programar o testear.\n\n", reporte));
                 emit_event(&app_handle, step_count, "Verificación Lógica completada.", "SUCCESS");
             },
@@ -1489,15 +1673,7 @@ pub async fn run_agent_loop(
                 let context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
                 let mut qwen_prompt = format!("Instrucción principal: {}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message);
-                let target_model = match crate::llm::router::get_best_model(&task_complexity, &available_models, &app_handle, step_count).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        let msg = format!("[ENV_FAILURE] {}", e);
-                        emit_event(&app_handle, step_count, &msg, "FATAL");
-                        current_context.push_str(&format!("{}\n\n", msg));
-                        break;
-                    }
-                };
+                let target_model = programmer_model.clone();
                 emit_event(&app_handle, step_count, &format!("[ROUTER] Cerebro Programador Seleccionado: {}", target_model), "INFO");
 
                 let mut exito_bucle_programador = false;
@@ -1668,16 +1844,10 @@ pub async fn run_agent_loop(
                 } else {
                     architect_used = true;
                     emit_event(&app_handle, step_count, "Generando mapa arquitectónico del sistema...", "ACTION");
-                    match crate::core::architect::generate_dependency_map(&workspace_path) {
-                        Ok(report) => {
-                            current_context.push_str(&format!("Reporte Arquitectónico:\n{}\n\n", report));
-                            emit_event(&app_handle, step_count, "Mapa arquitectónico generado.", "SUCCESS");
-                        },
-                        Err(e) => {
-                            current_context.push_str(&format!("Error en Arquitecto: {}\n\n", e));
-                            emit_event(&app_handle, step_count, &e, "ERROR");
-                        }
-                    }
+                    let graph = crate::core::dependency_mapper::analyze_workspace(&workspace_path);
+                    let report = crate::core::dependency_mapper::format_graph_report(&graph);
+                    current_context.push_str(&format!("Reporte Arquitectónico:\n{}\n\n", report));
+                    emit_event(&app_handle, step_count, "Mapa arquitectónico generado.", "SUCCESS");
                 }
             },
             "TOOL_VISION_EVALUATOR" => {
@@ -1926,7 +2096,7 @@ pub async fn run_agent_loop(
                                 let _ = crate::core::restore_git_backup(&workspace_path).await;
                                 archivos_editados_historico.clear();
                                 comandos_ejecutados_historico.clear();
-                                task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::HighComplexityFix, language: None };
+                                _task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::HighComplexityFix, language: None };
                             emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
                                 current_role = AgentRole::Executor;
                                 critic_feedback = Some(fail_msg.clone());
@@ -1983,6 +2153,18 @@ pub async fn run_agent_loop(
                             emit_event(&app_handle, step_count, &err, "ERROR");
                         }
                     }
+                }
+            },
+            "TOOL_CREATE_RUNNER" => {
+                emit_event(&app_handle, step_count, "🏃 Generando runners de ejecución (test, build, dev, lint)...", "ACTION");
+                let runners = generate_project_runners(&workspace_path, &original_prompt_parsed).await;
+                if runners.is_empty() {
+                    current_context.push_str("[TOOL_CREATE_RUNNER] No se generaron runners (lenguaje no detectado o no soportado).\n\n");
+                    emit_event(&app_handle, step_count, "No se generaron runners (lenguaje desconocido).", "WARNING");
+                } else {
+                    let names: Vec<String> = runners.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
+                    current_context.push_str(&format!("[TOOL_CREATE_RUNNER] Runners generados: {}\n\n", names.join(", ")));
+                    emit_event(&app_handle, step_count, &format!("Runners generados: {}", names.join(", ")), "SUCCESS");
                 }
             },
             "TOOL_SEARCH" => {
@@ -2056,6 +2238,35 @@ pub async fn run_agent_loop(
                 // PESP v2 — Intercept TOOL_FINISH for Phase Advancement
                 // =======================================================
                 if !journal.fases.is_empty() && journal.fase_actual < journal.fases.len() - 1 {
+                    let phase_num = journal.fases[journal.fase_actual].numero;
+                    let phase_desc = &journal.fases[journal.fase_actual].descripcion;
+                    
+                    emit_event(&app_handle, step_count, &format!("⏸ [PAUSA INTERACTIVA] Fase {} completada. Esperando aprobación del usuario...", phase_num), "WARNING");
+                    
+                    let question = format!("He completado la Fase {}: '{}'. ¿Deseas que avance a la siguiente fase, o quieres revisar/cambiar algo?", phase_num, phase_desc);
+                    let options = vec!["Aprobar y Continuar".to_string(), "Modificar Instrucciones".to_string(), "Detener Agente".to_string()];
+                    
+                    // Pause execution and ask user
+                    match crate::core::ask_user::ask_user_async(&app_handle, question, options, current_context.clone()).await {
+                        Ok(reply) => {
+                            if reply == "Detener Agente" {
+                                emit_event(&app_handle, step_count, "El usuario detuvo la ejecución.", "ERROR");
+                                let final_res = FinalResponse { status: "FINISH".to_string(), respuesta_conversacional: "Detenido por el usuario".to_string() };
+                                return Ok(serde_json::to_string(&final_res).unwrap());
+                            } else if reply != "Aprobar y Continuar" {
+                                let user_feedback = format!("[FEEDBACK DEL USUARIO EN PAUSA INTERACTIVA]: {}", reply);
+                                current_context.push_str(&format!("{}\n\n", user_feedback));
+                                emit_event(&app_handle, step_count, "Feedback del usuario recibido. Ajustando plan.", "ACTION");
+                                step_count += 1;
+                                continue;
+                            }
+                        },
+                        Err(e) => {
+                            emit_event(&app_handle, step_count, &format!("Pausa interactiva interrumpida: {}", e), "ERROR");
+                            let final_res = FinalResponse { status: "FINISH".to_string(), respuesta_conversacional: "Interrumpido".to_string() };
+                            return Ok(serde_json::to_string(&final_res).unwrap());
+                        }
+                    }
                     emit_event(&app_handle, step_count, &format!("✅ [FASE {} COMPLETADA] Avanzando a la siguiente...", journal.fases[journal.fase_actual].numero), "SUCCESS");
                     
                     // Mark current phase as completed
@@ -2103,6 +2314,27 @@ pub async fn run_agent_loop(
                 }
             }
         }
+        
+        // ─── RECORD COMMAND TRAIL ───
+        let trail_role = match current_role {
+            AgentRole::Planner => "Planner",
+            AgentRole::Executor => "Executor",
+            AgentRole::Critic => "Critic",
+        };
+        let trail_result = if tool == "TOOL_FINISH" { StepResult::Success } else if current_context.contains("ERROR") || current_context.contains("FATAL") { StepResult::Error } else { StepResult::Success };
+        let trail_error = if trail_result == StepResult::Error { Some(format!("Tool: {}", tool)) } else { None };
+        command_trail.add_step(
+            step_count,
+            trail_role,
+            &tool,
+            &comando,
+            archivos_vec.clone(),
+            trail_result,
+            trail_error,
+            0, // duration - could be enhanced later
+            &current_context,
+        );
+        command_trail.save(&workspace_path);
         
         step_count += 1;
     }

@@ -23,6 +23,9 @@ Diseñado para un flujo de trabajo real y diverso: sistemas Android, facturació
 | Prompts comprimidos <200 tokens (7B-optimized) | 🟢 100% — Sprint 3 ✅ | Tier 1 |
 | Vision Evaluator (xcap + moondream) | 🟢 95% — Sprint 3 ✅ | Tier 1 |
 | Anti-Stub Enforcer | 🟢 90% | Tier 1 |
+| Command Trail System (Rastro) | 🟢 100% — Sprint 3 ✅ | Tier 1 |
+| Script Runner Generator | 🟢 100% — Sprint 3 ✅ | Tier 1 |
+| Frontend Anti-Backend Shield | 🟢 100% — Sprint 3 ✅ | Tier 1 |
 | Dependency Mapper (sin LLM) | 🟢 85% | Tier 1 |
 | RAG Memory (Rust nativo) | 🟡 70% | Tier 2 |
 | Chronos-VFS Zero-Trace | 🟡 65% | Tier 2 |
@@ -83,11 +86,17 @@ Aura-Sentinel no solo escribe código; lo entiende, lo valida, asegura sus depen
 - Carpetas masivas como `node_modules`, `.git`, `target`, `build`, `vendor` son invisibles para el LLM.
 - En cada turno, el agente recibe un mapa exacto de los archivos que *realmente existen* en el workspace.
 
-### 11. Zero-Trace Architecture (Agent Workspace) 🧠⚡
+### 11. Zero-Trace Architecture (Agent Workspace) 🧠⚡ (Temp marker)
 - **Diseño de Sistemas en RAM (Pensamiento Autónomo)**: Antes de escribir código físico, Aura Sentinel usa obligatoriamente `TOOL_AST_INJECT` para estructurar la arquitectura del sistema directamente en la memoria volátil utilizando el motor integrado `Chronos-VFS`.
 - **0-alloc y Latencia O(1)**: Los nodos lógicos generados por el LLM se mapean dinámicamente en un `AgentWorkspace` de 1 millón de slots soportado por memoria anónima (`memmap2`) y `monoio`.
 - **Salto Físico Obligatorio**: La Máquina de Estados prohíbe terminar la tarea después de pensar en RAM. Obliga al agente a usar `TOOL_PROGRAMMER` para transcribir su diseño mental al disco duro.
 - **Ejecución Segura**: Protege tu disco SSD de operaciones I/O masivas e inútiles mientras la IA piensa y corrige sus propios diseños.
+
+### 12. Command Trail & Script Runners (Nivel "Moderno 2026") 📜
+- **Command Trail Visible**: Registro estructurado e inmutable de cada paso del agente, persistido en `.aura_command_trail.json`. Incluye metadata completa: rol, herramienta, stdout, stderr, código de salida, duración y hash de contexto.
+- **Script-First Approach**: Autogeneración de scripts de ejecución nativos (`run_tests.sh`, `build.bat`, etc.) al detectar el ecosistema del proyecto (Rust, Python, TS, etc.).
+- **Frontend Anti-Backend Shield**: Detección dinámica de proyectos Web (ej. presencia de `index.html`). El núcleo bloquea al LLM si intenta ejecutar código de frontend que interactúa con el DOM usando comandos de backend como `node`, redirigiendo la validación hacia herramientas visuales (`TOOL_VISION_EVALUATOR`) y erradicando los bucles infinitos de `ReferenceError`.
+- **Resiliencia Mejorada de JSON**: Parseo inteligente adaptado a modelos más pequeños (ej. Qwen 7B) que extrae transparentemente outputs JSON estructurados dentro de bloques Markdown (````json````).
 
 ---
 

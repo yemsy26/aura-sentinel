@@ -53,7 +53,31 @@ fn get_system_stats() -> String {
     format!("CPU: {:.1}% | RAM Sys: {:.1}/{:.1} GB | App: {:.0} MB{}", cpu_usage, used_mem, total_mem, app_mem, status)
 }
 
+
+#[tauri::command]
+async fn get_ollama_models() -> Result<Vec<String>, String> {
+    let client = reqwest::Client::new();
+    match client.get("http://localhost:11434/api/tags").send().await {
+        Ok(res) => {
+            if let Ok(json) = res.json::<serde_json::Value>().await {
+                if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
+                    let mut model_names = Vec::new();
+                    for m in models {
+                        if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                            model_names.push(name.to_string());
+                        }
+                    }
+                    return Ok(model_names);
+                }
+            }
+            Err("No models found".to_string())
+        },
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn main() {
+
     // Aislamiento de hardware: Desactivar GPU en WebView2 (Windows)
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
@@ -79,8 +103,10 @@ fn main() {
             memory::save_file_content,
             llm::process_user_prompt,
             get_system_stats,
+            get_ollama_models,
             get_background_tasks,
-            ui_kill_task
+            ui_kill_task,
+            core::ask_user::submit_user_answer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

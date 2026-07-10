@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use chrono::{DateTime, Utc};
 
 /// Represents a single phase of a multi-phase construction mission (PESP v2).
 /// Each phase has a clear goal, required files, and a success criterion.
@@ -221,13 +222,6 @@ pub fn close_journal(journal: &mut SessionJournal, status: &str, workspace_path:
 }
 
 fn current_timestamp() -> String {
-    // No chrono dependency — use std::time for a simple Unix timestamp string
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // Format as simple readable: "YYYY-MM-DD HH:MM:SS UTC" would need chrono.
-    // Without chrono we store unix seconds and a human note.
-    format!("unix:{} (usa 'date -d @{}' para convertir)", secs, secs)
+    let now: DateTime<Utc> = Utc::now();
+    now.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }

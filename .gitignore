@@ -31,3 +31,11 @@ brains.json
 patch_*.py
 fix_*.py
 refactor_*.py
+
+# Aura-Sentinel Generated
+run_tests.*
+build.*
+dev.*
+lint.*
+docker.*
+.aura_command_trail.json
