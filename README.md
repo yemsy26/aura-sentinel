@@ -86,7 +86,7 @@ Aura-Sentinel no solo escribe código; lo entiende, lo valida, asegura sus depen
 - Carpetas masivas como `node_modules`, `.git`, `target`, `build`, `vendor` son invisibles para el LLM.
 - En cada turno, el agente recibe un mapa exacto de los archivos que *realmente existen* en el workspace.
 
-### 11. Zero-Trace Architecture (Agent Workspace) 🧠⚡ (Temp marker)
+### 11. Zero-Trace Architecture (Agent Workspace) 🧠⚡
 - **Diseño de Sistemas en RAM (Pensamiento Autónomo)**: Antes de escribir código físico, Aura Sentinel usa obligatoriamente `TOOL_AST_INJECT` para estructurar la arquitectura del sistema directamente en la memoria volátil utilizando el motor integrado `Chronos-VFS`.
 - **0-alloc y Latencia O(1)**: Los nodos lógicos generados por el LLM se mapean dinámicamente en un `AgentWorkspace` de 1 millón de slots soportado por memoria anónima (`memmap2`) y `monoio`.
 - **Salto Físico Obligatorio**: La Máquina de Estados prohíbe terminar la tarea después de pensar en RAM. Obliga al agente a usar `TOOL_PROGRAMMER` para transcribir su diseño mental al disco duro.
