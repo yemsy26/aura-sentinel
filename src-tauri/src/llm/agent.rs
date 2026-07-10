@@ -1610,14 +1610,23 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         graph.god_nodes.len(),
                         graph.cycles.len()
                     );
-                    current_context.push_str(&format!(
-                        "[TOOL_MAPPER] Análisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
-                        [INSTRUCCIÓN CRÍTICA]: El grafo de arriba es la REALIDAD FÍSICA del proyecto. \
-                        Sigue el 'Orden de Escritura Recomendado' AL PIE DE LA LETRA. \
-                        Usa TOOL_PROGRAMMER para escribir cada archivo en ese orden exacto. \
-                        NO empieces por archivos que dependen de otros que aún no existen.\n\n",
-                        report
-                    ));
+                    if graph.nodes.is_empty() {
+                        current_context.push_str(&format!(
+                            "[TOOL_MAPPER] Análisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
+                            [ADVERTENCIA INTERNA]: El workspace está completamente vacío (0 archivos). No hay nada que mapear.\n\
+                            Para avanzar, DEBES usar TOOL_THINK para diseñar los archivos a crear, o usar TOOL_AST_INJECT para estructurar el proyecto.\n\n",
+                            report
+                        ));
+                    } else {
+                        current_context.push_str(&format!(
+                            "[TOOL_MAPPER] Análisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
+                            [INSTRUCCIÓN CRÍTICA]: El grafo de arriba es la REALIDAD FÍSICA del proyecto. \
+                            Sigue el 'Orden de Escritura Recomendado' AL PIE DE LA LETRA. \
+                            Usa TOOL_PROGRAMMER para escribir cada archivo en ese orden exacto. \
+                            NO empieces por archivos que dependen de otros que aún no existen.\n\n",
+                            report
+                        ));
+                    }
                     emit_event(&app_handle, step_count, &summary, "SUCCESS");
                 }
             },
@@ -1682,7 +1691,16 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 while max_intentos > 0 && !exito_bucle_programador {
                     match delegate_to_programmer(&qwen_prompt, &context_for_qwen, &target_model).await {
                         Ok(json_res) => {
-                            let clean_json_res = strip_think_tags(json_res.clone());
+                            let mut clean_json_res = strip_think_tags(json_res.clone());
+                            if let Some(s) = clean_json_res.find("```json") {
+                                if let Some(e) = clean_json_res[s+7..].find("```") {
+                                    clean_json_res = clean_json_res[s+7..s+7+e].trim().to_string();
+                                }
+                            } else if let Some(s) = clean_json_res.find("```") {
+                                if let Some(e) = clean_json_res[s+3..].find("```") {
+                                    clean_json_res = clean_json_res[s+3..s+3+e].trim().to_string();
+                                }
+                            }
                             if let Ok(prog_output) = serde_json::from_str::<ProgrammerOutput>(&clean_json_res) {
                                 if !prog_output.cambios.is_empty() {
                                     emit_event(&app_handle, step_count, "Activando Git-Shield: Creando punto de retorno...", "PLANNING");
@@ -1812,9 +1830,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     break;
                                 }
                             } else {
-                                emit_event(&app_handle, step_count, "El programador devolvió JSON inválido.", "ERROR");
-                                current_context.push_str("Programador: JSON inválido.\n\n");
-                                break;
+                                emit_event(&app_handle, step_count, &format!("El programador devolvió JSON inválido (Intento {} restantes)", max_intentos - 1), "ERROR");
+                                qwen_prompt = format!("{}\n\n[ERROR CRÍTICO]: Tu respuesta anterior NO fue un JSON válido o falló la serialización. REGLA ESTRICTA: Tu salida debe ser ÚNICAMENTE un objeto JSON analizable, sin texto adicional antes o después. Si usas bloques markdown, asegúrate de que el JSON interno sea correcto.", qwen_prompt);
+                                max_intentos -= 1;
                             }
                         },
                         Err(e) => {
