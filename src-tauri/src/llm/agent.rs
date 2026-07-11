@@ -696,7 +696,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         let agent_prompt = match current_role {
             // Planner - compressed to <200 tokens
             AgentRole::Planner => format!(
-                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS PLANNER: TOOL_FINISH, TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_SEARCH, TOOL_ASK_USER.\nPROHIBIDO: TOOL_WORKSPACE_MANAGER (no borres archivos), TOOL_PROGRAMMER, TOOL_TERMINAL.\nREGLA CRITICA DE REPETICION: Si el objetivo ya se encuentra 100% implementado en el Workspace (los archivos ya existen y tienen el codigo), DEBES usar INMEDIATAMENTE TOOL_FINISH para abortar. NUNCA reescribas codigo que ya existe. Si no esta completado, cuando tu plan este listo, usa TOOL_THINK.\n{}{}{}",
+                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS PLANNER: TOOL_FINISH, TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_SEARCH, TOOL_ASK_USER.\nPROHIBIDO: TOOL_WORKSPACE_MANAGER (no borres archivos), TOOL_PROGRAMMER, TOOL_TERMINAL.\nREGLA CRITICA DE REPETICION: Si el objetivo ya se encuentra 100% implementado en el Workspace (los archivos ya existen y tienen el codigo), DEBES usar INMEDIATAMENTE TOOL_FINISH para abortar. NUNCA reescribas codigo que ya existe. Si no esta completado, cuando tu plan este listo, usa TOOL_THINK.\nREGLA CRITICA TOOL_MAPPER: TOOL_MAPPER SOLO es valido para proyectos de codigo con multiples archivos fuente que necesitan analisis de dependencias (js, ts, py, rs, go, etc). Para tareas simples de sistema (crear carpeta, renombrar, mover archivos, preguntas generales) JAMAS uses TOOL_MAPPER. En esos casos usa directamente TOOL_THINK.\n{}{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, analysis_fast_path, json_schema
             ),
@@ -1043,12 +1043,26 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 } else if comandos_ejecutados_historico.contains(&comando) {
                     let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
                     emit_event(&app_handle, step_count, "Comando repetido interceptado", "WARNING");
-                    // If Critic is stuck repeating the same dir/ls command, force it back to Executor
                     if current_role == AgentRole::Critic {
                         let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el Crítico. Estás repitiendo el mismo comando. Esto suele significar que la prueba ya tuvo éxito y no hay más errores. El sistema está FORZANDO la acción TOOL_FINISH para terminar la tarea o la fase actual de forma segura.";
                         emit_event(&app_handle, step_count, "[SISTEMA] Bucle de Terminal en Crítico -> Forzando FINISH", "WARNING");
                         forced_next_tool = Some(("TOOL_FINISH".to_string(), "Las pruebas parecen haber concluido. Usa TOOL_FINISH.".to_string()));
                         current_context.push_str(&format!("{}\n\n", msg));
+                    } else if current_role == AgentRole::Executor {
+                        // Executor stuck repeating informational commands (dir, ls, etc.) = task is done
+                        let cmd_lower = comando.to_lowercase();
+                        let is_info_cmd = cmd_lower.trim() == "dir"
+                            || cmd_lower.trim() == "ls"
+                            || cmd_lower.trim() == "ls -la"
+                            || cmd_lower.trim() == "dir /b";
+                        if is_info_cmd {
+                            let msg = "[SISTEMA INTERNO]: El Ejecutor está repitiendo un comando informacional (dir/ls). Esto indica que la tarea ya fue completada. FORZANDO TOOL_FINISH para cerrar la misión.";
+                            emit_event(&app_handle, step_count, "[SISTEMA] Ejecutor en loop informacional -> Forzando FINISH", "WARNING");
+                            forced_next_tool = Some(("TOOL_FINISH".to_string(), "La tarea ya fue completada según el historial de comandos. Resume los resultados al usuario.".to_string()));
+                            current_context.push_str(&format!("{}\n\n", msg));
+                        } else {
+                            current_context.push_str(&format!("{}\n\n", res_msg));
+                        }
                     } else {
                         current_context.push_str(&format!("{}\n\n", res_msg));
                     }
@@ -1062,6 +1076,32 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     } else {
                         programmer_cooldown_hits = 0;
                         comandos_ejecutados_historico.insert(comando.clone());
+
+                        // ── Pre-check: verify the script file exists before running it ─────────
+                        let cmd_lower_check = comando.to_lowercase();
+                        let script_file = if cmd_lower_check.starts_with("node ") {
+                            Some(comando.trim_start_matches("node ").trim().split_whitespace().next().unwrap_or(""))
+                        } else if cmd_lower_check.starts_with("python ") || cmd_lower_check.starts_with("python3 ") {
+                            Some(comando.splitn(2, ' ').nth(1).unwrap_or("").trim().split_whitespace().next().unwrap_or(""))
+                        } else {
+                            None
+                        };
+                        if let Some(script) = script_file {
+                            if !script.is_empty() && !script.starts_with('-') {
+                                let script_path = std::path::Path::new(&workspace_path).join(script);
+                                if !script_path.exists() {
+                                    let warn_msg = format!(
+                                        "[SISTEMA]: El archivo '{}' NO existe en el workspace. No puedes ejecutar un archivo que no existe.\n\
+                                        Primero crea el archivo con TOOL_PROGRAMMER, o verifica los archivos disponibles con TOOL_TERMINAL (dir).",
+                                        script
+                                    );
+                                    current_context.push_str(&format!("{}\n\n", warn_msg));
+                                    emit_event(&app_handle, step_count, &format!("[PRE-CHECK] Archivo no encontrado: {}", script), "ERROR");
+                                    continue;
+                                }
+                            }
+                        }
+
                         emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
                         match execute_terminal_command(&workspace_path, &comando).await {
                         Ok(out) => {
@@ -1329,7 +1369,30 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 }
             },
             "TOOL_ENV_MANAGER" => {
-                if comando.trim().is_empty() {
+                let cmd_trimmed = comando.trim();
+                // Guard: detect when agent passes terminal commands or flags to ENV_MANAGER
+                let looks_like_terminal_cmd = cmd_trimmed.contains(" -") // flags like -v, -h
+                    || cmd_trimmed.starts_with("node ")
+                    || cmd_trimmed.starts_with("python")
+                    || cmd_trimmed.starts_with("npm ")
+                    || cmd_trimmed.starts_with("npx ")
+                    || cmd_trimmed.starts_with("pip ")
+                    || cmd_trimmed.starts_with("dir")
+                    || cmd_trimmed.starts_with("ls")
+                    || cmd_trimmed.contains(".js")
+                    || cmd_trimmed.contains(".py")
+                    || cmd_trimmed.contains(".ts");
+
+                if looks_like_terminal_cmd {
+                    let warn_msg = format!(
+                        "[SISTEMA]: TOOL_ENV_MANAGER RECHAZADO. '{}' parece un comando de terminal, no un nombre de paquete.\n\
+                        TOOL_ENV_MANAGER solo acepta nombres de paquetes scoop (ej: 'nodejs', 'python', 'git').\n\
+                        Para ejecutar comandos en la terminal usa TOOL_TERMINAL en su lugar.",
+                        cmd_trimmed
+                    );
+                    current_context.push_str(&format!("{}\n\n", warn_msg));
+                    emit_event(&app_handle, step_count, &format!("[ENV_MANAGER] Rechazado comando de terminal: {}", cmd_trimmed), "WARNING");
+                } else if cmd_trimmed.is_empty() {
                     let res_msg = "Error: El paquete no puede estar vacío.";
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(&app_handle, step_count, "Paquete vacío", "ERROR");
@@ -1594,7 +1657,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             },
             "TOOL_MAPPER" => {
                 mapper_consecutive += 1;
-                if mapper_consecutive > 2 {
+                if mapper_consecutive > 1 {
                     let msg = "[SISTEMA INTERNO]: Loop de TOOL_MAPPER detectado. El workspace no cambiara magicamente. FORZANDO TOOL_THINK en el siguiente turno.";
                     current_context.push_str(&format!("{}\n\n", msg));
                     emit_event(&app_handle, step_count, msg, "WARNING");
