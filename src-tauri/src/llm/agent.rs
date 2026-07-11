@@ -696,13 +696,13 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         let agent_prompt = match current_role {
             // Planner - compressed to <200 tokens
             AgentRole::Planner => format!(
-                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS PLANNER: TOOL_FINISH, TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_SEARCH, TOOL_ASK_USER.\nPROHIBIDO: TOOL_WORKSPACE_MANAGER (no borres archivos), TOOL_PROGRAMMER, TOOL_TERMINAL.\nREGLA CRITICA DE REPETICION: Si el objetivo ya se encuentra 100% implementado en el Workspace (los archivos ya existen y tienen el codigo), DEBES usar INMEDIATAMENTE TOOL_FINISH para abortar. NUNCA reescribas codigo que ya existe. Si no esta completado, cuando tu plan este listo, usa TOOL_THINK.\nREGLA CRITICA TOOL_MAPPER: TOOL_MAPPER SOLO es valido para proyectos de codigo con multiples archivos fuente que necesitan analisis de dependencias (js, ts, py, rs, go, etc). Para tareas simples de sistema (crear carpeta, renombrar, mover archivos, preguntas generales) JAMAS uses TOOL_MAPPER. En esos casos usa directamente TOOL_THINK.\n{}{}{}",
+                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS PLANNER: TOOL_FINISH, TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_SEARCH, TOOL_ASK_USER.\nPROHIBIDO: TOOL_WORKSPACE_MANAGER (no borres archivos), TOOL_PROGRAMMER, TOOL_TERMINAL.\nREGLA CRITICA DE REPETICION: Solo usa TOOL_FINISH si los archivos existentes en el Workspace corresponden EXACTAMENTE al objetivo solicitado. Si los archivos tienen nombres que no coinciden con el objetivo (ej. el usuario pide 'juego' pero existen 'projectController.js'), DEBES crear los archivos correctos. NUNCA uses TOOL_FINISH porque 'hay algun archivo' si ese archivo no cumple el objetivo.\nREGLA CRITICA TOOL_MAPPER: TOOL_MAPPER SOLO es valido para proyectos de codigo con multiples archivos fuente que necesitan analisis de dependencias. Para tareas simples usa directamente TOOL_THINK.\n{}{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, analysis_fast_path, json_schema
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START, TOOL_ASK_USER. Usa TOOL_ENV_MANAGER *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH. REGLA DE SENTIDO COMUN: Si el usuario te pide crear/escribir un archivo pero ya existe y esta completo en el Workspace, NO USES TOOL_PROGRAMMER para reescribirlo. Ignora esa parte y continua con el resto de la tarea.\n\n{}{}",
+                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START, TOOL_ASK_USER. Usa TOOL_ENV_MANAGER *SOLO* para instalar binarios scoop (ej: 'nodejs', 'git', no comandos).\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH.\nEJEMPLOS TOOL_TERMINAL: Para correr 'npm audit fix' usa TOOL_TERMINAL con comando='npm audit fix'. Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. Para 'pip install X' usa TOOL_TERMINAL con comando='pip install X'. NUNCA inventes herramientas como 'NPM AUDIT' o 'NPM INSTALL' — todas las acciones de terminal van con TOOL_TERMINAL.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
@@ -788,9 +788,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             }
         };
         let checklist = raw_value.get("checklist_mental").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let tool = raw_value.get("herramienta").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_uppercase();
+        let mut tool = raw_value.get("herramienta").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_uppercase();
         let pensamiento = raw_value.get("pensamiento").and_then(|v| v.as_str()).unwrap_or("Sin pensamiento").to_string();
-        let comando = raw_value.get("comando").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let mut comando = raw_value.get("comando").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let task_id = raw_value.get("task_id").and_then(|v| v.as_str()).unwrap_or("default_task").to_string();
 
         // ── FORCED TOOL VALIDATION ────────────────────────────────────────────
@@ -1888,8 +1888,10 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                         }
                                     }
                                 } else {
-                                    emit_event(&app_handle, step_count, "El programador no propuso cambios.", "WARNING");
-                                    current_context.push_str("Programador: No se propusieron cambios.\n\n");
+                                    // No changes proposed — this can be legitimate (files already correct)
+                                    emit_event(&app_handle, step_count, "El programador no propuso cambios. Los archivos ya están al día.", "WARNING");
+                                    current_context.push_str("Programador: No se propusieron cambios (los archivos ya están correctos o no hay nada que modificar). El Ejecutor puede usar TOOL_TERMINAL para verificar o TOOL_FINISH si la tarea está lista.\n\n");
+                                    exito_bucle_programador = true; // treat as success, not failure
                                     break;
                                 }
                             } else {
@@ -2380,18 +2382,64 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 return Ok(serde_json::to_string(&final_res).unwrap());
             },
             _ => {
-                unknown_tool_consecutive += 1;
-                emit_event(&app_handle, step_count, &format!("Herramienta desconocida: {}", tool), "WARNING");
-                if unknown_tool_consecutive >= 3 {
-                    forced_next_tool = Some((
-                        "TOOL_THINK".to_string(),
-                        "El sistema bloqueó mi acceso porque intenté usar herramientas inventadas que no existen en el prompt. Transfiero el control para evitar bucles de alucinación.".to_string()
+                // ── Smart unknown-tool interceptor ──────────────────────────────────────
+                // Detect common patterns where the LLM invents tool names that are
+                // actually shell commands. Auto-redirect to TOOL_TERMINAL.
+                let tool_lower = tool.to_lowercase();
+                let shell_like = tool_lower.starts_with("npm")
+                    || tool_lower.starts_with("npx")
+                    || tool_lower.starts_with("pip")
+                    || tool_lower.starts_with("node")
+                    || tool_lower.starts_with("python")
+                    || tool_lower.starts_with("git ")
+                    || tool_lower.starts_with("cargo")
+                    || tool_lower.starts_with("rustup")
+                    || tool_lower.starts_with("mkdir")
+                    || tool_lower.starts_with("cd ");
+
+                if shell_like {
+                    // Convert the invented tool name into a TOOL_TERMINAL command
+                    let terminal_cmd = if comando.trim().is_empty() {
+                        tool.clone() // use the tool name as the command
+                    } else {
+                        format!("{} {}", tool, comando)
+                    };
+                    emit_event(&app_handle, step_count, &format!("[AUTO-REDIRECT] '{}' → TOOL_TERMINAL: {}", tool, terminal_cmd), "WARNING");
+                    current_context.push_str(&format!(
+                        "[SISTEMA]: La herramienta '{}' no existe. Fue redirigida automáticamente a TOOL_TERMINAL con el comando '{}'.\n\
+                        RECUERDA: Para ejecutar comandos de shell SIEMPRE usa TOOL_TERMINAL con el campo 'comando'. Ejemplos: TOOL_TERMINAL+npm audit fix, TOOL_TERMINAL+npm install, TOOL_TERMINAL+pip install X.\n\n",
+                        tool, terminal_cmd
                     ));
-                    unknown_tool_consecutive = 0;
-                    current_context.push_str(&format!("Error crítico: uso de herramienta desconocida '{}'. [FSM FORZANDO TOOL_THINK]\n\n", tool));
-                    emit_event(&app_handle, step_count, "[FSM] Agente inventando herramientas. Forzando TOOL_THINK.", "WARNING");
+                    tool = format!("TOOL_TERMINAL");
+                    comando = terminal_cmd;
+                    // Re-enter as TOOL_TERMINAL by continuing the outer loop
+                    // We need to push back and re-process — instead, execute inline
+                    emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
+                    comandos_ejecutados_historico.insert(comando.clone());
+                    match execute_terminal_command(&workspace_path, &comando).await {
+                        Ok(out) => {
+                            current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto): {}\n\n", out));
+                            emit_event(&app_handle, step_count, &format!("Auto-terminal OK: {}", &out[..out.len().min(120)]), "SUCCESS");
+                        }
+                        Err(e) => {
+                            current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto) Error: {}\n\n", e));
+                            emit_event(&app_handle, step_count, &format!("Auto-terminal Error: {}", e), "ERROR");
+                        }
+                    }
                 } else {
-                    current_context.push_str(&format!("Advertencia: Intentaste usar herramienta desconocida '{}'. Usa solo herramientas del catálogo.\n\n", tool));
+                    unknown_tool_consecutive += 1;
+                    emit_event(&app_handle, step_count, &format!("Herramienta desconocida: {}", tool), "WARNING");
+                    if unknown_tool_consecutive >= 3 {
+                        forced_next_tool = Some((
+                            "TOOL_THINK".to_string(),
+                            "El sistema bloqueó mi acceso porque intenté usar herramientas inventadas que no existen en el prompt. Transfiero el control para evitar bucles de alucinación.".to_string()
+                        ));
+                        unknown_tool_consecutive = 0;
+                        current_context.push_str(&format!("Error crítico: uso de herramienta desconocida '{}'. [FSM FORZANDO TOOL_THINK]\n\n", tool));
+                        emit_event(&app_handle, step_count, "[FSM] Agente inventando herramientas. Forzando TOOL_THINK.", "WARNING");
+                    } else {
+                        current_context.push_str(&format!("Advertencia: Intentaste usar herramienta desconocida '{}'. Para comandos de shell usa TOOL_TERMINAL. Usa solo herramientas del catálogo.\n\n", tool));
+                    }
                 }
             }
         }
