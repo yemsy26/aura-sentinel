@@ -8,6 +8,7 @@
 //! - docker.sh / .bat     → Build y run en Docker
 //!
 //! Cada script incluye:
+#![allow(dead_code)] // extensions() y variantes de RunnerType son para uso futuro
 //   - Shebang correcto
 //   - set -euo pipefail (bash) / error handling (bat)
 //   - Logging con timestamps

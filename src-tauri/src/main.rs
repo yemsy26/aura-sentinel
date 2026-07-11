@@ -90,7 +90,7 @@ fn main() {
             // Inicialización de módulos asíncronos o configuración adicional
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+.invoke_handler(tauri::generate_handler![
             memory::get_workspace_tree,
             memory::get_current_directory,
             memory::init_memory_log,
@@ -106,7 +106,8 @@ fn main() {
             get_ollama_models,
             get_background_tasks,
             ui_kill_task,
-            core::ask_user::submit_user_answer
+            core::ask_user::submit_user_answer,
+            core::auto_validator::run_auto_validation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

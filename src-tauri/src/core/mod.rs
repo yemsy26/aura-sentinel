@@ -13,6 +13,9 @@ pub mod error_classifier;
 pub mod ask_user;
 pub mod command_trail;
 pub mod runner_generator;
+pub mod auto_validator;
+pub mod map; // generate_repo_map — árbol visual del workspace para contexto LLM
+
 use std::path::Path;
 use tokio::process::Command;
 use std::sync::{Arc, OnceLock};

@@ -3,9 +3,12 @@
 //! Proporciona un registro inmutable y serializable de cada paso del agente,
 //! permitiendo auditoría, depuración y análisis post-mortem.
 
+#![allow(dead_code)] // Los métodos recent(), failed_steps(), report(), to_json() son para análisis futuro
+
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::Path;
+
 
 /// Máximo de pasos guardados en memoria (rotating buffer)
 const MAX_TRAIL_STEPS: usize = 200;

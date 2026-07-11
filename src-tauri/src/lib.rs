@@ -14,3 +14,8 @@ pub fn run() {
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
+
+pub mod core;
+pub mod llm;
+pub mod memory;
+pub mod net;

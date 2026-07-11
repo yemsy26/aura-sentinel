@@ -5,7 +5,7 @@ use crate::core::{
     execute_terminal_command, start_background_task, read_task_logs, kill_task,
     validate_workspace, format_system_error,
     runner_generator::generate_standard_runners,
-    command_trail::{CommandTrail, StepResult},
+    command_trail::StepResult, // CommandTrail used inline via full path in the trail block
 };
 use super::{call_ollama, delegate_to_programmer, delegate_to_auditor, delegate_to_logic_solver, ProgrammerOutput};
 
@@ -633,7 +633,20 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         let live_workspace_context = if live_files.is_empty() {
             "El proyecto está completamente vacío. Aún no has creado ningún archivo físico.".to_string()
         } else {
-            live_files.join("\n")
+            // ── Conectar generate_repo_map para mejor contexto LLM ─────────────
+            // En lugar de una lista plana de rutas absolutas, el LLM recibe un
+            // árbol visual del repositorio (formato: ├── dir/ ├── file.js)
+            // que es mucho más legible para razonamiento estructural.
+            let repo_map = crate::core::map::generate_repo_map(std::path::Path::new(&workspace_path));
+            let relative_files: Vec<String> = live_files.iter()
+                .map(|f| {
+                    f.strip_prefix(&workspace_path)
+                        .unwrap_or(f)
+                        .trim_start_matches(['/', '\\'])
+                        .to_string()
+                })
+                .collect();
+            format!("{}\n\nARCHIVOS (rutas relativas):\n{}", repo_map, relative_files.join("\n"))
         };
 
         // --- EVITAR DESBORDAMIENTO DE CONTEXTO (SPRINT 1: limite estricto 6000) ---
