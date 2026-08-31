@@ -82,6 +82,22 @@ pub struct SessionJournal {
     /// Whether a phase plan has already been generated for this mission
     #[serde(default)]
     pub plan_generado: bool,
+
+    // ═══════════════════════════════════════════════════════════
+    // MISSION PERSISTENCE — FSM State Snapshots (Fase 1)
+    // ═══════════════════════════════════════════════════════════
+    /// Serialized current_context string at last checkpoint (for FSM resume)
+    #[serde(default)]
+    pub fsm_context: Option<String>,
+    /// Active FSM role at last checkpoint: "Planner" | "Executor" | "Critic"
+    #[serde(default)]
+    pub fsm_role: Option<String>,
+    /// Step number at last checkpoint
+    #[serde(default)]
+    pub fsm_step: u32,
+    /// If true, this session was interrupted mid-loop and should be offered for resume
+    #[serde(default)]
+    pub interrupted: bool,
 }
 
 /// File name for the session journal (hidden by convention via leading dot)

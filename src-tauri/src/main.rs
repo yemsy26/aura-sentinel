@@ -54,6 +54,37 @@ fn get_system_stats() -> String {
 }
 
 
+// ── Fase 4: Scheduler Tauri commands ─────────────────────────────────────────
+
+#[tauri::command]
+fn schedule_task(objective: String, workspace: String, cron_expr: String, description: String) -> String {
+    core::scheduler::register_task(&objective, &workspace, &cron_expr, &description)
+}
+
+#[tauri::command]
+fn list_scheduled_tasks() -> String {
+    core::scheduler::list_tasks_json()
+}
+
+#[tauri::command]
+fn remove_scheduled_task(id: String) -> bool {
+    core::scheduler::remove_task(&id)
+}
+
+// ── Fase 3: Episodic Memory Tauri commands ────────────────────────────────────
+
+#[tauri::command]
+fn search_episodes_cmd(query: String) -> String {
+    let results = core::episodic_memory::search_episodes(&query);
+    serde_json::to_string(&results).unwrap_or_else(|_| "[]".to_string())
+}
+
+#[tauri::command]
+fn get_recent_episodes_cmd(n: u32) -> String {
+    let results = core::episodic_memory::load_recent_episodes(n as usize);
+    serde_json::to_string(&results).unwrap_or_else(|_| "[]".to_string())
+}
+
 #[tauri::command]
 async fn get_ollama_models() -> Result<Vec<String>, String> {
     let client = reqwest::Client::new();
@@ -86,8 +117,15 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|_app| {
-            // Inicialización de módulos asíncronos o configuración adicional
+        .setup(|app| {
+            let handle = app.handle().clone();
+
+            // ── Fase 4: Iniciar Scheduler autónomo (tick cada 60s) ──
+            core::scheduler::start_scheduler(handle.clone());
+
+            // ── Fase 1: Auto-resume de misión interrumpida ──
+            core::mission_persist::auto_resume_if_needed(&handle);
+
             Ok(())
         })
 .invoke_handler(tauri::generate_handler![
@@ -107,7 +145,14 @@ fn main() {
             get_background_tasks,
             ui_kill_task,
             core::ask_user::submit_user_answer,
-            core::auto_validator::run_auto_validation
+            core::auto_validator::run_auto_validation,
+            // ── Fase 4: Scheduler commands ──
+            schedule_task,
+            list_scheduled_tasks,
+            remove_scheduled_task,
+            // ── Fase 3: Episode memory commands ──
+            search_episodes_cmd,
+            get_recent_episodes_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

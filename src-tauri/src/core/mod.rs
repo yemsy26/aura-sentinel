@@ -15,6 +15,12 @@ pub mod command_trail;
 pub mod runner_generator;
 pub mod auto_validator;
 pub mod map; // generate_repo_map — árbol visual del workspace para contexto LLM
+// ══ Nuevos módulos autónomos (Fase 1-5) ══════════════════════════════
+pub mod mission_persist;    // Fase 1: Persistencia de misión entre reinicios
+pub mod container;          // Fase 2: TOOL_CONTAINER (Docker/Podman)
+pub mod episodic_memory;    // Fase 3: Memoria multi-sesión JSONL
+pub mod scheduler;          // Fase 4: Scheduler autónomo (cron interno)
+pub mod sanity_monitor;     // Fase 5: Monitor de cordura del LLM
 
 use std::path::Path;
 use tokio::process::Command;

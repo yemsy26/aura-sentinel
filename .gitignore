@@ -39,3 +39,20 @@ dev.*
 lint.*
 docker.*
 .aura_command_trail.json
+
+# Compiled test artifacts & scratch binaries
+*.exe
+*.pdb
+test_*.rs
+test_*.py
+
+# Modelfiles (local LLM config — not part of source)
+Modelfile*
+
+# Aura runtime session data (machine-specific)
+.aura_session.json
+.aura_workspaces.json
+.aura_scheduler.json
+.aura_episodes.jsonl
+src-tauri/brains.json
+data/model_stats.json

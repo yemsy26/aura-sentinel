@@ -246,7 +246,7 @@ pub async fn consolidate_knowledge(workspace_path: &str, chunks: &[MemoryChunk])
     );
     
     // Usamos el ORCHESTRATOR_MODEL (asumiendo phi3/llama3) para sintetizar
-    if let Ok(synthesis) = crate::llm::call_ollama(crate::llm::agent::ORCHESTRATOR_MODEL, &prompt).await {
+    if let Ok(synthesis) = crate::llm::call_ollama(crate::llm::agent::DEFAULT_ORCHESTRATOR_MODEL, &prompt).await {
         let lessons: Vec<String> = synthesis.lines()
             .map(|l| l.trim().trim_start_matches("-").trim_start_matches("*").trim().to_string())
             .filter(|l| !l.is_empty())

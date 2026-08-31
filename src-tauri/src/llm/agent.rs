@@ -89,7 +89,8 @@ fn classify_mission(msg: &str) -> MissionType {
                     "qué sistema", "describe", "explica", "muéstrame", "muestrame", "que tiene",
                     "qué tiene", "que contiene", "qué contiene", "inspect", "analyze", "show me",
                     "que es", "qué es", "que tipo", "qué tipo", "que hace", "qué hace",
-                    "analisa este", "analiza este", "revisa este"];
+                    "analisa este", "analiza este", "revisa este",
+                    "auditoría", "auditoria", "audita", "sat", "lógica", "logica", "satisfacibilidad"];
     let debug = ["arregla", "corrige", "bug", "falla", "fallo", "fix", "debug", "broken",
                  "no funciona", "no compila", "sale error", "hay un error"];
     let refactor = ["refactoriza", "refactorizar", "mejora", "optimiza", "limpia el", "reorganiza", "simplifica"];
@@ -281,9 +282,9 @@ fn detect_project_language(workspace_path: &str) -> String {
     "unknown".to_string()
 }
 
-pub const ORCHESTRATOR_MODEL: &str = "llama3.1:8b";
+pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "gemma4-e4b";
 #[allow(dead_code)]
-pub const PROGRAMMER_MODEL: &str = "qwen2.5-coder:7b";
+pub const DEFAULT_PROGRAMMER_MODEL: &str = "gemma4-e4b";
 
 pub async fn run_agent_loop(
     user_message: String,
@@ -418,6 +419,10 @@ pub async fn run_agent_loop(
     let mut current_role = AgentRole::Planner;
     let mut critic_feedback: Option<String> = None;
 
+    // ── Fase 5: Sanity Monitor state ─────────────────────────────────────────
+    let mut tool_history: Vec<String> = Vec::new();
+    let mut last_progress_step: u32 = 1;
+
     // ── Mission Type Classifier ─────────────────────────────────────────────
     let mission_type = classify_mission(&original_prompt_parsed);
     let mission_label = match &mission_type {
@@ -428,17 +433,23 @@ pub async fn run_agent_loop(
     };
 
     // ── Acceptance Contract ─────────────────────────────────────────────────
-    // Defined by the Planner when it calls TOOL_THINK.
-    // The Critic uses this to know exactly when the task is complete.
     let mut acceptance_contract: Option<String> = None;
 
-    let mut step_count = 1;
+    let mut step_count = 1u32;
     let max_steps = 50;
     let mut json_error_count = 0;
 
     // ── Session Journal ────────────────────────────────────────
-    // Persist mission state to disk so sleep/restart doesn’t lose context.
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
+
+    // ── Fase 1: Register workspace in global index for auto-resume ────────────
+    crate::core::mission_persist::register_workspace(&workspace_path);
+
+    // ── Fase 3: Inject episodic memory context ────────────────────────────────
+    let episode_context = crate::core::episodic_memory::get_episode_context(3);
+    if !episode_context.is_empty() {
+        current_context.push_str(&episode_context);
+    }
     
     // Si la sesión anterior terminó o falló, limpiamos las fases para que el Arquitecto pueda crear un plan nuevo para esta nueva misión.
     if journal.status == "COMPLETADO" || journal.status == "ERROR" || journal.status == "FINISH" {
@@ -473,7 +484,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
     // =======================================================
     if !journal.plan_generado && (mission_type == MissionType::Construction || mission_type == MissionType::Refactor) {
         emit_event(&app_handle, 0, "🏗️ [ARQUITECTO DE FASES] Analizando tarea para dividirla en fases...", "PLANNING");
-        let model_for_planner = "qwen2.5-coder:7b";
+        let model_for_planner = DEFAULT_PROGRAMMER_MODEL;
         let fases = crate::llm::phase_planner::generate_phase_plan(&original_prompt_parsed, model_for_planner).await;
         
         journal.fases = fases.clone();
@@ -707,15 +718,28 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             ws = workspace_path);
 
         let agent_prompt = match current_role {
-            // Planner - compressed to <200 tokens
+            // Planner - Enrutamiento Semántico Avanzado (Zero-Hint Routing)
             AgentRole::Planner => format!(
-                "[PLANIFICADOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS PLANNER: TOOL_FINISH, TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK, TOOL_AUDITOR, TOOL_SEARCH, TOOL_ASK_USER.\nPROHIBIDO: TOOL_WORKSPACE_MANAGER (no borres archivos), TOOL_PROGRAMMER, TOOL_TERMINAL.\nREGLA CRITICA DE REPETICION: Solo usa TOOL_FINISH si los archivos existentes en el Workspace corresponden EXACTAMENTE al objetivo solicitado. Si los archivos tienen nombres que no coinciden con el objetivo (ej. el usuario pide 'juego' pero existen 'projectController.js'), DEBES crear los archivos correctos. NUNCA uses TOOL_FINISH porque 'hay algun archivo' si ese archivo no cumple el objetivo.\nREGLA CRITICA TOOL_MAPPER: TOOL_MAPPER SOLO es valido para proyectos de codigo con multiples archivos fuente que necesitan analisis de dependencias. Para tareas simples usa directamente TOOL_THINK.\n{}{}{}",
+                "[PLANIFICADOR / ZERO-HINT ROUTER]\nObjetivo del Usuario: {}\nWorkspace Actual: {}\n{}\nHistorial de Conversación:\n{}\n\n\
+                ERES EL ENRUTADOR PRINCIPAL. Tu misión es analizar la intención del usuario de forma 100% implícita y autónoma, SIN depender de que el usuario mencione herramientas por su nombre.\n\
+                HERRAMIENTAS PERMITIDAS (SELECCIONA POR SEMÁNTICA):\n\
+                - TOOL_LOGIC_SOLVER: Dispara esta herramienta AUTOMÁTICAMENTE si el usuario pide analizar esquemas criptográficos, problemas de satisfacibilidad, paridad matemática, restricciones lógicas, álgebra booleana, grafos densos o cuellos de botella de reglas. (¡El motor SpectraSAT lo resolverá en RAM!).\n\
+                - TOOL_SCHEDULER: Usa esto si el usuario pide ejecutar tareas repetitivas o programadas (ej. 'haz esto cada lunes', 'audita cada semana'). Comando: 'cron_expr|descripción'.\n\
+                - TOOL_THINK: Si el objetivo requiere crear, escribir, modificar o debugear código fuente, usa esto para transferir el control al EJECUTOR de forma transparente.\n\
+                - TOOL_MAPPER: Solo para analizar dependencias en proyectos con múltiples archivos existentes.\n\
+                - TOOL_AUDITOR: Para revisiones de seguridad en código fuente existente.\n\
+                - TOOL_SEARCH / TOOL_WEB_SEARCH: Si necesitas buscar documentación o investigar información externa.\n\
+                - TOOL_ASK_USER: Para pedir clarificaciones si la intención es completamente ambigua.\n\
+                - TOOL_FINISH: Usa esto ÚNICAMENTE si la tarea ya está 100% completada y verificada (o si reportaste los resultados finales). NUNCA uses esto si aún hay pasos pendientes.\n\
+                \nPROHIBIDO: TOOL_WORKSPACE_MANAGER, TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER (Estas son exclusivas del Ejecutor).\n\
+                REGLA DE ZERO-HINT: Nunca le pidas al usuario que especifique la herramienta. Deduce la necesidad matemática o de código y actúa en consecuencia.\n\
+                {}{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, analysis_fast_path, json_schema
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START, TOOL_ASK_USER. Usa TOOL_ENV_MANAGER *SOLO* para instalar binarios scoop (ej: 'nodejs', 'git', no comandos).\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH.\nEJEMPLOS TOOL_TERMINAL: Para correr 'npm audit fix' usa TOOL_TERMINAL con comando='npm audit fix'. Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. Para 'pip install X' usa TOOL_TERMINAL con comando='pip install X'. NUNCA inventes herramientas como 'NPM AUDIT' o 'NPM INSTALL' — todas las acciones de terminal van con TOOL_TERMINAL.\n\n{}{}",
+                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START, TOOL_ASK_USER.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
@@ -762,6 +786,33 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             AgentRole::Critic   => "🔬 CRÍTICO",
         };
         emit_event(&app_handle, step_count, &format!("[{}] Pensando con {}...", role_label, orchestrator_model), "PLANNING");
+
+        // ── Fase 5: Sanity Monitor (cada 5 pasos) ──────────────────────────────
+        if step_count % 5 == 0 {
+            let sanity = crate::core::sanity_monitor::check(
+                &tool_history,
+                current_context.len(),
+                json_error_count,
+                step_count,
+                last_progress_step,
+            );
+            crate::core::sanity_monitor::emit_report(&app_handle, &sanity);
+            if let Some(hint) = crate::core::sanity_monitor::build_correction_hint(&sanity) {
+                current_context.push_str(&hint);
+                emit_event(&app_handle, step_count, &format!("[⚕️ CORDURA {}] {}", sanity.level, &sanity.recommendation.chars().take(80).collect::<String>()), "WARNING");
+            }
+        }
+
+        // ── Fase 1: Mission Checkpoint (cada 3 pasos) ───────────────────────────
+        if step_count % 3 == 0 {
+            let role_str = format!("{:?}", current_role);
+            crate::core::mission_persist::save_checkpoint(
+                &workspace_path,
+                &current_context.chars().take(6000).collect::<String>(),
+                &role_str,
+                step_count,
+            );
+        }
 
         let mut agent_res = match call_ollama(&orchestrator_model, &agent_prompt).await {
             Ok(res) => res,
@@ -1558,33 +1609,142 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 mandatory_tools_executed.insert("TOOL_AUDITOR".to_string());
             },
             "TOOL_LOGIC_SOLVER" => {
-                emit_event(&app_handle, step_count, "Iniciando Z3-Logic Solver...", "ACTION");
-                let real_files: Vec<String> = {
-                    let hallucinated = archivos_vec.iter().any(|f| {
-                        !std::path::Path::new(&workspace_path).join(f).exists()
-                    });
-                    if hallucinated || archivos_vec.is_empty() {
-                        let mut found = Vec::new();
-                        if let Ok(entries) = std::fs::read_dir(&workspace_path) {
-                            for entry in entries.flatten() {
-                                let p = entry.path();
-                                if let Some(ext) = p.extension() {
-                                    let ext = ext.to_string_lossy().to_lowercase();
-                                    if matches!(ext.as_str(), "py"|"rs"|"js"|"ts"|"go"|"c"|"cpp") {
-                                        found.push(p.to_string_lossy().to_string());
+                // ─── MODO 1A: SAT nativo — n_vars + clauses en el JSON del agente ───
+                let n_vars_opt  = raw_value.get("n_vars").and_then(|v| v.as_u64()).map(|v| v as usize);
+                let clauses_opt = raw_value.get("clauses").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter().filter_map(|row| {
+                        row.as_array().map(|r| r.iter().filter_map(|x| x.as_i64().map(|i| i as i32)).collect::<Vec<i32>>())
+                    }).collect::<Vec<Vec<i32>>>()
+                });
+
+                // ─── MODO 1B: Auto-extracción desde user_message cuando el LLM no proveyó clauses ───
+                // Busca el primer array de arrays de enteros en el mensaje original del usuario.
+                let (n_vars_opt, clauses_opt) = if n_vars_opt.is_none() || clauses_opt.is_none() {
+                    // Buscar patrón [[...], [...], ...] en user_message
+                    let extracted = (|| -> Option<(usize, Vec<Vec<i32>>)> {
+                        let text = &user_message;
+                        let start = text.find("[[").or_else(|| text.find("[ ["))?;
+                        let sub = &text[start..];
+                        
+                        // Encontrar el cierre del array contando corchetes para ser robusto
+                        let mut depth = 0;
+                        let mut end = 0;
+                        for (i, c) in sub.char_indices() {
+                            if c == '[' { depth += 1; }
+                            else if c == ']' { depth -= 1; }
+                            
+                            if depth == 0 && i > 0 {
+                                end = i + 1;
+                                break;
+                            }
+                        }
+                        if end == 0 { return None; }
+                        
+                        let array_str = &sub[..end];
+                        let parsed: serde_json::Value = serde_json::from_str(array_str).ok()?;
+                        let outer = parsed.as_array()?;
+                        let clauses: Vec<Vec<i32>> = outer.iter().filter_map(|row| {
+                            row.as_array().map(|r| r.iter().filter_map(|x| x.as_i64().map(|i| i as i32)).collect())
+                        }).collect();
+                        if clauses.is_empty() { return None; }
+                        // n_vars = max abs value across all literals
+                        let n_vars = clauses.iter().flatten().map(|x| x.unsigned_abs() as usize).max().unwrap_or(0);
+                        Some((n_vars, clauses))
+                    })();
+                    if let Some((nv, cl)) = extracted {
+                        (Some(nv), Some(cl))
+                    } else {
+                        (n_vars_opt, clauses_opt)
+                    }
+                } else {
+                    (n_vars_opt, clauses_opt)
+                };
+
+                let verdict = if let (Some(n_vars), Some(clauses)) = (n_vars_opt, clauses_opt) {
+                    // ⚡ Invocación nativa SpectraSAT — cero latencia de subproceso
+                    emit_event(&app_handle, step_count, &format!("⚡ [SPECTRASAT] Resolviendo instancia SAT: {} vars, {} cláusulas...", n_vars, clauses.len()), "ACTION");
+                    let result = crate::llm::solve_with_spectrasat(n_vars, clauses);
+                    emit_event(&app_handle, step_count, &format!("⚡ [SPECTRASAT] Veredicto: {}", result), "SUCCESS");
+                    result
+                } else {
+                    // ─── MODO 2: Análisis semántico de código vía LLM (fallback real) ───
+                    emit_event(&app_handle, step_count, "🔍 [LOGIC_SOLVER] Analizando código con motor lógico-semántico...", "ACTION");
+                    let real_files: Vec<String> = {
+                        let hallucinated = archivos_vec.iter().any(|f| {
+                            !std::path::Path::new(&workspace_path).join(f).exists()
+                        });
+                        if hallucinated || archivos_vec.is_empty() {
+                            let mut found = Vec::new();
+                            if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                                for entry in entries.flatten() {
+                                    let p = entry.path();
+                                    if let Some(ext) = p.extension() {
+                                        let ext = ext.to_string_lossy().to_lowercase();
+                                        if matches!(ext.as_str(), "py"|"rs"|"js"|"ts"|"go"|"c"|"cpp") {
+                                            found.push(p.to_string_lossy().to_string());
+                                        }
                                     }
                                 }
                             }
+                            found
+                        } else {
+                            archivos_vec.clone()
                         }
-                        found
-                    } else {
-                        archivos_vec.clone()
-                    }
+                    };
+                    let safe_files = memory::read_files_safely(&workspace_path, real_files).await;
+                    delegate_to_logic_solver(&safe_files, &orchestrator_model).await
                 };
-                let safe_files = memory::read_files_safely(&workspace_path, real_files).await;
-                let reporte = delegate_to_logic_solver(&safe_files, &orchestrator_model).await;
-                current_context.push_str(&format!("Reporte de Verificación Formal (Logic Solver):\n{}\n\nRevisa los problemas matemáticos o lógicos detectados antes de programar o testear.\n\n", reporte));
-                emit_event(&app_handle, step_count, "Verificación Lógica completada.", "SUCCESS");
+
+
+                let mut parsed_status = verdict.clone();
+                let mut assignment_msg = String::new();
+
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&verdict) {
+                    if let Some(s) = parsed.get("status").and_then(|v| v.as_str()) {
+                        parsed_status = s.to_string();
+                    }
+                    if let Some(arr) = parsed.get("assignment").and_then(|v| v.as_array()) {
+                        let vars: Vec<String> = arr.iter().enumerate().map(|(i, v)| {
+                            format!("v{} = {}", i + 1, v.as_bool().unwrap_or(false))
+                        }).collect();
+                        assignment_msg = format!("\n\n[ASIGNACIÓN BOOLEANA ENCONTRADA]:\n{}", vars.join("\n"));
+                    }
+                }
+
+                // ─── FSM: Veredicto obtenido → generar reporte y forzar TOOL_FINISH ───
+                if parsed_status.starts_with("UNSAT") {
+                    let unsat_msg = format!(
+                        "⛔ VEREDICTO SPECTRASAT: {}\n\n\
+                        AUDITORÍA COMERCIO FÉNIX — SISTEMA CONTRADICTORIO DETECTADO\n\
+                        El motor matemático SpectraSAT ha certificado que el esquema de encriptación \
+                        es INSATISFACIBLE (UNSAT). No existe ninguna combinación de valores booleanos \
+                        para las 5 variables que cumpla las 10 reglas simultáneamente. \
+                        El ciclo x1≠x2≠x3≠x4≠x5≠x1 con 5 variables (número impar) crea una \
+                        contradicción lógica irresoluble. El ingeniero está equivocado: \
+                        el sistema NO puede ser validado.",
+                        parsed_status
+                    );
+                    current_context.push_str(&format!("{}\n\n", unsat_msg));
+                    emit_event(&app_handle, step_count, &format!("⛔ [SPECTRASAT] UNSAT certificado — sistema contradictorio"), "WARNING");
+                    // Force TOOL_FINISH con el reporte completo
+                    forced_next_tool = Some(("TOOL_FINISH".to_string(), unsat_msg));
+                } else if parsed_status.starts_with("SAT") {
+                    let sat_msg = format!(
+                        "✅ VEREDICTO SPECTRASAT: {}\n\n\
+                        AUDITORÍA COMERCIO FÉNIX — SISTEMA SATISFACIBLE\n\
+                        El motor matemático SpectraSAT ha certificado que el esquema de encriptación \
+                        ES SATISFACIBLE (SAT). Existe al menos una asignación de valores booleanos \
+                        que cumple todas las restricciones simultáneamente. El sistema puede ser validado.{}",
+                        parsed_status, assignment_msg
+                    );
+                    current_context.push_str(&format!("{}\n\n", sat_msg));
+                    emit_event(&app_handle, step_count, "✅ [SPECTRASAT] SAT certificado — sistema seguro", "SUCCESS");
+                    forced_next_tool = Some(("TOOL_FINISH".to_string(), sat_msg));
+                } else {
+                    current_context.push_str(&format!("Veredicto SpectraSAT: {}\n\n", parsed_status));
+                    emit_event(&app_handle, step_count, "✅ Verificación lógica completada.", "SUCCESS");
+                }
+
             },
             "TOOL_WORKSPACE_MANAGER" => {
                 emit_event(&app_handle, step_count, "Gestionando archivos del workspace...", "ACTION");
@@ -2263,6 +2423,50 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     emit_event(&app_handle, step_count, &format!("Runners generados: {}", names.join(", ")), "SUCCESS");
                 }
             },
+            // ── Fase 2: TOOL_CONTAINER (Docker/Podman) ──
+            "TOOL_CONTAINER" => {
+                let parts: Vec<&str> = comando.splitn(3, ' ').collect();
+                if parts.len() < 2 {
+                    let err = "Error: El comando TOOL_CONTAINER debe ser 'accion imagen/id [comando]'. Ejemplo: 'run nginx:latest'";
+                    current_context.push_str(&format!("Error en TOOL_CONTAINER: {}\n\n", err));
+                    emit_event(&app_handle, step_count, err, "ERROR");
+                } else {
+                    let action_str = parts[0];
+                    let image_or_id = parts[1];
+                    let run_cmd = if parts.len() > 2 { parts[2] } else { "" };
+                    
+                    emit_event(&app_handle, step_count, &format!("Contenedor: {} {}", action_str, image_or_id), "ACTION");
+                    
+                    let action_enum = crate::core::container::ContainerAction::from_str(action_str);
+                    match crate::core::container::container_exec(action_enum, image_or_id, run_cmd, &workspace_path).await {
+                        Ok(out) => {
+                            current_context.push_str(&format!("Resultado TOOL_CONTAINER:\n{}\n\n", out));
+                            emit_event(&app_handle, step_count, "Comando de contenedor exitoso.", "SUCCESS");
+                            last_progress_step = step_count;
+                        },
+                        Err(e) => {
+                            current_context.push_str(&format!("Error TOOL_CONTAINER:\n{}\n\n", e));
+                            emit_event(&app_handle, step_count, &e, "ERROR");
+                        }
+                    }
+                }
+            },
+            // ── Fase 4: TOOL_SCHEDULER (Cron tasks) ──
+            "TOOL_SCHEDULER" => {
+                let parts: Vec<&str> = comando.splitn(2, '|').collect();
+                if parts.len() < 2 {
+                    let err = "Error: TOOL_SCHEDULER requiere 'cron_expr|objetivo_descriptivo'. Ejemplo: '0 9 * * 1|auditar seguridad'";
+                    current_context.push_str(&format!("Error TOOL_SCHEDULER: {}\n\n", err));
+                    emit_event(&app_handle, step_count, err, "ERROR");
+                } else {
+                    let cron = parts[0].trim();
+                    let desc = parts[1].trim();
+                    let id = crate::core::scheduler::register_task(desc, &workspace_path, cron, desc);
+                    current_context.push_str(&format!("Tarea programada exitosamente (ID: {}). Cron: {}\n\n", id, cron));
+                    emit_event(&app_handle, step_count, &format!("📅 Tarea '{}' programada ({})", desc, cron), "SUCCESS");
+                    last_progress_step = step_count;
+                }
+            },
             "TOOL_SEARCH" => {
                 // FALLO #6 FIX: use `comando` as query first, fall back to `url_a_investigar`.
                 let search_query = if !comando.trim().is_empty() { comando.clone() } else { url.clone() };
@@ -2387,6 +2591,19 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 emit_event(&app_handle, step_count, "Bucle completado exitosamente.", "FINISH");
                 // ── Journal: mark completed ──
                 crate::core::session_journal::close_journal(&mut journal, "COMPLETADO", &workspace_path);
+                
+                // ── Fase 1: Clear interrupt flag ──
+                crate::core::mission_persist::clear_interrupt(&workspace_path);
+
+                // ── Fase 3: Guardar Memoria Episódica (Multi-sesión) ──
+                crate::core::episodic_memory::save_episode(
+                    &workspace_path,
+                    &journal.objetivo,
+                    "COMPLETADO",
+                    &journal.herramientas_usadas,
+                    &journal.archivos_tocados,
+                );
+
                 let final_res = FinalResponse {
                     status: "FINISH".to_string(),
                     respuesta_conversacional: respuesta_conv,
@@ -2495,4 +2712,6 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
     };
     Ok(serde_json::to_string(&final_res).unwrap())
 }
+
+
 

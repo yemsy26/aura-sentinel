@@ -104,11 +104,11 @@ pub async fn get_best_model(
     app_handle: &AppHandle,
     step: u32,
 ) -> Result<String, String> {
-    let mut config_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    config_path.push("brains.json");
-
-    let config_data = fs::read_to_string(&config_path)
-        .unwrap_or_else(|_| include_str!("../../brains.json").to_string());
+    // 100% force embedded config to avoid workspace drift
+    let mut config_data = include_str!("../../brains.json").to_string();
+    if config_data.starts_with('\u{feff}') {
+        config_data = config_data.trim_start_matches('\u{feff}').to_string();
+    }
 
     let config: BrainConfig = serde_json::from_str(&config_data)
         .map_err(|e| format!("Error parseando brains.json: {}", e))?;

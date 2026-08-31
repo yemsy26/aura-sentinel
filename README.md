@@ -1,8 +1,8 @@
 # Aura-Sentinel 🛡️🧠
 **Agente DevSecOps Autónomo y Resiliente — por Ramon Antonio Burgos Jerez**
 
-> 🏆 **Nivel Alcanzado: Agente Local Elite — Tier 1** (Sprint S1✅ S2✅ S3✅ — Julio 2026)
-> Supera a OpenHands en estabilidad. Nivel comparable a Aider con ventajas arquitectónicas únicas.
+> 🏆 **Nivel Alcanzado: Agente Autónomo Completo — Tier 0** (Sprint S4✅ — Agosto 2026)
+> Arquitectura de autonomía completa. Comparable a Devin 2.0 y OpenDevin en capacidades clave.
 
 Aura-Sentinel es un agente de Inteligencia Artificial diseñado para desarrollo de software continuo, control de calidad automatizado y resiliencia arquitectónica. Construido con **Tauri (Rust + Vanilla JS)**, orquesta múltiples modelos de lenguaje locales (Ollama) para programar, auditar y proteger tu código **sin depender de APIs de terceros en la nube**.
 
@@ -10,22 +10,29 @@ Diseñado para un flujo de trabajo real y diverso: sistemas Android, facturació
 
 ---
 
-## 🏆 Estado del Sistema (Julio 2026)
+## 🏆 Estado del Sistema (Agosto 2026 — Sprint 4)
 
 | Módulo | Estado | Tier |
 |---|---|---|
-| FSM Multi-Agente (Planificador→Ejecutor→Crítico) | 🟢 95% — Micrometa-gated | Tier 1 |
-| Transición Ejecutor→Crítico por Micrometas | 🟢 100% — Sprint 2 ✅ | Tier 1 |
-| Clasificador de Tipo de Misión | 🟢 100% — Sprint 1 ✅ | Tier 1 |
-| Contrato de Aceptación Planificador→Crítico | 🟢 100% — Sprint 1 ✅ | Tier 1 |
-| Compresión de Contexto cada 10 pasos | 🟢 100% — Sprint 1 ✅ | Tier 1 |
-| TOOL_AUDITOR (salida JSON estructurada) | 🟢 95% — Sprint 2 ✅ | Tier 1 |
-| Prompts comprimidos <200 tokens (7B-optimized) | 🟢 100% — Sprint 3 ✅ | Tier 1 |
-| Vision Evaluator (xcap + moondream) | 🟢 95% — Sprint 3 ✅ | Tier 1 |
-| Anti-Stub Enforcer | 🟢 90% | Tier 1 |
-| Command Trail System (Rastro) | 🟢 100% — Sprint 3 ✅ | Tier 1 |
-| Script Runner Generator | 🟢 100% — Sprint 3 ✅ | Tier 1 |
-| Frontend Anti-Backend Shield | 🟢 100% — Sprint 3 ✅ | Tier 1 |
+| FSM Multi-Agente (Planificador→Ejecutor→Crítico) | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| Transición Ejecutor→Crítico por Micrometas | 🟢 100% — Sprint 2 ✅ | Tier 0 |
+| Clasificador de Tipo de Misión (NLU + math) | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| Zero-Hint Router (enrutamiento semántico implícito) | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| Contrato de Aceptación Planificador→Crítico | 🟢 100% — Sprint 1 ✅ | Tier 0 |
+| Compresión de Contexto cada 10 pasos | 🟢 100% — Sprint 1 ✅ | Tier 0 |
+| **Mission Persistence (auto-resume cross-restart)** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| **TOOL_CONTAINER (Docker / Podman nativo)** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| **Memoria Episódica Multi-Sesión** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| **Scheduler Autónomo (cron nativo Tokio)** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| **Sanity Monitor (anti-saturación y auto-corrección)** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| **SpectraSAT FFI — Motor Lógico en RAM** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
+| TOOL_AUDITOR (salida JSON estructurada) | 🟢 95% — Sprint 2 ✅ | Tier 0 |
+| Prompts comprimidos <200 tokens (7B-optimized) | 🟢 100% — Sprint 3 ✅ | Tier 0 |
+| Vision Evaluator (xcap + moondream) | 🟢 95% — Sprint 3 ✅ | Tier 0 |
+| Anti-Stub Enforcer | 🟢 90% | Tier 0 |
+| Command Trail System (Rastro) | 🟢 100% — Sprint 3 ✅ | Tier 0 |
+| Script Runner Generator | 🟢 100% — Sprint 3 ✅ | Tier 0 |
+| Frontend Anti-Backend Shield | 🟢 100% — Sprint 3 ✅ | Tier 0 |
 | Dependency Mapper (sin LLM) | 🟢 85% | Tier 1 |
 | RAG Memory (Rust nativo) | 🟡 70% | Tier 2 |
 | Chronos-VFS Zero-Trace | 🟡 65% | Tier 2 |

@@ -53,9 +53,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.editor = null;
     window.currentOpenFile = null;
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // MONACO INIT
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (window.require) {
         window.require(['vs/editor/editor.main'], function () {
             window.editor = monaco.editor.create(document.getElementById('monaco-editor-host'), {
@@ -110,9 +110,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // TABS RENDERING
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     function getFileIcon(name) {
         const ext = name.split('.').pop().toLowerCase();
         if (['js', 'jsx', 'ts', 'tsx', 'mjs'].includes(ext)) return '\u26a1';
@@ -229,9 +229,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // LOGGING
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     function logSystemThought(message, color = '#00ff00') {
         const p = document.createElement('p');
         const timeStr = new Date().toTimeString().split(' ')[0];
@@ -289,9 +289,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // AUTO-LOAD WORKSPACE
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     logSystemThought("\u25c8 AURA-SENTINEL v3.0 \u2014 Inicializando...", '#58a6ff');
     try {
         const defaultCwd = await invoke('get_current_directory');
@@ -323,9 +323,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         logSystemThought(`[FATAL] Error de auto-carga: ${error}`, '#f85149');
     }
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // MANUAL WORKSPACE LOAD
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     loadWorkspaceBtn.addEventListener('click', async () => {
         try {
             const selectedPath = await open({ directory: true, multiple: false });
@@ -358,9 +358,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (error) { logSystemThought(`[ERROR] ${error}`, '#f85149'); }
     });
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // FILE TREE
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     function renderTree(nodes, container) {
         const currentExpanded = new Set();
         container.querySelectorAll('ul.tree-list ul').forEach(ul => {
@@ -484,9 +484,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         container.appendChild(ul);
     }
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // CHAT INPUT
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     chatInput.addEventListener('keypress', async (e) => {
         if (e.key === 'Enter' && chatInput.value.trim() !== '') {
             let text = chatInput.value.trim();
@@ -556,9 +556,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // TELEMETRY
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     setInterval(async () => {
         try {
             const stats = await invoke('get_system_stats');
@@ -570,9 +570,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderTabs();
     loadOllamaModels();
 
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // UI IMPROVEMENTS: RESIZING & COLLAPSING
-    // ─────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const root = document.documentElement;
     const workspacePanel = document.getElementById('workspace-panel');
     const rightStack = document.querySelector('.panel-right-stack');
@@ -781,3 +781,41 @@ document.addEventListener('DOMContentLoaded', async () => {
     setTimeout(updateBackgroundTasks, 1000);
 
 });
+// Modal Ask User logic
+let currentAskUserId = null;
+
+window.__TAURI__.event.listen('agent-ask-user', (event) => {
+    const data = event.payload;
+    currentAskUserId = data.id;
+    
+    document.getElementById('ask-user-question').textContent = data.question;
+    const optionsContainer = document.getElementById('ask-user-options');
+    optionsContainer.innerHTML = '';
+    
+    data.options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.textContent = opt;
+        btn.style = "background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 8px; border-radius: 4px; cursor: pointer;";
+        btn.onclick = () => submitAnswer(opt);
+        optionsContainer.appendChild(btn);
+    });
+    
+    document.getElementById('ask-user-modal').style.display = 'flex';
+});
+
+async function submitAnswer(answer) {
+    if (currentAskUserId) {
+        await invoke('submit_user_answer', { id: currentAskUserId, answer: answer });
+        document.getElementById('ask-user-modal').style.display = 'none';
+        document.getElementById('ask-user-custom').value = '';
+        currentAskUserId = null;
+    }
+}
+
+document.getElementById('ask-user-custom-btn').onclick = () => {
+    const val = document.getElementById('ask-user-custom').value.trim();
+    if (val) {
+        submitAnswer(val);
+    }
+};
+

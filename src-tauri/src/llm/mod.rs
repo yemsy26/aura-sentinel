@@ -152,6 +152,8 @@ struct EmbeddingResponse {
     embedding: Vec<f32>,
 }
 
+pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
+
 pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
     // Timeout corto (8s) para no bloquear el pipeline si nomic no está disponible
     let client = reqwest::Client::builder()
@@ -161,7 +163,7 @@ pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
     let url = "http://localhost:11434/api/embeddings";
     
     let payload = EmbeddingRequest {
-        model: "nomic-embed-text",
+        model: DEFAULT_EMBEDDING_MODEL,
         prompt: text,
     };
 
@@ -267,18 +269,26 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
         .unwrap_or_else(|e| format!("Error en auditoría: {}", e))
 }
 
+/// Invoca el motor SpectraSAT directamente en memoria (FFI nativo, cero latencia de subproceso).
+/// Si se proveen `n_vars` y `clauses` en el JSON del agente, los resuelve directamente.
+/// Si no, cae en modo de revisión de código vía LLM (análisis de satisfacibilidad semántica).
+pub(crate) fn solve_with_spectrasat(n_vars: usize, clauses: Vec<Vec<i32>>) -> String {
+    spectrasat_core::solve_native_rust(n_vars, clauses)
+}
+
 pub(crate) async fn delegate_to_logic_solver(file_contents: &str, model: &str) -> String {
+    // Modo análisis de código: el LLM detecta problemas lógicos en el código fuente
     let solver_prompt = format!(
-        "Eres un Motor de Verificación Formal (Logic Solver). Tu misión es demostrar matemáticamente y de manera lógica si el código adjunto contiene fallos lógicos, bucles infinitos, condiciones inalcanzables o dependencias rotas. \
-        Debes emular un solver z3.\n\n\
+        "Eres un Motor de Verificación Formal (Logic Solver). Analiza si el código adjunto contiene \
+        fallos lógicos, condiciones inalcanzables, bucles infinitos o dependencias rotas.\n\n\
         CÓDIGO A ANALIZAR:\n{}\n\n\
         INSTRUCCIONES:\n\
         1. Analiza el flujo de control rigurosamente.\n\
-        2. Identifica cualquier variable que pueda no inicializarse.\n\
-        3. Verifica si existe alguna condición lógica que jamás se pueda cumplir (Dead Code).\n\
-        4. Comprueba los límites de memoria o recursión.\n\
-        5. Devuelve el reporte en formato texto detallado, enfocado en lógica estricta y matemáticas, NO en estilo visual o rendimiento.\n\n\
-        REPORTE Z3-LOGIC:",
+        2. Identifica variables no inicializadas.\n\
+        3. Detecta Dead Code (condiciones imposibles de cumplir).\n\
+        4. Comprueba límites de memoria o recursión.\n\
+        5. Si detectas un problema de satisfacibilidad booleana (SAT/UNSAT), exprésalo en formato CNF.\n\n\
+        REPORTE LÓGICO:",
         file_contents
     );
     call_ollama_text(model, &solver_prompt).await
