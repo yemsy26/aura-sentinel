@@ -105,11 +105,11 @@ pub async fn run_tests(workspace_path: &str) -> TestResult {
 
 async fn handle_test_output(output: Result<std::process::Output, std::io::Error>, lang_name: &str) -> TestResult {
     match output {
-        // Binary not found → surface as ENV_FAILURE so agent.rs can auto-install
+        // Binary not found → surface as ENV_FAILURE
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             TestResult::Failed(format!(
-                "[ENV_FAILURE] No se encontró el comando. \
-                 El sistema intentará instalarlo automáticamente."
+                "[ENV_FAILURE] No se encontró el comando o ejecutable en PATH. \
+                 Verifica que las herramientas y dependencias del entorno estén instaladas."
             ))
         }
         Err(e) => {
@@ -143,5 +143,6 @@ async fn handle_test_output(output: Result<std::process::Output, std::io::Error>
 }
 
 fn emit_tester_info(msg: &str) {
-    println!("{}", msg);
+    eprintln!("{}", msg);
 }
+

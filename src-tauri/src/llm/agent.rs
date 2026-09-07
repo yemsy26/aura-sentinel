@@ -547,10 +547,13 @@ pub async fn run_agent_loop(
 
     let mut retry_tracker = crate::core::error_classifier::RetryTracker::new();
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
+    // ── Context Window Tiered Monitor (Devin 2.0 / OSS 2025 Pattern) ────────
+    let context_monitor = crate::core::context_monitor::ContextMonitor::new(6000, &original_prompt_parsed);
 
     // ── Multi-Agent Role State Machine ─────────────────────────────────────
     let mut current_role = AgentRole::Planner;
     let mut critic_feedback: Option<String> = None;
+
 
     // ── Fase 5: Sanity Monitor state ─────────────────────────────────────────
     let mut tool_history: Vec<String> = Vec::new();
@@ -760,19 +763,39 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             journal.fsm_context = Some(current_context.clone());
             crate::core::session_journal::save_journal(&workspace_path, &journal);
 
+            let mut workspace_files: Vec<String> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        if !name.starts_with('.') && name != "target" {
+                            workspace_files.push(name);
+                        }
+                    }
+                }
+            }
+
             let pause_msg = format!(
                 "⏸️ **Pausa de Presupuesto Agéntico (Paso {})**\n\n\
-                Se ha completado el bloque de {} pasos asignado a este turno. El proyecto sigue en desarrollo activo en el workspace:\n\
-                {}\n\n\
-                Escribe **'continua'** para otorgarme otro bloque de pasos y continuar exactamente donde me quedé sin perder progreso.",
+                Se ha completado el bloque de {} pasos asignado a este turno. El proyecto sigue en desarrollo activo en el workspace:\n\n\
+                **📋 Estado de Fases:**\n{}\n\n\
+                **📁 Archivos en Workspace:**\n{}\n\n\
+                💡 Escribe **'continua'** para otorgarme otro bloque de 50 pasos y continuar exactamente donde me quedé sin perder progreso.",
                 step_count, max_steps,
                 if journal.fases.is_empty() {
-                    "Fases en desarrollo".to_string()
+                    "- Fases en desarrollo activo".to_string()
                 } else {
                     journal.fases.iter().map(|f| format!("- Fase {}: {} [{}]", f.numero, f.descripcion, f.estado)).collect::<Vec<_>>().join("\n")
+                },
+                if workspace_files.is_empty() {
+                    "- (Preparando archivos)".to_string()
+                } else {
+                    workspace_files.iter().map(|f| format!("- `{}`", f)).collect::<Vec<_>>().join("\n")
                 }
             );
             emit_event(&app_handle, step_count, &pause_msg, "WARNING");
+
             let final_res = FinalResponse {
                 status: "FINISH".to_string(),
                 respuesta_conversacional: pause_msg,
@@ -831,14 +854,16 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             let existing = current_context.clone();
             current_context = format!("{}{}", pesp_status, existing);
         }
-        // ── Context Compression: zero-latency sliding window to prevent LLM saturation ──
-        if current_context.len() > 4500 {
-            emit_event(&app_handle, step_count, "[MEMORIA] Optimizando ventana de contexto (Zero-Latency)...", "INFO");
-            let head: String = current_context.chars().take(900).collect();
-            let tail: String = current_context.chars().rev().take(2500).collect::<Vec<_>>().into_iter().rev().collect();
-            current_context = format!("{}\n\n[... HISTORIAL INTERMEDIO COMPACTADO PARA MÁXIMA VELOCIDAD ...]\n\n{}", head, tail);
-            emit_event(&app_handle, step_count, "[MEMORIA] Contexto optimizado sin latencia.", "SUCCESS");
+        // ── Context Window Tiered Monitor & Intelligent Compaction (Devin 2.0 / OSS 2025 Pattern) ──
+        let (fill_pct, ctx_status) = context_monitor.status(current_context.len());
+        if context_monitor.should_compact(current_context.len()) {
+            emit_event(&app_handle, step_count, &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct * 100.0), "INFO");
+            current_context = context_monitor.compact_context(&current_context);
+            emit_event(&app_handle, step_count, "[MEMORIA] Contexto compactado exitosamente sin pérdida del objetivo.", "SUCCESS");
+        } else if ctx_status == crate::core::context_monitor::ContextStatus::ApproachingLimit {
+            emit_event(&app_handle, step_count, &format!("[MEMORIA] Ventana al {:.0}% de capacidad — operando con normalidad.", fill_pct * 100.0), "INFO");
         }
+
 
         let mut forced_override: Option<(String, String)> = None;
         if let Some((forced, override_msg)) = forced_next_tool.take() {
@@ -892,16 +917,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             }
         };
 
-        // --- EVITAR DESBORDAMIENTO DE CONTEXTO (SPRINT 1: limite estricto 6000) ---
-        // Reducido de 10000 a 6000: los modelos locales se saturan antes y alucinan.
-        if current_context.len() > 6000 {
-            let offset = current_context.len() - 6000;
-            if let Some(cut) = current_context[offset..].find("PASO") {
-                current_context = format!("...[HISTORIAL RECORTADO POR LIMITE DE MEMORIA - solo ultimos pasos]...\n{}", &current_context[offset + cut..]);
-            } else {
-                current_context = format!("...[HISTORIAL RECORTADO]...\n{}", &current_context[offset..]);
-            }
+        // --- EVITAR DESBORDAMIENTO DE CONTEXTO (Garantizando Objetivo Inmutable) ---
+        if context_monitor.should_compact(current_context.len()) {
+            current_context = context_monitor.compact_context(&current_context);
         }
+
         // ── Critic → Executor feedback block ──────────────────────────────────
         let critic_feedback_block = if let Some(ref fb) = critic_feedback {
             format!("\n\n[REPORTE DEL CRÍTICO — DEBES CORREGIR ESTOS PROBLEMAS ANTES DE CONTINUAR]:\n{}\n", fb)
@@ -3003,7 +3023,25 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     let phase_num = current_phase.numero;
 
                     let missing_files: Vec<String> = current_phase.archivos.iter()
-                        .filter(|arch| !std::path::Path::new(&workspace_path).join(arch).exists())
+                        .filter(|arch| {
+                            let p = std::path::Path::new(&workspace_path).join(arch);
+                            if p.exists() {
+                                return false; // El archivo existe físicamente
+                            }
+                            // Si el planificador puso 'index.html' pero el usuario pidió otro HTML (ej. 'cyber_sentinel.html')
+                            if *arch == "index.html" {
+                                if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                                    for entry in entries.flatten() {
+                                        if let Some(ext) = entry.path().extension() {
+                                            if ext == "html" {
+                                                return false; // Existe un HTML válido en el proyecto
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            true
+                        })
                         .cloned()
                         .collect();
 
@@ -3135,8 +3173,25 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             AgentRole::Executor => "Executor",
             AgentRole::Critic => "Critic",
         };
-        let trail_result = if tool == "TOOL_FINISH" { StepResult::Success } else if current_context.contains("ERROR") || current_context.contains("FATAL") { StepResult::Error } else { StepResult::Success };
+        // FIX: Only check the NEW context added since the last step (the delta),
+        // not the entire accumulated current_context which always contains past ERROR strings.
+        // We use last_error_hashes as a proxy: if a hash was just added this step, it's an error.
+        let step_had_error = if tool == "TOOL_FINISH" {
+            false
+        } else {
+            // Check if the most recent terminal error hash was added THIS step
+            // by checking if last_error_hashes grew this iteration (compared to pre-step size).
+            // Simplified: check the last 80 chars of context for fresh error signals.
+            let context_tail = &current_context[current_context.len().saturating_sub(800)..];
+            context_tail.contains("[PATCH_FAIL]")
+                || context_tail.contains("FATAL")
+                || context_tail.contains("error[E")   // Rust compiler errors
+                || context_tail.contains("[ENV_FAILURE]")
+                || context_tail.contains("Traceback (most recent call last)")
+        };
+        let trail_result = if step_had_error { StepResult::Error } else { StepResult::Success };
         let trail_error = if trail_result == StepResult::Error { Some(format!("Tool: {}", tool)) } else { None };
+
         command_trail.add_step(
             step_count,
             trail_role,

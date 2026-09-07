@@ -158,7 +158,8 @@ fn check_python_stubs(content: &str, warnings: &mut Vec<String>) {
 }
 
 fn check_rust_stubs(content: &str, warnings: &mut Vec<String>) {
-    for (i, line) in content.lines().enumerate() {
+    let lines: Vec<&str> = content.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.contains("todo!()") {
             warnings.push(format!("Línea {}: todo!() — función no implementada", i + 1));
@@ -169,11 +170,33 @@ fn check_rust_stubs(content: &str, warnings: &mut Vec<String>) {
         if trimmed.starts_with("// TODO") || trimmed.starts_with("// todo") {
             warnings.push(format!("Línea {}: TODO sin implementar: '{}'", i + 1, trimmed));
         }
+        // FIX: Only flag empty body {} if the PRECEDING non-empty line is a fn/impl,
+        // NOT if it's a struct/enum/type/trait/const (those legitimately have empty {}).
         if trimmed == "{ }" || trimmed == "{}" {
-            warnings.push(format!("Línea {}: cuerpo de función vacío detectado", i + 1));
+            let prev_code = lines[..i]
+                .iter()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .map(|l| l.trim())
+                .unwrap_or("");
+            let is_fn_body = prev_code.contains("fn ") 
+                || prev_code.contains("async fn ")
+                || (prev_code.ends_with('{') && prev_code.contains("impl "));
+            let is_type_def = prev_code.starts_with("struct ")
+                || prev_code.starts_with("enum ")
+                || prev_code.starts_with("type ")
+                || prev_code.starts_with("trait ")
+                || prev_code.starts_with("pub struct ")
+                || prev_code.starts_with("pub enum ")
+                || prev_code.starts_with("pub trait ")
+                || prev_code.contains("derive");
+            if is_fn_body && !is_type_def {
+                warnings.push(format!("Línea {}: cuerpo de función vacío detectado", i + 1));
+            }
         }
     }
 }
+
 
 fn check_js_stubs(content: &str, warnings: &mut Vec<String>) {
     for (i, line) in content.lines().enumerate() {
@@ -225,11 +248,27 @@ fn check_generic_stubs(content: &str, warnings: &mut Vec<String>) {
 }
 
 fn check_bat_stubs(content: &str, warnings: &mut Vec<String>) {
+    // FIX: Accept multiple valid pause/silence patterns used by intentional silent scripts.
+    // Only warn if the script has real logic (>3 non-comment lines) and NONE of the patterns.
     let lower_content = content.to_lowercase();
-    if !lower_content.contains("pause") {
-        warnings.push("Script .bat no contiene 'pause'. NUNCA dejes que la consola se cierre sola. Usa 'if %ERRORLEVEL% neq 0 pause' o pon un 'pause' al final.".to_string());
+    let real_lines = content.lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with("rem ") && !t.starts_with("::") && !t.starts_with("@echo")
+        })
+        .count();
+    let has_pause_pattern = lower_content.contains("pause")
+        || lower_content.contains("timeout")
+        || lower_content.contains(">nul")
+        || lower_content.contains("ping -n")       // common delay trick
+        || lower_content.contains("exit /b")       // exits silently by design
+        || lower_content.contains("exit /b 0")
+        || lower_content.contains("%errorlevel%"); // error check implies intentional control
+    if real_lines > 3 && !has_pause_pattern {
+        warnings.push("Script .bat sin pausa ni control de flujo. Si la ventana debe mantenerse abierta, añade 'pause' al final.".to_string());
     }
 }
+
 
 #[cfg(test)]
 mod tests {

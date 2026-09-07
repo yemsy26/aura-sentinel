@@ -21,6 +21,8 @@ pub mod container;          // Fase 2: TOOL_CONTAINER (Docker/Podman)
 pub mod episodic_memory;    // Fase 3: Memoria multi-sesión JSONL
 pub mod scheduler;          // Fase 4: Scheduler autónomo (cron interno)
 pub mod sanity_monitor;     // Fase 5: Monitor de cordura del LLM
+pub mod context_monitor;    // Monitor de ventana de contexto y compactación determinista
+
 
 use std::path::Path;
 use tokio::process::Command;

@@ -205,11 +205,8 @@ impl AutoValidator {
                     }
                 }
                 
-                // Auto-fix: generar runners
-                if fix.contains("TOOL_CREATE_RUNNER") || fix.contains("Generar runners") {
-                    // Se ejecuta TOOL_CREATE_RUNNER en el agente
-                    result.auto_fixed.push("Runners generados (pendiente ejecución de herramienta)".to_string());
-                }
+                // Note: Runner generation cannot be performed purely synchronously here;
+                // it remains a suggested_fix for the agent to execute via TOOL_CREATE_RUNNER.
             }
         }
     }
