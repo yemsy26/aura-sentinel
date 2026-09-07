@@ -540,6 +540,11 @@ pub async fn run_agent_loop(
     let mut mandatory_tools_executed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut forced_next_tool: Option<(String, String)> = None;
     let mut intercept_consecutive: u32 = 0; // track consecutive LLM disobedience
+    // ── Semantic Error Loop Detector — ring buffer of last 5 terminal output hashes ──
+    // Populated whenever a TOOL_TERMINAL command produces an error. If last 3 are identical,
+    // sanity_monitor escalates to RED and forces TOOL_THINK.
+    let mut last_error_hashes: std::collections::VecDeque<u64> = std::collections::VecDeque::with_capacity(5);
+
     let mut retry_tracker = crate::core::error_classifier::RetryTracker::new();
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
 
@@ -690,19 +695,31 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
         // ── FASE 5: Monitor de Cordura y Salud Cognitiva del Agente ──
         if step_count % 3 == 0 || step_count == 1 {
+            let error_hashes_slice: Vec<u64> = last_error_hashes.iter().copied().collect();
             let report = crate::core::sanity_monitor::check(
                 &tool_history,
                 current_context.len(),
                 json_error_count,
                 step_count,
                 last_progress_step,
+                &error_hashes_slice,
             );
             crate::core::sanity_monitor::emit_report(&app_handle, &report);
-            if let Some(hint) = crate::core::sanity_monitor::build_correction_hint(&report) {
+            if let Some((hint, forced_tool_opt)) = crate::core::sanity_monitor::build_correction_hint(&report) {
                 current_context.push_str(&hint);
                 emit_event(&app_handle, step_count, &format!("[CORDURA] {}", report.recommendation), "WARNING");
+                // RED level: mechanically force the tool — don't just inject text
+                if let Some(forced_tool_name) = forced_tool_opt {
+                    if forced_next_tool.is_none() {
+                        forced_next_tool = Some((
+                            forced_tool_name.clone(),
+                            format!("[CORDURA-RED] Forzando {} — loop o error semántico detectado.", forced_tool_name),
+                        ));
+                    }
+                }
             }
         }
+
 
         // ── EMERGENCY EXIT: step budget exhausted ────────────────────────
         if step_count >= max_steps {
@@ -1018,19 +1035,30 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
         // ── Fase 5: Sanity Monitor (cada 5 pasos) ──────────────────────────────
         if step_count % 5 == 0 {
+            let error_hashes_slice2: Vec<u64> = last_error_hashes.iter().copied().collect();
             let sanity = crate::core::sanity_monitor::check(
                 &tool_history,
                 current_context.len(),
                 json_error_count,
                 step_count,
                 last_progress_step,
+                &error_hashes_slice2,
             );
             crate::core::sanity_monitor::emit_report(&app_handle, &sanity);
-            if let Some(hint) = crate::core::sanity_monitor::build_correction_hint(&sanity) {
-                current_context.push_str(&hint);
+            if let Some((hint2, forced_tool_opt2)) = crate::core::sanity_monitor::build_correction_hint(&sanity) {
+                current_context.push_str(&hint2);
                 emit_event(&app_handle, step_count, &format!("[⚕️ CORDURA {}] {}", sanity.level, &sanity.recommendation.chars().take(80).collect::<String>()), "WARNING");
+                if let Some(forced_tool_name2) = forced_tool_opt2 {
+                    if forced_next_tool.is_none() {
+                        forced_next_tool = Some((
+                            forced_tool_name2.clone(),
+                            format!("[CORDURA-RED] Forzando {} — loop o error semántico detectado.", forced_tool_name2),
+                        ));
+                    }
+                }
             }
         }
+
 
         // ── Fase 1: Mission Checkpoint (cada 3 pasos) ───────────────────────────
         if step_count % 3 == 0 {
@@ -1612,7 +1640,20 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
                                 emit_event(&app_handle, step_count, &res_msg, "ERROR");
 
+                                // ── Track error hash for semantic loop detection ──
+                                // If the same error output repeats 3+ times, sanity_monitor will escalate.
+                                {
+                                    use std::hash::{Hash, Hasher};
+                                    use std::collections::hash_map::DefaultHasher;
+                                    let mut hasher = DefaultHasher::new();
+                                    err.trim().hash(&mut hasher);
+                                    let err_hash = hasher.finish();
+                                    if last_error_hashes.len() >= 5 { last_error_hashes.pop_front(); }
+                                    last_error_hashes.push_back(err_hash);
+                                }
+
                                 // ── SELF-REPAIR LOOP (ReAct pattern) ───────────────────
+
                                 // Classify the error type and choose the appropriate recovery strategy.
                                 // Professional agents (SWE-agent, Claude) never retry blindly.
                                 let error_type = crate::core::error_classifier::classify_error(

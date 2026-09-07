@@ -357,7 +357,7 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
                 exitosos_nombres.push(cambio.archivo.clone());
                 
                 use std::time::{SystemTime, UNIX_EPOCH};
-                let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
+                let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs().to_string();
                 
                 let entry = FenixMemoryLog {
                     task_id: format!("TASK-{}", timestamp),
@@ -381,11 +381,28 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
     } else {
         "0 archivos modificados exitosamente.".to_string()
     };
-    if fuzzy_logs.is_empty() {
-        Ok(base_msg)
+    let full_msg = if fuzzy_logs.is_empty() {
+        base_msg.clone()
     } else {
-        Ok(format!("{}\n{}", base_msg, fuzzy_logs.join("\n")))
+        format!("{}\n{}", base_msg, fuzzy_logs.join("\n"))
+    };
+
+    // ── CRITICAL FIX: if we had cambios to apply but applied ZERO of them,
+    //    return Err so the agent knows its patches didn't land. Previously this
+    //    returned Ok("0 archivos modificados exitosamente.") — a false success.
+    if exitosos == 0 && !fuzzy_logs.is_empty() {
+        // Some patches were attempted (fuzzy_logs has rejection notes) but none applied.
+        return Err(format!(
+            "[PATCH_FAIL] Ningún parche fue aplicado (0 de {} cambio(s) encontraron coincidencia).\n\
+             Verifica que el texto en el campo 'buscar' exista exactamente en los archivos destino.\n\
+             Detalles: {}\n\
+             CONSEJO: Lee el archivo primero con TOOL_READ_FILE y copia el fragmento exacto a buscar.",
+            fuzzy_logs.len(),
+            fuzzy_logs.join(" | ")
+        ));
     }
+
+    Ok(full_msg)
 }
 
 pub async fn update_last_memory_status(workspace_path: &str, status: &str) -> Result<(), String> {

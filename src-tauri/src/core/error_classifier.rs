@@ -153,6 +153,9 @@ pub struct RetryTracker {
     pub transient_retries: u32,
     pub logic_retries: u32,
     pub last_tool: String,
+    /// Cumulative total error count — does NOT reset on tool change.
+    /// Catches A→B→A→B→... alternating patterns that bypass per-tool limits.
+    pub total_error_count: u32,
 }
 
 impl RetryTracker {
@@ -160,12 +163,22 @@ impl RetryTracker {
 
     /// Record a failure and return whether the agent should escalate.
     pub fn record_failure(&mut self, tool: &str, error_type: &ErrorType) -> bool {
+        // Always increment the cumulative counter regardless of tool change
+        self.total_error_count += 1;
+
         if self.last_tool != tool {
-            // New tool — reset counters
+            // New tool — reset per-tool counters but NOT total_error_count
             self.transient_retries = 0;
             self.logic_retries = 0;
             self.last_tool = tool.to_string();
         }
+
+        // Cumulative escalation: if >8 errors across all tools, always escalate.
+        // This catches A→B→A→B alternating patterns that reset per-tool counters.
+        if self.total_error_count >= 8 {
+            return true;
+        }
+
         match error_type {
             ErrorType::Transient => {
                 self.transient_retries += 1;
@@ -179,8 +192,12 @@ impl RetryTracker {
         }
     }
 
-    pub fn _reset(&mut self) {
+    /// Reset all counters (e.g., after a successful tool execution)
+    #[allow(dead_code)]
+    pub fn reset_all(&mut self) {
         self.transient_retries = 0;
         self.logic_retries = 0;
+        self.total_error_count = 0;
+        self.last_tool = String::new();
     }
 }

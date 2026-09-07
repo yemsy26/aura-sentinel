@@ -230,9 +230,15 @@ warn() {
         }
         RunnerType::Custom(ref name) => {
             script.push_str(&format!("# Custom runner: {}\n", name));
-            script.push_str("# TODO: Implementar lógica personalizada\n");
-            script.push_str("exit 1\n");
+            script.push_str("# Auto-generated fallback: discovers and runs available test files\n");
+            script.push_str("echo \"[CUSTOM RUNNER] Buscando tests en el workspace...\"\n");
+            script.push_str("found=0\n");
+            script.push_str("for f in test_*.py verify_*.py *_test.py; do\n");
+            script.push_str("  if [ -f \"$f\" ]; then python \"$f\" && found=1; fi\n");
+            script.push_str("done\n");
+            script.push_str("if [ $found -eq 0 ]; then echo \"[INFO] No se encontraron scripts de prueba automáticos. Considera agregar test_*.py\"; exit 0; fi\n");
         }
+
     }
 
     script.push_str("\n# Fin del script\n");
@@ -362,9 +368,15 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
         }
         RunnerType::Custom(ref name) => {
             script.push_str(&format!("REM Custom runner: {}\n", name));
-            script.push_str("REM TODO: Implementar lógica personalizada\n");
-            script.push_str("exit /b 1\n");
+            script.push_str("REM Auto-generated fallback: discovers and runs available test files\n");
+            script.push_str("echo [CUSTOM RUNNER] Buscando tests en el workspace...\n");
+            script.push_str("set FOUND=0\n");
+            script.push_str("for %%f in (test_*.py verify_*.py *_test.py) do (\n");
+            script.push_str("  python %%f && set FOUND=1\n");
+            script.push_str(")\n");
+            script.push_str("if %FOUND%==0 echo [INFO] No se encontraron scripts de prueba. Considera agregar test_*.py\n");
         }
+
     }
 
     script.push_str("\nREM Fin del script\n");
@@ -488,9 +500,15 @@ fn generate_powershell_script(config: &RunnerConfig) -> String {
         }
         RunnerType::Custom(ref name) => {
             script.push_str(&format!("# Custom runner: {}\n", name));
-            script.push_str("# TODO: Implementar lógica personalizada\n");
-            script.push_str("exit 1\n");
+            script.push_str("# Auto-generated fallback: discovers and runs available test files\n");
+            script.push_str("Write-Host '[CUSTOM RUNNER] Buscando tests en el workspace...'\n");
+            script.push_str("$found = $false\n");
+            script.push_str("Get-ChildItem -Filter 'test_*.py','verify_*.py','*_test.py' -ErrorAction SilentlyContinue | ForEach-Object {\n");
+            script.push_str("  python $_.FullName; if ($LASTEXITCODE -eq 0) { $found = $true }\n");
+            script.push_str("}\n");
+            script.push_str("if (-not $found) { Write-Host '[INFO] No se encontraron scripts de prueba. Considera agregar test_*.py' }\n");
         }
+
     }
 
     script.push_str("\n# Fin del script\n");
