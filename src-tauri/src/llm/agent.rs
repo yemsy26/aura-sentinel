@@ -2264,8 +2264,15 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     // CRITICAL AUTO-HEAL: If the workspace currently fails validation (e.g. syntax error in verify_dashboard.py),
                     // automatically inject any failing files into archivos_vec so the programmer model receives them,
                     // even if a small model forgot to include them in archivos_a_editar.
+                    let mut compile_alert_note = String::new();
                     if let Err(compile_err) = validate_workspace(&workspace_path).await {
                         let failing_files = crate::core::extract_workspace_files_from_error(&workspace_path, &compile_err);
+                        if !failing_files.is_empty() {
+                            compile_alert_note = format!(
+                                "\n\n⚠️ ALERTA CRÍTICA DE AUTO-HEAL: El workspace tiene un error de sintaxis/compilación en los archivos {:?}:\n{}\nDEBES incluir {:?} en tu lista de 'cambios' y reparar el error de sintaxis.",
+                                failing_files, compile_err, failing_files
+                            );
+                        }
                         for ff in failing_files {
                             if !archivos_vec.contains(&ff) {
                                 emit_event(&app_handle, step_count, &format!("[AUTO-HEAL] Archivo con error detectado e inyectado a programación: {}", ff), "INFO");
@@ -2277,7 +2284,8 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     let mut safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
                     let mut context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
-                let mut qwen_prompt = format!("Instrucción principal: {}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message);
+                let mut qwen_prompt = format!("Instrucción principal: {}{}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message, compile_alert_note);
+
                 let target_model = if programmer_model.to_lowercase().contains("embed") {
                     if !orchestrator_model.to_lowercase().contains("embed") {
                         orchestrator_model.clone()
@@ -2421,19 +2429,27 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                     },
                                                     Err(e) => {
                                                         emit_event(&app_handle, step_count, &format!("Error detectado: {}", e), "ERROR");
-                                                        qwen_prompt = format!("{}\n\n[ERROR DE COMPILACIÓN/EJECUCIÓN]: El código que generaste causó este error:\n{}\n\nSoluciónalo y genera un nuevo JSON asegurándote de escapar correctamente los strings y reparar todos los archivos afectados. REGLA ESTRICTA: DEBES RESPONDER ÚNICAMENTE CON UN JSON VÁLIDO (sin texto fuera del JSON).", qwen_prompt, e);
                                                         
                                                         // Auto-inject any broken workspace files into archivos_vec
                                                         let new_failing = crate::core::extract_workspace_files_from_error(&workspace_path, &e);
-                                                        for ff in new_failing {
-                                                            if !archivos_vec.contains(&ff) {
+                                                        let mandatory_note = if !new_failing.is_empty() {
+                                                            format!("\n⚠️ OBLIGATORIO: Tu lista de 'cambios' DEBE incluir un arreglo para los archivos {:?}. No modifiques otros archivos hasta que este error esté resuelto.", new_failing)
+                                                        } else {
+                                                            String::new()
+                                                        };
+
+                                                        qwen_prompt = format!("{}\n\n[ERROR DE COMPILACIÓN/EJECUCIÓN]: El código causó este error:\n{}\n{}\nSoluciónalo y genera un nuevo JSON asegurándote de escapar correctamente los strings y reparar todos los archivos afectados. REGLA ESTRICTA: DEBES RESPONDER ÚNICAMENTE CON UN JSON VÁLIDO (sin texto fuera del JSON).", qwen_prompt, e, mandatory_note);
+                                                        
+                                                        for ff in &new_failing {
+                                                            if !archivos_vec.contains(ff) {
                                                                 emit_event(&app_handle, step_count, &format!("[AUTO-HEAL] Inyectando archivo afectado para reintento: {}", ff), "INFO");
-                                                                archivos_vec.push(ff);
+                                                                archivos_vec.push(ff.clone());
                                                             }
                                                         }
                                                         if e.contains("package.json") && !archivos_vec.contains(&"package.json".to_string()) {
                                                             archivos_vec.push("package.json".to_string());
                                                         }
+
 
                                                         // Refresh safe_files and context_for_qwen so the next attempt contains the broken file content!
                                                         safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;

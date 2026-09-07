@@ -151,8 +151,11 @@ fn sanitize_file_content_by_extension(filename: &str, content: &str) -> String {
         }
         let joined = lines.join("\n");
 
-        // Fix doubled quotes and unescaped quotes in HTML tags inside Python strings
+        // 1. Fix doubled quotes: id=""val"" -> id=\"val\"
         let re_doubled = regex::Regex::new(r#"([a-zA-Z0-9_\-]+)=""([^"'\r\n]+)"""#).ok();
+        // 2. Fix unescaped attribute quotes inside HTML tags (with or without closing >)
+        // e.g. `<canvas id="radarCanvas"` or `<div class="box">` inside Python string literals
+        let re_tag_attr = regex::Regex::new(r#"(<[a-zA-Z0-9_\-]+[^"'\r\n]*?\s+[a-zA-Z0-9_\-]+)=(?<!\\)"([^"'\r\n]+)(?<!\\)""#).ok();
         let re_tag = regex::Regex::new(r#"<[a-zA-Z0-9_\-]+(?:\s+[^>]+)*>"#).ok();
         let re_attr = regex::Regex::new(r#"([a-zA-Z0-9_\-]+)=(?<!\\)"([^"'\r\n]+)(?<!\\)""#).ok();
 
@@ -160,11 +163,28 @@ fn sanitize_file_content_by_extension(filename: &str, content: &str) -> String {
         if let Some(re_dbl) = re_doubled {
             sanitized = re_dbl.replace_all(&sanitized, "$1=\\\"$2\\\"").into_owned();
         }
+        if let Some(re_ta) = re_tag_attr {
+            sanitized = re_ta.replace_all(&sanitized, "$1=\\\"$2\\\"").into_owned();
+        }
         if let (Some(re_t), Some(re_a)) = (re_tag, re_attr) {
             sanitized = re_t.replace_all(&sanitized, |caps: &regex::Captures| {
                 let tag_str = &caps[0];
                 re_a.replace_all(tag_str, "$1=\\\"$2\\\"").into_owned()
             }).into_owned();
+        }
+
+        // 3. Windows cp1252 terminal safety: replace non-ASCII emojis with ASCII tags
+        // to prevent UnicodeEncodeError in python print() statements
+        sanitized = sanitized
+            .replace("❌", "[FAIL]")
+            .replace("✅", "[PASS]")
+            .replace("⚠️", "[WARN]")
+            .replace("🛡️", "[SHIELD]")
+            .replace("🚀", "[RUN]");
+
+        // 4. Ensure UTF-8 encoding declaration at the top if missing
+        if !sanitized.starts_with("# -*- coding: utf-8 -*-") && !sanitized.starts_with("# coding: utf-8") {
+            sanitized = format!("# -*- coding: utf-8 -*-\n{}", sanitized);
         }
 
         if !sanitized.is_empty() && !sanitized.ends_with('\n') {

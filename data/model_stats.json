@@ -1,8 +1,8 @@
 {
   "gemma4-e4b:latest::Orchestrator": {
-    "total_uses": 7,
-    "success_count": 7,
-    "total_steps": 35
+    "total_uses": 8,
+    "success_count": 8,
+    "total_steps": 54
   },
   "llama3.1:8b::Orchestrator": {
     "total_uses": 16,
