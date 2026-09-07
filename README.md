@@ -1,294 +1,139 @@
 # Aura-Sentinel 🛡️🧠
-**Agente DevSecOps Autónomo y Resiliente — por Ramon Antonio Burgos Jerez**
+**Agente Autónomo de Ingeniería de Software DevSecOps de Nivel Industrial**  
+*Desarrollado por Ramón Antonio Burgos Jerez*
 
-> 🏆 **Nivel Alcanzado: Agente Autónomo Completo — Tier 0** (Sprint S4✅ — Agosto 2026)
-> Arquitectura de autonomía completa. Comparable a Devin 2.0 y OpenDevin en capacidades clave.
+> 🏆 **Nivel Alcanzado: Agente Autónomo Completo — Tier 0 (v3.0.0 — Septiembre 2026)**  
+> Arquitectura de autonomía completa y ejecución determinista. Estándar de la industria comparable a SWE-agent y Devin 2.0.
 
-Aura-Sentinel es un agente de Inteligencia Artificial diseñado para desarrollo de software continuo, control de calidad automatizado y resiliencia arquitectónica. Construido con **Tauri (Rust + Vanilla JS)**, orquesta múltiples modelos de lenguaje locales (Ollama) para programar, auditar y proteger tu código **sin depender de APIs de terceros en la nube**.
-
-Diseñado para un flujo de trabajo real y diverso: sistemas Android, facturación, lotería, Firebase, inteligencia artificial con redes neuronales, trading autónomo en Rust/Python, sistemas MEV en Polygon/BNB, y aprendizaje diario de nuevos lenguajes.
+Aura-Sentinel es un agente de Inteligencia Artificial de alto rendimiento diseñado para el ciclo de vida completo de desarrollo de software: planificación de arquitecturas, generación modular de código, verificación estricta de compilación y ejecución de suites de pruebas con auto-reparación en bucle cerrado. Construido sobre un núcleo nativo en **Rust (Tauri)** acoplado a una interfaz moderna con **Monaco Editor**, orquesta modelos locales (Ollama) sin depender de APIs de terceros en la nube, garantizando máxima privacidad y latencia cero.
 
 ---
 
-## 🏆 Estado del Sistema (Agosto 2026 — Sprint 4)
+## 🏆 Estado del Sistema (v3.0.0 Enterprise)
 
-| Módulo | Estado | Tier |
+| Módulo Subyacente | Estado | Nivel / Tier |
 |---|---|---|
-| FSM Multi-Agente (Planificador→Ejecutor→Crítico) | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| Transición Ejecutor→Crítico por Micrometas | 🟢 100% — Sprint 2 ✅ | Tier 0 |
-| Clasificador de Tipo de Misión (NLU + math) | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| Zero-Hint Router (enrutamiento semántico implícito) | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| Contrato de Aceptación Planificador→Crítico | 🟢 100% — Sprint 1 ✅ | Tier 0 |
-| Compresión de Contexto cada 10 pasos | 🟢 100% — Sprint 1 ✅ | Tier 0 |
-| **Mission Persistence (auto-resume cross-restart)** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| **TOOL_CONTAINER (Docker / Podman nativo)** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| **Memoria Episódica Multi-Sesión** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| **Scheduler Autónomo (cron nativo Tokio)** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| **Sanity Monitor (anti-saturación y auto-corrección)** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| **SpectraSAT FFI — Motor Lógico en RAM** | 🟢 100% — Sprint 4 ✅ | Tier 0 |
-| TOOL_AUDITOR (salida JSON estructurada) | 🟢 95% — Sprint 2 ✅ | Tier 0 |
-| Prompts comprimidos <200 tokens (7B-optimized) | 🟢 100% — Sprint 3 ✅ | Tier 0 |
-| Vision Evaluator (xcap + moondream) | 🟢 95% — Sprint 3 ✅ | Tier 0 |
-| Anti-Stub Enforcer | 🟢 90% | Tier 0 |
-| Command Trail System (Rastro) | 🟢 100% — Sprint 3 ✅ | Tier 0 |
-| Script Runner Generator | 🟢 100% — Sprint 3 ✅ | Tier 0 |
-| Frontend Anti-Backend Shield | 🟢 100% — Sprint 3 ✅ | Tier 0 |
-| Dependency Mapper (sin LLM) | 🟢 85% | Tier 1 |
-| RAG Memory (Rust nativo) | 🟡 70% | Tier 2 |
-| Chronos-VFS Zero-Trace | 🟡 65% | Tier 2 |
+| **FSM Multi-Agente (Planificador → Ejecutor → Crítico)** | 🟢 100% Operativo | Tier 0 (Industrial) |
+| **Unified Brain Selector & Turbo Mode (`⚡ MÁXIMA POTENCIA`)** | 🟢 100% Operativo | Tier 0 (Industrial) |
+| **Dynamic Phase Gatekeeper (PESP v2 & Smart Alias)** | 🟢 100% Operativo | Tier 0 (Industrial) |
+| **AutoValidator Subsystem (`core::auto_validator`)** | 🟢 100% Conectado | Tier 0 (Industrial) |
+| **SpectraSAT FFI — Motor Lógico Booleano en RAM** | 🟢 100% Operativo | Tier 0 (Determinista) |
+| **Zero-Hint Router (Enrutamiento Semántico Autónomo)** | 🟢 100% Operativo | Tier 0 (Industrial) |
+| **Mission Persistence (Persistencia Cross-Restart)** | 🟢 100% Operativo | Tier 0 (Resiliente) |
+| **Sanity Monitor (Anti-Stall & Recuperación Activa)** | 🟢 100% Operativo | Tier 0 (Industrial) |
+| **Monaco Editor & Tarjetas de Artefactos Interactivas** | 🟢 100% Operativo | Tier 0 (UI/UX) |
+| **TOOL_CONTAINER (Docker & Podman Nativo)** | 🟢 100% Operativo | Tier 0 (DevOps) |
+| **Scheduler Autónomo (Cron Tokio Asíncrono)** | 🟢 100% Operativo | Tier 0 (Automatización) |
+| **Memoria Episódica Multi-Sesión (JSONL Vectorial)** | 🟢 100% Operativo | Tier 0 (Cognición) |
+| **Git-Shield & Auto-Sanación sin Amnesia** | 🟢 100% Operativo | Tier 0 (Resiliente) |
+| **Compresión Dinámica de Contexto & Sanitizer** | 🟢 100% Operativo | Tier 0 (Optimizado) |
 
 ---
 
-## 🏗️ Arquitectura de DevSecOps Autónoma
+## 🏛️ Arquitectura del Motor Autónomo
 
-Aura-Sentinel no solo escribe código; lo entiende, lo valida, asegura sus dependencias y se autoprotege a través de sistemas modulares críticos:
+### 1. FSM Multi-Agente Cognitiva (Planificador → Ejecutor → Crítico)
+- **Planificador (Planner / Zero-Hint Router)**: Inicia la misión abstrayendo el objetivo en un contrato de aceptación estricto y un desglose modular de micro-metas. Deduce implícitamente herramientas matemáticas o de desarrollo sin necesidad de sintaxis forzada.
+- **Ejecutor (Executor)**: Genera y edita archivos de código uno a uno con validación de sintaxis inmediata, ejecuta comandos de terminal, orquesta contenedores e instala dependencias.
+- **Crítico (Critic)**: Evalúa el cumplimiento del 100% de los criterios del contrato. Ejecuta pruebas automatizadas y prohíbe la finalización (`TOOL_FINISH`) si existen fallos de compilación, enlaces de assets rotos o errores en tests.
 
-### 1. Ingeniería de Entornos (Módulo DevOps Autónomo) 🌍
-- **Auto-Instalación Silenciosa**: Detecta qué programa falta (`go`, `node`, `python`, `gcc`, `mvn`, etc.) y lo instala mediante `scoop` o `winget`, sin permisos de administrador invasivos.
-- **Hot-Reloading del PATH**: Tras instalar una dependencia, Rust recarga `PATH` desde el registro de Windows en memoria. Aura instala un compilador en el Paso 1 y lo usa en el Paso 2, *sin reiniciar la aplicación*.
-- **Pre-Flight Check**: Antes de cada misión, valida que el entorno mínimo esté operativo (Ollama respondiendo, workspace válido).
+### 2. Unified Brain Selector & Turbo Mode (`⚡ MÁXIMA POTENCIA`)
+- **Control Centralizado**: Un selector único e intuitivo en la barra superior unifica el modelo activo tanto para el frontend como para el backend.
+- **Modo Turbo**: Permite activar la aceleración directa para omitir pasos intermedios repetitivos y maximizar el rendimiento en tareas guiadas por scripts.
+- **HUD de Rendimiento**: Telemetría visual en vivo con temperatura, tiempo de respuesta y estado de GPU offload.
 
-### 2. Máquina de Estados y Kill-Switches (Protección Anti-Bucles) 🛑
-- **Cooldown de Programador**: Si Aura edita el mismo archivo 3 veces seguidas sin probar, Rust aborta la operación.
-- **Terminal Estricta**: Intercepta comandos vacíos y comandos repetitivos (detecta `go mod init` ejecutándose dos veces y lo bloquea).
-- **Escalada de 3 Niveles (NoTests)**: Si el agente intenta ejecutar tests en un proyecto vacío: 1) Advierte, 2) Fuerza crear archivos de test, 3) Fuerza instalación del framework de test.
-- **Detección Inteligente de Errores de Dependencias**: Distingue entre `go.mod` ausente (→ `go mod init`) y errores de sintaxis en el código (→ Auto-Debugger). Evita que el agente ejecute `go mod init` repetidamente cuando el problema es lógico.
+### 3. Dynamic Phase Gatekeeper (PESP v2) & Smart Alias Matching
+- **Detección Flexible de Entregables**: Resuelve dinámicamente alias de archivos solicitados por el usuario (ej. `cyber_sentinel.html`, `dashboard.html`, `index.html`) evitando atascos rígidos por nombres de archivo predeterminados.
+- **Auto-Convergencia Determinista**: Cuando un script de verificación (ej. `python verify_dashboard.py`) pasa con código de salida 0 y 100% de aserciones válidas, el sistema intercepta el resultado e invoca inmediatamente `TOOL_FINISH`, erradicando bucles infinitos de re-testeo.
 
-### 3. Git-Shield y Auto-Sanación Cognitiva (Auto-Heal) 🛡️
-- Antes de cada cambio propuesto por el programador, realiza un `git commit` silencioso.
-- Si el código falla por sintaxis o errores lógicos, revierte con `git restore .` preservando el último estado funcional.
-- **Auto-Heal sin Amnesia**: Cuando ocurre un error (ej. `SyntaxError` o fallo en tests), el sistema inyecta el log de error en el prompt del LLM **sin borrar la instrucción original**. El agente recuerda qué estaba construyendo y lo arregla iterativamente.
-- **Motor de Escapado JSON Estricto**: Reglas de serialización reforzadas para evitar que modelos pequeños (como Qwen 7B) rompan el parseo de Rust al generar Expresiones Regulares o strings multilínea en Python.
-- **Snapshot de Terminal**: Cuando el terminal ejecuta un comando exitoso (ej. `go mod init`), Git-Shield toma un snapshot inmediato para que archivos de configuración no se pierdan en un revert posterior.
+### 4. AutoValidator Proactivo Conectado
+- Integrado directamente en `validate_workspace(&workspace_path)`.
+- Escanea de forma recursiva archivos HTML y JS en busca de dependencias locales faltantes (`<script src="...">`, `<link href="...">`, imágenes, audio).
+- Reporta advertencias y errores accionables al agente para que subsane enlaces rotos antes de entregar el proyecto.
+- Protegido contra inyecciones de código incompatibles en proyectos web convencionales.
 
-### 4. QA Autónomo (TOOL_TESTER & Auto-Debugger) 🧪
-- Detecta el lenguaje del proyecto automáticamente y ejecuta la suite de tests nativa.
-- **Detección de Errores**: Distingue errores de dependencias (→ `TOOL_TERMINAL` automático) de errores de lógica (→ `TOOL_PROGRAMMER` obligatorio).
-- **Auto-Debugger**: Si los tests fallan por lógica, el sistema obliga al agente a arreglar el código antes de poder volver a testear.
+### 5. SpectraSAT FFI — Motor de Satisfacibilidad en RAM
+- Resuelve problemas de lógica proposicional (SAT/UNSAT) mediante una biblioteca nativa en Rust compilada con optimizaciones avanzadas de CPU.
+- Procesa restricciones en microsegundos y emite veredictos certificados (`SAT_CERTIFIED` o `UNSAT_*`) con la asignación booleana exacta de cada variable, visualizadas mediante chips interactivos en la interfaz de usuario.
 
-### 5. Razonamiento Lógico Matemático (TOOL_LOGIC_SOLVER) 🧮
-- **Z3 Theorem Prover**: Evalúa matemáticamente la validez del código para detectar bucles infinitos y condiciones inalcanzables.
-- Capacidad de razonamiento avanzado para asegurar la completitud lógica del código antes de compilarlo.
+### 6. Sanity Monitor & Anti-Stall Engine
+- Monitorea la actividad del agente cada 5 pasos.
+- Detecta loops de herramientas, comandos repetitivos sin efecto o patrones de estancamiento.
+- Inyecta advertencias correctivas de alta prioridad en el contexto para redirigir la estrategia del modelo.
 
-### 6. Autonomía de Entorno (TOOL_WORKSPACE_MANAGER) 🧹
-- **Mantenimiento Autónomo**: El agente limpia activamente su propio workspace, eliminando archivos basura o pruebas temporales tras completar sus tareas.
-
-### 7. Inteligencia Híbrida (Router Dinámico) 🧠☁️
-- **Complejidad Baja**: `deepseek-coder:6.7b` — operaciones rápidas y directas.
-- **Complejidad Media**: `qwen2.5-coder:7b` — lógica de negocio estándar.
-- **Complejidad Alta / Post-Fallo**: `qwen2.5-coder:14b` — debugging complejo, escala automáticamente tras un fallo de tests.
-- **Orquestador**: `llama3.1:8b` — planificación y checklist mental.
-- Compatible con modelos en la nube vía Ollama para tareas que superen la capacidad local.
-
-### 8. Memoria Vectorial Permanente (RAG) 🐘
-- Código exitoso es vectorizado con `nomic-embed-text` y almacenado en un motor de Similitud de Coseno nativo en Rust puro.
-- En futuras tareas, Aura escanea su historial e inyecta fragmentos relevantes en su contexto antes de programar — evita reinventar la rueda.
-- Memoria aislada y etiquetada por workspace para no contaminar contextos.
-
-### 9. Path Jail (Seguridad Estricta) 🔒
-- Intercepta y audita cada intento de lectura/escritura (`is_path_allowed`).
-- Si Aura intenta tocar cualquier archivo fuera del directorio de proyecto, la operación se bloquea bajo `[SECURITY_VIOLATION]`.
-
-### 10. Gestión de Contexto Avanzada 🗜️
-- Carpetas masivas como `node_modules`, `.git`, `target`, `build`, `vendor` son invisibles para el LLM.
-- En cada turno, el agente recibe un mapa exacto de los archivos que *realmente existen* en el workspace.
-
-### 11. Zero-Trace Architecture (Agent Workspace) 🧠⚡
-- **Diseño de Sistemas en RAM (Pensamiento Autónomo)**: Antes de escribir código físico, Aura Sentinel usa obligatoriamente `TOOL_AST_INJECT` para estructurar la arquitectura del sistema directamente en la memoria volátil utilizando el motor integrado `Chronos-VFS`.
-- **0-alloc y Latencia O(1)**: Los nodos lógicos generados por el LLM se mapean dinámicamente en un `AgentWorkspace` de 1 millón de slots soportado por memoria anónima (`memmap2`) y `monoio`.
-- **Salto Físico Obligatorio**: La Máquina de Estados prohíbe terminar la tarea después de pensar en RAM. Obliga al agente a usar `TOOL_PROGRAMMER` para transcribir su diseño mental al disco duro.
-- **Ejecución Segura**: Protege tu disco SSD de operaciones I/O masivas e inútiles mientras la IA piensa y corrige sus propios diseños.
-
-### 12. Command Trail & Script Runners (Nivel "Moderno 2026") 📜
-- **Command Trail Visible**: Registro estructurado e inmutable de cada paso del agente, persistido en `.aura_command_trail.json`. Incluye metadata completa: rol, herramienta, stdout, stderr, código de salida, duración y hash de contexto.
-- **Script-First Approach**: Autogeneración de scripts de ejecución nativos (`run_tests.sh`, `build.bat`, etc.) al detectar el ecosistema del proyecto (Rust, Python, TS, etc.).
-- **Frontend Anti-Backend Shield**: Detección dinámica de proyectos Web (ej. presencia de `index.html`). El núcleo bloquea al LLM si intenta ejecutar código de frontend que interactúa con el DOM usando comandos de backend como `node`, redirigiendo la validación hacia herramientas visuales (`TOOL_VISION_EVALUATOR`) y erradicando los bucles infinitos de `ReferenceError`.
-- **Resiliencia Mejorada de JSON**: Parseo inteligente adaptado a modelos más pequeños (ej. Qwen 7B) que extrae transparentemente outputs JSON estructurados dentro de bloques Markdown (````json````).
+### 7. Monaco Editor & Tarjetas de Artefactos
+- Visualización de código en tiempo real con resaltado de sintaxis profesional.
+- Selector de archivos en vivo para explorar los entregables del workspace mientras el agente trabaja.
+- Tarjetas de artefactos dedicadas para salidas de consola, reportes de pruebas unitarias y veredictos de satisfacción lógica.
 
 ---
 
-## 🌐 Lenguajes Soportados por TOOL_TESTER
+## 🧰 Catálogo Completo de Herramientas (Tools)
 
-El sistema detecta el lenguaje automáticamente por los archivos presentes en el workspace:
-
-| Lenguaje | Detección automática | Comando de tests | Caso de uso |
-|---|---|---|---|
-| **Go** | `*_test.go` / `go.mod` | `go test ./...` | APIs, backends, CLI tools |
-| **Rust** | `Cargo.toml` + `#[test]` | `cargo test` | Trading autónomo, sistemas de alto rendimiento |
-| **Python** | `test_*.py` / `pytest.ini` / `pyproject.toml` | `python -m pytest` | IA, redes neuronales, trading, bots |
-| **JavaScript** | `*.test.js` / `jest.config.js` | `npm test` | Frontend, Firebase, Node.js |
-| **TypeScript** | `*.test.ts` / `jest.config.ts` | `npm test` | Firebase, apps web, APIs |
-| **Java (Maven)** | `pom.xml` | `mvn test -q` | Sistemas de facturación, backend empresarial |
-| **Java (Gradle)** | `build.gradle` / `build.gradle.kts` | `gradlew test` | Proyectos Java modernos |
-| **Kotlin (Android)** | `build.gradle` + `AndroidManifest.xml` | `gradlew test` | Apps Android, sistemas móviles |
-| **Solidity (Hardhat)** | `hardhat.config.js` / `.ts` | `npx hardhat test` | Contratos MEV en Polygon, BNB, ETH |
-| **Solidity (Foundry)** | `foundry.toml` | `forge test -v` | Contratos MEV avanzados, fuzzing |
-| **C++** | `CMakeLists.txt` / `Makefile` con `test:` | `make test` | Sistemas embebidos, alto rendimiento |
-| **C** | `test_*.c` / `*_test.c` | `gcc + ejecuta` | Algoritmos, sistemas base |
-| **PHP** | `phpunit.xml` / `*Test.php` | `php vendor/bin/phpunit` | Sistemas de facturación web |
-| **Dart / Flutter** | `pubspec.yaml` | `flutter test` / `dart test` | Apps móviles multiplataforma |
-| **Swift** | `Package.swift` | `swift test` | Apps iOS, macOS |
+| Herramienta | Rol Permitido | Función / Propósito |
+|---|---|---|
+| `TOOL_PROGRAMMER` | Ejecutor | Crea o sobreescribe archivos de código fuente de forma atómica. |
+| `TOOL_TERMINAL` | Ejecutor, Crítico | Ejecuta comandos reales en la shell del sistema operativo (PowerShell / CMD / Bash). |
+| `TOOL_TESTER` | Crítico | Descubre y ejecuta la suite de pruebas nativa según el lenguaje del proyecto. |
+| `TOOL_CONTAINER` | Ejecutor | Administra entornos Docker / Podman (`run`, `exec`, `stop`, `activate_env`). |
+| `TOOL_LOGIC_SOLVER` | Planificador | Resuelve problemas de lógica, álgebra booleana y SAT con SpectraSAT FFI. |
+| `TOOL_SCHEDULER` | Planificador | Programa tareas periódicas usando expresiones cron nativas en Tokio. |
+| `TOOL_VISION_EVALUATOR` | Crítico | Captura la pantalla y evalúa visualmente la interfaz de usuario con visión computacional. |
+| `TOOL_AUDITOR` | Planificador | Realiza revisiones de seguridad y calidad generando informes estructurados JSON. |
+| `TOOL_MAPPER` | Planificador | Genera el mapa de dependencias y la estructura del árbol de archivos del workspace. |
+| `TOOL_BACKGROUND_START` | Ejecutor | Inicia servicios o servidores en segundo plano sin bloquear el terminal. |
+| `TOOL_BACKGROUND_STATUS`| Ejecutor | Consulta los logs y el estado de una tarea en segundo plano. |
+| `TOOL_BACKGROUND_STOP`  | Ejecutor | Detiene un proceso en segundo plano. |
+| `TOOL_ENV_MANAGER` | Ejecutor | Instala paquetes y binarios faltantes de manera transparente mediante Scoop / Winget. |
+| `TOOL_ASK_USER` | Todos | Solicita información adicional cuando la intención del usuario es ambigua. |
+| `TOOL_FINISH` | Planificador, Crítico | Concluye la misión cuando el 100% de los criterios han sido verificados. |
 
 ---
 
-## 🛠️ Instalación
+## 🌐 Ecosistemas y Lenguajes Soportados
 
-### Requisitos Previos
-1. [**Ollama**](https://ollama.com/) — Motor de IA local
-2. [**Rust / Cargo**](https://rustup.rs/) — Para compilar el backend
-3. [**Node.js**](https://nodejs.org/) — Para el frontend
-4. [**Git**](https://git-scm.com/) — Para Git-Shield
+El agente detecta automáticamente la tecnología del workspace y adapta sus comandos de prueba y validación:
 
-### Modelos de Ollama Requeridos
+- **Rust**: `Cargo.toml` (`cargo check`, `cargo test`)
+- **Python**: `pyproject.toml`, `requirements.txt`, `test_*.py` (`pytest`, `compileall`)
+- **Web / Frontend**: `*.html`, `*.css`, `*.js`, `*.ts` (`node --check`, AutoValidator)
+- **Node.js / TypeScript**: `package.json`, `tsconfig.json` (`npm test`, `jest`, `vitest`)
+- **Go**: `go.mod`, `*_test.go` (`go test ./...`)
+- **Java**: `pom.xml`, `build.gradle` (`mvn test`, `gradlew test`)
+- **Kotlin / Android**: `build.gradle.kts`, `AndroidManifest.xml`
+- **C / C++**: `CMakeLists.txt`, `Makefile` (`gcc`, `make test`)
+- **Solidity / Web3**: `hardhat.config.js`, `foundry.toml` (`npx hardhat test`, `forge test`)
+- **PHP**: `phpunit.xml`, `*Test.php` (`phpunit`)
+- **Dart / Flutter**: `pubspec.yaml` (`flutter test`)
+- **Swift**: `Package.swift` (`swift test`)
+
+---
+
+## 🚀 Inicio Rápido
+
+### Requisitos
+1. **Rust y Cargo**: `rustup default stable`
+2. **Node.js**: v18+ y npm
+3. **Ollama**: Motor local de LLMs ([ollama.com](https://ollama.com))
+
+### Modelos Recomendados en Ollama
 ```bash
-ollama pull llama3.1:8b          # Orquestador y Planificador
-ollama pull qwen2.5-coder:7b     # Ingeniero Base
-ollama pull deepseek-coder:6.7b  # Ingeniero Rápido
-ollama pull qwen2.5-coder:14b    # Ingeniero Experto (Auto-Debugger)
-ollama pull nomic-embed-text     # Motor de Memoria Vectorial (RAG)
-ollama pull moondream            # Vision Evaluator (GUI/Web QA) — NUEVO v0.4.0
+ollama pull qwen2.5-coder:7b     # Modelo principal recomendado para ejecución ágil y precisa
+ollama pull llama3.1:8b          # Alternativa excelente para orquestación y razonamiento
+ollama pull qwen2.5-coder:14b    # Modelo para arquitectura compleja y resolución avanzada
 ```
 
-### ⚙️ Configuración Crítica de Ollama (¡MUY IMPORTANTE!)
-Para que Aura Sentinel funcione a su máxima capacidad y no sufra de "Amnesia" o errores de parseo (EOF), debes configurar la UI de Ollama (o su archivo de entorno) de la siguiente manera:
-1. **Context Length (Longitud de Contexto)**: Ajústalo **mínimo a 16k, idealmente 32k**. Si lo dejas en 4k, el LLM olvidará tus instrucciones y no podrá generar archivos grandes.
-2. **Cloud Models (Opcional pero Recomendado)**: Si activas esta opción, el Router Dinámico en Rust podrá escalar las tareas de extrema complejidad a modelos gigantes (como `qwen2.5-coder:32b` o `llama3.3:70b`) usando tu PC local como proxy. Tu VRAM descansará y obtendrás inteligencia nivel GPT-4.
-
-### Ejecución
+### Compilación y Ejecución
 ```bash
-# 1. Instalar dependencias del frontend
+# 1. Instalar dependencias frontend
 npm install
 
-# 2. Compilar e iniciar el sistema completo (Frontend + Backend Rust)
+# 2. Iniciar en modo desarrollo con Tauri
 npm run tauri dev
 ```
 
-> **Nota para Actualizaciones:** Si descargas nuevos parches del repositorio (`git pull`), asegúrate de cerrar la consola de Aura Sentinel y volver a ejecutar `npm run tauri dev` para que Rust recompile los binarios con las últimas mejoras.
-
-### Scripts de Configuración Automática
-- **Windows**: `.\setup.ps1` en PowerShell (Asegúrate de ejecutar como Administrador si es la primera vez).
-- **Mac/Linux**: `bash setup.sh`
-
 ---
 
-## 📋 Formato del Comando
-```
-[USER] Aura, en un entorno de [LENGUAJE], [DESCRIPCIÓN DE LA TAREA].
-Ejecuta TOOL_TESTER. Cuando el test pase, usa TOOL_FINISH para avisarme.
-```
-
-### Ejemplos por dominio
-```
-# Android
-Aura, en un entorno Kotlin/Android, crea una clase Calculadora con suma y resta. 
-Crea su test unitario. Ejecuta TOOL_TESTER y usa TOOL_FINISH al terminar.
-
-# MEV / Blockchain
-Aura, en un entorno Solidity con Hardhat, crea un contrato ERC20 básico con
-función de mint. Crea el test con ethers.js. Ejecuta TOOL_TESTER.
-
-# Trading (Rust)
-Aura, en un entorno Rust, crea una función que calcula el RSI dado un vector
-de precios. Crea su test con datos reales de BTC. Ejecuta TOOL_TESTER.
-
-# Redes Neuronales (Python)
-Aura, en un entorno Python, crea una red neuronal simple con NumPy para
-clasificar XOR. Crea su test de accuracy. Ejecuta TOOL_TESTER.
-
-# Facturación (Java/Maven)
-Aura, en un entorno Java con Maven, crea una clase Factura con cálculo de IVA.
-Crea su test con JUnit. Ejecuta TOOL_TESTER.
-```
-
----
-
-## 🔧 Historial de Correcciones Críticas (Changelog)
-
-### v0.4.0 — 2026-07-07 🏆 **Tier 1 Elite — Sprints S1 + S2 + S3**
-Actualización que eleva a Aura Sentinel al nivel de agente local elite, resolviendo los 7 gaps críticos identificados en el benchmark 2026.
-
-**Sprint 1 — Estabilidad Base**
-
-| Feature | Implementación |
-|---|---|
-| **Clasificador de Tipo de Misión** | `MissionType`: Analysis, Construction, Refactor, Debug. Las tareas de análisis nunca abren el Ejecutor — van directo a TOOL_FINISH. |
-| **Contrato de Aceptación** | `formato_contrato()` captura criterios del Planificador desde TOOL_THINK e inyecta al Crítico como `contract_block`. |
-| **Compresión de Contexto** | Cada 10 pasos si el historial supera 4000 chars, el LLM lo resume automáticamente. Previene saturación en tareas largas. |
-
-**Sprint 2 — Robustez FSM**
-
-| Feature | Implementación |
-|---|---|
-| **Micrometa-gated Transition** | El Ejecutor solo transiciona al Crítico cuando TODAS las `micro_metas` están en estado `VERIFICADA`. Muestra las pendientes en consola. |
-| **TOOL_AUDITOR JSON** | Convierte texto libre del auditor a JSON accionable `{archivos, problema, accion_sugerida}` mediante llamada al LLM. |
-
-**Sprint 3 — Potencia y Visión**
-
-| Feature | Implementación |
-|---|---|
-| **Prompts <200 tokens** | Cada rol (Planificador, Ejecutor, Crítico) recibe ~80 tokens de instrucciones core. Mejora obediencia en qwen2.5-coder:7b significativamente. |
-| **TOOL_VISION_EVALUATOR** | Conectado completamente: xcap captura el monitor principal → PNG base64 → moondream (rápido) o llama3.2-vision (avanzado). Obligatorio para proyectos con GUI antes de TOOL_FINISH. |
-
-### v0.3.0 — 2026-06-14 (Chronos-VFS Zero-Trace & State Machine)
-Actualización masiva que convierte al Agente en un ente de pensamiento autónomo antes de la escritura física, integrando el motor RAM O(1).
-
-| Fix | Problema resuelto |
-|-----|-------------------|
-| **Pánico de Memoria (Ring Buffer)** | `AgentWorkspace` crasheaba silenciosamente al recibir capacidades que no fueran potencias de 2. Corregido instanciando `new(1_048_576)`. |
-| **Amnesia de Contexto (Ollama Limit)** | Documentada la restricción de 4k de contexto en Ollama que causaba cortes a mitad de JSON (EOF Parsing Error) y olvido de comandos. |
-| **Pensamiento Autónomo Forzado** | Añadida una regla al Prompt Maestro que obliga al LLM a usar `TOOL_AST_INJECT` (planear en RAM) para sistemas nuevos en lugar de saltar directo a escribir al disco. |
-| **Prevención de Terminación Prematura** | El modelo usaba `TOOL_FINISH` tras inyectar en RAM sin crear archivos físicos. Se bloqueó estrictamente esta acción en la Máquina de Estados. |
-
-### v0.2.0 — 2026-06-13 (Resiliencia Cognitiva y Auto-Sanación)
-Actualización enfocada en la estabilidad de modelos pequeños (7B/8B) y su capacidad para reprogramarse tras cometer errores, evitando bloqueos y cierres forzados.
-
-| Fix | Problema resuelto |
-|-----|-------------------|
-| **Amnesia del Auto-Sanador** | Durante un `Auto-Heal`, Git-Shield sobreescribía la instrucción original del usuario con el reporte de error. Qwen olvidaba su misión principal. Ahora, el error se concatena al contexto, dándole al LLM memoria completa del objetivo y del fallo. |
-| **Escapado JSON Estricto** | Qwen 2.5 7B generaba rupturas en el `serde_json` de Rust al usar `\n` o `\w` en Regex. Se inyectaron reglas absolutas en el Prompt del sistema exigiendo doble barra invertida (`\\n`), erradicando los `SyntaxError` de literales no terminados en Python. |
-| **Anti-Stub Enforcer (Rust)** | Rust ahora audita el código generado *antes* de guardarlo. Si el agente intenta crear scripts de ejecución `.bat` que se cierran silenciosamente y carecen de un `pause` absoluto, el orquestador rechaza el archivo y obliga al LLM a reescribirlo. |
-| **Protección contra Bucles de Éxito** | Si el agente tenía éxito al probar un script en la terminal, repetía el comando exitoso infinitamente al no ver un mensaje de finalización. Se parcheó el núcleo en `agent.rs` para interceptar bucles de comandos exactos y forzar el cierre exitoso de la tarea con `TOOL_FINISH`. |
-| **Bucle Infinito de Comandos Vacíos** | El LLM a veces enviaba comandos `__EMPTY_CMD__`. Se implementó una barrera en `agent.rs` que intercepta comandos vacíos y advierte al LLM antes de procesarlos. |
-| **Clippy 100% Limpio** | Auditoría y eliminación de todo el *dead code*, importaciones sin uso y variables no leídas en el motor de Rust. |
-
-### v0.1.0 — 2026-06-07 (Sesión de Estabilización)
-Sesión de ingeniería intensiva que resolvió la cadena de fallos que impedía completar tareas en Go:
-
-| Fix | Problema resuelto |
-|-----|-------------------|
-| **Ollama via HTTP** | `ollama list` fallaba en Windows por alias de ejecución. Reemplazado por llamada HTTP a `http://127.0.0.1:11434/api/tags` |
-| **Quitar `forced_next_tool` de TOOL_TESTER** | El sistema forzaba una herramienta sin pasar el JSON correcto, generando comandos vacíos en cascada |
-| **Prompt post-TOOL_TERMINAL** | El LLM volvía a usar el terminal tras un éxito en vez de ir a TOOL_TESTER. Se añadió instrucción imperativa |
-| **Git-Shield tras TOOL_TERMINAL** | `go.mod` creado por el terminal era eliminado en el siguiente revert por no estar trackeado en Git |
-| **Quitar `setup failed` de dep detection** | Go usa `[setup failed]` tanto para módulo faltante como para error de sintaxis. El sistema los confundía, enviando al LLM a `go mod init` infinitamente cuando el problema era un bug de código |
-| **Soporte Java (Maven/Gradle)** | Añadido a `languages.rs` |
-| **Soporte Kotlin/Android** | Detección por `AndroidManifest.xml` + Gradle |
-| **Soporte Solidity** | Hardhat (`npx hardhat test`) y Foundry (`forge test`) |
-| **Soporte PHP** | PHPUnit via `phpunit.xml` o `*Test.php` |
-| **Soporte Dart/Flutter** | Detección por `pubspec.yaml` |
-| **Soporte Swift** | Detección por `Package.swift` |
-| **Soporte C** | Compilación y ejecución con `gcc` de archivos `test_*.c` |
-
----
-
-## 🤝 Filosofía de Uso
-1. **Pídele tareas completas** con tests incluidos.
-2. **Deja que actúe** — verás en la consola técnica cómo planifica, define micro-metas, ejecuta archivo por archivo, y valida con el Crítico antes de terminar.
-3. **Intervención Cero** — dependencias, errores de compilación y fallos lógicos son manejados automáticamente.
-4. **Confianza en el proceso** — el agente no marca tarea como completa hasta que TODAS las micro-metas del Planificador están verificadas.
-
-> *"La inteligencia genuina no actúa por instinto ciego; primero proyecta una simulación en su mente (Memoria Lógica) y, solo cuando la simulación es estable, mueve el brazo para materializarla."*
-
----
-
-## ⚖️ Legal & Licensing
+## 📜 Licencia
 Distribuido bajo la [Licencia MIT](LICENSE).  
-Copyright (c) 2026 Ramon Antonio Burgos Jerez.
-
-
-## 🛡️ Mejoras de Estabilidad y Seguridad (Actualización V3/V4)
-Aura Sentinel incluye protecciones contra bucles infinitos y falsos positivos de evaluación LLM:
-
-1. **Gestión de Sesión Anti-Atascos:** El núcleo de Rust persiste el estado del agente y el índice de pasos (`current_step`, `current_role`, `critic_feedback`) en `.aura_session.json` en tiempo real. En caso de interrupción crítica o reinicio, el agente restaura su memoria EXACTAMENTE donde se quedó sin repetir planeación.
-2. **QA Visual Reforzada:** En `vision.rs`, el navegador invisible incluye un `--virtual-time-budget=3000` para permitir el renderizado de interfaces pesadas o juegos en HTML5 Canvas antes de tomar la captura. Además, el sistema **no simula éxito** si el navegador falla; ahora retorna errores fatales, forzando la corrección.
-3. **Validación Exhaustiva de HTML/JS:** La función `validate_workspace` escanea y extrae automáticamente los scripts Javascript embebidos dentro de archivos `.html`, comprobando su sintaxis de forma nativa (`node --check`). Esto cierra el punto ciego de validación estática para proyectos monolíticos.
+Copyright (c) 2026 Ramón Antonio Burgos Jerez.

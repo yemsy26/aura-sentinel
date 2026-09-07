@@ -223,6 +223,10 @@ impl AutoValidator {
         
         let content = fs::read_to_string(&main_js_path).await.map_err(|e| e.to_string())?;
         
+        if !content.contains("Phaser") && !content.contains("phaser") {
+            return Ok(()); // Solo aplica para proyectos que usen Phaser
+        }
+
         if content.contains("createAssets") || content.contains("generateTexture") {
             return Ok(()); // Ya tiene generación programática
         }
@@ -283,7 +287,7 @@ impl AutoValidator {
         particle.destroy();
     "#;
                 
-                modified = format!("{}{}\n{}", &modified[..insert_pos + "preload()".len()], injection, &modified[insert_pos + "preload()".len()..]);
+                modified = format!("{}{}\n{}", &modified[..insert_pos], injection, &modified[insert_pos..]);
                 fs::write(&Path::new(&self.workspace_path).join("src/main.js"), modified).await.map_err(|e| e.to_string())?;
                 return Ok(());
             }

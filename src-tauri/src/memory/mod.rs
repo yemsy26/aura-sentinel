@@ -138,6 +138,44 @@ pub async fn read_files_safely(workspace_path: &str, files: Vec<String>) -> Stri
     combined_content
 }
 
+fn sanitize_file_content_by_extension(filename: &str, content: &str) -> String {
+    if filename.ends_with(".py") {
+        let mut lines: Vec<&str> = content.lines().collect();
+        while let Some(last) = lines.last() {
+            let trimmed = last.trim();
+            if trimmed == "}" || trimmed == "};" || trimmed.is_empty() {
+                lines.pop();
+            } else {
+                break;
+            }
+        }
+        let joined = lines.join("\n");
+
+        // Fix doubled quotes and unescaped quotes in HTML tags inside Python strings
+        let re_doubled = regex::Regex::new(r#"([a-zA-Z0-9_\-]+)=""([^"'\r\n]+)"""#).ok();
+        let re_tag = regex::Regex::new(r#"<[a-zA-Z0-9_\-]+(?:\s+[^>]+)*>"#).ok();
+        let re_attr = regex::Regex::new(r#"([a-zA-Z0-9_\-]+)=(?<!\\)"([^"'\r\n]+)(?<!\\)""#).ok();
+
+        let mut sanitized = joined;
+        if let Some(re_dbl) = re_doubled {
+            sanitized = re_dbl.replace_all(&sanitized, "$1=\\\"$2\\\"").into_owned();
+        }
+        if let (Some(re_t), Some(re_a)) = (re_tag, re_attr) {
+            sanitized = re_t.replace_all(&sanitized, |caps: &regex::Captures| {
+                let tag_str = &caps[0];
+                re_a.replace_all(tag_str, "$1=\\\"$2\\\"").into_owned()
+            }).into_owned();
+        }
+
+        if !sanitized.is_empty() && !sanitized.ends_with('\n') {
+            sanitized.push('\n');
+        }
+        sanitized
+    } else {
+        content.to_string()
+    }
+}
+
 pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> Result<String, String> {
     let mut exitosos = 0;
     let mut exitosos_nombres = Vec::new();
@@ -194,7 +232,8 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
             } else {
                 contenido_original.replacen(&cambio.buscar, &cambio.reemplazar, 1)
             };
-            match fs::write(&full_path, &nuevo_contenido).await {
+            let sanitized_contenido = sanitize_file_content_by_extension(&filename, &nuevo_contenido);
+            match fs::write(&full_path, &sanitized_contenido).await {
                 Ok(_) => { exitosos += 1; exitosos_nombres.push(filename); }
                 Err(e) => eprintln!("Error escribiendo {}: {}", full_path.display(), e),
             }
@@ -311,7 +350,8 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
             }
         }
         
-        match fs::write(&full_path, nuevo_contenido).await {
+        let sanitized_contenido = sanitize_file_content_by_extension(&cambio.archivo, &nuevo_contenido);
+        match fs::write(&full_path, sanitized_contenido).await {
             Ok(_) => {
                 exitosos += 1;
                 exitosos_nombres.push(cambio.archivo.clone());

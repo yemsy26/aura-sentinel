@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use chrono::{Utc, DateTime, NaiveDateTime};
+use chrono::{Utc, DateTime};
 use tauri::{AppHandle, Emitter};
 use tokio::time::{interval, Duration};
 

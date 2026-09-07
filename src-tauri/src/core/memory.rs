@@ -265,6 +265,32 @@ pub async fn consolidate_knowledge(workspace_path: &str, chunks: &[MemoryChunk])
         
         let _ = save_knowledge_index(&index).await;
     }
-    
     Ok(())
+}
+
+/// Recupera lecciones consolidadas para inyectar proactivamente al inicio de cada misión
+pub async fn get_proactive_lessons(max_lessons: usize) -> String {
+    let knowledge = load_knowledge_index().await;
+    if knowledge.is_empty() {
+        return String::new();
+    }
+    let mut block = String::from("💡 [LECCIONES DE ARQUITECTURA APRENDIDAS]:\n");
+    let mut count = 0;
+    for entry in knowledge.iter().rev() {
+        for lesson in &entry.lessons {
+            block.push_str(&format!("• {}\n", lesson));
+            count += 1;
+            if count >= max_lessons {
+                break;
+            }
+        }
+        if count >= max_lessons {
+            break;
+        }
+    }
+    if count == 0 {
+        return String::new();
+    }
+    block.push_str("\n");
+    block
 }

@@ -36,12 +36,15 @@ fn build_architect_prompt(user_message: &str) -> String {
         Tarea: {}\n\n\
         REGLAS:\n\
         1. RESPONDE ÚNICAMENTE CON JSON VÁLIDO. NADA más fuera del JSON.\n\
-        2. Si la tarea es simple (1-2 archivos), crea solo 1 fase.\n\
+        2. Si la tarea es simple (1-2 archivos), crea solo 1 o 2 fases.\n\
         3. Máximo 4 fases. Cada fase debe producir algo verificable.\n\
-        4. El criterio_de_exito debe ser un comando ejecutable (ej: 'node -c servidor.js', 'python -c \"import logica\"').\n\n\
+        4. El criterio_de_exito debe ser un comando ejecutable real (ej: 'node -c script.js', 'python verify.py', 'python -m py_compile app.py').\n\
+        5. MODULARIDAD OBLIGATORIA: Para dashboards o aplicaciones web, distribuye en archivos separados: estructura HTML, style.css (diseño), radar.js o app.js (lógica interactiva/canvas).\n\
+        6. NOMBRES EXACTOS DEL USUARIO: Si el usuario solicitó un nombre específico para su archivo (ej. 'cyber_sentinel.html', 'auth_sentinel.py'), DEBES USAR ESE NOMBRE EXACTO en la lista de 'archivos'. NUNCA inventes nombres genéricos como 'index.html' si el usuario pidió otro nombre.\n\
+        7. REQUERIMIENTO DE PRUEBAS: Si el usuario solicitó un script de verificación (ej. 'verify_dashboard.py') o tests, DEBES incluirlo explícitamente en la lista de 'archivos' de la fase final y su ejecución debe ser el 'criterio_de_exito'.\n\n\
         Formato exacto:\n\
         {{\"fases\": [\n\
-          {{\"numero\": 1, \"descripcion\": \"Crear archivos base\", \"archivos\": [\"servidor.js\"], \"criterio_de_exito\": \"node -c servidor.js\"}}\n\
+          {{\"numero\": 1, \"descripcion\": \"Estructura base\", \"archivos\": [\"archivo_solicitado.html\", \"style.css\"], \"criterio_de_exito\": \"python -c \\\"import os; print('OK')\\\"\"}}\n\
         ]}}",
         user_message
     )

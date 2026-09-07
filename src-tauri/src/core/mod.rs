@@ -362,10 +362,63 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
                 }
             }
         }
+
+        // 3b. AutoValidator: verificar integridad de scripts y assets locales en HTML/JS
+        let auto_val = auto_validator::AutoValidator::new(workspace_path);
+        let auto_res = auto_val.validate_and_fix().await;
+        let errors: Vec<_> = auto_res.issues.iter().filter(|i| i.severity == auto_validator::Severity::Error).collect();
+        if !errors.is_empty() {
+            let mut err_msg = String::from("[ASSET_OR_SCRIPT_MISSING] Se detectaron referencias a archivos faltantes en el workspace:\n");
+            for err in errors {
+                err_msg.push_str(&format!("- [{}] {}\n", err.file, err.message));
+            }
+            return Err(err_msg.trim().to_string());
+        }
     }
 
     // 4. Generic Fallback
     Ok(())
+}
+
+/// Extracts all file names/relative paths that actually exist in the workspace
+/// and are mentioned in an error message (from compiler, linter, or test runner).
+pub fn extract_workspace_files_from_error(workspace_path: &str, error_text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let ws_path = Path::new(workspace_path);
+    if let Ok(entries) = std::fs::read_dir(ws_path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if !fname.starts_with('.') && error_text.contains(&fname) {
+                    if !found.contains(&fname) {
+                        found.push(fname);
+                    }
+                }
+            } else if p.is_dir() {
+                let sub_name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if !sub_name.starts_with('.') && sub_name != "node_modules" && sub_name != "target" && sub_name != "__pycache__" && sub_name != ".git" {
+                    if let Ok(sub_entries) = std::fs::read_dir(&p) {
+                        for sub_entry in sub_entries.flatten() {
+                            let sub_p = sub_entry.path();
+                            if sub_p.is_file() {
+                                let sub_fname = sub_p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                let rel_path = format!("{}/{}", sub_name, sub_fname);
+                                let rel_path_win = format!("{}\\{}", sub_name, sub_fname);
+                                if error_text.contains(&sub_fname) || error_text.contains(&rel_path) || error_text.contains(&rel_path_win) {
+                                    let canonical_rel = rel_path.replace('\\', "/");
+                                    if !found.contains(&canonical_rel) {
+                                        found.push(canonical_rel);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    found
 }
 
 /// Creates an emergency Git rollback checkpoint before executing risky code generation.

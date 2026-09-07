@@ -90,7 +90,7 @@ pub async fn call_ollama_with_schema(model: &str, prompt: &str, schema: serde_js
         prompt,
         stream: false,
         format: schema,
-        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }),
+        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 8192, "repeat_penalty": 1.05, "temperature": 0.2 }),
     };
 
     let res = client.post(url)

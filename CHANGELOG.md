@@ -1,6 +1,32 @@
-﻿# Changelog — Aura-Sentinel
+# Changelog — Aura-Sentinel
 
 Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fecha.
+
+---
+
+## [3.0.0] — 2026-09-06 (Aura Sentinel v3.0 Enterprise Architecture)
+
+### 🚀 Nivel Alcanzado: Agente Autónomo de Nivel Industrial (SWE-Agent / Devin 2.0 Standard)
+
+#### 🧠 Unified Brain Selector & Turbo Mode (`⚡ MÁXIMA POTENCIA`)
+- **Selector Unificado**: Consolidado un selector de modelo único e intuitivo en la barra superior del UI, eliminando controles redundantes y sincronizando el estado con el backend de Tauri.
+- **Modo Turbo**: Activación de 1 clic para bypass de micro-metas redundantes y aceleración de bucles de ejecución directa.
+- **Indicador HUD**: Telemetría visual en tiempo real de temperatura, GPU offload y estado de compilación.
+
+#### 🛡️ Dynamic Phase Gatekeeper (PESP v2) & Smart Alias Matching
+- Eliminadas las suposiciones rígidas que exigían `index.html` para proyectos web; ahora utiliza resolución dinámica (`has_html_files` y detección de alias de entrega como `cyber_sentinel.html`, `dashboard.html`, etc.).
+- Verificación semántica de entregables: el Gatekeeper valida la existencia física y semántica de archivos antes de permitir transiciones de fase.
+- Auto-convergencia en tests exitosos: cuando un script de verificación (ej. `verify_*.py`) retorna exit code 0 con éxito al 100%, el agente fuerza inmediatamente `TOOL_FINISH` previniendo loops y agotamiento de pasos.
+
+#### 🔧 AutoValidator Subsystem Reconnected
+- Conectado el subsistema `core::auto_validator::AutoValidator` al ciclo de vida de validación del workspace (`validate_workspace`).
+- Validación proactiva de etiquetas `<script src="...">`, `<link href="...">` y assets locales antes de la verificación final.
+- Protección inteligente en generación de assets: salvaguarda contra inyecciones de código incompatibles en aplicaciones web puras.
+
+#### 🧹 Context Sanitizer Dinámico & Limpieza de Reliquias
+- Eliminación de todas las rutas y marcadores obsoletos hardcodeados (`proxy-stack-windows`).
+- Sanitizador de contexto multi-sesión dinámico que filtra rutas foráneas entre proyectos en disco.
+- Resolución de compilación en Rust Tauri con **0 errores y 0 warnings** (`cargo check` en sub-4 segundos).
 
 ---
 

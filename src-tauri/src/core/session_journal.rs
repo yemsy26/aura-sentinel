@@ -118,7 +118,10 @@ fn new_session_id() -> String {
 pub fn load_journal(workspace_path: &str) -> SessionJournal {
     let journal_path = Path::new(workspace_path).join(JOURNAL_FILE);
     let mut journal = match std::fs::read_to_string(&journal_path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Ok(content) => {
+            let clean = content.trim_start_matches('\u{feff}');
+            serde_json::from_str(clean).unwrap_or_default()
+        },
         Err(_) => SessionJournal::default(),
     };
     // Backwards compatibility: assign a session_id if the old journal didn't have one

@@ -22,6 +22,19 @@ pub enum ErrorType {
 pub fn classify_error(stderr: &str, stdout: &str, exit_code: i32) -> ErrorType {
     let combined = format!("{} {}", stderr, stdout).to_lowercase();
 
+    // ── CODE & TEST ASSERTION signals (Always Logic errors, never Blocked) ─
+    let code_or_test_signals = [
+        "[fail]", "fail:", "failed", "assertionerror", "syntaxerror",
+        "typeerror", "referenceerror", "nameerror", "indexerror",
+        "valueerror", "missing html", "missing js", "missing css",
+        "traceback", "test failed", "verification failed", "assert "
+    ];
+    for sig in &code_or_test_signals {
+        if combined.contains(sig) {
+            return ErrorType::Logic;
+        }
+    }
+
     // ── BLOCKED errors (cannot be fixed by the agent alone) ────────────────
     let blocked_signals = [
         "access denied", "access is denied",
@@ -86,26 +99,48 @@ pub fn repair_prompt(
             tool_name, attempt, command, stderr.trim()
         ),
 
-        ErrorType::Logic => format!(
-            "[SELF-REPAIR] Error lógico detectado en '{}'.\n\
-            Comando que falló: '{}'\n\
-            Error recibido: {}\n\
-            DIAGNÓSTICO REQUERIDO: Antes de reintentar, debes usar TOOL_THINK para:\n\
-            1. Identificar la causa exacta del error\n\
-            2. Proponer una corrección específica\n\
-            3. Ejecutar el comando corregido (no repitas el mismo)\n\
-            NUNCA repitas el comando fallido sin modificación.",
-            tool_name, command, stderr.trim()
-        ),
+        ErrorType::Logic => {
+            let cmd_lower = command.to_lowercase();
+            let err_lower = stderr.to_lowercase();
+            let is_test = cmd_lower.contains("verify") || cmd_lower.contains("test")
+                || err_lower.contains("[fail]") || err_lower.contains("assert")
+                || err_lower.contains("missing html") || err_lower.contains("missing js");
+
+            if is_test {
+                format!(
+                    "[AUTO-DIAGNOSIS DE TEST FALLIDO] en '{}' (intento {}/6).\n\
+                    Comando ejecutado: '{}'\n\
+                    Salida del error: {}\n\
+                    GUÍA DE AUTO-REPARACIÓN AUTÓNOMA:\n\
+                    1. Revisa el archivo objetivo: ¿falta realmente el elemento/función o existe con atributos en orden distinto (ej. <div class=\"...\" id=\"...\">)?\n\
+                    2. Revisa el SCRIPT DE PRUEBA: ¿tiene asunciones rígidas (búsqueda de cadenas fijas en vez de regex semántico) o un bug lógico en el reporte (ej. array sin 'PASS' o exit(1) incorrecto)?\n\
+                    3. Usa TOOL_PROGRAMMER para corregir el archivo objetivo o flexibilizar el script de prueba.\n\
+                    4. Vuelve a ejecutar el test. PROHIBIDO usar TOOL_ASK_USER para pedir al usuario que arregle código o tests.",
+                    tool_name, attempt, command, stderr.trim()
+                )
+            } else {
+                format!(
+                    "[SELF-REPAIR] Error lógico detectado en '{}' (intento {}/6).\n\
+                    Comando que falló: '{}'\n\
+                    Error recibido: {}\n\
+                    DIAGNÓSTICO REQUERIDO: Antes de reintentar, debes usar TOOL_THINK para:\n\
+                    1. Identificar la causa exacta del error en el código o comando.\n\
+                    2. Proponer una corrección específica y aplicarla con TOOL_PROGRAMMER.\n\
+                    3. Ejecutar el comando corregido (no repitas el mismo sin cambios).\n\
+                    PROHIBIDO usar TOOL_ASK_USER para pedir permiso de corregir sintaxis o código.",
+                    tool_name, attempt, command, stderr.trim()
+                )
+            }
+        },
 
         ErrorType::Blocked => format!(
-            "[SELF-REPAIR] Error bloqueante en '{}'. El agente no puede resolverlo solo.\n\
+            "[SELF-REPAIR] Error bloqueante del sistema en '{}'. El agente no puede resolverlo solo.\n\
             Comando: '{}'\n\
             Error: {}\n\
             ACCIÓN OBLIGATORIA: Usa TOOL_ASK_USER para explicar al usuario:\n\
             - Qué intenta hacer el agente\n\
-            - Qué está bloqueando el progreso\n\
-            - Qué necesita el usuario proporcionar o instalar\n\
+            - Qué dependencia o permiso del sistema está bloqueando el progreso\n\
+            - Qué necesita el usuario proporcionar o instalar fuera del workspace\n\
             NO reintentes este comando. Espera instrucción del usuario.",
             tool_name, command, stderr.trim()
         ),
@@ -138,7 +173,7 @@ impl RetryTracker {
             }
             ErrorType::Logic => {
                 self.logic_retries += 1;
-                self.logic_retries >= 2 // escalate after 2 logic retries (1 think + 1 retry)
+                self.logic_retries >= 6 // escalate only after 6 logic attempts (ample self-repair room)
             }
             ErrorType::Blocked => true, // always escalate immediately
         }

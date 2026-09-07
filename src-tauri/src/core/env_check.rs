@@ -109,6 +109,10 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
     }
 
     // 2. Write permissions in workspace
+    if workspace_path.trim().is_empty() || workspace_path == "Ninguno" {
+        errors.push("No has seleccionado un espacio de trabajo válido. Haz clic en '[+] Cargar' en el panel WORKSPACE para seleccionar la carpeta donde Aura Sentinel debe operar.".to_string());
+        return Err(errors);
+    }
     let test_file = Path::new(workspace_path).join(".aura_test_write");
     if std::fs::write(&test_file, "test").is_err() {
         errors.push(format!("No tengo permisos de escritura en el directorio: {}", workspace_path));

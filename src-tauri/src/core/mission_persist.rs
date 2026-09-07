@@ -9,8 +9,17 @@ pub fn save_checkpoint(
     context: &str,
     role: &str,
     step: u32,
+    objective: Option<&str>,
 ) {
     let mut journal = load_journal(workspace_path);
+    if let Some(obj) = objective {
+        if !obj.is_empty() {
+            journal.objetivo = obj.to_string();
+        }
+    }
+    journal.workspace_path = workspace_path.to_string();
+    journal.status = "EN_PROGRESO".to_string();
+    journal.ultimo_paso = step;
     journal.fsm_context = Some(context.chars().take(8000).collect()); // cap at 8KB
     journal.fsm_role = Some(role.to_string());
     journal.fsm_step = step;
@@ -22,6 +31,7 @@ pub fn save_checkpoint(
 pub fn clear_interrupt(workspace_path: &str) {
     let mut journal = load_journal(workspace_path);
     journal.interrupted = false;
+    journal.status = "COMPLETADO".to_string();
     journal.fsm_context = None;
     journal.fsm_role = None;
     save_journal(workspace_path, &journal);
@@ -31,6 +41,7 @@ pub fn clear_interrupt(workspace_path: &str) {
 #[derive(Debug, Clone)]
 pub struct ResumeState {
     pub objective: String,
+    #[allow(dead_code)]
     pub context: String,
     pub role: String,
     pub step: u32,
@@ -52,7 +63,7 @@ pub fn find_pending_mission() -> Option<ResumeState> {
 
     for ws in workspaces {
         let journal = load_journal(&ws);
-        if journal.interrupted && journal.status == "EN_PROGRESO" {
+        if journal.interrupted && !journal.objetivo.is_empty() {
             if let (Some(ctx), Some(role)) = (journal.fsm_context.clone(), journal.fsm_role.clone()) {
                 return Some(ResumeState {
                     objective: journal.objetivo.clone(),

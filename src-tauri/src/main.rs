@@ -95,7 +95,10 @@ async fn get_ollama_models() -> Result<Vec<String>, String> {
                     let mut model_names = Vec::new();
                     for m in models {
                         if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
-                            model_names.push(name.to_string());
+                            let lower = name.to_lowercase();
+                            if !lower.contains("embed") && !lower.contains("bge-") && !lower.contains("minilm") {
+                                model_names.push(name.to_string());
+                            }
                         }
                     }
                     return Ok(model_names);

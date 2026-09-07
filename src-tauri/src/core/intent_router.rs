@@ -60,7 +60,7 @@ pub fn try_handle_meta_command(
 
     if is_resume {
         let journal = crate::core::session_journal::load_journal(workspace_path);
-        if !journal.objetivo.is_empty() && journal.status == "EN_PROGRESO" {
+        if !journal.objetivo.is_empty() && (journal.status == "EN_PROGRESO" || journal.interrupted) {
             // Return a message that tells the frontend to re-run with the saved objective
             let resume_msg = format!(
                 "🔄 **Retomando misión desde el paso {}**\n\n\
@@ -73,7 +73,11 @@ pub fn try_handle_meta_command(
                 objetivo: journal.objetivo,
                 resume_msg,
             });
-        } else if journal.objetivo.is_empty() {
+        } else if !journal.objetivo.is_empty() && journal.status == "COMPLETADO" {
+            return Some(IntentAction::Finish(
+                format!("✅ La misión previa ya fue completada con éxito:\n\n🎯 *{}*\n\nSi deseas una nueva tarea o auditoría, envíame una nueva instrucción.", journal.objetivo)
+            ));
+        } else {
             return Some(IntentAction::Finish(
                 "📋 No hay ninguna tarea activa que retomar en este workspace. Dame un nuevo objetivo y empezamos.".to_string()
             ));
