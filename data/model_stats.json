@@ -1,12 +1,17 @@
 {
+  "llama3.1:8b::Orchestrator": {
+    "total_uses": 16,
+    "success_count": 16,
+    "total_steps": 166
+  },
   "gemma4-e4b:latest::Orchestrator": {
     "total_uses": 9,
     "success_count": 9,
     "total_steps": 78
   },
-  "llama3.1:8b::Orchestrator": {
-    "total_uses": 16,
-    "success_count": 16,
-    "total_steps": 166
+  "qwen2.5-coder:7b::Orchestrator": {
+    "total_uses": 1,
+    "success_count": 1,
+    "total_steps": 3
   }
 }

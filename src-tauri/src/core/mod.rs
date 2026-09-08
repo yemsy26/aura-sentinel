@@ -22,6 +22,9 @@ pub mod episodic_memory;    // Fase 3: Memoria multi-sesión JSONL
 pub mod scheduler;          // Fase 4: Scheduler autónomo (cron interno)
 pub mod sanity_monitor;     // Fase 5: Monitor de cordura del LLM
 pub mod context_monitor;    // Monitor de ventana de contexto y compactación determinista
+pub mod config;             // Configuración centralizada del sistema
+pub mod logging;            // Logging unificado y estructurado en JSONL
+pub mod health;             // Health checks nativos del sistema y Ollama
 
 
 use std::path::Path;
@@ -36,9 +39,38 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 pub struct BackgroundTask {
     pub child: tokio::process::Child,
     pub logs: Arc<Mutex<Vec<String>>>,
+    #[allow(dead_code)]
+    pub started_at: std::time::Instant,
+}
+
+/// Limpia de la memoria las tareas en segundo plano que ya hayan terminado o salido.
+/// No interrumpe procesos activos como servidores de desarrollo.
+pub async fn cleanup_finished_tasks() -> usize {
+    let tasks = get_bg_tasks();
+    let mut tasks_guard = tasks.lock().await;
+    let mut finished_ids = Vec::new();
+
+    for (id, task) in tasks_guard.iter_mut() {
+        match task.child.try_wait() {
+            Ok(Some(_status)) => {
+                finished_ids.push(id.clone());
+            }
+            Ok(None) => {}
+            Err(_) => {
+                finished_ids.push(id.clone());
+            }
+        }
+    }
+
+    let count = finished_ids.len();
+    for id in finished_ids {
+        tasks_guard.remove(&id);
+    }
+    count
 }
 
 pub async fn get_active_tasks_snapshot() -> Vec<serde_json::Value> {
+    cleanup_finished_tasks().await;
     let mut snapshot = Vec::new();
     if let Some(registry) = BACKGROUND_TASKS.get() {
         let tasks = registry.lock().await;
@@ -124,9 +156,12 @@ pub async fn start_background_task(workspace_path: &str, task_id: &str, command:
         }
     });
 
+    cleanup_finished_tasks().await;
+
     let task = BackgroundTask {
         child,
         logs,
+        started_at: std::time::Instant::now(),
     };
 
     let tasks = get_bg_tasks();
