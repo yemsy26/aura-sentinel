@@ -1,6 +1,6 @@
-#![allow(dead_code)]
+﻿#![allow(dead_code)]
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::core::world_state::WorldState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MissionStatus {
@@ -39,33 +39,17 @@ pub struct RuntimeMetrics {
     pub elapsed_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileState {
-    pub path: String,
-    pub exists: bool,
-    pub hash: Option<String>,
-    pub size: u64,
-    pub modified_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct WorldState {
-    pub workspace_root: String,
-    pub files: HashMap<String, FileState>,
-    pub primary_language: Option<String>,
-    pub active_processes: Vec<String>,
-}
-
+/// Unified cognitive state. WorldState comes from world_state::WorldState (no duplicate).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitiveState {
     pub mission: MissionState,
-    pub world: WorldState,
+    pub world: Option<WorldState>,
     pub beliefs: Vec<String>,
     pub metrics: RuntimeMetrics,
 }
 
 impl CognitiveState {
-    pub fn new(mission_id: &str, objective: &str, workspace_root: &str) -> Self {
+    pub fn new(mission_id: &str, objective: &str) -> Self {
         let now = chrono::Utc::now().to_rfc3339();
         Self {
             mission: MissionState {
@@ -77,12 +61,7 @@ impl CognitiveState {
                 created_at: now.clone(),
                 updated_at: now,
             },
-            world: WorldState {
-                workspace_root: workspace_root.to_string(),
-                files: HashMap::new(),
-                primary_language: None,
-                active_processes: Vec::new(),
-            },
+            world: None,
             beliefs: Vec::new(),
             metrics: RuntimeMetrics::default(),
         }
@@ -92,5 +71,9 @@ impl CognitiveState {
         self.mission.current_step += 1;
         self.metrics.total_steps += 1;
         self.mission.updated_at = chrono::Utc::now().to_rfc3339();
+    }
+
+    pub fn set_world(&mut self, world: WorldState) {
+        self.world = Some(world);
     }
 }

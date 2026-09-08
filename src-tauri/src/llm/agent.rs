@@ -763,7 +763,6 @@ pub async fn run_agent_loop(
     let mut cognitive_state = crate::core::cognitive_state::CognitiveState::new(
         &format!("m_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)),
         &original_prompt_parsed,
-        &workspace_path,
     );
 
     // ── Acceptance Contract ─────────────────────────────────────────────────

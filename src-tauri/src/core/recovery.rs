@@ -1,74 +1,144 @@
 #![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum RecoveryAction {
-    RetryWithFix { advice: String },
-    AlternativeTool { recommended_tool: String, rationale: String },
-    RewriteFileDirectly { file_path: String },
-    AskUserClarification { prompt: String },
-    AbortMission { reason: String },
+/// Classification of error types to enable targeted recovery strategies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorClass {
+    Syntax,
+    Compile,
+    Dependency,
+    Test,
+    Runtime,
+    Environment,
+    Permission,
+    Network,
+    Tool,
+    Model,
+    Unknown,
+}
+
+/// The decision the runtime should take in response to a failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecoveryDecision {
+    /// Retry the same operation with a fix suggestion.
+    Retry { advice: String },
+    /// Change the approach / strategy entirely.
+    ChangeStrategy { advice: String },
+    /// Switch to a different tool.
+    ChangeTool { recommended_tool: String, rationale: String },
+    /// Trigger a full re-plan of remaining steps.
+    Replan { reason: String },
+    /// Attempt to repair the environment (install deps, check PATH, etc.).
+    RepairEnvironment { advice: String },
+    /// Escalate to the user for input.
+    AskUser { prompt: String },
+    /// No recovery possible, abort mission.
+    Abort { reason: String },
+}
+
+/// Legacy action alias kept for backward compatibility.
+pub type RecoveryAction = RecoveryDecision;
+
+/// Classifies an error message string into an ErrorClass.
+pub fn classify_error(error_msg: &str) -> ErrorClass {
+    let e = error_msg.to_lowercase();
+    if e.contains("syntax") || e.contains("expected") || e.contains("unexpected token") || e.contains("parse error") {
+        ErrorClass::Syntax
+    } else if e.contains("error[e") || e.contains("cannot find") || e.contains("undeclared") || e.contains("does not exist") {
+        ErrorClass::Compile
+    } else if e.contains("no such crate") || e.contains("unresolved import") || e.contains("could not find") || e.contains("package not found") {
+        ErrorClass::Dependency
+    } else if e.contains("test failed") || e.contains("panicked at") || e.contains("assertion failed") {
+        ErrorClass::Test
+    } else if e.contains("permission denied") || e.contains("access is denied") {
+        ErrorClass::Permission
+    } else if e.contains("network") || e.contains("connection refused") || e.contains("timeout") || e.contains("tls") {
+        ErrorClass::Network
+    } else if e.contains("not recognized") || e.contains("not found") || e.contains("no se reconoce") || e.contains("command not found") {
+        ErrorClass::Environment
+    } else if e.contains("tool") {
+        ErrorClass::Tool
+    } else {
+        ErrorClass::Unknown
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct RecoveryEngine {
-    tool_failure_counts: std::collections::HashMap<String, usize>,
+    failure_counts: std::collections::HashMap<String, usize>,
 }
 
 impl RecoveryEngine {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
-    /// Records a failure and deterministically determines the optimal recovery action.
-    pub fn plan_recovery(&mut self, tool_name: &str, error_msg: &str) -> RecoveryAction {
-        let count = self.tool_failure_counts.entry(tool_name.to_string()).or_insert(0);
+    /// Records a failure and returns the best recovery decision based on
+    /// error classification and failure history.
+    pub fn recover(&mut self, tool_name: &str, error_msg: &str, error_class: ErrorClass) -> RecoveryDecision {
+        let count = self.failure_counts.entry(tool_name.to_string()).or_insert(0);
         *count += 1;
         let failures = *count;
 
-        let err_lower = error_msg.to_lowercase();
-
-        // 1. Patch mismatch in programmer
-        if tool_name == "TOOL_PROGRAMMER" && (err_lower.contains("no coincide") || err_lower.contains("patch") || err_lower.contains("match")) {
-            return RecoveryAction::RewriteFileDirectly {
-                file_path: "archivo_afectado".to_string(),
+        // Hard cap: abort after 5 consecutive failures on same tool
+        if failures >= 5 {
+            return RecoveryDecision::Abort {
+                reason: format!("'{}' ha fallado {} veces consecutivas — misión inviable.", tool_name, failures),
             };
         }
 
-        // 2. Missing binary or command not found in terminal
-        if tool_name == "TOOL_TERMINAL" && (err_lower.contains("not recognized") || err_lower.contains("not found") || err_lower.contains("no se reconoce")) {
-            return RecoveryAction::AlternativeTool {
-                recommended_tool: "TOOL_ENV_CHECK".to_string(),
-                rationale: "El comando solicitado no está instalado en el PATH. Comprueba las dependencias disponibles.".to_string(),
-            };
-        }
-
-        // 3. Repeated failure escalation
+        // Escalate to user after 3 consecutive failures
         if failures >= 3 {
-            return RecoveryAction::AskUserClarification {
+            return RecoveryDecision::AskUser {
                 prompt: format!(
-                    "La herramienta '{}' ha fallado {} veces consecutivas con el error: '{}'. ¿Cómo deseas proceder?",
+                    "'{}' ha fallado {} veces con error: '{}'. ¿Cómo deseas proceder?",
                     tool_name, failures, error_msg
                 ),
             };
         }
 
-        if failures == 2 {
-            if tool_name == "TOOL_PROGRAMMER" {
-                return RecoveryAction::AlternativeTool {
-                    recommended_tool: "TOOL_THINK".to_string(),
-                    rationale: "Fallo repetido al escribir código. Reevalúa la estructura lógica del módulo antes de reintentar.".to_string(),
-                };
+        match error_class {
+            ErrorClass::Syntax | ErrorClass::Compile => {
+                if tool_name == "TOOL_PROGRAMMER" && failures >= 2 {
+                    RecoveryDecision::ChangeStrategy {
+                        advice: "Reescribe el módulo completo en lugar de hacer un patch parcial.".to_string(),
+                    }
+                } else {
+                    RecoveryDecision::Retry {
+                        advice: format!("Corrige el error de compilación/sintaxis antes de reintentar: {}", error_msg),
+                    }
+                }
             }
-        }
-
-        RecoveryAction::RetryWithFix {
-            advice: format!("Corrige el parámetro causante del error antes de volver a intentar: {}", error_msg),
+            ErrorClass::Dependency => RecoveryDecision::RepairEnvironment {
+                advice: format!("Instala las dependencias faltantes o ajusta Cargo.toml/package.json: {}", error_msg),
+            },
+            ErrorClass::Test => RecoveryDecision::Retry {
+                advice: format!("Un test falló. Analiza el output del test y corrige la lógica: {}", error_msg),
+            },
+            ErrorClass::Environment => RecoveryDecision::ChangeTool {
+                recommended_tool: "TOOL_ENV_CHECK".to_string(),
+                rationale: "El comando no está disponible en PATH. Verifica el entorno antes de continuar.".to_string(),
+            },
+            ErrorClass::Permission => RecoveryDecision::AskUser {
+                prompt: format!("Permiso denegado al ejecutar '{}'. ¿Requieres elevar privilegios?", tool_name),
+            },
+            ErrorClass::Network => RecoveryDecision::Retry {
+                advice: "Error de red transitorio. Reintenta en unos segundos.".to_string(),
+            },
+            ErrorClass::Model | ErrorClass::Tool | ErrorClass::Runtime | ErrorClass::Unknown => {
+                RecoveryDecision::Replan {
+                    reason: format!("Error no clasificable en '{}': {}. Se recomienda replanning.", tool_name, error_msg),
+                }
+            }
         }
     }
 
+    /// Legacy method — wraps recover() with auto-classification.
+    pub fn plan_recovery(&mut self, tool_name: &str, error_msg: &str) -> RecoveryDecision {
+        let class = classify_error(error_msg);
+        self.recover(tool_name, error_msg, class)
+    }
+
     pub fn record_success(&mut self, tool_name: &str) {
-        self.tool_failure_counts.remove(tool_name);
+        self.failure_counts.remove(tool_name);
     }
 }
 
@@ -77,22 +147,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_classify_error() {
+        assert_eq!(classify_error("error[E0412]: cannot find type"), ErrorClass::Compile);
+        assert_eq!(classify_error("panicked at 'assertion failed'"), ErrorClass::Test);
+        assert_eq!(classify_error("permission denied (os error 13)"), ErrorClass::Permission);
+        assert_eq!(classify_error("node is not recognized as a command"), ErrorClass::Environment);
+    }
+
+    #[test]
     fn test_recovery_planning() {
         let mut engine = RecoveryEngine::new();
+        let dec = engine.recover("TOOL_TERMINAL", "package not found", ErrorClass::Dependency);
+        assert!(matches!(dec, RecoveryDecision::RepairEnvironment { .. }));
+    }
 
-        // Patch mismatch
-        let action = engine.plan_recovery("TOOL_PROGRAMMER", "El bloque a buscar no coincide");
-        assert!(matches!(action, RecoveryAction::RewriteFileDirectly { .. }));
-
-        // Missing command
-        let action = engine.plan_recovery("TOOL_TERMINAL", "cargo: command not found");
-        assert!(matches!(action, RecoveryAction::AlternativeTool { .. }));
-
-        // Escalation after 3 failures
-        let mut engine2 = RecoveryEngine::new();
-        let _ = engine2.plan_recovery("TOOL_TERMINAL", "generic error");
-        let _ = engine2.plan_recovery("TOOL_TERMINAL", "generic error");
-        let action3 = engine2.plan_recovery("TOOL_TERMINAL", "generic error");
-        assert!(matches!(action3, RecoveryAction::AskUserClarification { .. }));
+    #[test]
+    fn test_escalation_on_repeated_failure() {
+        let mut engine = RecoveryEngine::new();
+        engine.recover("TOOL_PROGRAMMER", "syntax error", ErrorClass::Syntax);
+        engine.recover("TOOL_PROGRAMMER", "syntax error", ErrorClass::Syntax);
+        let dec = engine.recover("TOOL_PROGRAMMER", "syntax error", ErrorClass::Syntax);
+        assert!(matches!(dec, RecoveryDecision::AskUser { .. }));
     }
 }

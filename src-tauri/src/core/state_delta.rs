@@ -1,4 +1,5 @@
-#![allow(dead_code)]
+﻿#![allow(dead_code)]
+use crate::core::content_hash::compute_content_hash;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -15,23 +16,11 @@ pub struct FileDelta {
 pub struct StateDelta;
 
 impl StateDelta {
-    /// Calcula el hash rápido de un archivo si existe
+    /// Computes a deterministic content hash for a file using shared content_hash module.
     pub fn compute_hash(path: &Path) -> Option<String> {
-        if !path.exists() {
-            return None;
-        }
-        if let Ok(bytes) = std::fs::read(path) {
-            use std::hash::{Hash, Hasher};
-            use std::collections::hash_map::DefaultHasher;
-            let mut hasher = DefaultHasher::new();
-            bytes.hash(&mut hasher);
-            Some(format!("{:016x}", hasher.finish()))
-        } else {
-            None
-        }
+        compute_content_hash(path)
     }
 
-    /// Captura el estado antes de una modificación
     pub fn capture_before(workspace: &str, relative_path: &str) -> (Option<String>, u64) {
         let full_path = Path::new(workspace).join(relative_path);
         let hash = Self::compute_hash(&full_path);
@@ -39,7 +28,6 @@ impl StateDelta {
         (hash, bytes)
     }
 
-    /// Compara contra el estado posterior y genera un FileDelta
     pub fn capture_delta(
         workspace: &str,
         relative_path: &str,
@@ -50,14 +38,6 @@ impl StateDelta {
         let after_hash = Self::compute_hash(&full_path);
         let after_bytes = full_path.metadata().map(|m| m.len()).unwrap_or(0);
         let changed = before_hash != after_hash;
-
-        FileDelta {
-            file_path: relative_path.to_string(),
-            changed,
-            before_hash,
-            after_hash,
-            bytes_before: before_bytes,
-            bytes_after: after_bytes,
-        }
+        FileDelta { file_path: relative_path.to_string(), changed, before_hash, after_hash, bytes_before: before_bytes, bytes_after: after_bytes }
     }
 }

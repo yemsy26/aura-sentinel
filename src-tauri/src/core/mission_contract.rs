@@ -83,7 +83,7 @@ impl MissionContract {
         });
     }
 
-    pub fn mark_criterion(&mut self, id: &str, satisfied: bool) -> bool {
+    pub(crate) fn mark_criterion(&mut self, id: &str, satisfied: bool) -> bool {
         if let Some(ac) = self.acceptance_criteria.iter_mut().find(|c| c.id == id) {
             ac.status = if satisfied {
                 CriterionStatus::Satisfied

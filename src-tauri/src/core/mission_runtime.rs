@@ -1,10 +1,16 @@
+#![allow(dead_code)]
 use crate::core::mission_contract::MissionContract;
 use crate::core::cognitive_state::CognitiveState;
 use crate::core::evidence::EvidenceGraph;
-use crate::core::stall_detector::StallDetector;
-use crate::core::policy::PolicyEngine;
+use crate::core::stall_detector::{StallDetector, StallType, ProgressSignature};
+use crate::core::policy::{PolicyEngine, ActionProposal, PolicyDecision};
+use crate::core::completion_gate::{CompletionGate, CompletionDecision};
+use crate::core::step_budget::StepBudget;
+use crate::core::recovery::{RecoveryEngine, RecoveryDecision, classify_error};
+use crate::core::world_state::WorldState;
+use crate::core::observation::Observation;
 
-#[allow(dead_code)]
+/// Runtime governance controller — the cognitive brain of agent.rs.
 pub struct MissionRuntime {
     pub mission_id: String,
     pub workspace_path: String,
@@ -12,62 +18,140 @@ pub struct MissionRuntime {
     pub cognitive_state: CognitiveState,
     pub evidence_graph: EvidenceGraph,
     pub stall_detector: StallDetector,
-    pub step_budget: u32,
-    pub max_steps: u32,
+    pub budget: StepBudget,
+    pub recovery: RecoveryEngine,
+    pub world: Option<WorldState>,
 }
 
 impl MissionRuntime {
-    #[allow(dead_code)]
     pub fn new(workspace_path: &str, objective: &str, max_steps: u32) -> Self {
-        let mission_id = format!("m_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
-        let contract = MissionContract::new(objective);
-        let cognitive_state = CognitiveState::new(&mission_id, objective, workspace_path);
-        let evidence_graph = EvidenceGraph::new();
-        let stall_detector = StallDetector::new(5);
-
+        let mission_id = format!(
+            "m_{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
         MissionRuntime {
-            mission_id,
+            contract: MissionContract::new(objective),
+            cognitive_state: CognitiveState::new(&mission_id, objective),
+            evidence_graph: EvidenceGraph::new(),
+            stall_detector: StallDetector::new(6),
+            budget: StepBudget::new(max_steps),
+            recovery: RecoveryEngine::new(),
+            world: None,
             workspace_path: workspace_path.to_string(),
-            contract,
-            cognitive_state,
-            evidence_graph,
-            stall_detector,
-            step_budget: max_steps,
-            max_steps,
+            mission_id,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn is_budget_exhausted(&self, current_step: u32) -> bool {
-        current_step >= self.max_steps
+    // ─── Budget ────────────────────────────────────────────────────────────────
+
+    pub fn budget_remaining(&self) -> u32 {
+        self.budget.remaining_steps()
     }
 
-    #[allow(dead_code)]
-    pub fn record_action_step(&mut self) -> u32 {
+    pub fn is_budget_exhausted(&self) -> bool {
+        self.budget.is_exhausted()
+    }
+
+    pub fn record_step(&mut self) -> u32 {
         self.cognitive_state.update_step();
         self.cognitive_state.metrics.tool_calls += 1;
-        self.cognitive_state.mission.current_step
+        self.budget.record_step()
     }
 
-    #[allow(dead_code)]
-    pub fn can_complete(&self) -> crate::core::completion_gate::CompletionDecision {
-        crate::core::completion_gate::CompletionGate::evaluate(
-            &self.contract,
-            &self.cognitive_state,
-            &self.evidence_graph,
-        )
+    // ─── World Observation ─────────────────────────────────────────────────────
+
+    /// Takes a fresh workspace snapshot and stores it in the runtime.
+    pub fn observe_world(&mut self) {
+        match WorldState::capture(&self.workspace_path) {
+            Ok(ws) => {
+                self.cognitive_state.set_world(ws.clone());
+                self.world = Some(ws);
+            }
+            Err(e) => {
+                eprintln!("[MissionRuntime] observe_world error: {}", e);
+            }
+        }
     }
 
-    #[allow(dead_code)]
-    pub fn check_policy(&self, proposal: &crate::core::policy::ActionProposal) -> crate::core::policy::PolicyDecision {
+    // ─── Observation Recording ─────────────────────────────────────────────────
+
+    /// Records a structured tool observation and feeds it to StallDetector.
+    pub fn record_observation(&mut self, obs: &Observation) {
+        let ok = obs.status == crate::core::observation::ObservationStatus::Success;
+        if !ok {
+            self.cognitive_state.metrics.failed_actions += 1;
+        } else {
+            // Record implicit evidence for successful terminal / validator tool calls
+            let tool_upper = obs.tool_name.to_uppercase();
+            if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
+                use crate::core::evidence::EvidenceKind;
+                let claim = format!(
+                    "{} exitoso en paso {}",
+                    obs.tool_name, self.cognitive_state.mission.current_step
+                );
+                self.evidence_graph.record(
+                    EvidenceKind::CommandExitCode,
+                    &obs.tool_name,
+                    &claim,
+                    &obs.payload,
+                    0.85,
+                    self.cognitive_state.mission.current_step,
+                );
+            }
+        }
+
+        // Feed stall detector signature
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        if !ok { obs.payload.hash(&mut hasher); }
+        let err_hash = if ok { 0 } else { hasher.finish() };
+
+        let sig = ProgressSignature {
+            step: self.cognitive_state.mission.current_step,
+            state_hash: 0,
+            files_changed: obs.files_affected.len() as u32,
+            criteria_satisfied: self.contract.acceptance_criteria
+                .iter()
+                .filter(|c| c.status == crate::core::mission_contract::CriterionStatus::Satisfied)
+                .count() as u32,
+            evidence_count: self.evidence_graph.entries.len() as u32,
+            last_tool_used: obs.tool_name.clone(),
+            last_command: String::new(),
+            last_error_hash: err_hash,
+        };
+        self.stall_detector.record_signature(sig);
+    }
+
+    // ─── Stall Detection ───────────────────────────────────────────────────────
+
+    pub fn should_stall_recover(&self, window: usize) -> Option<StallType> {
+        self.stall_detector.detect_stall(window)
+    }
+
+    // ─── Policy ────────────────────────────────────────────────────────────────
+
+    pub fn check_policy(&self, proposal: &ActionProposal) -> PolicyDecision {
         PolicyEngine::authorize(proposal)
     }
 
-    #[allow(dead_code)]
-    pub fn record_tool_result(&mut self, ok: bool) {
-        if !ok {
-            self.cognitive_state.metrics.failed_actions += 1;
-        }
+    // ─── Completion Gate ───────────────────────────────────────────────────────
+
+    /// The ONLY authority allowed to declare mission complete.
+    /// Never let agent.rs declare completion without calling this.
+    pub fn can_complete(&self) -> CompletionDecision {
+        CompletionGate::evaluate(&self.contract, &self.cognitive_state, &self.evidence_graph)
+    }
+
+    // ─── Recovery ──────────────────────────────────────────────────────────────
+
+    pub fn plan_recovery(&mut self, tool_name: &str, error_msg: &str) -> RecoveryDecision {
+        let class = classify_error(error_msg);
+        self.cognitive_state.metrics.recovery_actions += 1;
+        self.recovery.recover(tool_name, error_msg, class)
     }
 }
 
@@ -78,8 +162,24 @@ mod tests {
     #[test]
     fn test_mission_runtime_init() {
         let rt = MissionRuntime::new(".", "Test objective", 50);
-        assert_eq!(rt.max_steps, 50);
-        assert!(!rt.is_budget_exhausted(10));
-        assert!(rt.is_budget_exhausted(50));
+        assert_eq!(rt.budget.total_steps, 50);
+        assert!(!rt.is_budget_exhausted());
+        assert_eq!(rt.budget_remaining(), 50);
+    }
+
+    #[test]
+    fn test_runtime_delegates_to_completion_gate() {
+        let rt = MissionRuntime::new(".", "Build something", 50);
+        // With no evidence and no criteria, should complete (empty contract).
+        let dec = rt.can_complete();
+        assert_eq!(dec, crate::core::completion_gate::CompletionDecision::Complete);
+    }
+
+    #[test]
+    fn test_runtime_budget_tracking() {
+        let mut rt = MissionRuntime::new(".", "Test", 10);
+        for _ in 0..10 { rt.record_step(); }
+        assert!(rt.is_budget_exhausted());
+        assert_eq!(rt.budget_remaining(), 0);
     }
 }
