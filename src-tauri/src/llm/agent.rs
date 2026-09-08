@@ -2387,7 +2387,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 
                 let mut qwen_prompt = format!("Instrucción principal: {}{}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message, compile_alert_note);
 
-                let target_model = if programmer_model.to_lowercase().contains("embed") {
+                let mut target_model = if programmer_model.to_lowercase().contains("embed") {
                     if !orchestrator_model.to_lowercase().contains("embed") {
                         orchestrator_model.clone()
                     } else {
@@ -2396,6 +2396,18 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 } else {
                     programmer_model.clone()
                 };
+
+                // Fallback de seguridad: si el modelo solicitado no está instalado en Ollama (ej. si fue borrado o cambió de nombre),
+                // usar el primer modelo disponible que sirva para programar (ej. qwen) o el orquestador actual.
+                if !available_models.iter().any(|m| m.starts_with(&target_model)) {
+                    if let Some(valid) = available_models.iter().find(|m| m.contains("qwen") || m.contains("coder")) {
+                        target_model = valid.clone();
+                    } else if let Some(valid) = available_models.iter().find(|m| !m.contains("embed")) {
+                        target_model = valid.clone();
+                    } else {
+                        target_model = DEFAULT_PROGRAMMER_MODEL.to_string();
+                    }
+                }
                 emit_event(&app_handle, step_count, &format!("[ROUTER] Cerebro Programador Seleccionado: {}", target_model), "INFO");
 
                 let mut exito_bucle_programador = false;
