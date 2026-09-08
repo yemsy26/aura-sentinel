@@ -237,86 +237,71 @@ fn classify_mission(msg: &str) -> MissionType {
     MissionType::Construction
 }
 
-/// Helper to verify if a required file from a phase is satisfied on disk or through intelligent aliases.
+/// Helper to verify if a required file from a phase is strictly satisfied on disk.
+/// Requires exact file presence and non-empty content (size > 0).
+/// Does not allow loose extension matching or inline script shortcuts.
 fn is_phase_file_satisfied(workspace_path: &str, file_name: &str) -> bool {
-    let p = std::path::Path::new(workspace_path).join(file_name);
-    if p.exists() {
-        return true;
+    let ws = std::path::Path::new(workspace_path);
+    let target_clean = file_name.trim();
+    if target_clean.is_empty() {
+        return false;
     }
 
-    // Check common alias variations (plural/singular, common entry names)
-    let variations: Vec<&str> = match file_name {
-        "styles.css" => vec!["style.css"],
-        "style.css" => vec!["styles.css"],
-        "script.js" => vec!["scripts.js", "app.js", "main.js", "dashboard.js"],
-        "scripts.js" => vec!["script.js", "app.js", "main.js", "dashboard.js"],
-        "radar.js" | "telemetry.js" | "traffic_chart.js" => vec!["dashboard.js", "script.js", "app.js", "main.js"],
-        "index.html" => vec!["app.html", "main.html", "dashboard.html", "cyber_sentinel.html"],
-        _ => vec![],
-    };
-    for v in variations {
-        if std::path::Path::new(workspace_path).join(v).exists() {
-            return true;
+    // 1. Direct path check and standard subdirectories
+    let candidates = [
+        ws.join(target_clean),
+        ws.join("src").join(target_clean),
+        ws.join("public").join(target_clean),
+        ws.join("app").join(target_clean),
+        ws.join("lib").join(target_clean),
+    ];
+
+    for path in &candidates {
+        if path.is_file() {
+            if let Ok(meta) = path.metadata() {
+                if meta.len() > 0 {
+                    return true;
+                }
+            }
         }
     }
 
-    let p_lower = file_name.to_lowercase();
-    let ext = std::path::Path::new(file_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    // 2. Strict 1-to-1 canonical alias for exact matching stylesheets only
+    let strict_alias = match target_clean {
+        "styles.css" => Some("style.css"),
+        "style.css" => Some("styles.css"),
+        _ => None,
+    };
 
-    if let Ok(entries) = std::fs::read_dir(workspace_path) {
-        for entry in entries.flatten() {
-            let entry_path = entry.path();
-            if !entry_path.is_file() {
-                continue;
-            }
-            let fname = entry_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-            if fname == p_lower {
-                return true;
-            }
-            if !ext.is_empty() {
-                if let Some(entry_ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                    if entry_ext.to_lowercase() == ext {
-                        if ext == "html" || ext == "htm" {
-                            if entry.metadata().map(|m| m.len() > 20).unwrap_or(false) {
-                                return true;
-                            }
-                        }
-                        if ext == "css" {
-                            if entry.metadata().map(|m| m.len() > 10).unwrap_or(false) {
-                                return true;
-                            }
-                        }
-                        if ext == "js" {
-                            if entry.metadata().map(|m| m.len() > 20).unwrap_or(false) {
-                                return true;
-                            }
-                        }
-                        if ext == "py" && fname.ends_with(".py") {
-                            if entry.metadata().map(|m| m.len() > 20).unwrap_or(false) {
-                                return true;
-                            }
-                        }
+    if let Some(alias) = strict_alias {
+        let alias_candidates = [
+            ws.join(alias),
+            ws.join("src").join(alias),
+            ws.join("public").join(alias),
+        ];
+        for path in &alias_candidates {
+            if path.is_file() {
+                if let Ok(meta) = path.metadata() {
+                    if meta.len() > 0 {
+                        return true;
                     }
                 }
             }
         }
     }
 
-    // Check if HTML has inline scripts or styles satisfying css/js requirements
-    if ext == "css" || ext == "js" {
-        if let Ok(entries) = std::fs::read_dir(workspace_path) {
-            for entry in entries.flatten() {
-                if entry.path().extension().and_then(|e| e.to_str()) == Some("html") {
-                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                        if ext == "css" && (content.contains("<style") || content.contains("<link rel=\"stylesheet\"")) {
-                            return true;
-                        }
-                        if ext == "js" && (content.contains("<script") || content.contains(file_name)) {
-                            return true;
+    // 3. Case-insensitive exact filename check (e.g. index.html vs Index.html)
+    let target_lower = target_clean.to_lowercase();
+    if let Ok(entries) = std::fs::read_dir(ws) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_file() {
+                if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
+                    if name.to_lowercase() == target_lower {
+                        if let Ok(meta) = entry_path.metadata() {
+                            if meta.len() > 0 {
+                                return true;
+                            }
                         }
                     }
                 }
