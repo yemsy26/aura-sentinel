@@ -765,6 +765,13 @@ pub async fn run_agent_loop(
         &original_prompt_parsed,
     );
 
+    // ── MissionRuntime: cognitive governor (unifies contract + evidence + budget + stall + recovery) ──
+    let mut runtime = crate::core::mission_runtime::MissionRuntime::new(
+        &workspace_path,
+        &original_prompt_parsed,
+        50,
+    );
+
     // ── Acceptance Contract ─────────────────────────────────────────────────
     let mut acceptance_contract: Option<String> = None;
 
@@ -1363,6 +1370,12 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         cognitive_state.metrics.tool_calls += 1;
         step_budget.record_step();
 
+        // ── MissionRuntime: step tracking + stall detection ──
+        runtime.record_step();
+        if let Some(stall) = runtime.should_stall_recover(4) {
+            emit_event(&app_handle, step_count, &format!("[STALL DETECTOR] {:?} detectado. Considera cambiar estrategia.", stall), "WARNING");
+        }
+
         // ── Arquitectura Cognitiva v4: Validación previa de esquema (P1) ──
         if let crate::core::schema_validator::SchemaValidationResult::Invalid(schema_err) = 
             crate::core::schema_validator::SchemaValidator::validate_tool_payload(&tool, &raw_value) {
@@ -1689,7 +1702,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             },
         };
 
-        match crate::core::policy::PolicyEngine::authorize(&action_proposal) {
+        match runtime.check_policy(&action_proposal) {
             crate::core::policy::PolicyDecision::Deny(reason) => {
                 emit_event(&app_handle, step_count, &format!("[POLICY BLOCK] {}", reason), "ERROR");
                 current_context.push_str(&format!("{}\n[ACCIÓN DENEGADA]: Elige una alternativa segura.\n\n", reason));
@@ -1822,6 +1835,13 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             }
                             let digested_out = digest_terminal_output(&out, 2500);
                             let res_msg = format!("Éxito: {}", digested_out);
+                            // ── MissionRuntime: record successful observation ──
+                            {
+                                let obs = crate::core::observation::Observation::success(
+                                    "TOOL_TERMINAL", &digested_out, vec![],
+                                );
+                                runtime.record_observation(&obs);
+                            }
                             // ── Silent-success auto-verifier ─────────────────────────────────────
                             // When a script runs successfully but prints nothing to stdout,
                             // the LLM cannot confirm the task is done and loops. Fix: scan the
@@ -3470,12 +3490,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     journal.fases[journal.fase_actual].estado = "COMPLETADA".to_string();
                 }
 
-                // ── Arquitectura Cognitiva v4: CompletionGate Evaluation ──
-                let completion_decision = crate::core::completion_gate::CompletionGate::evaluate(
-                    &mission_contract,
-                    &cognitive_state,
-                    &evidence_graph,
-                );
+                // ── Arquitectura Cognitiva v4: CompletionGate — delegado a MissionRuntime ──
+                // Sync runtime with live contract and evidence before evaluating
+                runtime.contract = mission_contract.clone();
+                runtime.evidence_graph = evidence_graph.clone();
+                let completion_decision = runtime.can_complete();
                 match completion_decision {
                     crate::core::completion_gate::CompletionDecision::Incomplete(missing_reasons) => {
                         let block_msg = format!("[COMPLETION GATE] ⚠️ Finalización rechazada. Requisitos pendientes:\n{}", missing_reasons.join("\n"));
