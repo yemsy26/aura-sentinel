@@ -103,18 +103,13 @@ pub struct SessionJournal {
 /// File name for the session journal (hidden by convention via leading dot)
 const JOURNAL_FILE: &str = ".aura_session.json";
 
-/// Generates a short random session ID (8 hex chars)
+/// Generates a robust UUID v4 session ID
 fn new_session_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    format!("{:08x}", nanos)
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// Loads the session journal from disk, or returns a default empty one.
-/// Sprint 2: auto-assigns session_id if the loaded journal has none (backwards compat).
+/// Auto-assigns UUID session_id if the loaded journal has none (backwards compat).
 pub fn load_journal(workspace_path: &str) -> SessionJournal {
     let journal_path = Path::new(workspace_path).join(JOURNAL_FILE);
     let mut journal = match std::fs::read_to_string(&journal_path) {
@@ -124,18 +119,20 @@ pub fn load_journal(workspace_path: &str) -> SessionJournal {
         },
         Err(_) => SessionJournal::default(),
     };
-    // Backwards compatibility: assign a session_id if the old journal didn't have one
     if journal.session_id.is_empty() {
         journal.session_id = new_session_id();
     }
     journal
 }
 
-/// Saves the session journal to disk (best-effort — failures are non-fatal).
+/// Saves the session journal atomically via .tmp file + atomic rename to prevent corruption.
 pub fn save_journal(workspace_path: &str, journal: &SessionJournal) {
     let journal_path = Path::new(workspace_path).join(JOURNAL_FILE);
+    let tmp_path = Path::new(workspace_path).join(format!("{}.tmp", JOURNAL_FILE));
     if let Ok(json) = serde_json::to_string_pretty(journal) {
-        let _ = std::fs::write(&journal_path, json);
+        if std::fs::write(&tmp_path, json).is_ok() {
+            let _ = std::fs::rename(&tmp_path, &journal_path);
+        }
     }
 }
 
