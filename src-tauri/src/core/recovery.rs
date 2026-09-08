@@ -42,6 +42,13 @@ pub type RecoveryAction = RecoveryDecision;
 /// Classifies an error message string into an ErrorClass.
 pub fn classify_error(error_msg: &str) -> ErrorClass {
     let e = error_msg.to_lowercase();
+    // Windows-specific: 'touch' not recognized, or "El nombre del directorio no es válido"
+    if e.contains("el nombre del directorio no es") || e.contains("nombre del directorio")
+        || e.contains("is not recognized") && e.contains("touch")
+        || e.contains("no se reconoce el comando interno") && e.contains("touch")
+    {
+        return ErrorClass::Environment;
+    }
     if e.contains("syntax") || e.contains("expected") || e.contains("unexpected token") || e.contains("parse error") {
         ErrorClass::Syntax
     } else if e.contains("error[e") || e.contains("cannot find") || e.contains("undeclared") || e.contains("does not exist") {
@@ -113,10 +120,16 @@ impl RecoveryEngine {
             ErrorClass::Test => RecoveryDecision::Retry {
                 advice: format!("Un test falló. Analiza el output del test y corrige la lógica: {}", error_msg),
             },
-            ErrorClass::Environment => RecoveryDecision::ChangeTool {
-                recommended_tool: "TOOL_ENV_CHECK".to_string(),
-                rationale: "El comando no está disponible en PATH. Verifica el entorno antes de continuar.".to_string(),
-            },
+            ErrorClass::Environment => {
+                let windows_hint = if error_msg.to_lowercase().contains("touch")
+                    || error_msg.to_lowercase().contains("nombre del directorio")
+                {
+                    "En Windows 'touch' no existe. Usa: 'New-Item -Type File <nombre>' o 'echo $null > <nombre>'".to_string()
+                } else {
+                    format!("El comando no está disponible en este entorno. Verifica la disponibilidad o usa una alternativa compatible: {}", error_msg)
+                };
+                RecoveryDecision::RepairEnvironment { advice: windows_hint }
+            }
             ErrorClass::Permission => RecoveryDecision::AskUser {
                 prompt: format!("Permiso denegado al ejecutar '{}'. ¿Requieres elevar privilegios?", tool_name),
             },

@@ -935,35 +935,48 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
         // ── EMERGENCY EXIT: step budget exhausted ────────────────────────
         if step_count >= max_steps {
-            // Check if deliverables exist and pass validation
-            let deliverables_ok = validate_workspace(&workspace_path).await.is_ok();
-            if deliverables_ok {
-                let mut created_files: Vec<String> = Vec::new();
-                if let Ok(entries) = std::fs::read_dir(&workspace_path) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_file() {
-                            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                            if !name.starts_with('.') {
-                                created_files.push(name);
+                // ── Evaluate CompletionGate before claiming success at budget limit ──
+                let deliverables_ok = validate_workspace(&workspace_path).await.is_ok();
+                let completion_ok = match runtime.can_complete() {
+                    crate::core::completion_gate::CompletionDecision::Complete => true,
+                    _ => false,
+                };
+
+                if deliverables_ok && completion_ok {
+                    let mut created_files: Vec<String> = Vec::new();
+                    if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_file() {
+                                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                if !name.starts_with('.') {
+                                    created_files.push(name);
+                                }
                             }
                         }
                     }
-                }
 
-                emit_event(&app_handle, step_count, "✅ Misión completada. Todos los entregables validados.", "SUCCESS");
-                let final_res = FinalResponse {
-                    status: "FINISH".to_string(),
-                    respuesta_conversacional: format!(
-                        "### 🛡️ Misión Completada con Éxito\n\n\
-                        Se han implementado y validado todos los componentes del proyecto:\n\
-                        {}\n\n\
-                        Todos los archivos pasaron las pruebas de compilación y verificación al 100%.",
-                        created_files.iter().map(|f| format!("- `{}`", f)).collect::<Vec<_>>().join("\n")
-                    ),
-                };
-                return Ok(serde_json::to_string(&final_res).unwrap());
-            }
+                    emit_event(&app_handle, step_count, "✅ Misión completada. Todos los entregables validados.", "SUCCESS");
+                    let final_res = FinalResponse {
+                        status: "FINISH".to_string(),
+                        respuesta_conversacional: format!(
+                            "### 🛡️ Misión Completada con Éxito\n\n\
+                            Se han implementado y validado todos los componentes del proyecto:\n\
+                            {}\n\n\
+                            Todos los archivos pasaron las pruebas de compilación y verificación al 100%.",
+                            created_files.iter().map(|f| format!("- `{}`", f)).collect::<Vec<_>>().join("\n")
+                        ),
+                    };
+                    return Ok(serde_json::to_string(&final_res).unwrap());
+                } else if deliverables_ok && !completion_ok {
+                    // Files exist but CompletionGate not satisfied — honest incomplete status
+                    emit_event(&app_handle, step_count, "⏸️ Presupuesto agotado — entregables presentes pero criterios de misión incompletos.", "WARNING");
+                    let final_res = FinalResponse {
+                        status: "INCOMPLETE".to_string(),
+                        respuesta_conversacional: "⚠️ **Presupuesto agotado**: Los archivos fueron creados pero el agente no pudo verificar el 100% de los criterios de aceptación. Escribe **'continua'** para otorgar otro bloque de pasos.".to_string(),
+                    };
+                    return Ok(serde_json::to_string(&final_res).unwrap());
+                }
 
             // Save state for continuation
             journal.interrupted = true;
@@ -1359,7 +1372,23 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         // ── MissionRuntime: step tracking + stall detection (single source of truth) ──
         runtime.record_step();
         if let Some(stall) = runtime.should_stall_recover(4) {
-            emit_event(&app_handle, step_count, &format!("[STALL DETECTOR] {:?} detectado. Considera cambiar estrategia.", stall), "WARNING");
+            let stall_msg = format!("[STALL DETECTOR] {:?} detectado. Forzando verificación real del filesystem.", stall);
+            emit_event(&app_handle, step_count, &stall_msg, "WARNING");
+            // RepeatedTool stall: force a dir command to anchor LLM to filesystem reality
+            if matches!(stall, crate::core::stall_detector::StallType::RepeatedTool)
+                && forced_next_tool.is_none()
+            {
+                forced_next_tool = Some((
+                    "TOOL_TERMINAL".to_string(),
+                    format!(
+                        "[STALL RECOVERY] Verificando estado real del workspace. {}",
+                        "Ejecuta 'dir' y ajusta tu plan según los archivos que realmente existen."
+                    ),
+                ));
+                current_context.push_str(
+                    "[CORRECCIÓN FORZADA]: Estás en un bucle. Verifica los archivos existentes con 'dir' antes de continuar.\n\n"
+                );
+            }
         }
 
         // ── Arquitectura Cognitiva v4: Validación previa de esquema (P1) ──
@@ -2803,6 +2832,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                             }
                                                             for f in &written_files {
                                                                 archivos_editados_historico.insert(f.clone());
+                                                                // ── HECHO INMUTABLE: Previene que el modelo olvide archivos recién creados ──
+                                                                current_context.push_str(&format!(
+                                                                    "[HECHO INMUTABLE — NO IGNORAR]: El archivo '{}' fue creado/modificado exitosamente en el paso {}. NO debe recrearse ni editarse sin razón técnica explícita.\n",
+                                                                    f, step_count
+                                                                ));
                                                             }
                                                         } else {
                                                             // Integration failed — revert and force fix
