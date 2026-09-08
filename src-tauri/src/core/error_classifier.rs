@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// Error classification engine for Aura-Sentinel's self-repair loop.
 ///
 /// Professional agents (SWE-agent, AutoGen, Claude) classify errors into 3 types
@@ -8,6 +9,39 @@
 ///  - BLOCKED   → escalate to user (missing credential, not installed, permission)
 ///
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ErrorClass {
+    Syntax,
+    Compile,
+    Dependency,
+    Test,
+    Runtime,
+    Environment,
+    Permission,
+    Network,
+    Tool,
+    Model,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RecoveryStrategy {
+    RetryImmediate,
+    ThinkAndPatch,
+    ReinstallDependency,
+    ChangeTool,
+    EscalateUser,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ClassifiedError {
+    pub class: ErrorClass,
+    pub fingerprint: String,
+    pub retryable: bool,
+    pub max_retries: u8,
+    pub recovery_strategy: RecoveryStrategy,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ErrorType {
     /// Temporary condition — retry the same action up to 3 times.
@@ -16,6 +50,43 @@ pub enum ErrorType {
     Logic,
     /// Hard blocker — the agent cannot resolve this alone; escalate to user.
     Blocked,
+}
+
+/// Detailed classification into modern ErrorClass
+pub fn classify_detailed(stderr: &str, stdout: &str, exit_code: i32) -> ClassifiedError {
+    let combined = format!("{} {}", stderr, stdout).to_lowercase();
+    
+    let (class, retryable, max_retries, strategy) = if combined.contains("syntaxerror") || combined.contains("unexpected token") {
+        (ErrorClass::Syntax, true, 4, RecoveryStrategy::ThinkAndPatch)
+    } else if combined.contains("cargo check") || combined.contains("error[e") || combined.contains("compile") {
+        (ErrorClass::Compile, true, 4, RecoveryStrategy::ThinkAndPatch)
+    } else if combined.contains("cannot find module") || combined.contains("not found in path") || combined.contains("no such file or directory") {
+        (ErrorClass::Dependency, true, 2, RecoveryStrategy::ReinstallDependency)
+    } else if combined.contains("assertionerror") || combined.contains("test failed") || combined.contains("[fail]") {
+        (ErrorClass::Test, true, 5, RecoveryStrategy::ThinkAndPatch)
+    } else if combined.contains("access denied") || combined.contains("permission denied") {
+        (ErrorClass::Permission, false, 0, RecoveryStrategy::EscalateUser)
+    } else if combined.contains("timed out") || combined.contains("connection refused") {
+        (ErrorClass::Network, true, 3, RecoveryStrategy::RetryImmediate)
+    } else if exit_code != 0 {
+        (ErrorClass::Runtime, true, 3, RecoveryStrategy::ThinkAndPatch)
+    } else {
+        (ErrorClass::Unknown, false, 1, RecoveryStrategy::ChangeTool)
+    };
+
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    combined.hash(&mut hasher);
+    let fingerprint = format!("{:016x}", hasher.finish());
+
+    ClassifiedError {
+        class,
+        fingerprint,
+        retryable,
+        max_retries,
+        recovery_strategy: strategy,
+    }
 }
 
 /// Classify a terminal error into one of the three error types.

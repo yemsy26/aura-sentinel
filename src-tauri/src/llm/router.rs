@@ -49,6 +49,12 @@ pub struct ModelStats {
     pub total_uses: u32,
     pub success_count: u32,
     pub total_steps: u32,
+    #[serde(default)]
+    pub total_latency_ms: u64,
+    #[serde(default)]
+    pub compile_failures: u32,
+    #[serde(default)]
+    pub test_failures: u32,
 }
 
 impl ModelStats {
@@ -56,6 +62,17 @@ impl ModelStats {
     pub fn success_rate(&self) -> f32 {
         if self.total_uses == 0 { return 0.5; }
         self.success_count as f32 / self.total_uses as f32
+    }
+
+    /// Calcula puntuación de utilidad compuesta (Utility Score)
+    pub fn composite_score(&self) -> f32 {
+        if self.total_uses == 0 { return 50.0; }
+        let base_rate = self.success_rate() * 100.0;
+        let avg_steps = (self.total_steps as f32 / self.total_uses as f32).max(1.0);
+        let step_penalty = (avg_steps * 0.5).min(20.0);
+        let failure_penalty = ((self.compile_failures + self.test_failures) as f32 * 2.0).min(30.0);
+        
+        (base_rate - step_penalty - failure_penalty).max(0.0)
     }
 }
 
@@ -146,9 +163,9 @@ pub async fn get_best_model(
         let use_stats = stats_a.map(|s| s.total_uses >= 5).unwrap_or(false)
             && stats_b.map(|s| s.total_uses >= 5).unwrap_or(false);
         if use_stats {
-            let rate_b = stats_b.map(|s| s.success_rate()).unwrap_or(0.5);
-            let rate_a = stats_a.map(|s| s.success_rate()).unwrap_or(0.5);
-            rate_b.partial_cmp(&rate_a).unwrap_or(std::cmp::Ordering::Equal)
+            let score_b = stats_b.map(|s| s.composite_score()).unwrap_or(50.0);
+            let score_a = stats_a.map(|s| s.composite_score()).unwrap_or(50.0);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
         } else {
             std::cmp::Ordering::Equal
         }
