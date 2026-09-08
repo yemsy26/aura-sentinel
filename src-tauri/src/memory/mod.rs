@@ -53,7 +53,7 @@ pub async fn get_workspace_tree_internal(path: String) -> Result<Vec<FileNode>, 
             .git_ignore(true)
             .filter_entry(|e| {
                 let name = e.file_name().to_string_lossy();
-                name != ".git" && name != "node_modules"
+                name != ".git" && name != "node_modules" && name != "__pycache__" && !name.ends_with(".pyc")
             })
             .build();
 
@@ -626,8 +626,15 @@ pub async fn read_file_content(path: String) -> Result<String, String> {
     if !file_path.exists() {
         return Err("El archivo no existe.".to_string());
     }
-    match fs::read_to_string(&file_path).await {
-        Ok(content) => Ok(content),
+    match fs::read(&file_path).await {
+        Ok(bytes) => {
+            // Evitar intentar mostrar archivos binarios pesados o compilados
+            let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if ["pyc", "exe", "dll", "bin", "iso", "png", "jpg", "jpeg", "gif", "ico", "wasm", "pdf", "zip", "tar", "gz"].contains(&ext.as_str()) {
+                return Err("Archivo binario no editable en editor de texto.".to_string());
+            }
+            Ok(String::from_utf8_lossy(&bytes).to_string())
+        },
         Err(e) => Err(format!("Error al leer archivo: {}", e)),
     }
 }
