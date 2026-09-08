@@ -432,8 +432,8 @@ async fn generate_project_runners(workspace_path: &str, prompt: &str) -> Vec<std
     generate_for_language(&language, project_root).await
 }
 
-async fn generate_for_language(language: &str, _project_root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let (_test_cmd, _build_cmd, _dev_cmd, _lint_cmd) = match language {
+async fn generate_for_language(language: &str, project_root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let (test_cmd, build_cmd, dev_cmd, lint_cmd) = match language {
         "rust" => (
             Some("cargo test".to_string()),
             Some("cargo build".to_string()),
@@ -510,12 +510,12 @@ async fn generate_for_language(language: &str, _project_root: &std::path::Path) 
     };
     
     match generate_standard_runners(
-        std::path::Path::new("."),
-        "rust",
-        Some("cargo test".to_string()),
-        Some("cargo build".to_string()),
-        Some("cargo run".to_string()),
-        Some("cargo clippy".to_string()),
+        project_root,
+        language,
+        test_cmd,
+        build_cmd,
+        dev_cmd,
+        lint_cmd,
     ).await {
         Ok(paths) => paths,
         Err(_) => Vec::new(),
@@ -529,8 +529,7 @@ fn detect_project_language(workspace_path: &str) -> String {
     
     if path.join("Cargo.toml").exists() { return "rust".to_string(); }
     if path.join("package.json").exists() {
-        // Verificar si es TypeScript
-        if Path::new(workspace_path).join("tsconfig.json").exists() {
+        if path.join("tsconfig.json").exists() {
             return "typescript".to_string();
         }
         return "javascript".to_string();
@@ -544,8 +543,7 @@ fn detect_project_language(workspace_path: &str) -> String {
     if path.join("composer.json").exists() { return "php".to_string(); }
     if path.join("pubspec.yaml").exists() { return "dart".to_string(); }
     if path.join("Package.swift").exists() { return "swift".to_string(); }
-    if path.join("Cargo.toml").exists() { return "rust".to_string(); }
-    if path.join("*.csproj").exists() || std::fs::read_dir(workspace_path).map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().extension().map(|ext| ext == "csproj").unwrap_or(false))).unwrap_or(false) {
+    if std::fs::read_dir(workspace_path).map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().extension().map(|ext| ext == "csproj").unwrap_or(false))).unwrap_or(false) {
         return "csharp".to_string();
     }
     if path.join("Gemfile").exists() { return "ruby".to_string(); }
@@ -773,6 +771,15 @@ pub async fn run_agent_loop(
     if mission_type == MissionType::Execution {
         current_role = AgentRole::Executor;
     }
+
+    // ── Arquitectura Cognitiva v4: MissionContract + EvidenceGraph + CognitiveState ──
+    let mut mission_contract = crate::core::mission_contract::MissionContract::new(&original_prompt_parsed);
+    let mut evidence_graph = crate::core::evidence::EvidenceGraph::new();
+    let mut cognitive_state = crate::core::cognitive_state::CognitiveState::new(
+        &format!("m_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)),
+        &original_prompt_parsed,
+        &workspace_path,
+    );
 
     // ── Acceptance Contract ─────────────────────────────────────────────────
     let mut acceptance_contract: Option<String> = None;
@@ -1359,6 +1366,10 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 comando = auto_cmd;
             }
         }
+
+        // ── Arquitectura Cognitiva v4: Actualizar paso y métricas ──
+        cognitive_state.update_step();
+        cognitive_state.metrics.tool_calls += 1;
 
         // ── FORCED TOOL VALIDATION ────────────────────────────────────────────
         // If the system has determined the LLM is stuck in a tool-loop,
@@ -2465,6 +2476,12 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             } else {
                                 if !comando.trim().is_empty() {
                                     acceptance_contract = Some(formato_contrato(&comando));
+                                    mission_contract.add_criterion(
+                                        &format!("AC-{:03}", mission_contract.acceptance_criteria.len() + 1),
+                                        &comando.chars().take(120).collect::<String>(),
+                                        crate::core::mission_contract::VerificationMethod::ManualReview,
+                                        false,
+                                    );
                                     emit_event(&app_handle, step_count, &format!("[CONTRATO] Criterios definidos: {}", comando.chars().take(80).collect::<String>()), "INFO");
                                 }
                                 current_role = AgentRole::Executor;
@@ -2991,6 +3008,15 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             return Ok(serde_json::to_string(&final_res).unwrap());
                         } else {
                             tester_success_hits += 1;
+                            cognitive_state.metrics.successful_verifications += 1;
+                            evidence_graph.record(
+                                crate::core::evidence::EvidenceKind::Test,
+                                "TOOL_TESTER",
+                                "tests_passed",
+                                "PASSED",
+                                1.0,
+                                step_count,
+                            );
                             current_context.push_str(&format!("Resultado Tests:\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LOS TESTS PASARON EXITOSAMENTE. LA TAREA ESTÁ COMPLETADA. EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS TOOL_TESTER.\n\n", success_msg));
                             emit_event(&app_handle, step_count, "Todos los tests pasaron exitosamente. Iniciando Auto-Indexación...", "SUCCESS");
                             // AUTO INDEXACIÓN SILENCIOSA
@@ -3413,6 +3439,33 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
                     journal.fases[journal.fase_actual].estado = "COMPLETADA".to_string();
                 }
+
+                // ── Arquitectura Cognitiva v4: CompletionGate Evaluation ──
+                let completion_decision = crate::core::completion_gate::CompletionGate::evaluate(
+                    &mission_contract,
+                    &cognitive_state,
+                    &evidence_graph,
+                );
+                match completion_decision {
+                    crate::core::completion_gate::CompletionDecision::Incomplete(missing_reasons) => {
+                        let block_msg = format!("[COMPLETION GATE] ⚠️ Finalización rechazada. Requisitos pendientes:\n{}", missing_reasons.join("\n"));
+                        emit_event(&app_handle, step_count, "[COMPLETION GATE] Criterios de misión aún no satisfechos.", "WARNING");
+                        current_context.push_str(&format!("{}\n[ACCIÓN OBLIGATORIA]: Resuelve estos puntos antes de llamar a TOOL_FINISH.\n\n", block_msg));
+                        step_count += 1;
+                        continue;
+                    },
+                    crate::core::completion_gate::CompletionDecision::Blocked(block_reasons) => {
+                        let block_msg = format!("[COMPLETION GATE] 🛑 Misión bloqueada por restricciones:\n{}", block_reasons.join("\n"));
+                        emit_event(&app_handle, step_count, "[COMPLETION GATE] Bloqueado por restricciones.", "FATAL");
+                        current_context.push_str(&format!("{}\n\n", block_msg));
+                        step_count += 1;
+                        continue;
+                    },
+                    crate::core::completion_gate::CompletionDecision::Complete => {
+                        emit_event(&app_handle, step_count, "🎯 [COMPLETION GATE] Verificación superada: Todos los criterios cumplidos.", "SUCCESS");
+                    }
+                }
+
                 emit_event(&app_handle, step_count, "Bucle completado exitosamente.", "FINISH");
                 // ── Journal: mark completed ──
                 crate::core::session_journal::close_journal(&mut journal, "COMPLETADO", &workspace_path);

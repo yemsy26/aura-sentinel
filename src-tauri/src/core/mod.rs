@@ -25,6 +25,11 @@ pub mod context_monitor;    // Monitor de ventana de contexto y compactación de
 pub mod config;             // Configuración centralizada del sistema
 pub mod logging;            // Logging unificado y estructurado en JSONL
 pub mod health;             // Health checks nativos del sistema y Ollama
+// ══ Arquitectura Cognitiva Determinista (v4) ══════════════════════════════
+pub mod mission_contract;    // Contrato formal de misión y criterios de aceptación
+pub mod cognitive_state;     // Estado cognitivo unificado (MissionState + Metrics)
+pub mod evidence;            // Grafo de evidencia verificable
+pub mod completion_gate;     // Puerta determinista de finalización
 
 
 use std::path::Path;
