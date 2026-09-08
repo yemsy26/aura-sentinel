@@ -786,6 +786,7 @@ pub async fn run_agent_loop(
 
     let mut step_count = 1u32;
     let mut max_steps = 50u32;
+    let mut step_budget = crate::core::step_budget::StepBudget::new(max_steps);
     let mut json_error_count = 0;
 
     // ── Session Journal ────────────────────────────────────────
@@ -1376,6 +1377,19 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         // ── Arquitectura Cognitiva v4: Actualizar paso y métricas ──
         cognitive_state.update_step();
         cognitive_state.metrics.tool_calls += 1;
+        step_budget.record_step();
+
+        // ── Arquitectura Cognitiva v4: Validación previa de esquema (P1) ──
+        if let crate::core::schema_validator::SchemaValidationResult::Invalid(schema_err) = 
+            crate::core::schema_validator::SchemaValidator::validate_tool_payload(&tool, &raw_value) {
+            emit_event(&app_handle, step_count, &format!("[SCHEMA ERROR] {}", schema_err), "WARNING");
+            current_context.push_str(&format!(
+                "[VALIDACIÓN DE ESQUEMA FALLIDA]: {}\nCorrige los argumentos del objeto JSON para la herramienta '{}'.\n\n",
+                schema_err, tool
+            ));
+            step_count += 1;
+            continue;
+        }
 
         // ── FORCED TOOL VALIDATION ────────────────────────────────────────────
         // If the system has determined the LLM is stuck in a tool-loop,

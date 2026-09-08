@@ -36,6 +36,9 @@ pub mod stall_detector;      // Detección de estancamiento basada en firmas de 
 pub mod experience;          // Memoria cognitiva de experiencias y consolidación
 pub mod project_profile;     // Perfil unificado y detector multi-lenguaje de proyectos
 pub mod mission_runtime;     // Orquestador desacoplado de ejecución de misiones
+pub mod envelope;            // Typed Tool Envelope para retornos de herramientas
+pub mod step_budget;         // Presupuesto de pasos con distribución 40/30/20/10
+pub mod schema_validator;    // Validación de esquemas de llamadas de herramientas
 
 
 use std::path::Path;
