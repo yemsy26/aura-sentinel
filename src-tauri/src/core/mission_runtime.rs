@@ -43,6 +43,13 @@ impl MissionRuntime {
     }
 
     #[allow(dead_code)]
+    pub fn record_action_step(&mut self) -> u32 {
+        self.cognitive_state.update_step();
+        self.cognitive_state.metrics.tool_calls += 1;
+        self.cognitive_state.mission.current_step
+    }
+
+    #[allow(dead_code)]
     pub fn can_complete(&self) -> crate::core::completion_gate::CompletionDecision {
         crate::core::completion_gate::CompletionGate::evaluate(
             &self.contract,
@@ -54,6 +61,13 @@ impl MissionRuntime {
     #[allow(dead_code)]
     pub fn check_policy(&self, proposal: &crate::core::policy::ActionProposal) -> crate::core::policy::PolicyDecision {
         PolicyEngine::authorize(proposal)
+    }
+
+    #[allow(dead_code)]
+    pub fn record_tool_result(&mut self, ok: bool) {
+        if !ok {
+            self.cognitive_state.metrics.failed_actions += 1;
+        }
     }
 }
 

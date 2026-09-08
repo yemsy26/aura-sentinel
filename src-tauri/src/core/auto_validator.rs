@@ -154,7 +154,19 @@ impl AutoValidator {
 
     /// Valida assets referenciados en HTML/CSS
     async fn validate_assets(&self, result: &mut ValidationResult) {
-        // Verificar carpeta assets/
+        // Verificar carpeta assets/ solo si existen referencias reales a assets o es un proyecto de juego
+        let has_game = self.find_files("*.js").await.iter().any(|f| {
+            if let Ok(content) = std::fs::read_to_string(f) {
+                content.contains("Phaser") || content.contains("canvas") || content.contains("this.load.")
+            } else {
+                false
+            }
+        });
+
+        if !has_game {
+            return; // Proyectos web estándar o backend no requieren forzosamente carpeta assets/
+        }
+
         let assets_dir = Path::new(&self.workspace_path).join("assets");
         let src_assets = Path::new(&self.workspace_path).join("src/assets");
         
@@ -163,7 +175,7 @@ impl AutoValidator {
                 severity: Severity::Warning,
                 file: "workspace".to_string(),
                 line: None,
-                message: "No se encontró carpeta de assets (assets/ o src/assets/)".to_string(),
+                message: "No se encontró carpeta de assets (assets/ o src/assets/) para el juego".to_string(),
                 suggested_fix: Some("Crear carpeta assets/ y añadir assets, o usar gráficos programáticos".to_string()),
             });
         }
