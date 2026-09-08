@@ -3,8 +3,8 @@ use tauri::AppHandle;
 use crate::llm::agent::emit_event;
 
 /// NLU unificado: una sola llamada LLM que corrige ortografía Y clasifica intención.
-/// Antes eran 2 llamadas (corrector + clasificador) -> ahora es 1 sola llamada.
-pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHandle, chat_history: &[String]) -> String {
+/// Usa el modelo seleccionado por el usuario para coherencia global.
+pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHandle, chat_history: &[String], requested_model: &str) -> String {
     // Resolver modelos disponibles
     let mut available_models = Vec::new();
     if let Ok(res) = reqwest::Client::new()
@@ -23,15 +23,7 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
         }
     }
 
-    // Usar FastTrack para NLU - bonsai27b está en brains.json como fast_parser
-    // esto evita el swap de modelo entre NLU y la fase de orquestación
-    let task_ctx = crate::llm::router::TaskContext {
-        task_type: crate::llm::router::TaskType::FastTrack,
-        language: None,
-    };
-
-    let model = crate::llm::router::get_best_model(&task_ctx, &available_models, app_handle, 0).await
-        .unwrap_or_else(|_| crate::llm::agent::DEFAULT_ORCHESTRATOR_MODEL.to_string());
+    let model = crate::llm::agent::resolve_model_or_fallback(requested_model, &available_models);
 
     emit_event(app_handle, 0, &format!("🧠 [NLU] Analizando con {}...", model), "PLANNING");
 

@@ -419,6 +419,44 @@ pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "qwen2.5-coder:7b";
 #[allow(dead_code)]
 pub const DEFAULT_PROGRAMMER_MODEL: &str = "qwen2.5-coder:7b";
 
+/// Resuelve el modelo solicitado contra la lista de modelos de Ollama disponibles.
+/// Si el modelo solicitado coincide exactamente o por prefijo, lo usa directamente.
+/// Solo recurre a un fallback si el modelo no está físicamente instalado en Ollama.
+pub fn resolve_model_or_fallback(requested: &str, available_models: &[String]) -> String {
+    let req = requested.trim();
+    if req.is_empty() {
+        return DEFAULT_ORCHESTRATOR_MODEL.to_string();
+    }
+
+    // 1. Coincidencia exacta
+    if let Some(found) = available_models.iter().find(|m| m.as_str() == req) {
+        return found.clone();
+    }
+
+    // 2. Coincidencia con o sin tag (ej: 'qwen2.5-coder:7b' vs 'qwen2.5-coder' o 'qwen2.5-coder:latest')
+    let req_base = req.split(':').next().unwrap_or(req);
+    if let Some(found) = available_models.iter().find(|m| {
+        let m_base = m.split(':').next().unwrap_or(m.as_str());
+        m.as_str() == req || m.starts_with(&format!("{}:", req)) || (m_base == req_base && (m.ends_with(":latest") || !req.contains(':')))
+    }) {
+        return found.clone();
+    }
+
+    // 3. Si coincide prefijo completo
+    if let Some(found) = available_models.iter().find(|m| m.starts_with(req) || req.starts_with(m.as_str())) {
+        return found.clone();
+    }
+
+    // 4. Fallback de seguridad si el modelo solicitado no existe en Ollama
+    if let Some(valid) = available_models.iter().find(|m| !m.contains("embed") && (m.contains("coder") || m.contains("qwen"))) {
+        valid.clone()
+    } else if let Some(valid) = available_models.iter().find(|m| !m.contains("embed")) {
+        valid.clone()
+    } else {
+        DEFAULT_ORCHESTRATOR_MODEL.to_string()
+    }
+}
+
 pub async fn run_agent_loop(
     mut user_message: String,
     workspace_path: String,
@@ -443,6 +481,11 @@ pub async fn run_agent_loop(
         }
     };
     emit_event(&app_handle, 0, "Pre-Flight Check superado.", "SUCCESS");
+
+    // Resolver modelos de forma global respetando estrictamente la selección del usuario.
+    let orchestrator_model = resolve_model_or_fallback(&orchestrator_model, &available_models);
+    let programmer_model = resolve_model_or_fallback(&programmer_model, &available_models);
+    emit_event(&app_handle, 0, &format!("⚙️ [CEREBRO GLOBAL ACTIVO] Modelo: {}", orchestrator_model), "INFO");
             
     let mut current_context = String::new();
     
@@ -657,7 +700,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
     // =======================================================
     if !journal.plan_generado && (mission_type == MissionType::Construction || mission_type == MissionType::Refactor) {
         emit_event(&app_handle, 0, "🏗️ [ARQUITECTO DE FASES] Analizando tarea para dividirla en fases...", "PLANNING");
-        let model_for_planner = DEFAULT_PROGRAMMER_MODEL;
+        let model_for_planner = &orchestrator_model;
         let fases = crate::llm::phase_planner::generate_phase_plan(&original_prompt_parsed, model_for_planner).await;
         
         journal.fases = fases.clone();
@@ -1057,10 +1100,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             ctx
         };
 
-        let orchestrator_model = crate::llm::router::get_best_model(&crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::Orchestrator, language: None }, &available_models, &app_handle, 0).await
-            .unwrap_or_else(|_| orchestrator_model.to_string());
-        // Cache the model name for context compression (avoids re-resolving every 10 steps)
-
+        // El modelo del orquestador respeta la selección global del usuario (ya resuelto en resolve_model_or_fallback)
         let role_label = match current_role {
             AgentRole::Planner  => "🧠 PLANIFICADOR",
             AgentRole::Executor => "⚙️ EJECUTOR",
@@ -2389,27 +2429,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 
                 let mut qwen_prompt = format!("Instrucción principal: {}{}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message, compile_alert_note);
 
-                let mut target_model = if programmer_model.to_lowercase().contains("embed") {
-                    if !orchestrator_model.to_lowercase().contains("embed") {
-                        orchestrator_model.clone()
+                let target_model = resolve_model_or_fallback(
+                    if !programmer_model.is_empty() && !programmer_model.to_lowercase().contains("embed") {
+                        &programmer_model
                     } else {
-                        DEFAULT_PROGRAMMER_MODEL.to_string()
-                    }
-                } else {
-                    programmer_model.clone()
-                };
-
-                // Fallback de seguridad: si el modelo solicitado no está instalado en Ollama (ej. si fue borrado o cambió de nombre),
-                // usar el primer modelo disponible que sirva para programar (ej. qwen) o el orquestador actual.
-                if !available_models.iter().any(|m| m.starts_with(&target_model)) {
-                    if let Some(valid) = available_models.iter().find(|m| m.contains("qwen") || m.contains("coder")) {
-                        target_model = valid.clone();
-                    } else if let Some(valid) = available_models.iter().find(|m| !m.contains("embed")) {
-                        target_model = valid.clone();
-                    } else {
-                        target_model = DEFAULT_PROGRAMMER_MODEL.to_string();
-                    }
-                }
+                        &orchestrator_model
+                    },
+                    &available_models,
+                );
                 emit_event(&app_handle, step_count, &format!("[ROUTER] Cerebro Programador Seleccionado: {}", target_model), "INFO");
 
                 let mut exito_bucle_programador = false;

@@ -505,7 +505,7 @@ pub async fn process_user_prompt(mut user_message: String, workspace_path: Strin
         journal.chat_history = combined_history.clone();
         crate::core::session_journal::save_journal(&workspace_path, &journal);
 
-        let mut nlu_response = translator::translate_to_technical_intent(&user_message, &app_handle, &combined_history).await;
+        let mut nlu_response = translator::translate_to_technical_intent(&user_message, &app_handle, &combined_history, &orchestrator_model).await;
         let start_idx = nlu_response.find('{');
         let end_idx = nlu_response.rfind('}');
         if let (Some(s), Some(e)) = (start_idx, end_idx) {

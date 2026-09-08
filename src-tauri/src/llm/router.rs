@@ -26,12 +26,14 @@ impl TaskType {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TaskContext {
     pub task_type: TaskType,
     pub language: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 pub struct BrainConfig {
     pub orchestrator: Vec<String>,
     pub fast_parser: Vec<String>,
@@ -50,6 +52,7 @@ pub struct ModelStats {
 }
 
 impl ModelStats {
+    #[allow(dead_code)]
     pub fn success_rate(&self) -> f32 {
         if self.total_uses == 0 { return 0.5; }
         self.success_count as f32 / self.total_uses as f32
@@ -98,6 +101,7 @@ pub fn record_model_result(model: &str, task_type: &TaskType, success: bool, ste
     save_stats(&stats);
 }
 
+#[allow(dead_code)]
 pub async fn get_best_model(
     context: &TaskContext,
     available_models: &[String],

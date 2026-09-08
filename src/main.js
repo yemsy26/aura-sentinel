@@ -32,8 +32,11 @@ async function loadOllamaModels() {
         });
         mostPowerfulModel = powerCandidate ? powerCandidate.name : (availableModels[0] ? availableModels[0].name : null);
 
-        // Smart default: Qwen 2.5 Coder 7B (ultra fast + accurate), fallback to others
-        if (availableModels.some(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen2.5-coder"))) {
+        // Restore user choice from localStorage, or smart default
+        const savedModel = localStorage.getItem('aura_active_model');
+        if (savedModel && availableModels.some(m => m.name === savedModel)) {
+            agentModelSelect.value = savedModel;
+        } else if (availableModels.some(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen2.5-coder"))) {
             agentModelSelect.value = availableModels.find(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen2.5-coder")).name;
         } else if (availableModels.some(m => m.name.includes("gemma4-e4b"))) {
             agentModelSelect.value = availableModels.find(m => m.name.includes("gemma4-e4b")).name;
@@ -46,6 +49,7 @@ async function loadOllamaModels() {
         updateModelStatusUI();
 
         agentModelSelect.onchange = () => {
+            localStorage.setItem('aura_active_model', agentModelSelect.value);
             updateModelStatusUI();
             logSystemThought(`[CEREBRO] Modelo activo cambiado a: ${agentModelSelect.value}`, '#58a6ff');
         };
@@ -58,12 +62,14 @@ async function loadOllamaModels() {
                     const standard = availableModels.find(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen") || m.name.includes("gemma4-e4b") || m.name.includes("llama3.1"));
                     if (standard) {
                         agentModelSelect.value = standard.name;
+                        localStorage.setItem('aura_active_model', standard.name);
                         turboBtn.classList.remove('turbo-active');
                         turboBtn.textContent = '⚡ MÁXIMA POTENCIA';
                         logSystemThought(`[MODO TURBO] Desactivado. Modelo estándar: ${standard.name}`, '#8b949e');
                     }
                 } else {
                     agentModelSelect.value = mostPowerfulModel;
+                    localStorage.setItem('aura_active_model', mostPowerfulModel);
                     turboBtn.classList.add('turbo-active');
                     turboBtn.textContent = `🚀 POTENCIA MÁXIMA (${mostPowerfulModel.split(':')[0]})`;
                     logSystemThought(`[MODO TURBO ACTIVADO] Asignado cerebro de máxima potencia: ${mostPowerfulModel}`, '#a855f7');
