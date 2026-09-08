@@ -2,69 +2,66 @@
 **Agente Autónomo de Ingeniería de Software DevSecOps de Nivel Industrial**  
 *Desarrollado por Ramón Antonio Burgos Jerez*
 
-> 🏆 **Nivel Alcanzado: Agente Autónomo Completo — Tier 0 (v3.0.0 — Septiembre 2026)**  
-> Arquitectura de autonomía completa y ejecución determinista. Estándar de la industria comparable a SWE-agent y Devin 2.0.
+> 🏆 **Nivel Alcanzado: Agente Autónomo Cognitivo Completo — Tier 0 (v4.0.0 — Septiembre 2026)**  
+> Arquitectura de autonomía completa, determinismo formal, contratos de misión y ejecución gobernada por puertas de finalización verificables. Estándar de la industria equiparable a Devin 2.0 y SWE-agent (Princeton ACI).
 
-Aura-Sentinel es un agente de Inteligencia Artificial de alto rendimiento diseñado para el ciclo de vida completo de desarrollo de software: planificación de arquitecturas, generación modular de código, verificación estricta de compilación y ejecución de suites de pruebas con auto-reparación en bucle cerrado. Construido sobre un núcleo nativo en **Rust (Tauri)** acoplado a una interfaz moderna con **Monaco Editor**, orquesta modelos locales (Ollama) sin depender de APIs de terceros en la nube, garantizando máxima privacidad y latencia cero.
-
----
-
-## 🏆 Estado del Sistema (v3.0.0 Enterprise)
-
-| Módulo Subyacente | Estado | Nivel / Tier |
-|---|---|---|
-| **FSM Multi-Agente (Planificador → Ejecutor → Crítico)** | 🟢 100% Operativo | Tier 0 (Industrial) |
-| **Unified Brain Selector & Turbo Mode (`⚡ MÁXIMA POTENCIA`)** | 🟢 100% Operativo | Tier 0 (Industrial) |
-| **Dynamic Phase Gatekeeper (PESP v2 & Smart Alias)** | 🟢 100% Operativo | Tier 0 (Industrial) |
-| **AutoValidator Subsystem (`core::auto_validator`)** | 🟢 100% Conectado | Tier 0 (Industrial) |
-| **SpectraSAT FFI — Motor Lógico Booleano en RAM** | 🟢 100% Operativo | Tier 0 (Determinista) |
-| **Zero-Hint Router (Enrutamiento Semántico Autónomo)** | 🟢 100% Operativo | Tier 0 (Industrial) |
-| **Mission Persistence (Persistencia Cross-Restart)** | 🟢 100% Operativo | Tier 0 (Resiliente) |
-| **Sanity Monitor (Anti-Stall & Recuperación Activa)** | 🟢 100% Operativo | Tier 0 (Industrial) |
-| **Monaco Editor & Tarjetas de Artefactos Interactivas** | 🟢 100% Operativo | Tier 0 (UI/UX) |
-| **TOOL_CONTAINER (Docker & Podman Nativo)** | 🟢 100% Operativo | Tier 0 (DevOps) |
-| **Scheduler Autónomo (Cron Tokio Asíncrono)** | 🟢 100% Operativo | Tier 0 (Automatización) |
-| **Memoria Episódica Multi-Sesión (JSONL Vectorial)** | 🟢 100% Operativo | Tier 0 (Cognición) |
-| **Git-Shield & Auto-Sanación sin Amnesia** | 🟢 100% Operativo | Tier 0 (Resiliente) |
-| **Compresión Dinámica de Contexto & Sanitizer** | 🟢 100% Operativo | Tier 0 (Optimizado) |
+Aura-Sentinel es un sistema de ejecución e ingeniería de software autónomo de alto rendimiento. Ejerce control sobre el ciclo de vida de desarrollo de software: deducción de contratos formales de aceptación, particionado de fases, generación modular de código atómico, validación sintáctica determinista, presupuestación matemática de pasos y suites de verificación con auto-reparación en bucle cerrado. Construido sobre un motor nativo en **Rust (Tauri)** con **Monaco Editor**, orquesta modelos locales (Ollama) sin depender de servicios en la nube, garantizando cero latencia y soberanía absoluta de datos.
 
 ---
 
-## 🏛️ Arquitectura del Motor Autónomo
+## 🏆 Estado del Sistema (v4.0.0 Enterprise Cognitive Runtime)
 
-### 1. FSM Multi-Agente Cognitiva (Planificador → Ejecutor → Crítico)
-- **Planificador (Planner / Zero-Hint Router)**: Inicia la misión abstrayendo el objetivo en un contrato de aceptación estricto y un desglose modular de micro-metas. Deduce implícitamente herramientas matemáticas o de desarrollo sin necesidad de sintaxis forzada.
-- **Ejecutor (Executor)**: Genera y edita archivos de código uno a uno con validación de sintaxis inmediata, ejecuta comandos de terminal, orquesta contenedores e instala dependencias.
-- **Crítico (Critic)**: Evalúa el cumplimiento del 100% de los criterios del contrato. Ejecuta pruebas automatizadas y prohíbe la finalización (`TOOL_FINISH`) si existen fallos de compilación, enlaces de assets rotos o errores en tests.
+| Módulo / Capa Subyacente | Estado | Nivel / Tier | Garantía Arquitectónica |
+|---|---|---|---|
+| **Contrato Formal de Misión (`mission_contract`)** | 🟢 100% Operativo | Tier 0 (Determinista) | Criterios de aceptación verificables antes de generar código |
+| **Puerta de Finalización (`completion_gate`)** | 🟢 100% Operativo | Tier 0 (Gobernado) | Bloquea `TOOL_FINISH` si restan criterios o evidencias pendientes |
+| **Grafo de Evidencias Verificables (`evidence`)** | 🟢 100% Operativo | Tier 0 (Auditabilidad) | Registro criptográfico y comprobación de aserciones de prueba |
+| **Presupuesto de Pasos 40/30/20/10 (`step_budget`)** | 🟢 100% Operativo | Tier 0 (Confiabilidad) | 40% dev / 30% verificación / 20% auto-reparación / 10% handoff |
+| **Validación Previa de Esquema (`schema_validator`)** | 🟢 100% Operativo | Tier 0 (Resiliente) | Rechaza payloads JSON defectuosos antes del despacho al sistema |
+| **Typed Error Envelope (`envelope`, `error_classifier`)** | 🟢 100% Operativo | Tier 0 (Industrial) | Señalización `{retryable, requires_human}` anti-bucles |
+| **Motor de Políticas y Seguridad (`policy`)** | 🟢 100% Operativo | Tier 0 (Seguridad) | Bloquea comandos destructivos y requiere aprobación en riesgos altos |
+| **Detector de Estancamiento (`stall_detector`, `state_delta`)**| 🟢 100% Operativo | Tier 0 (Anti-Loop) | Detección matemática de delta-cero sobre el sistema de archivos |
+| **Memoria Cognitiva & Lecciones (`experience`)** | 🟢 100% Operativo | Tier 0 (Cognición) | Huella de tareas y reutilización de estrategias análogas previas |
+| **Perfil Multi-Lenguaje (`project_profile`)** | 🟢 100% Operativo | Tier 0 (Multi-Stack) | Detección automática de Rust, Python, TS/JS, Go, C# y frameworks |
+| **Orquestador Desacoplado (`mission_runtime`)** | 🟢 100% Operativo | Tier 0 (Modular) | Encapsulamiento del loop y métricas en tiempo real |
+| **SpectraSAT FFI — Motor Booleano en RAM** | 🟢 100% Operativo | Tier 0 (Determinista) | Satisfacibilidad lógica garantizada con chips visuales interactivos |
+| **Persistencia Atómica & Sesiones (`session_journal`)** | 🟢 100% Operativo | Tier 0 (Tolerancia) | Escrituras seguras vía `.tmp` + rename con UUIDs v4 |
+| **FSM Multi-Agente (Planificador → Ejecutor → Crítico)** | 🟢 100% Operativo | Tier 0 (Industrial) | Control de flujo gobernado por el arnés, no por el modelo |
 
-### 2. Unified Brain Selector & Turbo Mode (`⚡ MÁXIMA POTENCIA`)
-- **Control Centralizado**: Un selector único e intuitivo en la barra superior unifica el modelo activo tanto para el frontend como para el backend.
-- **Modo Turbo**: Permite activar la aceleración directa para omitir pasos intermedios repetitivos y maximizar el rendimiento en tareas guiadas por scripts.
-- **HUD de Rendimiento**: Telemetría visual en vivo con temperatura, tiempo de respuesta y estado de GPU offload.
+---
 
-### 3. Dynamic Phase Gatekeeper (PESP v2) & Smart Alias Matching
-- **Detección Flexible de Entregables**: Resuelve dinámicamente alias de archivos solicitados por el usuario (ej. `cyber_sentinel.html`, `dashboard.html`, `index.html`) evitando atascos rígidos por nombres de archivo predeterminados.
-- **Auto-Convergencia Determinista**: Cuando un script de verificación (ej. `python verify_dashboard.py`) pasa con código de salida 0 y 100% de aserciones válidas, el sistema intercepta el resultado e invoca inmediatamente `TOOL_FINISH`, erradicando bucles infinitos de re-testeo.
+## 🏛️ Arquitectura del Motor Autónomo v4
 
-### 4. AutoValidator Proactivo Conectado
-- Integrado directamente en `validate_workspace(&workspace_path)`.
-- Escanea de forma recursiva archivos HTML y JS en busca de dependencias locales faltantes (`<script src="...">`, `<link href="...">`, imágenes, audio).
-- Reporta advertencias y errores accionables al agente para que subsane enlaces rotos antes de entregar el proyecto.
-- Protegido contra inyecciones de código incompatibles en proyectos web convencionales.
+```text
+               OBJETIVO DEL USUARIO
+                         ↓
+               MISSION CONTRACT (ACs)
+                         ↓
+      POLICY ENGINE & PRE-EXECUTION SCHEMA
+                         ↓
+             FSM RUNTIME ORCHESTRATOR
+    [ Planificador → Ejecutor → Crítico ]
+                         ↓
+      EVIDENCE GRAPH & STATE DELTA TRACKER
+                         ↓
+       COMPLETION GATE (Aprobación Formal)
+                         ↓
+          ENTREGA DETERMINISTA & EXPERIENCIA
+```
 
-### 5. SpectraSAT FFI — Motor de Satisfacibilidad en RAM
-- Resuelve problemas de lógica proposicional (SAT/UNSAT) mediante una biblioteca nativa en Rust compilada con optimizaciones avanzadas de CPU.
-- Procesa restricciones en microsegundos y emite veredictos certificados (`SAT_CERTIFIED` o `UNSAT_*`) con la asignación booleana exacta de cada variable, visualizadas mediante chips interactivos en la interfaz de usuario.
+### 1. Gobernanza por Contratos y Puerta de Cierre
+Aura Sentinel v4 no permite que el LLM declare arbitrariamente que terminó una tarea mediante `TOOL_FINISH`. La **Puerta de Finalización** (`CompletionGate`) coteja matemáticamente que cada criterio de aceptación del contrato cuente con evidencia verificada (códigos de retorno 0, pruebas aprobadas, hashes de archivos en disco). Si falta una sola comprobación requerida, el cierre es rechazado con instrucciones exactas para subsanar el faltante.
 
-### 6. Sanity Monitor & Anti-Stall Engine
-- Monitorea la actividad del agente cada 5 pasos.
-- Detecta loops de herramientas, comandos repetitivos sin efecto o patrones de estancamiento.
-- Inyecta advertencias correctivas de alta prioridad en el contexto para redirigir la estrategia del modelo.
+### 2. Presupuesto Asignado por Fases (40/30/20/10)
+Inspirado en el estándar de Devin 2.0 y SWE-agent:
+- **40% Ejecución Inicial**: Escritura limpia de componentes y dependencias.
+- **30% Verificación Rigurosa**: Ejecución de suites de prueba automatizadas.
+- **20% Auto-Reparación Guiada**: Reflexión profunda y resolución de aserciones fallidas sin tocar al usuario.
+- **10% Margen de Handoff Seguro**: Garantiza la generación del informe final antes de agotar el límite de pasos.
 
-### 7. Monaco Editor & Tarjetas de Artefactos
-- Visualización de código en tiempo real con resaltado de sintaxis profesional.
-- Selector de archivos en vivo para explorar los entregables del workspace mientras el agente trabaja.
-- Tarjetas de artefactos dedicadas para salidas de consola, reportes de pruebas unitarias y veredictos de satisfacción lógica.
+### 3. Autoprotección y Prevención de Estancamiento
+- **StallDetector**: Monitorea la firma de progreso (`ProgressSignature`). Si el modelo ejecuta herramientas repetidamente sin alterar el estado del disco o sin avanzar en el grafo de evidencias, se activan intercepciones duras que rompen el bucle.
+- **PolicyEngine**: Impide comandos peligrosos fuera de sandbox (`format`, `diskpart`, borrado de raíces del sistema).
 
 ---
 
@@ -92,20 +89,18 @@ Aura-Sentinel es un agente de Inteligencia Artificial de alto rendimiento diseñ
 
 ## 🌐 Ecosistemas y Lenguajes Soportados
 
-El agente detecta automáticamente la tecnología del workspace y adapta sus comandos de prueba y validación:
+El agente detecta automáticamente la tecnología del workspace con `ProjectProfile` y adapta sus comandos de prueba y validación:
 
-- **Rust**: `Cargo.toml` (`cargo check`, `cargo test`)
-- **Python**: `pyproject.toml`, `requirements.txt`, `test_*.py` (`pytest`, `compileall`)
-- **Web / Frontend**: `*.html`, `*.css`, `*.js`, `*.ts` (`node --check`, AutoValidator)
+- **Rust**: `Cargo.toml` (`cargo check`, `cargo test`, `cargo clippy`)
+- **Python**: `pyproject.toml`, `requirements.txt`, `test_*.py` (`pytest`, `ruff`, `compileall`)
+- **Web / Frontend**: `*.html`, `*.css`, `*.js`, `*.ts` (AutoValidator desacoplado)
 - **Node.js / TypeScript**: `package.json`, `tsconfig.json` (`npm test`, `jest`, `vitest`)
-- **Go**: `go.mod`, `*_test.go` (`go test ./...`)
+- **Go**: `go.mod`, `*_test.go` (`go test ./...`, `golangci-lint`)
 - **Java**: `pom.xml`, `build.gradle` (`mvn test`, `gradlew test`)
 - **Kotlin / Android**: `build.gradle.kts`, `AndroidManifest.xml`
-- **C / C++**: `CMakeLists.txt`, `Makefile` (`gcc`, `make test`)
+- **C / C++ / C#**: `CMakeLists.txt`, `Makefile`, `*.csproj` (`dotnet test`, `make test`)
 - **Solidity / Web3**: `hardhat.config.js`, `foundry.toml` (`npx hardhat test`, `forge test`)
-- **PHP**: `phpunit.xml`, `*Test.php` (`phpunit`)
-- **Dart / Flutter**: `pubspec.yaml` (`flutter test`)
-- **Swift**: `Package.swift` (`swift test`)
+- **PHP, Dart / Flutter, Swift**: Detección nativa con suites específicas.
 
 ---
 
