@@ -105,14 +105,22 @@ pub async fn start_background_task(workspace_path: &str, task_id: &str, command:
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            logs_clone1.lock().await.push(format!("[STDOUT] {}", line));
+            let mut guard = logs_clone1.lock().await;
+            if guard.len() >= 500 {
+                guard.remove(0);
+            }
+            guard.push(format!("[STDOUT] {}", line));
         }
     });
 
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            logs_clone2.lock().await.push(format!("[STDERR] {}", line));
+            let mut guard = logs_clone2.lock().await;
+            if guard.len() >= 500 {
+                guard.remove(0);
+            }
+            guard.push(format!("[STDERR] {}", line));
         }
     });
 
@@ -190,16 +198,23 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
     };
 
     if path.join("requirements.txt").exists() || path.join("main.py").exists() || has_python_files() {
-        // BUG-4 FIX: Dynamically resolve Python path from USERPROFILE instead of hardcoding username
+        // Multi-source cascade Python detection (Scoop, Conda, Pyenv, AppData, PATH)
         let python_cmd = {
             let profile = std::env::var("USERPROFILE").unwrap_or_default();
-            let scoop_python = std::path::PathBuf::from(&profile)
-                .join("scoop").join("apps").join("python").join("current").join("python.exe");
-            if scoop_python.exists() {
-                scoop_python.to_string_lossy().into_owned()
-            } else {
-                "python".to_string()
-            }
+            let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
+            let candidates = [
+                std::path::PathBuf::from(&profile).join("scoop").join("apps").join("python").join("current").join("python.exe"),
+                std::path::PathBuf::from(&profile).join("miniconda3").join("python.exe"),
+                std::path::PathBuf::from(&profile).join("anaconda3").join("python.exe"),
+                std::path::PathBuf::from(&local_app_data).join("Programs").join("Python").join("Python312").join("python.exe"),
+                std::path::PathBuf::from(&local_app_data).join("Programs").join("Python").join("Python311").join("python.exe"),
+                std::path::PathBuf::from(&local_app_data).join("Programs").join("Python").join("Python310").join("python.exe"),
+                std::path::PathBuf::from(&profile).join(".pyenv").join("pyenv-win").join("shims").join("python.exe"),
+            ];
+            candidates.iter()
+                .find(|p| p.exists())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "python".to_string())
         };
         let output = Command::new(&python_cmd)
             .arg("-m")

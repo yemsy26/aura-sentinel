@@ -203,25 +203,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 }
             });
+        });
+    }
 
-            // HOT-RELOAD: backend agent writes a file
-            window.__TAURI__.event.listen('file-updated', async (event) => {
-                const updatedPath = event.payload.path;
-                const shortName = updatedPath.split(/[\\\/]/).pop();
-                logSystemThought(`[HOT-RELOAD] Agente modificó: ${shortName}`, '#e3b341');
-                if (openTabs.has(updatedPath)) {
-                    try {
-                        const newContent = await invoke('read_file_content', { path: updatedPath });
-                        const tab = openTabs.get(updatedPath);
+    // HOT-RELOAD: backend agent writes a file (always active even if editor is deferred)
+    if (window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('file-updated', async (event) => {
+            const updatedPath = event.payload.path;
+            const shortName = updatedPath.split(/[\\\/]/).pop();
+            logSystemThought(`[HOT-RELOAD] Agente modificó: ${shortName}`, '#e3b341');
+            if (openTabs.has(updatedPath)) {
+                try {
+                    const newContent = await invoke('read_file_content', { path: updatedPath });
+                    const tab = openTabs.get(updatedPath);
+                    if (tab && tab.model) {
                         const fullRange = tab.model.getFullModelRange();
                         tab.model.pushEditOperations([], [{ range: fullRange, text: newContent }], () => null);
                         tab.isDirty = false;
                         renderTabs();
-                    } catch (e) {
-                        console.error("Hot-reload error:", e);
                     }
+                } catch (e) {
+                    console.error("Hot-reload error:", e);
                 }
-            });
+            }
         });
     }
 

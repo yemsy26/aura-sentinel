@@ -155,9 +155,9 @@ struct EmbeddingResponse {
 pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
 
 pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
-    // Timeout corto (8s) para no bloquear el pipeline si nomic no está disponible
+    // Timeout de 30s para resiliencia en sistemas con CPU/Ollama bajo carga
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Error construyendo cliente de embeddings: {}", e))?;
     let url = "http://localhost:11434/api/embeddings";
