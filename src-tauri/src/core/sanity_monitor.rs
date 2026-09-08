@@ -61,22 +61,31 @@ pub fn check(
         if level != "RED" { level = "YELLOW"; }
     }
 
-    // ─── 2. Semantic Error Loop Detection (same error output ≥3 times) ───
-    //    If the last 3 hashes are identical, the agent is getting the same
-    //    error output regardless of what it tries — escalate immediately.
-    if last_error_hashes.len() >= 3 {
-        let recent = &last_error_hashes[last_error_hashes.len().saturating_sub(3)..];
-        if recent.iter().all(|&h| h == recent[0] && h != 0) {
-            score -= 0.45;
+    // ─── 2. Semantic Error Loop Detection (same error output ≥2 times) ───
+    //    If the last 2 hashes are identical, the agent is getting the exact same
+    //    error output without real change. Also check if last 4 show an alternating pattern.
+    if last_error_hashes.len() >= 2 {
+        let recent_2 = &last_error_hashes[last_error_hashes.len().saturating_sub(2)..];
+        if recent_2[0] == recent_2[1] && recent_2[0] != 0 {
+            score -= 0.50;
             issues.push(format!(
                 "🔴 ERROR SEMÁNTICO REPETIDO: La misma salida de error apareció {} veces consecutivas. \
                  El agente está atascado en un loop de corrección sin cambio real. \
                  ACCIÓN: Usa TOOL_THINK para reconsiderar la estrategia completamente. \
                  Si es un script de verificación, usa regex flexible en lugar de coincidencia exacta.",
-                recent.len()
+                recent_2.len()
             ));
             level = "RED";
             forced_tool = Some("TOOL_THINK".to_string());
+        } else if last_error_hashes.len() >= 4 {
+            let recent_4 = &last_error_hashes[last_error_hashes.len().saturating_sub(4)..];
+            // Check alternating error cycle A-B-A-B
+            if recent_4[0] == recent_4[2] && recent_4[1] == recent_4[3] && recent_4[0] != recent_4[1] && recent_4[0] != 0 {
+                score -= 0.50;
+                issues.push("🔴 BUCLE OSCILANTE DETECTADO: Ciclo alternante de 2 errores repetidos detectado en los últimos 4 pasos. Reconsidera la arquitectura.".to_string());
+                level = "RED";
+                forced_tool = Some("TOOL_THINK".to_string());
+            }
         }
     }
 

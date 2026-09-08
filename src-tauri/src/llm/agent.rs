@@ -738,10 +738,10 @@ pub async fn run_agent_loop(
     // FIX-B3: Per-file patch failure counter. When a file accumulates 3+ PATCH_FAILs in a row,
     // escalate to full-file overwrite mode instead of retrying failed patches forever.
     let mut patch_fail_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    // ── Semantic Error Loop Detector — ring buffer of last 5 terminal output hashes ──
-    // Populated whenever a TOOL_TERMINAL command produces an error. If last 3 are identical,
+    // ── Semantic Error Loop Detector — ring buffer of last 7 terminal output hashes ──
+    // Populated whenever a TOOL_TERMINAL command produces an error. If identical errors repeat,
     // sanity_monitor escalates to RED and forces TOOL_THINK.
-    let mut last_error_hashes: std::collections::VecDeque<u64> = std::collections::VecDeque::with_capacity(5);
+    let mut last_error_hashes: std::collections::VecDeque<u64> = std::collections::VecDeque::with_capacity(7);
 
     let mut retry_tracker = crate::core::error_classifier::RetryTracker::new();
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
@@ -1974,7 +1974,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     let mut hasher = DefaultHasher::new();
                                     err.trim().hash(&mut hasher);
                                     let err_hash = hasher.finish();
-                                    if last_error_hashes.len() >= 5 { last_error_hashes.pop_front(); }
+                                    if last_error_hashes.len() >= 7 { last_error_hashes.pop_front(); }
                                     last_error_hashes.push_back(err_hash);
                                 }
 
