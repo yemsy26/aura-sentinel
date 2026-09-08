@@ -200,6 +200,10 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
     let mut exitosos = 0;
     let mut exitosos_nombres = Vec::new();
     let mut fuzzy_logs = Vec::new();
+    // FIX-B2: Track patches that fail with "no match at all" (not even in fuzzy_logs).
+    // Without this, apply_code_changes returns Ok("0 archivos...") — a false success.
+    let mut patch_not_found_count = 0usize;
+    let mut patch_not_found_files: Vec<String> = Vec::new();
     
     for cambio in cambios {
         let path_obj = Path::new(&cambio.archivo);
@@ -366,6 +370,9 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
             
             if !matched {
                 eprintln!("Aura-Sentinel Aviso: No se encontró el texto exacto ni difuso aplicable en {}", cambio.archivo);
+                // FIX-B2: Count this as a real patch failure (not just a fuzzy rejection).
+                patch_not_found_count += 1;
+                patch_not_found_files.push(cambio.archivo.clone());
                 continue;
             }
         }
@@ -407,18 +414,35 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
         format!("{}\n{}", base_msg, fuzzy_logs.join("\n"))
     };
 
-    // ── CRITICAL FIX: if we had cambios to apply but applied ZERO of them,
-    //    return Err so the agent knows its patches didn't land. Previously this
-    //    returned Ok("0 archivos modificados exitosamente.") — a false success.
+    // ── CRITICAL FIX-B2: if we had cambios to apply but applied ZERO of them,
+    //    return Err so the agent knows its patches didn't land.
+    //    Case A: fuzzy-rejected patches (fuzzy_logs not empty).
+    //    Case B: patches where search text didn't exist at all (patch_not_found_count > 0).
+    //    Both cases previously returned Ok("0 archivos...") — a false success.
     if exitosos == 0 && !fuzzy_logs.is_empty() {
-        // Some patches were attempted (fuzzy_logs has rejection notes) but none applied.
+        // Case A: Some patches were attempted (fuzzy_logs has rejection notes) but none applied.
         return Err(format!(
             "[PATCH_FAIL] Ningún parche fue aplicado (0 de {} cambio(s) encontraron coincidencia).\n\
              Verifica que el texto en el campo 'buscar' exista exactamente en los archivos destino.\n\
              Detalles: {}\n\
-             CONSEJO: Lee el archivo primero con TOOL_READ_FILE y copia el fragmento exacto a buscar.",
+             CONSEJO: Lee el archivo con TOOL_TERMINAL ('type <archivo>') y copia el fragmento exacto a buscar.\n\
+             Si el archivo es nuevo o muy diferente, usa buscar: \"\" para hacer overwrite completo.",
             fuzzy_logs.len(),
             fuzzy_logs.join(" | ")
+        ));
+    }
+    if exitosos == 0 && patch_not_found_count > 0 {
+        // Case B: All patches silently failed because search text wasn't in the file at all.
+        return Err(format!(
+            "[PATCH_FAIL] {} parche(s) fallaron: el texto buscado NO existe en los archivos {:?}.\n\
+             Posibles causas: (1) El archivo tiene contenido diferente al esperado, \
+             (2) el modelo alucinó el contenido del archivo, (3) el archivo aún no ha sido creado.\n\
+             SOLUCIÓN OBLIGATORIA: Usa TOOL_TERMINAL con 'type <archivo>' para leer el contenido real \
+             del archivo, luego corrige el campo 'buscar' con texto que EXISTA en el archivo.\n\
+             ALTERNATIVA: Si quieres sobreescribir el archivo completo, usa buscar: \"\" y pon el \
+             contenido nuevo en 'reemplazar'.",
+            patch_not_found_count,
+            patch_not_found_files
         ));
     }
 

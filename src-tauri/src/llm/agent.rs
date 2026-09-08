@@ -546,6 +546,9 @@ pub async fn run_agent_loop(
     let mut mandatory_tools_executed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut forced_next_tool: Option<(String, String)> = None;
     let mut intercept_consecutive: u32 = 0; // track consecutive LLM disobedience
+    // FIX-B3: Per-file patch failure counter. When a file accumulates 3+ PATCH_FAILs in a row,
+    // escalate to full-file overwrite mode instead of retrying failed patches forever.
+    let mut patch_fail_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     // ── Semantic Error Loop Detector — ring buffer of last 5 terminal output hashes ──
     // Populated whenever a TOOL_TERMINAL command produces an error. If last 3 are identical,
     // sanity_monitor escalates to RED and forces TOOL_THINK.
@@ -1147,28 +1150,80 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         if let Some((forced, override_msg)) = &forced_override {
             if tool != *forced {
                 intercept_consecutive += 1;
-                let release = intercept_consecutive >= 3;
-                let extra = if release {
-                    "MÁXIMO ALCANZADO: orden cancelada, usa la herramienta que prefieras."
-                } else {
-                    "Corrige tu elección y usa la herramienta indicada."
-                };
                 let error_msg = format!(
-                    "[INTERCEPT {}/3] Se te ordenó usar '{}' (razón: '{}'). Elegiste '{}'. {}",
-                    intercept_consecutive, forced, override_msg, tool, extra
+                    "[INTERCEPT {}/3] Se te ordenó usar '{}' (razón: '{}'). Elegiste '{}'. Corrige tu elección.",
+                    intercept_consecutive, forced, override_msg, tool
                 );
                 current_context.push_str(&format!("{}\n\n", error_msg));
                 emit_event(&app_handle, step_count,
                     &format!("[INTERCEPT {}/3] LLM desobedeció orden de usar {}", intercept_consecutive, forced),
                     "WARNING");
 
-                if release {
-                    // Give up forcing — let the agent choose freely
-                    forced_next_tool = None;
-                    intercept_consecutive = 0;
+                // FIX-A1: Never give up — if model ignores the forced tool 3 times in a row,
+                // HARD-EXECUTE the forced action directly without asking the LLM again.
+                // This is the only reliable way to break a loop with a stubborn small model.
+                if intercept_consecutive >= 3 {
                     emit_event(&app_handle, step_count,
-                        "[INTERCEPT] Orden cancelada tras 3 intentos. Agente libre.", "WARNING");
+                        "[INTERCEPT] Modelo ignoró la orden 3 veces. Ejecutando acción forzada directamente...", "WARNING");
+
+                    // Determine what to hard-execute based on the forced tool
+                    let forced_cmd_to_run = if forced == "TOOL_TERMINAL" {
+                        // Run the command from the override_msg if it looks like a shell command,
+                        // otherwise default to a safe directory listing
+                        if override_msg.contains("type ") || override_msg.contains("dir ") || override_msg.contains("python ") || override_msg.contains("cargo ") {
+                            // Extract the command portion after common prefixes
+                            let cmd_part = override_msg
+                                .split("ejecutar '").nth(1).and_then(|s| s.split('\'').next())
+                                .or_else(|| override_msg.split("comando: '").nth(1).and_then(|s| s.split('\'').next()))
+                                .or_else(|| override_msg.split("'TOOL_TERMINAL'. ").nth(1))
+                                .map(|s| s.trim())
+                                .unwrap_or("dir /b");
+                            cmd_part.to_string()
+                        } else {
+                            // Safe fallback: list workspace files so context is enriched
+                            format!("dir /b \"{}\"", workspace_path)
+                        }
+                    } else {
+                        // For other forced tools, just inject the reason into context and continue
+                        String::new()
+                    };
+
+                    if !forced_cmd_to_run.is_empty() {
+                        // Execute directly using the same function as TOOL_TERMINAL
+                        match execute_terminal_command(&workspace_path, &forced_cmd_to_run).await {
+                            Ok(output) => {
+                                let out_len = output.len();
+                                let digest = if out_len > 3000 { &output[..3000] } else { &output[..] };
+                                let auto_msg = format!(
+                                    "[INTERCEPTOR AUTO-EXEC] Ejecuté '{}' directamente porque el modelo ignoró la orden.\nResultado:\n{}\n\n",
+                                    forced_cmd_to_run, digest
+                                );
+                                current_context.push_str(&auto_msg);
+                                emit_event(&app_handle, step_count,
+                                    &format!("[INTERCEPTOR AUTO-EXEC] Ejecución directa completada: {} chars", out_len),
+                                    "SUCCESS");
+                            }
+                            Err(e) => {
+                                current_context.push_str(&format!(
+                                    "[INTERCEPTOR AUTO-EXEC] Intenté ejecutar '{}' pero falló: {}\n\n",
+                                    forced_cmd_to_run, e
+                                ));
+                            }
+                        }
+                    } else {
+                        current_context.push_str(&format!(
+                            "[INTERCEPTOR] Forzando abandono de herramienta '{}'. Razón: {}\n\n",
+                            tool, override_msg
+                        ));
+                    }
+                    // Reset intercept — the hard-exec counts as having obeyed the intent
+                    intercept_consecutive = 0;
+                    forced_next_tool = None;
+                    // Skip to next iteration — the context is now enriched, model can proceed
+                    step_count += 1;
+                    continue;
                 } else {
+                    // Re-queue the forced tool for the next iteration
                     forced_next_tool = forced_override.clone();
                 }
                 step_count += 1;
@@ -2494,7 +2549,51 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                         },
                                         Err(e) => {
                                             emit_event(&app_handle, step_count, &format!("Error escribiendo archivos: {}", e), "ERROR");
-                                            current_context.push_str(&format!("Programador Falló al escribir: {}\n\n", e));
+
+                                            // FIX-B3: Track per-file patch failures. After 3 consecutive
+                                            // failures on the same file, escalate to full-file overwrite mode.
+                                            let is_patch_fail = e.contains("[PATCH_FAIL]");
+                                            if is_patch_fail {
+                                                // Extract which files failed from the error message
+                                                let failed_files: Vec<String> = prog_output.cambios.iter()
+                                                    .map(|c| c.archivo.clone())
+                                                    .collect();
+
+                                                let mut overwrite_files: Vec<String> = Vec::new();
+                                                for fname in &failed_files {
+                                                    let count = patch_fail_counts.entry(fname.clone()).or_insert(0);
+                                                    *count += 1;
+                                                    if *count >= 3 {
+                                                        overwrite_files.push(fname.clone());
+                                                    }
+                                                }
+
+                                                if !overwrite_files.is_empty() {
+                                                    // Escalate: inject overwrite instruction and force TOOL_PROGRAMMER
+                                                    let overwrite_msg = format!(
+                                                        "\n\n⛔ ESCALACIÓN CRÍTICA DE PATCH: Los archivos {:?} han fallado {} veces seguidas con parches.\n\
+                                                         El modelo está alucinando el contenido del archivo.\n\
+                                                         INSTRUCCIÓN OBLIGATORIA: En tu PRÓXIMA llamada a TOOL_PROGRAMMER, usa buscar: \"\" (cadena vacía)\n\
+                                                         para SOBREESCRIBIR el archivo completo. NO uses fragmentos de texto en 'buscar'.\n\
+                                                         Escribe el archivo COMPLETO en el campo 'reemplazar'.",
+                                                        overwrite_files,
+                                                        patch_fail_counts.get(&overwrite_files[0]).copied().unwrap_or(3)
+                                                    );
+                                                    current_context.push_str(&overwrite_msg);
+                                                    emit_event(&app_handle, step_count,
+                                                        &format!("[PATCH-ESCALATION] {} archivo(s) requieren overwrite completo tras 3 fallos", overwrite_files.len()),
+                                                        "WARNING");
+                                                    // Reset counters for these files so next cycle is fresh
+                                                    for fname in &overwrite_files {
+                                                        patch_fail_counts.insert(fname.clone(), 0);
+                                                    }
+                                                } else {
+                                                    // Not yet at 3 fails — normal error feedback
+                                                    current_context.push_str(&format!("Programador Falló al escribir (PATCH_FAIL): {}\n\n", e));
+                                                }
+                                            } else {
+                                                current_context.push_str(&format!("Programador Falló al escribir: {}\n\n", e));
+                                            }
                                             break;
                                         }
                                     }
@@ -3195,6 +3294,45 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         Err(e) => {
                             current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto) Error: {}\n\n", e));
                             emit_event(&app_handle, step_count, &format!("Auto-terminal Error: {}", e), "ERROR");
+                        }
+                    }
+                } else if tool == "TOOL_READ_FILE" {
+                    // FIX-B4: TOOL_READ_FILE is referenced in PATCH_FAIL advice but was never implemented.
+                    // Auto-handle it: read the file indicated in `comando` and inject content into context.
+                    // `archivos_a_editar` is only in scope inside TOOL_PROGRAMMER, so we rely on `comando` here.
+                    let file_to_read = if !comando.trim().is_empty() {
+                        let p = std::path::Path::new(comando.trim());
+                        if p.is_absolute() {
+                            p.to_path_buf()
+                        } else {
+                            std::path::Path::new(&workspace_path).join(comando.trim())
+                        }
+                    } else {
+                        // No filename given — fallback: list workspace root
+                        std::path::Path::new(&workspace_path).to_path_buf()
+                    };
+
+                    emit_event(&app_handle, step_count, &format!("[TOOL_READ_FILE] Leyendo: {}", file_to_read.display()), "ACTION");
+                    match tokio::fs::read_to_string(&file_to_read).await {
+                        Ok(contents) => {
+                            let c_len = contents.len();
+                            let display = if c_len > 8000 { &contents[..8000] } else { &contents[..] };
+                            let read_msg = format!(
+                                "[TOOL_READ_FILE] Contenido de '{}':\n```\n{}\n```\n\n\
+                                 Ahora tienes el contenido real del archivo. Usa TOOL_PROGRAMMER con el \
+                                 campo 'buscar' copiado EXACTAMENTE del texto anterior.\n\n",
+                                file_to_read.display(), display
+                            );
+                            current_context.push_str(&read_msg);
+                            emit_event(&app_handle, step_count, &format!("Archivo leído: {} chars", c_len), "SUCCESS");
+                        }
+                        Err(e) => {
+                            current_context.push_str(&format!(
+                                "[TOOL_READ_FILE] Error leyendo '{}': {}. \
+                                 Puede que el archivo no exista todavía — usa TOOL_PROGRAMMER con buscar: \"\" para crearlo.\n\n",
+                                file_to_read.display(), e
+                            ));
+                            emit_event(&app_handle, step_count, &format!("TOOL_READ_FILE Error: {}", e), "ERROR");
                         }
                     }
                 } else {
