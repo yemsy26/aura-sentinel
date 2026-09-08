@@ -205,10 +205,12 @@ enum MissionType {
     Construction,  // "crea", "implementa", "build"
     Refactor,      // "mejora", "optimiza", "refactoriza"
     Debug,         // "arregla", "bug", "error", "fix"
+    Execution,     // "ejecuta", "corre", "prueba", "testea", "run", "verify"
 }
 
 fn classify_mission(msg: &str) -> MissionType {
     let m = msg.to_lowercase();
+    let execution = ["ejecuta", "ejecutar", "corre", "correr", "testea", "run", "execute", "verifica", "verificar"];
     let construction = ["construye", "construir", "crea", "crear", "implementa", "implementar",
                         "escribe", "escribir", "genera", "generar", "programa", "programar",
                         "desarrolla", "desarrollar", "build", "create", "write", "microservicio"];
@@ -227,11 +229,149 @@ fn classify_mission(msg: &str) -> MissionType {
                     "estado actual", "estado del proyecto", "cual es el estado", "cuál es el estado",
                     "resumen del estado", "informe", "reporte", "status"];
 
+    if execution.iter().any(|w| m.contains(w))    { return MissionType::Execution; }
     if construction.iter().any(|w| m.contains(w)) { return MissionType::Construction; }
     if debug.iter().any(|w| m.contains(w))        { return MissionType::Debug; }
     if refactor.iter().any(|w| m.contains(w))     { return MissionType::Refactor; }
     if analysis.iter().any(|w| m.contains(w))     { return MissionType::Analysis; }
     MissionType::Construction
+}
+
+/// Helper to verify if a required file from a phase is satisfied on disk or through intelligent aliases.
+fn is_phase_file_satisfied(workspace_path: &str, file_name: &str) -> bool {
+    let p = std::path::Path::new(workspace_path).join(file_name);
+    if p.exists() {
+        return true;
+    }
+
+    // Check common alias variations (plural/singular, common entry names)
+    let variations: Vec<&str> = match file_name {
+        "styles.css" => vec!["style.css"],
+        "style.css" => vec!["styles.css"],
+        "script.js" => vec!["scripts.js", "app.js", "main.js", "dashboard.js"],
+        "scripts.js" => vec!["script.js", "app.js", "main.js", "dashboard.js"],
+        "radar.js" | "telemetry.js" | "traffic_chart.js" => vec!["dashboard.js", "script.js", "app.js", "main.js"],
+        "index.html" => vec!["app.html", "main.html", "dashboard.html", "cyber_sentinel.html"],
+        _ => vec![],
+    };
+    for v in variations {
+        if std::path::Path::new(workspace_path).join(v).exists() {
+            return true;
+        }
+    }
+
+    let p_lower = file_name.to_lowercase();
+    let ext = std::path::Path::new(file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if let Ok(entries) = std::fs::read_dir(workspace_path) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if !entry_path.is_file() {
+                continue;
+            }
+            let fname = entry_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+            if fname == p_lower {
+                return true;
+            }
+            if !ext.is_empty() {
+                if let Some(entry_ext) = entry_path.extension().and_then(|e| e.to_str()) {
+                    if entry_ext.to_lowercase() == ext {
+                        if ext == "html" || ext == "htm" {
+                            if entry.metadata().map(|m| m.len() > 20).unwrap_or(false) {
+                                return true;
+                            }
+                        }
+                        if ext == "css" {
+                            if entry.metadata().map(|m| m.len() > 10).unwrap_or(false) {
+                                return true;
+                            }
+                        }
+                        if ext == "js" {
+                            if entry.metadata().map(|m| m.len() > 20).unwrap_or(false) {
+                                return true;
+                            }
+                        }
+                        if ext == "py" && fname.ends_with(".py") {
+                            if entry.metadata().map(|m| m.len() > 20).unwrap_or(false) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check if HTML has inline scripts or styles satisfying css/js requirements
+    if ext == "css" || ext == "js" {
+        if let Ok(entries) = std::fs::read_dir(workspace_path) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("html") {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        if ext == "css" && (content.contains("<style") || content.contains("<link rel=\"stylesheet\"")) {
+                            return true;
+                        }
+                        if ext == "js" && (content.contains("<script") || content.contains(file_name)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Helper to auto-extract commands from the agent's thought when comando is empty.
+fn extract_command_from_thought(pensamiento: &str, workspace_path: &str) -> Option<String> {
+    for quote in ['`', '"', '\''] {
+        let parts: Vec<&str> = pensamiento.split(quote).collect();
+        if parts.len() >= 3 {
+            for chunk in parts.chunks(2).skip(1) {
+                if let Some(&cand) = chunk.first() {
+                    let cand_trim = cand.trim();
+                    if cand_trim.starts_with("python ")
+                        || cand_trim.starts_with("node ")
+                        || cand_trim == "dir"
+                        || cand_trim == "ls"
+                        || cand_trim.starts_with("npm ")
+                        || cand_trim.starts_with("cargo ")
+                    {
+                        return Some(cand_trim.to_string());
+                    }
+                    if cand_trim.ends_with(".py") && std::path::Path::new(workspace_path).join(cand_trim).exists() {
+                        return Some(format!("python {}", cand_trim));
+                    }
+                    if cand_trim.ends_with(".js") && std::path::Path::new(workspace_path).join(cand_trim).exists() {
+                        return Some(format!("node {}", cand_trim));
+                    }
+                }
+            }
+        }
+    }
+
+    let lower = pensamiento.to_lowercase();
+    for word in lower.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '-');
+        if clean.ends_with(".py") {
+            let script_path = std::path::Path::new(workspace_path).join(clean);
+            if script_path.exists() {
+                return Some(format!("python {}", clean));
+            }
+        } else if clean.ends_with(".js") {
+            let script_path = std::path::Path::new(workspace_path).join(clean);
+            if script_path.exists() {
+                return Some(format!("node {}", clean));
+            }
+        }
+    }
+
+    None
 }
 
 /// Formats the acceptance contract from the Planner's TOOL_THINK 'comando' field.
@@ -627,7 +767,12 @@ pub async fn run_agent_loop(
         MissionType::Construction => "🏗️ CONSTRUCCIÓN",
         MissionType::Refactor     => "♻️ REFACTORING",
         MissionType::Debug        => "🐛 DEBUG",
+        MissionType::Execution    => "⚡ EJECUCIÓN/VERIFICACIÓN",
     };
+
+    if mission_type == MissionType::Execution {
+        current_role = AgentRole::Executor;
+    }
 
     // ── Acceptance Contract ─────────────────────────────────────────────────
     let mut acceptance_contract: Option<String> = None;
@@ -665,13 +810,11 @@ pub async fn run_agent_loop(
         user_message = journal.objetivo.clone();
         original_prompt_parsed = journal.objetivo.clone();
         journal.interrupted = true; // Signals restoration block below
-    } else if journal.status == "COMPLETADO" || journal.status == "ERROR" || journal.status == "FINISH" {
-        // Only clear phases if starting a genuine fresh mission
+    } else {
+        // Any new user prompt (not an explicit continuation) resets the phase plan for the new objective
         journal.plan_generado = false;
         journal.fases.clear();
         journal.fase_actual = 0;
-        journal.objetivo = user_message.clone();
-    } else {
         journal.objetivo = user_message.clone();
     }
 
@@ -1209,6 +1352,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             tool = "TOOL_FINISH".to_string();
         }
 
+        // Auto-extract command if tool is TOOL_TERMINAL and comando is empty
+        if tool == "TOOL_TERMINAL" && comando.trim().is_empty() {
+            if let Some(auto_cmd) = extract_command_from_thought(&pensamiento, &workspace_path) {
+                emit_event(&app_handle, step_count, &format!("[AUTO-EXTRACT] Comando recuperado del pensamiento: {}", auto_cmd), "INFO");
+                comando = auto_cmd;
+            }
+        }
+
         // ── FORCED TOOL VALIDATION ────────────────────────────────────────────
         // If the system has determined the LLM is stuck in a tool-loop,
         // validate its decision against the forced tool constraint.
@@ -1302,10 +1453,10 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         // ── ROLE HARD LOCKS (FSM ENFORCEMENT) ─────────────────────────────────
         let is_forced_and_obeyed = forced_override.as_ref().map_or(false, |(f, _)| f == &tool);
         if !is_forced_and_obeyed && current_role == AgentRole::Planner {
-            // TOOL_WORKSPACE_MANAGER is explicitly blocked: in a real test (prueba 4, paso 1)
-            // the Planner called it without parameters and deleted the freshly-created project files.
-            if ["TOOL_PROGRAMMER", "TOOL_TESTER", "TOOL_TERMINAL", "TOOL_BACKGROUND_START",
-                "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL", "TOOL_ENV_MANAGER",
+            if tool == "TOOL_PROGRAMMER" || tool == "TOOL_TERMINAL" || tool == "TOOL_BACKGROUND_START" {
+                current_role = AgentRole::Executor;
+                emit_event(&app_handle, step_count, &format!("[FSM] Planificador -> Ejecutor: Transición automática para ejecutar {}.", tool), "INFO");
+            } else if ["TOOL_TESTER", "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL", "TOOL_ENV_MANAGER",
                 "TOOL_ASSET_MANAGER", "TOOL_VISION_EVALUATOR", "TOOL_WORKSPACE_MANAGER"].contains(&tool.as_str()) {
                 let error_msg = format!(
                     "[ACCESO DENEGADO]: Eres el Planificador. No tienes permiso para usar {}. \
@@ -3167,25 +3318,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     // ── GATEKEEPER ESTRICTO DE FASE (Con resolución inteligente de alias) ──
                     let current_phase = &journal.fases[journal.fase_actual];
                     let missing_files: Vec<String> = current_phase.archivos.iter()
-                        .filter(|arch| {
-                            let p = std::path::Path::new(&workspace_path).join(arch);
-                            if p.exists() {
-                                return false; // El archivo existe físicamente
-                            }
-                            // Si el planificador puso 'index.html' pero el usuario pidió otro HTML (ej. 'cyber_sentinel.html')
-                            if *arch == "index.html" {
-                                if let Ok(entries) = std::fs::read_dir(&workspace_path) {
-                                    for entry in entries.flatten() {
-                                        if let Some(ext) = entry.path().extension() {
-                                            if ext == "html" {
-                                                return false; // Existe un HTML válido en el proyecto
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            true
-                        })
+                        .filter(|arch| !is_phase_file_satisfied(&workspace_path, arch))
                         .cloned()
                         .collect();
 
@@ -3256,25 +3389,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     let phase_num = current_phase.numero;
 
                     let missing_files: Vec<String> = current_phase.archivos.iter()
-                        .filter(|arch| {
-                            let p = std::path::Path::new(&workspace_path).join(arch);
-                            if p.exists() {
-                                return false; // El archivo existe físicamente
-                            }
-                            // Si el planificador puso 'index.html' pero el usuario pidió otro HTML (ej. 'cyber_sentinel.html')
-                            if *arch == "index.html" {
-                                if let Ok(entries) = std::fs::read_dir(&workspace_path) {
-                                    for entry in entries.flatten() {
-                                        if let Some(ext) = entry.path().extension() {
-                                            if ext == "html" {
-                                                return false; // Existe un HTML válido en el proyecto
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            true
-                        })
+                        .filter(|arch| !is_phase_file_satisfied(&workspace_path, arch))
                         .cloned()
                         .collect();
 
