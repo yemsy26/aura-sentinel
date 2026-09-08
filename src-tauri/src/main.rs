@@ -86,6 +86,12 @@ fn get_recent_episodes_cmd(n: u32) -> String {
 }
 
 #[tauri::command]
+fn cancel_agent_mission() -> bool {
+    llm::request_agent_cancel();
+    true
+}
+
+#[tauri::command]
 async fn get_ollama_models() -> Result<Vec<String>, String> {
     let client = reqwest::Client::new();
     match client.get("http://localhost:11434/api/tags").send().await {
@@ -143,6 +149,7 @@ fn main() {
             memory::read_file_content,
             memory::save_file_content,
             llm::process_user_prompt,
+            cancel_agent_mission,
             get_system_stats,
             get_ollama_models,
             get_background_tasks,

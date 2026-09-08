@@ -143,6 +143,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const chatInput = document.getElementById('chat-input');
     const chatSendBtn = document.getElementById('chat-send-btn');
+    const chatCancelBtn = document.getElementById('chat-cancel-btn');
     const chatMessages = document.getElementById('chat-messages');
     const systemThoughts = document.getElementById('system-thoughts');
     const loadWorkspaceBtn = document.getElementById('load-workspace-btn');
@@ -621,7 +622,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatInput.value = '';
         chatInput.style.height = '24px';
         chatInput.disabled = true;
-        if (chatSendBtn) chatSendBtn.disabled = true;
+        if (chatSendBtn) {
+            chatSendBtn.style.display = 'none';
+        }
+        if (chatCancelBtn) {
+            chatCancelBtn.style.display = 'flex';
+            chatCancelBtn.disabled = false;
+        }
+
+        const resetInputState = () => {
+            chatInput.disabled = false;
+            if (chatSendBtn) {
+                chatSendBtn.style.display = 'flex';
+                chatSendBtn.disabled = false;
+            }
+            if (chatCancelBtn) {
+                chatCancelBtn.style.display = 'none';
+                chatCancelBtn.disabled = false;
+            }
+            chatInput.focus();
+        };
 
         text = text.replace(/^\[USER\]\s*/i, '');
         const sysIdx = text.indexOf('[SYSTEM]');
@@ -644,8 +664,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (!currentWorkspace || currentWorkspace === "Ninguno") {
             loadingBubble.remove();
-            chatInput.disabled = false;
-            if (chatSendBtn) chatSendBtn.disabled = false;
+            resetInputState();
             appendMessageToDOM('aura', '⚠️ **Espacio de trabajo requerido**\n\nPor favor, haz clic en el botón **`[+] Cargar`** en el panel izquierdo (**WORKSPACE**) para seleccionar la carpeta del proyecto antes de enviar la instrucción.');
             return;
         }
@@ -683,9 +702,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
 
             unlisten();
-            chatInput.disabled = false;
-            if (chatSendBtn) chatSendBtn.disabled = false;
-            chatInput.focus();
+            resetInputState();
 
             try {
                 const data = JSON.parse(responseString);
@@ -708,8 +725,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
         } catch (error) {
-            chatInput.disabled = false;
-            if (chatSendBtn) chatSendBtn.disabled = false;
+            resetInputState();
             logSystemThought(`[ERROR PIPELINE] ${error}`, '#f85149');
             loadingBody.innerHTML = `<span style="color:#f85149;font-weight:bold;">[ERROR]</span> <span style="color:#c9d1d9;">${error}</span>`;
         }
@@ -734,6 +750,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatSendBtn.addEventListener('click', async () => {
             if (chatInput.value.trim() !== '') {
                 await dispatchPrompt(chatInput.value);
+            }
+        });
+    }
+
+    if (chatCancelBtn) {
+        chatCancelBtn.addEventListener('click', async () => {
+            chatCancelBtn.disabled = true;
+            logSystemThought("🛑 [USUARIO] Solicitud de cancelación enviada...", '#f85149');
+            try {
+                await invoke('cancel_agent_mission');
+            } catch (err) {
+                console.error("Error al cancelar agente:", err);
             }
         });
     }

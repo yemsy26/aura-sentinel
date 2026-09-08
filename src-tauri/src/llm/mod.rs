@@ -313,11 +313,27 @@ impl Drop for AgentLockGuard {
     }
 }
 static AGENT_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static AGENT_CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn request_agent_cancel() {
+    AGENT_CANCELLED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn is_agent_cancelled() -> bool {
+    AGENT_CANCELLED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn reset_agent_cancel() {
+    AGENT_CANCELLED.store(false, std::sync::atomic::Ordering::SeqCst);
+}
 
 #[tauri::command]
 pub async fn process_user_prompt(mut user_message: String, workspace_path: String, orchestrator_model: String, programmer_model: String, app_handle: tauri::AppHandle) -> Result<String, String> {
     let _guard = match AgentLockGuard::try_lock() {
-        Some(g) => g,
+        Some(g) => {
+            reset_agent_cancel();
+            g
+        },
         None => {
             return Ok(serde_json::json!({
                 "status": "FINISH",

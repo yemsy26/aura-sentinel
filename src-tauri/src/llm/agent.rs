@@ -739,6 +739,18 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
     }
 
     while step_count <= max_steps {
+        // ── Cancellation Check: Interrupción inmediata solicitada por el usuario ──
+        if crate::llm::is_agent_cancelled() {
+            emit_event(&app_handle, step_count, "🛑 [CANCELADO] Misión detenida por el usuario.", "WARNING");
+            journal.interrupted = true;
+            journal.status = "INTERRUMPIDO".to_string();
+            crate::core::session_journal::save_journal(&workspace_path, &journal);
+            let final_res = FinalResponse {
+                status: "FINISH".to_string(),
+                respuesta_conversacional: "🛑 **Misión Cancelada**: Has detenido la ejecución del agente. Puedes continuar en cualquier momento con `continua` o enviarle una nueva instrucción.".to_string(),
+            };
+            return Ok(serde_json::to_string(&final_res).unwrap());
+        }
 
         // ── FASE 1: Mission Checkpoint for Auto-Resume cross-restart ──
         let role_str = match current_role {
@@ -2443,6 +2455,10 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 let mut max_intentos = 3;
                 
                 while max_intentos > 0 && !exito_bucle_programador {
+                    if crate::llm::is_agent_cancelled() {
+                        emit_event(&app_handle, step_count, "🛑 [CANCELADO] Deteniendo iteración de programación por usuario.", "WARNING");
+                        break;
+                    }
                     match delegate_to_programmer(&qwen_prompt, &context_for_qwen, &target_model).await {
                         Ok(json_res) => {
                             let mut clean_json_res = strip_think_tags(json_res.clone());

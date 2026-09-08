@@ -575,6 +575,35 @@ body, html {
     transform: none;
 }
 
+.chat-cancel-btn {
+    background: #f85149;
+    color: #ffffff;
+    border: none;
+    border-radius: var(--radius-sm);
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.15s, transform 0.15s;
+    flex-shrink: 0;
+    box-shadow: 0 0 8px rgba(248, 81, 73, 0.4);
+}
+
+.chat-cancel-btn:hover {
+    background: #da3633;
+    transform: scale(1.08);
+}
+
+.chat-cancel-btn:disabled {
+    background: #484f58;
+    color: #8b949e;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+}
+
 /* --- TECHNICAL CONSOLE --- */
 .panel-console {
     flex: 0 0 220px;
