@@ -33,6 +33,9 @@ pub mod completion_gate;     // Puerta determinista de finalización
 pub mod policy;              // Motor de políticas y autorización de acciones
 pub mod state_delta;         // Detección y hash de diferencias en archivos (FileDelta)
 pub mod stall_detector;      // Detección de estancamiento basada en firmas de progreso
+pub mod experience;          // Memoria cognitiva de experiencias y consolidación
+pub mod project_profile;     // Perfil unificado y detector multi-lenguaje de proyectos
+pub mod mission_runtime;     // Orquestador desacoplado de ejecución de misiones
 
 
 use std::path::Path;

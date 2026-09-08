@@ -806,6 +806,12 @@ pub async fn run_agent_loop(
         current_context.push_str(&episode_context);
     }
 
+    // ── Arquitectura Cognitiva v4: Inyectar Contexto de Experiencias Previas ──
+    let exp_context = crate::core::experience::ExperienceStore::build_experience_context(&original_prompt_parsed, "");
+    if !exp_context.is_empty() {
+        current_context.push_str(&exp_context);
+    }
+
     // ── FASE C: Inyectar Lecciones Consolidadas de Proyectos Previos ────────────
     let proactive_lessons = crate::core::memory::get_proactive_lessons(3).await;
     if !proactive_lessons.is_empty() {
@@ -3507,6 +3513,20 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     &journal.herramientas_usadas,
                     &journal.archivos_tocados,
                 );
+
+                // ── Arquitectura Cognitiva v4: Registrar Experiencia en Memoria ──
+                let profile = crate::core::project_profile::ProjectProfile::detect(&workspace_path);
+                let lang_str = format!("{:?}", profile.primary);
+                let exp_rec = crate::core::experience::ExperienceStore::create_record(
+                    &workspace_path,
+                    &journal.objetivo,
+                    &lang_str,
+                    journal.herramientas_usadas.clone(),
+                    step_count,
+                    crate::core::experience::ExperienceOutcome::Success,
+                    vec!["Misión completada con todos los criterios y pruebas aprobados.".to_string()],
+                );
+                let _ = crate::core::experience::ExperienceStore::record_experience(&exp_rec);
 
                 let mut respuesta_conv = respuesta_conv;
                 if respuesta_conv.trim().is_empty() {
