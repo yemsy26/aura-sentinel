@@ -520,6 +520,12 @@ pub async fn run_agent_loop(
     };
     let mut no_tests_consecutive = 0u32;
     let mut think_consecutive = 0u32;
+    let mut _programmer_consecutive = 0u32; // reserved for future per-tool cooldown
+    // ── THINK↔PROGRAMMER alternation loop detector ─────────────────────────
+    // Tracks consecutive steps that are ONLY THINK or PROGRAMMER with no
+    // TERMINAL, TESTER, or FINISH in between. If this reaches >= 8 steps,
+    // we force TOOL_TERMINAL to break the loop.
+    let mut think_programmer_alternation_count = 0u32;
     let mut auditor_consecutive = 0u32;
     let mut mapper_consecutive = 0u32;
     let mut critic_fsm_lock_consecutive = 0u32;
@@ -1352,9 +1358,35 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
         // Reset loop counters
         if tool != "TOOL_THINK" { think_consecutive = 0; }
+        if tool != "TOOL_PROGRAMMER" { _programmer_consecutive = 0; }
         if tool != "TOOL_AUDITOR" { auditor_consecutive = 0; }
         if tool != "TOOL_MAPPER" { mapper_consecutive = 0; }
         if tool != "TOOL_LEARN" { learn_consecutive = 0; }
+        // THINK↔PROGRAMMER alternation counter: only resets when NEITHER THINK nor PROGRAMMER
+        if tool == "TOOL_THINK" || tool == "TOOL_PROGRAMMER" {
+            think_programmer_alternation_count += 1;
+        } else {
+            think_programmer_alternation_count = 0;
+        }
+        // If alternation hits ≥ 8 steps without any TERMINAL/TESTER/FINISH, force TOOL_TERMINAL
+        if think_programmer_alternation_count >= 8 {
+            let loop_msg = format!(
+                "[SISTEMA INTERNO]: ⚠️ LOOP DETECTADO: {} pasos alternando THINK↔PROGRAMMER sin ejecutar nada en terminal. \
+                El modelo debe VERIFICAR su trabajo con comandos reales. FORZANDO TOOL_TERMINAL.",
+                think_programmer_alternation_count
+            );
+            eprintln!("{}", loop_msg);
+            emit_event(&app_handle, step_count, &loop_msg, "WARNING");
+            current_context.push_str(&format!("{}\n\n", loop_msg));
+            // Force terminal to run the verification/test script
+            if forced_next_tool.is_none() {
+                forced_next_tool = Some((
+                    "TOOL_TERMINAL".to_string(),
+                    "Ejecuta el script de verificación del proyecto o abre el archivo principal para comprobar que existe y tiene contenido.".to_string(),
+                ));
+            }
+            think_programmer_alternation_count = 0; // reset after intervention
+        }
 
         match tool.as_str() {
             "TOOL_TERMINAL" => {
@@ -3198,7 +3230,16 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             // Check if the most recent terminal error hash was added THIS step
             // by checking if last_error_hashes grew this iteration (compared to pre-step size).
             // Simplified: check the last 80 chars of context for fresh error signals.
-            let context_tail = &current_context[current_context.len().saturating_sub(800)..];
+            // SAFETY: Use char-boundary-safe slice to avoid panicking on multibyte UTF-8
+            // characters (e.g. accented letters, emojis in Task Charter injected by ContextMonitor).
+            let context_tail = {
+                let raw_offset = current_context.len().saturating_sub(800);
+                // Walk forward from raw_offset until we land on a valid char boundary.
+                let safe_offset = (raw_offset..=current_context.len())
+                    .find(|&i| current_context.is_char_boundary(i))
+                    .unwrap_or(current_context.len());
+                &current_context[safe_offset..]
+            };
             context_tail.contains("[PATCH_FAIL]")
                 || context_tail.contains("FATAL")
                 || context_tail.contains("error[E")   // Rust compiler errors

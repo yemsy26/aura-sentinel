@@ -196,12 +196,21 @@ impl AutoValidator {
     async fn apply_auto_fixes(&self, result: &mut ValidationResult) {
         for issue in &result.issues {
             if let Some(fix) = &issue.suggested_fix {
-                // Auto-fix: generar assets programáticos si faltan
+                // Auto-fix: generar assets programáticos si faltan.
+                // Guard: only attempt this for Phaser/game projects that actually have src/main.js.
+                // Without the guard, every non-Phaser workspace emits a spurious
+                // "[AUTO-FIX] Error generando assets: main.js no encontrado" warning.
                 if fix.contains("gráficos programáticos") || fix.contains("assets programáticos") {
-                    if let Err(e) = self.generate_programmatic_assets().await {
-                        eprintln!("[AUTO-FIX] Error generando assets: {}", e);
+                    let main_js_path = Path::new(&self.workspace_path).join("src/main.js");
+                    if main_js_path.exists() {
+                        if let Err(e) = self.generate_programmatic_assets().await {
+                            eprintln!("[AUTO-FIX] Error generando assets: {}", e);
+                        } else {
+                            result.auto_fixed.push("Generados assets programáticos en main.js".to_string());
+                        }
                     } else {
-                        result.auto_fixed.push("Generados assets programáticos en main.js".to_string());
+                        // Not a Phaser/game project — skip silently (debug level only)
+                        log::debug!("[AUTO-FIX] Omitiendo generación de assets: src/main.js no existe en este workspace.");
                     }
                 }
                 
@@ -210,6 +219,7 @@ impl AutoValidator {
             }
         }
     }
+
 
     /// Genera assets programáticos en main.js
     async fn generate_programmatic_assets(&self) -> Result<(), String> {
