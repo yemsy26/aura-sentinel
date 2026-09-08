@@ -551,6 +551,7 @@ pub async fn run_agent_loop(
     let mut mandatory_tools_executed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut forced_next_tool: Option<(String, String)> = None;
     let mut intercept_consecutive: u32 = 0; // track consecutive LLM disobedience
+    let mut ask_user_consecutive: u32 = 0; // track consecutive user questions to prevent stalling loops
     // FIX-B3: Per-file patch failure counter. When a file accumulates 3+ PATCH_FAILs in a row,
     // escalate to full-file overwrite mode instead of retrying failed patches forever.
     let mut patch_fail_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
@@ -1005,7 +1006,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START, TOOL_ASK_USER.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH.\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semántica (regex o checks independientes de atributos) sin asumir orden rígido en HTML. 2) Comprueba booleanos o 'PASS' correctamente y retorna sys.exit(0) si pasan. 3) Si un test falla, eres 100% autónomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python NUNCA uses llaves '}}' para cerrar bloques y escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
+                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER (eres el ejecutor: escribe código e implementa directamente).\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semántica (regex o checks independientes de atributos) sin asumir orden rígido en HTML. 2) Comprueba booleanos o 'PASS' correctamente y retorna sys.exit(0) si pasan. 3) Si un test falla, eres 100% autónomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python NUNCA uses llaves '}}' para cerrar bloques y escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
@@ -1270,8 +1271,8 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             if tool == "TOOL_FINISH" {
                 current_role = AgentRole::Critic;
                 emit_event(&app_handle, step_count, "[FSM] EJECUTOR -> CRÍTICO: Implementación concluida. Transfiriendo al Crítico para validación final y cierre.", "INFO");
-            } else if ["TOOL_TESTER", "TOOL_VISION_EVALUATOR", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
-                let error_msg = format!("[ACCESO DENEGADO]: Eres el Ejecutor. No tienes permiso para usar {}. Tu rol es escribir código. Si terminaste, asegúrate de que tu código esté listo y pasa Anti-Stub. El motor te pasará al Crítico automáticamente.", tool);
+            } else if ["TOOL_TESTER", "TOOL_VISION_EVALUATOR", "TOOL_MAPPER", "TOOL_AST_INJECT", "TOOL_ASK_USER"].contains(&tool.as_str()) {
+                let error_msg = format!("[ACCESO DENEGADO]: Eres el Ejecutor. No tienes permiso para usar {}. Tu rol es escribir código directamente con TOOL_PROGRAMMER o comandos con TOOL_TERMINAL. Prohibido preguntar o pedir aclaraciones en fase de ejecución.", tool);
                 current_context.push_str(&format!("{}\n\n", error_msg));
                 emit_event(&app_handle, step_count, &format!("[FSM LOCK] Ejecutor intentó usar {}", tool), "WARNING");
                 step_count += 1;
@@ -1431,6 +1432,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         if tool != "TOOL_AUDITOR" { auditor_consecutive = 0; }
         if tool != "TOOL_MAPPER" { mapper_consecutive = 0; }
         if tool != "TOOL_LEARN" { learn_consecutive = 0; }
+        if tool != "TOOL_ASK_USER" { ask_user_consecutive = 0; }
         // THINK↔PROGRAMMER alternation counter: only resets when NEITHER THINK nor PROGRAMMER
         if tool == "TOOL_THINK" || tool == "TOOL_PROGRAMMER" {
             think_programmer_alternation_count += 1;
@@ -3046,6 +3048,18 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 }
             },
             "TOOL_ASK_USER" => {
+                ask_user_consecutive += 1;
+                if ask_user_consecutive > 1 {
+                    // Anti-stalling protection: Do not allow the agent to prompt the user repeatedly
+                    let abort_msg = "[SISTEMA INTERNO]: ⚠️ TOOL_ASK_USER BLOQUEADO. Ya consultaste al usuario en el turno inmediato anterior. Prohibido volver a preguntar. Debes implementar o verificar la solución de inmediato con TOOL_PROGRAMMER o TOOL_TERMINAL.";
+                    current_context.push_str(&format!("{}\n\n", abort_msg));
+                    emit_event(&app_handle, step_count, "TOOL_ASK_USER bloqueado por repetición consecutiva. Forzando implementación.", "WARNING");
+                    current_role = AgentRole::Executor;
+                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Implementa el código directamente sin hacer más preguntas al usuario.".to_string()));
+                    step_count += 1;
+                    continue;
+                }
+
                 emit_event(&app_handle, step_count, "Solicitando información al usuario...", "ACTION");
                 let mut question = comando.clone();
                 if question.trim().is_empty() {
@@ -3066,6 +3080,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     Ok(answer) => {
                         current_context.push_str(&format!("Pregunta al usuario: {}\nRespuesta del usuario: {}\n\n", question, answer));
                         emit_event(&app_handle, step_count, "Respuesta del usuario recibida.", "SUCCESS");
+                        // User clarified the task — immediately transition to Executor with TOOL_PROGRAMMER
+                        current_role = AgentRole::Executor;
+                        forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), format!("El usuario ya aclaró los requerimientos: '{}'. Implementa el código inmediatamente.", answer)));
                     },
                     Err(e) => {
                         current_context.push_str(&format!("Error al consultar al usuario: {}\n\n", e));
