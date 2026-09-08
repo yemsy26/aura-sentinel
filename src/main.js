@@ -25,15 +25,17 @@ async function loadOllamaModels() {
             agentModelSelect.appendChild(opt);
         });
 
-        // Determine most powerful model (27b+, 70b, 14b, coder, bonsai, etc.)
+        // Determine most powerful model (14b, 27b+, 70b, 34b, etc.)
         const powerCandidate = availableModels.find(m => {
             const n = m.name.toLowerCase();
-            return n.includes("bonsai") || n.includes("27b") || n.includes("70b") || n.includes("34b") || n.includes("14b");
+            return n.includes("14b") || n.includes("bonsai") || n.includes("27b") || n.includes("70b") || n.includes("34b");
         });
         mostPowerfulModel = powerCandidate ? powerCandidate.name : (availableModels[0] ? availableModels[0].name : null);
 
-        // Smart default: balance between speed and precision
-        if (availableModels.some(m => m.name.includes("gemma4-e4b"))) {
+        // Smart default: Qwen 2.5 Coder 7B (ultra fast + accurate), fallback to others
+        if (availableModels.some(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen2.5-coder"))) {
+            agentModelSelect.value = availableModels.find(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen2.5-coder")).name;
+        } else if (availableModels.some(m => m.name.includes("gemma4-e4b"))) {
             agentModelSelect.value = availableModels.find(m => m.name.includes("gemma4-e4b")).name;
         } else if (availableModels.some(m => m.name.includes("llama3.1"))) {
             agentModelSelect.value = availableModels.find(m => m.name.includes("llama3.1")).name;
@@ -52,8 +54,8 @@ async function loadOllamaModels() {
         if (turboBtn && mostPowerfulModel) {
             turboBtn.onclick = () => {
                 if (agentModelSelect.value === mostPowerfulModel) {
-                    // Toggle back to gemma or llama
-                    const standard = availableModels.find(m => m.name.includes("gemma4-e4b") || m.name.includes("llama3.1"));
+                    // Toggle back to standard model (qwen 7b, gemma, etc.)
+                    const standard = availableModels.find(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen") || m.name.includes("gemma4-e4b") || m.name.includes("llama3.1"));
                     if (standard) {
                         agentModelSelect.value = standard.name;
                         turboBtn.classList.remove('turbo-active');

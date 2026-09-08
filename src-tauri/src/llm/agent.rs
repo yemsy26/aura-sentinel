@@ -220,7 +220,12 @@ fn classify_mission(msg: &str) -> MissionType {
                     "qué tiene", "que contiene", "qué contiene", "inspect", "analyze", "show me",
                     "que es", "qué es", "que tipo", "qué tipo", "que hace", "qué hace",
                     "analisa este", "analiza este", "revisa este",
-                    "auditoría", "auditoria", "audita", "sat", "lógica", "logica", "satisfacibilidad"];
+                    "auditoría", "auditoria", "audita", "sat", "lógica", "logica", "satisfacibilidad",
+                    "donde quedaste", "dónde quedaste", "donde te quedaste", "dónde te quedaste",
+                    "en que quedamos", "en qué quedamos", "en que quedaste", "en qué quedaste",
+                    "que falta", "qué falta", "que queda", "qué queda", "como va", "cómo va",
+                    "estado actual", "estado del proyecto", "cual es el estado", "cuál es el estado",
+                    "resumen del estado", "informe", "reporte", "status"];
 
     if construction.iter().any(|w| m.contains(w)) { return MissionType::Construction; }
     if debug.iter().any(|w| m.contains(w))        { return MissionType::Debug; }
@@ -410,9 +415,9 @@ fn detect_project_language(workspace_path: &str) -> String {
     "unknown".to_string()
 }
 
-pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "gemma4-e4b";
+pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "qwen2.5-coder:7b";
 #[allow(dead_code)]
-pub const DEFAULT_PROGRAMMER_MODEL: &str = "gemma4-e4b";
+pub const DEFAULT_PROGRAMMER_MODEL: &str = "qwen2.5-coder:7b";
 
 pub async fn run_agent_loop(
     mut user_message: String,
@@ -1143,6 +1148,13 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         let pensamiento = raw_value.get("pensamiento").and_then(|v| v.as_str()).unwrap_or("Sin pensamiento").to_string();
         let mut comando = raw_value.get("comando").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let task_id = raw_value.get("task_id").and_then(|v| v.as_str()).unwrap_or("default_task").to_string();
+        let mut respuesta_conv = raw_value.get("respuesta_conversacional").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        // Si el modelo solo quiere responder conversacionalmente (ej. "herramienta": null o "null"),
+        // y adjuntó una respuesta para el usuario, enrutar limpiamente como TOOL_FINISH para no entrar en bucle de error.
+        if (tool == "UNKNOWN" || tool == "NULL" || tool == "NONE" || tool.is_empty()) && !respuesta_conv.trim().is_empty() {
+            tool = "TOOL_FINISH".to_string();
+        }
 
         // ── FORCED TOOL VALIDATION ────────────────────────────────────────────
         // If the system has determined the LLM is stuck in a tool-loop,
@@ -1330,7 +1342,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         }
         
         let url = raw_value.get("url_a_investigar").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let respuesta_conv = raw_value.get("respuesta_conversacional").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if respuesta_conv.is_empty() {
+            respuesta_conv = raw_value.get("respuesta_conversacional").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        }
         
         let mut archivos_vec = Vec::new();
         if let Some(arr) = raw_value.get("archivos_a_editar").and_then(|v| v.as_array()) {

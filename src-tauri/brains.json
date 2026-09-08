@@ -1,20 +1,20 @@
 {
-  "orchestrator": ["gemma4-e4b"],
-  "fast_parser": ["gemma4-e4b"],
+  "orchestrator": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+  "fast_parser": ["qwen2.5-coder:7b"],
   "languages": {
-    "default": ["gemma4-e4b"],
-    "rust": ["gemma4-e4b"],
-    "python": ["gemma4-e4b"],
-    "javascript": ["gemma4-e4b"],
-    "typescript": ["gemma4-e4b"],
-    "solidity": ["gemma4-e4b"],
-    "go": ["gemma4-e4b"],
-    "java": ["gemma4-e4b"],
-    "cpp": ["gemma4-e4b"],
-    "csharp": ["gemma4-e4b"]
+    "default": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "rust": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "python": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "javascript": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "typescript": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "solidity": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "go": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "java": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "cpp": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+    "csharp": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"]
   },
-  "debugger": ["gemma4-e4b"],
-  "quality_assessor": ["gemma4-e4b"],
-  "vision": ["moondream"],
+  "debugger": ["qwen2.5-coder:14b", "qwen2.5-coder:7b"],
+  "quality_assessor": ["qwen2.5-coder:14b", "qwen2.5-coder:7b"],
+  "vision": ["moondream", "llama3.2-vision"],
   "embeddings": ["nomic-embed-text"]
 }
