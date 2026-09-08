@@ -30,6 +30,9 @@ pub mod mission_contract;    // Contrato formal de misión y criterios de acepta
 pub mod cognitive_state;     // Estado cognitivo unificado (MissionState + Metrics)
 pub mod evidence;            // Grafo de evidencia verificable
 pub mod completion_gate;     // Puerta determinista de finalización
+pub mod policy;              // Motor de políticas y autorización de acciones
+pub mod state_delta;         // Detección y hash de diferencias en archivos (FileDelta)
+pub mod stall_detector;      // Detección de estancamiento basada en firmas de progreso
 
 
 use std::path::Path;

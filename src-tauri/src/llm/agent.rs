@@ -1673,6 +1673,32 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             think_programmer_alternation_count = 0; // reset after intervention
         }
 
+        // ── Arquitectura Cognitiva v4: Autorización por PolicyEngine ──
+        let action_proposal = crate::core::policy::ActionProposal {
+            tool: tool.clone(),
+            arguments: raw_value.clone(),
+            expected_effect: pensamiento.clone(),
+            risk: if tool == "TOOL_TERMINAL" {
+                crate::core::policy::PolicyEngine::classify_terminal_command(&comando)
+            } else {
+                crate::core::policy::RiskLevel::Safe
+            },
+        };
+
+        match crate::core::policy::PolicyEngine::authorize(&action_proposal) {
+            crate::core::policy::PolicyDecision::Deny(reason) => {
+                emit_event(&app_handle, step_count, &format!("[POLICY BLOCK] {}", reason), "ERROR");
+                current_context.push_str(&format!("{}\n[ACCIÓN DENEGADA]: Elige una alternativa segura.\n\n", reason));
+                step_count += 1;
+                continue;
+            },
+            crate::core::policy::PolicyDecision::RequireUser(prompt) => {
+                emit_event(&app_handle, step_count, &format!("[POLICY USER REQ] {}", prompt), "WARNING");
+                current_context.push_str(&format!("[POLICY] Acción requiere confirmación del usuario: {}\n\n", prompt));
+            },
+            crate::core::policy::PolicyDecision::Allow | crate::core::policy::PolicyDecision::Sandbox(_) => {}
+        }
+
         match tool.as_str() {
             "TOOL_TERMINAL" => {
                 let cmd_lower = comando.to_lowercase();
