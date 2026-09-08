@@ -757,14 +757,6 @@ pub async fn run_agent_loop(
         current_role = AgentRole::Executor;
     }
 
-    // ── Arquitectura Cognitiva v4: MissionContract + EvidenceGraph + CognitiveState ──
-    let mut mission_contract = crate::core::mission_contract::MissionContract::new(&original_prompt_parsed);
-    let mut evidence_graph = crate::core::evidence::EvidenceGraph::new();
-    let mut cognitive_state = crate::core::cognitive_state::CognitiveState::new(
-        &format!("m_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)),
-        &original_prompt_parsed,
-    );
-
     // ── MissionRuntime: cognitive governor (unifies contract + evidence + budget + stall + recovery) ──
     let mut runtime = crate::core::mission_runtime::MissionRuntime::new(
         &workspace_path,
@@ -777,7 +769,6 @@ pub async fn run_agent_loop(
 
     let mut step_count = 1u32;
     let mut max_steps = 50u32;
-    let mut step_budget = crate::core::step_budget::StepBudget::new(max_steps);
     let mut json_error_count = 0;
 
     // ── Session Journal ────────────────────────────────────────
@@ -1365,12 +1356,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             }
         }
 
-        // ── Arquitectura Cognitiva v4: Actualizar paso y métricas ──
-        cognitive_state.update_step();
-        cognitive_state.metrics.tool_calls += 1;
-        step_budget.record_step();
-
-        // ── MissionRuntime: step tracking + stall detection ──
+        // ── MissionRuntime: step tracking + stall detection (single source of truth) ──
         runtime.record_step();
         if let Some(stall) = runtime.should_stall_recover(4) {
             emit_event(&app_handle, step_count, &format!("[STALL DETECTOR] {:?} detectado. Considera cambiar estrategia.", stall), "WARNING");
@@ -2039,6 +2025,28 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     last_error_hashes.push_back(err_hash);
                                 }
 
+                                // ── MissionRuntime: record error Observation → StallDetector + RecoveryEngine ──
+                                {
+                                    let obs = crate::core::observation::Observation::error(
+                                        "TOOL_TERMINAL",
+                                        &err,
+                                        None,
+                                        true,
+                                        None,
+                                    );
+                                    runtime.record_observation(&obs);
+                                    let recovery_dec = runtime.plan_recovery("TOOL_TERMINAL", &err);
+                                    match &recovery_dec {
+                                        crate::core::recovery::RecoveryDecision::RepairEnvironment { advice } => {
+                                            emit_event(&app_handle, step_count, &format!("[RECOVERY] Entorno: {}", advice), "WARNING");
+                                        }
+                                        crate::core::recovery::RecoveryDecision::Abort { reason } => {
+                                            emit_event(&app_handle, step_count, &format!("[RECOVERY] Abort: {}", reason), "FATAL");
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
                                 // ── SELF-REPAIR LOOP (ReAct pattern) ───────────────────
 
                                 // Classify the error type and choose the appropriate recovery strategy.
@@ -2526,8 +2534,8 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             } else {
                                 if !comando.trim().is_empty() {
                                     acceptance_contract = Some(formato_contrato(&comando));
-                                    mission_contract.add_criterion(
-                                        &format!("AC-{:03}", mission_contract.acceptance_criteria.len() + 1),
+                                    runtime.contract.add_criterion(
+                                        &format!("AC-{:03}", runtime.contract.acceptance_criteria.len() + 1),
                                         &comando.chars().take(120).collect::<String>(),
                                         crate::core::mission_contract::VerificationMethod::ManualReview,
                                         false,
@@ -3058,8 +3066,8 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             return Ok(serde_json::to_string(&final_res).unwrap());
                         } else {
                             tester_success_hits += 1;
-                            cognitive_state.metrics.successful_verifications += 1;
-                            evidence_graph.record(
+                            runtime.cognitive_state.metrics.successful_verifications += 1;
+                            runtime.evidence_graph.record(
                                 crate::core::evidence::EvidenceKind::Test,
                                 "TOOL_TESTER",
                                 "tests_passed",
@@ -3490,10 +3498,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     journal.fases[journal.fase_actual].estado = "COMPLETADA".to_string();
                 }
 
-                // ── Arquitectura Cognitiva v4: CompletionGate — delegado a MissionRuntime ──
-                // Sync runtime with live contract and evidence before evaluating
-                runtime.contract = mission_contract.clone();
-                runtime.evidence_graph = evidence_graph.clone();
+                // ── CompletionGate delegado a MissionRuntime (fuente única de verdad) ──
                 let completion_decision = runtime.can_complete();
                 match completion_decision {
                     crate::core::completion_gate::CompletionDecision::Incomplete(missing_reasons) => {
