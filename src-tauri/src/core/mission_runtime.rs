@@ -86,16 +86,20 @@ impl MissionRuntime {
         }
     }
 
-    /// Returns the current world state hash (0 if world not yet observed).
+    /// Returns the current world state hash using content hashes, not just file sizes.
+    /// This correctly detects when a file changes content but keeps the same size.
     pub fn current_world_hash(&self) -> u64 {
         self.world.as_ref().map(|w| {
             use std::hash::{Hash, Hasher};
             use std::collections::hash_map::DefaultHasher;
             let mut hasher = DefaultHasher::new();
-            // Hash the set of file paths + sizes as a cheap state fingerprint
-            for (path, state) in &w.files {
+            // Sort for determinism, then hash path + content_hash (not size_bytes)
+            let mut entries: Vec<(&String, &crate::core::world_state::FileSnapshot)> =
+                w.files.iter().collect();
+            entries.sort_by_key(|(p, _)| p.as_str());
+            for (path, snapshot) in entries {
                 path.hash(&mut hasher);
-                state.size_bytes.hash(&mut hasher);
+                snapshot.content_hash.hash(&mut hasher);
             }
             hasher.finish()
         }).unwrap_or(0)

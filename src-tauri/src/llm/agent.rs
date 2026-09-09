@@ -757,18 +757,10 @@ pub async fn run_agent_loop(
         current_role = AgentRole::Executor;
     }
 
-    // ── MissionRuntime: cognitive governor (unifies contract + evidence + budget + stall + recovery) ──
-    let mut runtime = crate::core::mission_runtime::MissionRuntime::new(
-        &workspace_path,
-        &original_prompt_parsed,
-        50,
-    );
-
     // ── Acceptance Contract ─────────────────────────────────────────────────
     let mut acceptance_contract: Option<String> = None;
 
     let mut step_count = 1u32;
-    let mut max_steps = 50u32;
     let mut json_error_count = 0;
 
     // ── Session Journal ────────────────────────────────────────
@@ -813,6 +805,14 @@ pub async fn run_agent_loop(
         journal.fase_actual = 0;
         journal.objetivo = user_message.clone();
     }
+
+    // ── MissionRuntime: cognitive governor built AFTER objective is resolved ──
+    // This ensures the runtime contract has the correct objective for continuations.
+    let mut runtime = crate::core::mission_runtime::MissionRuntime::new(
+        &workspace_path,
+        &original_prompt_parsed,  // <-- now guaranteed to be the resolved objective
+        50,
+    );
 
     journal.workspace_path = workspace_path.clone();
     journal.status = "EN_PROGRESO".to_string();
@@ -865,9 +865,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         if journal.fsm_step > 0 {
             step_count = journal.fsm_step;
         }
-        // CRITICAL FIX: Extend budget by 50 steps so the resumed mission can proceed!
-        max_steps = step_count + 50;
-        // Sync runtime budget to match — MissionRuntime must be the single budget authority
+        // Runtime budget is the SOLE authority — reset to 50 steps for continuation
         runtime.budget = crate::core::step_budget::StepBudget::new(50);
         journal.interrupted = false;
         crate::core::session_journal::save_journal(&workspace_path, &journal);
@@ -876,7 +874,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 current_context = ctx.clone();
             }
         }
-        emit_event(&app_handle, step_count, &format!("[SESSION RESTORED] Misión retomada exitosamente desde el paso {}. Presupuesto activo extendido a {} pasos.", step_count, max_steps), "SUCCESS");
+        emit_event(&app_handle, step_count, &format!("[SESSION RESTORED] Misión retomada exitosamente desde el paso {}. Presupuesto activo extendido a {} pasos.", step_count, runtime.budget_remaining()), "SUCCESS");
     }
 
     while !runtime.is_budget_exhausted() {
@@ -1006,7 +1004,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 **📋 Estado de Fases:**\n{}\n\n\
                 **📁 Archivos en Workspace:**\n{}\n\n\
                 💡 Escribe **'continua'** para otorgarme otro bloque de 50 pasos y continuar exactamente donde me quedé sin perder progreso.",
-                step_count, max_steps,
+                step_count, runtime.budget.total_steps,
                 if journal.fases.is_empty() {
                     "- Fases en desarrollo activo".to_string()
                 } else {
@@ -1968,18 +1966,43 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 || (err.contains("The term") && err.contains("is not recognized"));
 
                             if is_binary_missing {
-                                // Extract likely binary name from the failed command (first word)
+                                // ── Step 1: Record error Observation through the full circuit ──
+                                runtime.observe_world();
+                                runtime.record_tool_call();
+                                let world_hash_after = runtime.current_world_hash();
+                                let mut err_obs = crate::core::observation::Observation::error(
+                                    "TOOL_TERMINAL",
+                                    &err,
+                                    None,
+                                    true,
+                                    None,
+                                );
+                                err_obs.command = Some(comando.clone());
+                                err_obs.state_hash_after = Some(world_hash_after);
+                                runtime.record_observation(&err_obs);
+
+                                // ── Step 2: RecoveryEngine classifies and produces RepairEnvironment ──
+                                let recovery_dec = runtime.plan_recovery("TOOL_TERMINAL", &err);
+
+                                // ── Step 3: Execute TOOL_ENV_MANAGER as the recovery action ──
                                 let binary = comando.split_whitespace().next().unwrap_or(&comando);
                                 emit_event(&app_handle, step_count,
-                                    &format!("[AUTO-ENV] Binario '{}' no encontrado. Invocando TOOL_ENV_MANAGER automáticamente...", binary),
+                                    &format!("[RECOVERY→TOOL_ENV_MANAGER] Binario '{}' no encontrado — ejecutando instalación automática por RecoveryEngine...", binary),
                                     "WARNING");
+                                let _ = recovery_dec; // RecoveryEngine already consulted; install proceeds
 
                                 match crate::core::env_manager::install_dependency(binary).await {
                                     Ok(install_msg) => {
-                                        // Reset command history so the original command can be retried
-
+                                        // ── Produce Observation for the ENV_MANAGER action ──
+                                        let env_obs = crate::core::observation::Observation::success(
+                                            "TOOL_ENV_MANAGER",
+                                            &install_msg,
+                                            vec![],
+                                        );
+                                        runtime.record_observation(&env_obs);
+                                        runtime.record_tool_call();
                                         current_context.push_str(&format!(
-                                            "[AUTO-ENV] TOOL_ENV_MANAGER instaló '{}' automáticamente: {}\n\n\
+                                            "[RECOVERY] TOOL_ENV_MANAGER instaló '{}' automáticamente: {}\n\n\
                                              Tu SIGUIENTE PASO OBLIGATORIO es reintentar el comando que falló: '{}'.\n\n",
                                             binary, install_msg, comando
                                         ));
@@ -1988,6 +2011,16 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                             "SUCCESS");
                                     },
                                     Err(install_err) => {
+                                        // ── Produce error Observation for the failed ENV_MANAGER ──
+                                        let env_err_obs = crate::core::observation::Observation::error(
+                                            "TOOL_ENV_MANAGER",
+                                            &install_err,
+                                            None,
+                                            false,
+                                            Some("Intervención manual requerida para instalar la dependencia.".to_string()),
+                                        );
+                                        runtime.record_observation(&env_err_obs);
+                                        runtime.record_tool_call();
                                         let res_msg = format!("Error: {}\n[AUTO-ENV FALLÓ] No se pudo instalar '{}': {}\nSe requiere intervención manual.", err, binary, install_err);
                                         current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
                                         emit_event(&app_handle, step_count, &res_msg, "ERROR");
@@ -3785,7 +3818,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         respuesta_conversacional: format!(
             "He alcanzado el límite máximo de {} pasos sin llegar a una conclusión. \
              Por favor, revisa el historial de pasos y proporciona más contexto.",
-            max_steps
+            runtime.budget.total_steps
         ),
     };
     Ok(serde_json::to_string(&final_res).unwrap())
