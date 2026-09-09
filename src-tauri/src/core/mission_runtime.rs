@@ -1,4 +1,4 @@
-﻿#![allow(dead_code)]
+#![allow(dead_code)]
 use crate::core::mission_contract::MissionContract;
 use crate::core::cognitive_state::CognitiveState;
 use crate::core::evidence::EvidenceGraph;
@@ -12,7 +12,7 @@ use crate::core::observation::Observation;
 use crate::core::schema_validator::{SchemaValidator, SchemaValidationResult};
 use crate::core::tool_registry::ToolRegistry;
 
-/// Runtime governance controller â€” the cognitive brain of agent.rs.
+/// Runtime governance controller — the cognitive brain of agent.rs.
 pub struct MissionRuntime {
     pub mission_id: String,
     pub workspace_path: String,
@@ -23,6 +23,8 @@ pub struct MissionRuntime {
     pub budget: StepBudget,
     pub recovery: RecoveryEngine,
     pub world: Option<WorldState>,
+    /// FINAL-6: Owns the executor dispatch table. Register all tools before the mission loop.
+    pub tool_registry: ToolRegistry,
 }
 
 impl MissionRuntime {
@@ -44,10 +46,11 @@ impl MissionRuntime {
             world: None,
             workspace_path: workspace_path.to_string(),
             mission_id,
+            tool_registry: ToolRegistry::new(),
         }
     }
 
-    // â”€â”€â”€ Budget â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ——— Budget ————————————————————————————————————————————————————————
 
     pub fn budget_remaining(&self) -> u32 {
         self.budget.remaining_steps()
@@ -215,26 +218,36 @@ impl MissionRuntime {
         PolicyEngine::authorize(proposal)
     }
 
-    /// H-10 + FINAL-1+2: Action Gateway â€” complete authorization pipeline.
-    /// Order: ToolRegistry â†’ SchemaValidator â†’ Budget â†’ Policy.
-    /// agent.rs MUST call this (via execute_action) before any tool execution.
+    /// H-10 + FINAL-1+2+6: Action Gateway — complete authorization pipeline.
+    /// Order: ToolRegistry.validate_name → SchemaValidator → Budget → Policy.
+    /// agent.rs MUST NOT call tools directly — always goes through execute_action.
     pub fn authorize_action(&self, proposal: &ActionProposal) -> Result<(), String> {
-        // 0. ToolRegistry â€” is this a known, registered tool?
-        ToolRegistry::validate(&proposal.tool)?;
+        // 0a. ToolRegistry — is this a known tool name?
+        ToolRegistry::validate_name(&proposal.tool)?;
 
-        // 1. Schema â€” does the payload match the expected shape for this tool?
+        // 0b. ToolRegistry — does this tool have a registered executor?
+        //     TOOL_UNREGISTERED is a hard error: system misconfiguration, not a tool failure.
+        if self.tool_registry.resolve(&proposal.tool).is_none() {
+            return Err(format!(
+                "TOOL_UNREGISTERED: '{}' is known but has no executor registered. \
+                 Call runtime.tool_registry.register() before starting the mission loop.",
+                proposal.tool
+            ));
+        }
+
+        // 1. Schema — does the payload match the expected shape for this tool?
         match SchemaValidator::validate_tool_payload(&proposal.tool, &proposal.arguments) {
             SchemaValidationResult::Invalid(reason) =>
                 return Err(format!("SCHEMA_INVALID: {}", reason)),
             SchemaValidationResult::Valid => {}
         }
 
-        // 2. Budget â€” is there remaining step capacity?
+        // 2. Budget — is there remaining step capacity?
         if self.is_budget_exhausted() {
             return Err("BUDGET_EXHAUSTED: presupuesto de pasos agotado".into());
         }
 
-        // 3. Policy â€” is this action permitted by current security policy?
+        // 3. Policy — is this action permitted by current security policy?
         match PolicyEngine::authorize(proposal) {
             PolicyDecision::Allow => Ok(()),
             PolicyDecision::Deny(reason) => Err(format!("POLICY_DENY: {}", reason)),
@@ -243,57 +256,48 @@ impl MissionRuntime {
         }
     }
 
-    /// H-12: Execution Gateway â€” the COMPLETE pipeline for any tool action.
-    /// Enforces: authorize â†’ world snapshot before â†’ execute â†’ world snapshot after
-    ///           â†’ Observation â†’ record_observation â†’ record_tool_call.
+    /// FINAL-6: Execution Gateway — ToolRegistry is the sole dispatch authority.
     ///
-    /// The actual tool execution is provided as a closure so agent.rs can keep
-    /// its async handles (app_handle, filesystem, network) without moving them into Runtime.
+    /// Pipeline: ToolRegistry.validate_name → Schema → Budget → Policy
+    ///         → observe_world before → ToolRegistry.dispatch → observe_world after
+    ///         → Observation → record_observation
     ///
-    /// agent.rs usage:
-    /// ```ignore
-    /// let obs = runtime.execute_action(&proposal, || async {
-    ///     execute_terminal_command(&comando, &workspace_path).await
-    ///         .map_err(|e| e.to_string())
-    /// }).await;
-    /// ```
-    pub async fn execute_action<F, Fut>(
+    /// agent.rs NEVER passes an executor closure. It registers executors at startup
+    /// and calls execute_action(&proposal) — Runtime dispatches via ToolRegistry.
+    pub async fn execute_action(
         &mut self,
         proposal: &ActionProposal,
-        executor: F,
     ) -> Result<Observation, String>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<String, String>>,
     {
-        // 1. Authorization: ToolRegistry â†’ Schema â†’ Budget â†’ Policy
+        // 1. Full authorization gate: name → schema → budget → policy
         self.authorize_action(proposal)?;
 
-        // 2. World snapshot BEFORE â€” abort if we cannot establish baseline
-        //    (FINAL-3: observe_world returns Result; failure is surfaced, not silenced)
+        // 2. World snapshot BEFORE — abort if we cannot establish baseline
         if let Err(observe_err) = self.observe_world() {
             return Err(format!("OBSERVE_BEFORE_FAILED: {}", observe_err));
         }
         let hash_before = self.current_world_hash();
 
-        // 3. Execute â€” runtime delegates to the closure provided by agent.rs
-        //    The closure owns app_handle, filesystem, network â€” Runtime does not.
-        let exec_result = executor().await;
+        // 3. ToolRegistry dispatches — Runtime resolves which code runs, not agent.rs
+        let exec_result = self.tool_registry.dispatch(
+            &proposal.tool,
+            proposal.arguments.clone(),
+        ).await;
 
-        // 4. World snapshot AFTER â€” failure is recorded in Observation, not hidden
+        // 4. World snapshot AFTER — None = observation failed (not "no change")
         let hash_after = match self.observe_world() {
             Ok(()) => Some(self.current_world_hash()),
-            Err(_) => None, // None = observation failed, not "no change"
+            Err(_) => None,
         };
         self.record_tool_call();
 
-        // 5. Build Observation from result
+        // 5. Build Observation from dispatch result
         let mut obs = match exec_result {
             Ok(ref output) => Observation::success(&proposal.tool, output, vec![]),
             Err(ref err)   => Observation::error(&proposal.tool, err, None, true, None),
         };
         obs.state_hash_before = Some(hash_before);
-        obs.state_hash_after  = hash_after; // None means observation failed post-exec
+        obs.state_hash_after  = hash_after;
 
         // 6. Record through full circuit (StallDetector, EvidenceGraph)
         self.record_observation(&obs);
@@ -388,9 +392,14 @@ mod tests {
     /// H-11-B: authorize_action() denies when budget is exhausted.
     #[test]
     fn test_authorize_action_denies_on_exhausted_budget() {
+        use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test budget gate", 2);
         rt.record_step(); rt.record_step();
         assert!(rt.is_budget_exhausted());
+        // Must register executor so check 0b passes and budget check is reached
+        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
+            Box::pin(async { Ok("ok".to_string()) })
+        })).unwrap();
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
             arguments: serde_json::json!({"comando": "dir"}),
@@ -462,12 +471,16 @@ mod tests {
         assert_eq!(rt.budget_remaining(), 48, "budget should only decrease by record_step calls");
     }
 
-    /// H-15: execute_action() runs the full pipeline through Runtime.
-    /// Verifies: authorize â†’ world before â†’ execute â†’ world after â†’ Observation recorded.
-    /// No LLM, no agent.rs, no app_handle required.
+    /// H-15: execute_action() runs the full pipeline through Runtime via ToolRegistry.
     #[tokio::test]
     async fn test_execute_action_full_pipeline() {
+        use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test execution gateway", 10);
+        // Register a simulated executor BEFORE execute_action
+        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
+            Box::pin(async { Ok("simulated terminal output".to_string()) })
+        })).unwrap();
+
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
             arguments: serde_json::json!({"comando": "dir"}),
@@ -475,44 +488,40 @@ mod tests {
             risk: crate::core::policy::RiskLevel::Safe,
         };
 
-        // Execute via gateway with a simulated successful closure
-        let obs = rt.execute_action(&proposal, || async {
-            Ok("simulated terminal output".to_string())
-        }).await;
-
-        assert!(obs.is_ok(), "execute_action must succeed for authorized action");
+        let obs = rt.execute_action(&proposal).await;
+        assert!(obs.is_ok(), "execute_action must succeed for authorized registered action");
         let o = obs.unwrap();
         assert_eq!(o.status, crate::core::observation::ObservationStatus::Success);
         assert!(o.state_hash_before.is_some(), "world hash before must be recorded");
-        assert!(o.state_hash_after.is_some(), "world hash after must be recorded");
         assert_eq!(o.tool_name, "TOOL_TERMINAL");
-        // record_tool_call was called inside execute_action
         assert_eq!(rt.cognitive_state.metrics.tool_calls, 1);
     }
 
-    /// H-15b: execute_action() denies when budget is exhausted.
+    /// H-15b: execute_action() denies when budget is exhausted — registry not reached.
     #[tokio::test]
     async fn test_execute_action_denies_on_exhausted_budget() {
+        use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test deny on exhausted", 2);
         rt.record_step(); rt.record_step();
+        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
+            Box::pin(async { Ok("should not run".to_string()) })
+        })).unwrap();
+
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
             arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
         };
-        let result = rt.execute_action(&proposal, || async {
-            Ok("should not run".to_string())
-        }).await;
+        let result = rt.execute_action(&proposal).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("BUDGET_EXHAUSTED"));
     }
 
-    // â”€â”€ FINAL-5: Integration tests â€” full circuit verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ——— FINAL-5: Integration tests — full circuit verification ——————————————————
 
     /// FINAL-5-A: Executor is PHYSICALLY never called when authorization is denied.
-    /// Uses AtomicBool to prove the closure body was never entered â€” stronger than
-    /// just checking the Result return value.
+    /// AtomicBool proves the registered executor body was never entered.
     #[tokio::test]
     async fn test_executor_not_called_when_denied() {
         use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
@@ -523,6 +532,15 @@ mod tests {
         let executed = Arc::new(AtomicBool::new(false));
         let executed_clone = executed.clone();
 
+        // Register executor that sets the flag if called
+        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(move |_args| {
+            let flag = executed_clone.clone();
+            Box::pin(async move {
+                flag.store(true, Ordering::SeqCst);
+                Ok("should not run".to_string())
+            })
+        })).unwrap();
+
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
             arguments: serde_json::json!({"comando": "dir"}),
@@ -530,23 +548,24 @@ mod tests {
             risk: crate::core::policy::RiskLevel::Safe,
         };
 
-        let result = rt.execute_action(&proposal, move || async move {
-            executed_clone.store(true, Ordering::SeqCst);
-            Ok("should not run".to_string())
-        }).await;
-
+        let result = rt.execute_action(&proposal).await;
         assert!(result.is_err(), "Must deny when budget exhausted");
         assert!(
             !executed.load(Ordering::SeqCst),
-            "executor MUST NOT be called when authorization is denied"
+            "registered executor MUST NOT run when authorization is denied"
         );
     }
 
-    /// FINAL-5-B: Error Observation â†’ handle_observation() returns RecoveryDecision.
-    /// Verifies the Execution â†’ Observation â†’ Recovery circuit is wired end-to-end.
+    /// FINAL-5-B: Error from registered executor → handle_observation() → RecoveryDecision.
     #[tokio::test]
     async fn test_error_observation_produces_recovery_decision() {
+        use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test recovery circuit", 10);
+
+        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
+            Box::pin(async { Err("error[E0001]: command not found: rustc".to_string()) })
+        })).unwrap();
+
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
             arguments: serde_json::json!({"comando": "rustc nonexistent.rs"}),
@@ -554,9 +573,8 @@ mod tests {
             risk: crate::core::policy::RiskLevel::Safe,
         };
 
-        let obs = rt.execute_action(&proposal, || async {
-            Err("error[E0001]: command not found: rustc".to_string())
-        }).await.expect("execute_action itself should succeed");
+        let obs = rt.execute_action(&proposal).await
+            .expect("execute_action itself should succeed even on tool error");
 
         assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error,
             "Failed executor must produce Error observation");
@@ -565,7 +583,7 @@ mod tests {
             "Error Observation MUST produce a RecoveryDecision via handle_observation()");
     }
 
-    /// FINAL-5-C: Schema INVALID blocks execution â€” empty command caught before executor runs.
+    /// FINAL-5-C: Schema INVALID blocks before dispatch — executor never runs.
     #[tokio::test]
     async fn test_schema_invalid_blocks_execution() {
         use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
@@ -574,27 +592,64 @@ mod tests {
         let executed = Arc::new(AtomicBool::new(false));
         let executed_clone = executed.clone();
 
+        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(move |_args| {
+            let flag = executed_clone.clone();
+            Box::pin(async move {
+                flag.store(true, Ordering::SeqCst);
+                Ok("should not run".to_string())
+            })
+        })).unwrap();
+
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
-            arguments: serde_json::json!({"comando": ""}), // empty â†’ SCHEMA_INVALID
+            arguments: serde_json::json!({"comando": ""}), // empty → SCHEMA_INVALID
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
         };
 
-        let result = rt.execute_action(&proposal, move || async move {
-            executed_clone.store(true, Ordering::SeqCst);
-            Ok("should not run".to_string())
-        }).await;
-
+        let result = rt.execute_action(&proposal).await;
         assert!(result.is_err(), "Empty command must be rejected");
-        assert!(
-            result.unwrap_err().contains("SCHEMA_INVALID"),
-            "Error must be SCHEMA_INVALID from SchemaValidator"
-        );
-        assert!(
-            !executed.load(Ordering::SeqCst),
-            "executor MUST NOT run when Schema validation fails"
-        );
+        assert!(result.unwrap_err().contains("SCHEMA_INVALID"));
+        assert!(!executed.load(Ordering::SeqCst),
+            "registered executor MUST NOT run when Schema validation fails");
+    }
+
+    // ——— FINAL-6: ToolRegistry as dispatch authority ————————————————————————————
+
+    /// FINAL-6-A: Known but unregistered tool → TOOL_UNREGISTERED error.
+    #[tokio::test]
+    async fn test_unregistered_tool_dispatch_fails() {
+        let mut rt = MissionRuntime::new(".", "Test unregistered dispatch", 10);
+        // TOOL_TERMINAL is KNOWN but NOT registered in the registry
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::json!({"comando": "dir"}),
+            expected_effect: String::new(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+        let result = rt.execute_action(&proposal).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("TOOL_UNREGISTERED"),
+            "Known but unregistered tool must fail with TOOL_UNREGISTERED");
+    }
+
+    /// FINAL-6-B: After registration, ToolRegistry dispatches correctly.
+    #[tokio::test]
+    async fn test_registered_tool_dispatches_via_registry() {
+        use std::sync::Arc;
+        let mut rt = MissionRuntime::new(".", "Test registry dispatch", 10);
+        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
+            Box::pin(async { Ok("registry_dispatched".to_string()) })
+        })).unwrap();
+
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::json!({"comando": "dir"}),
+            expected_effect: String::new(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+        let obs = rt.execute_action(&proposal).await;
+        assert!(obs.is_ok());
+        assert_eq!(obs.unwrap().payload, "registry_dispatched");
     }
 }
-

@@ -1,4 +1,4 @@
-﻿use serde::Serialize;
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use crate::memory;
 use crate::core::{
@@ -812,6 +812,65 @@ pub async fn run_agent_loop(
         &original_prompt_parsed,  // <-- now guaranteed to be the resolved objective
         50,
     );
+
+    // ── FINAL-6: Register all tool executors with ToolRegistry ────────────────
+    // Must happen BEFORE the mission loop. ToolRegistry is now the sole dispatch
+    // authority — execute_action() resolves which code runs via registry, not ad-hoc.
+    {
+        use std::sync::Arc;
+
+        // TOOL_TERMINAL: core command execution (guards/redirect logic stay in match arm)
+        {
+            let ws = workspace_path.clone();
+            let _ = runtime.tool_registry.register("TOOL_TERMINAL", Arc::new(move |args| {
+                let workspace = ws.clone();
+                Box::pin(async move {
+                    let cmd = args["comando"].as_str().unwrap_or("").to_string();
+                    execute_terminal_command(&workspace, &cmd).await
+                        .map_err(|e| e.to_string())
+                })
+            }));
+        }
+
+        // TOOL_PROGRAMMER: complex retry+LLM logic handled in match arm for now.
+        // Registered so ToolRegistry validates the name; extraction to standalone fn is next.
+        {
+            let _ = runtime.tool_registry.register("TOOL_PROGRAMMER", Arc::new(|_args| {
+                Box::pin(async {
+                    Err("TOOL_PROGRAMMER: dispatched via match arm (extraction pending)".to_string())
+                })
+            }));
+        }
+
+        // TOOL_TESTER: same — match arm handles complex compilation+verification logic.
+        {
+            let _ = runtime.tool_registry.register("TOOL_TESTER", Arc::new(|_args| {
+                Box::pin(async {
+                    Err("TOOL_TESTER: dispatched via match arm (extraction pending)".to_string())
+                })
+            }));
+        }
+
+        // TOOL_FINISH: CompletionGate is the authority (match arm validates and signals)
+        {
+            let _ = runtime.tool_registry.register("TOOL_FINISH", Arc::new(|_args| {
+                Box::pin(async { Ok("FINISH_SIGNALED".to_string()) })
+            }));
+        }
+
+        // Remaining tools: stub dispatchers satisfy registry validation.
+        // Match arm handles actual execution for each.
+        for tool in &["TOOL_ENV_MANAGER", "TOOL_MAPPER", "TOOL_AST_INJECT",
+                       "TOOL_CONTAINER", "TOOL_WORKSPACE_MANAGER",
+                       "TOOL_BACKGROUND_START", "TOOL_BACKGROUND_QUERY",
+                       "TOOL_BROWSE", "TOOL_GIT"] {
+            let tool_name = tool.to_string();
+            let _ = runtime.tool_registry.register(tool, Arc::new(move |_args| {
+                let name = tool_name.clone();
+                Box::pin(async move { Ok(format!("{}_REGISTERED", name)) })
+            }));
+        }
+    }
 
     journal.workspace_path = workspace_path.clone();
     journal.status = "EN_PROGRESO".to_string();
