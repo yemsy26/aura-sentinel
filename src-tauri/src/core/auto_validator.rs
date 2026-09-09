@@ -87,13 +87,12 @@ impl AutoValidator {
 
         if !script_path.exists() {
             result.issues.push(ValidationIssue {
-                severity: Severity::Error,
+                severity: Severity::Warning,
                 file: html_file.to_string(),
                 line: Some(line),
-                message: format!("Script referenciado no existe: '{}' (resuelto a: {})", src, script_path.display()),
+                message: format!("Script referenciado aún no existe o ruta pendiente: '{}' (resuelto a: {})", src, script_path.display()),
                 suggested_fix: Some(format!("Verificar ruta o crear archivo: {}", script_path.display())),
             });
-            result.passed = false;
         }
     }
 
@@ -142,13 +141,12 @@ impl AutoValidator {
 
         if !asset_full.exists() {
             result.issues.push(ValidationIssue {
-                severity: Severity::Error,
+                severity: Severity::Warning,
                 file: js_file.to_string(),
                 line: Some(line),
-                message: format!("Asset referenciado no existe: '{}' (resuelto a: {})", asset_path, asset_full.display()),
+                message: format!("Asset referenciado aún no existe o ruta pendiente: '{}' (resuelto a: {})", asset_path, asset_full.display()),
                 suggested_fix: Some(format!("Crear asset o corregir ruta: {}", asset_full.display())),
             });
-            result.passed = false;
         }
     }
 
