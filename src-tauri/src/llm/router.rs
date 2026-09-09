@@ -171,6 +171,46 @@ pub async fn get_best_model(
         }
     });
 
+    // AL-v1: AdaptiveRouter re-ranks candidates using learned Experience + Stats.
+    // Cold-start → brains.json order unchanged (confidence = 0.5, no reorder).
+    // AdaptiveRouter cannot execute tools — it only produces a Recommendation.
+    {
+        use crate::core::learning::{AdaptiveRouter, FingerprintBuilder};
+        use crate::core::learning::persistence::LearningPersistence;
+        use crate::core::mission_contract::MissionContract;
+        use crate::core::project_profile::ProjectProfile;
+        use std::sync::Arc;
+
+        // Build a minimal fingerprint from context (no LLM, no I/O errors)
+        let dummy_contract = MissionContract::new(
+            &context.language.clone().unwrap_or_default()
+        );
+        let dummy_profile = ProjectProfile::detect(".");
+
+        let fp = FingerprintBuilder::from_mission(&dummy_contract, &dummy_profile);
+
+        let persistence = LearningPersistence::new();
+        let store = Arc::new(persistence.load_experiences(500));
+        let model_stats = persistence.load_model_stats();
+        let strategy_stats = persistence.load_strategy_stats();
+
+        // mission_id not available here — use task_type as seed for determinism
+        let seed = context.task_type.as_str();
+        let router = AdaptiveRouter::new(model_stats, strategy_stats, store, seed);
+        let rec = router.recommend(&fp, &ranked);
+
+        // Only reorder if router has actual experience (not cold-start)
+        // Cold-start leaves brains.json order intact
+        use crate::core::learning::RecommendationReason;
+        if !matches!(rec.reason, RecommendationReason::ColdStart) && rec.confidence > 0.6 {
+            // Move recommended model to front if it's in our candidate list
+            if let Some(pos) = ranked.iter().position(|m| *m == rec.model) {
+                let chosen = ranked.remove(pos);
+                ranked.insert(0, chosen);
+            }
+        }
+    }
+
     if let Some(first_choice) = ranked.first() {
         if !available_models.iter().any(|m| m.starts_with(first_choice)) {
             crate::llm::agent::emit_event(app_handle, step,
