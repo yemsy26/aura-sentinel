@@ -44,6 +44,7 @@ pub mod validation;          // Módulos desacoplados de validación sintáctica
 pub mod world_state;         // Snapshot determinista del estado del workspace y diffs
 pub mod observation;         // Envelope estructurado de observaciones y ejecución de herramientas
 pub mod recovery;            // Motor determinista de recuperación de fallos y alternativas
+pub mod tool_registry;       // FINAL-2: Autoridad de nombres de herramientas permitidas (ToolRegistry)
 
 
 use std::path::Path;

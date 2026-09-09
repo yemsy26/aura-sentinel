@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+﻿#![allow(dead_code)]
 use crate::core::mission_contract::MissionContract;
 use crate::core::cognitive_state::CognitiveState;
 use crate::core::evidence::EvidenceGraph;
@@ -9,8 +9,10 @@ use crate::core::step_budget::StepBudget;
 use crate::core::recovery::{RecoveryEngine, RecoveryDecision, classify_error};
 use crate::core::world_state::WorldState;
 use crate::core::observation::Observation;
+use crate::core::schema_validator::{SchemaValidator, SchemaValidationResult};
+use crate::core::tool_registry::ToolRegistry;
 
-/// Runtime governance controller — the cognitive brain of agent.rs.
+/// Runtime governance controller â€” the cognitive brain of agent.rs.
 pub struct MissionRuntime {
     pub mission_id: String,
     pub workspace_path: String,
@@ -45,7 +47,7 @@ impl MissionRuntime {
         }
     }
 
-    // ─── Budget ────────────────────────────────────────────────────────────────
+    // â”€â”€â”€ Budget â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     pub fn budget_remaining(&self) -> u32 {
         self.budget.remaining_steps()
@@ -72,7 +74,7 @@ impl MissionRuntime {
     }
 
     /// Restores the runtime's step counter from a persisted checkpoint.
-    /// The Runtime controls how its own state is restored — agent.rs must NOT
+    /// The Runtime controls how its own state is restored â€” agent.rs must NOT
     /// write directly to cognitive_state fields.
     pub fn restore_step(&mut self, step: u32) {
         self.cognitive_state.mission.current_step = step;
@@ -80,11 +82,11 @@ impl MissionRuntime {
     }
 
     /// Checks runtime coherence. Returns a list of violation strings.
-    /// Does NOT panic — callers emit FATAL/WARNING and decide how to proceed.
+    /// Does NOT panic â€” callers emit FATAL/WARNING and decide how to proceed.
     pub fn check_invariants(&self) -> Vec<String> {
         let mut violations = Vec::new();
         if self.contract.objective.trim().is_empty() {
-            violations.push("CONTRACT_EMPTY: objetivo vacío".into());
+            violations.push("CONTRACT_EMPTY: objetivo vacÃ­o".into());
         }
         if self.cognitive_state.mission.id != self.mission_id {
             violations.push(format!(
@@ -110,18 +112,20 @@ impl MissionRuntime {
         violations
     }
 
-    // ─── World Observation ─────────────────────────────────────────────────────
+    // â”€â”€â”€ World Observation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    /// Takes a fresh workspace snapshot and stores it in the runtime.
-    pub fn observe_world(&mut self) {
+    /// FINAL-3: Takes a fresh workspace snapshot and stores it in the runtime.
+    /// Returns Err if the snapshot fails so callers can distinguish
+    /// "no world change" (hash equal) from "observation failed" (None hash).
+    /// NEVER silences the error â€” eprintln is eliminated.
+    pub fn observe_world(&mut self) -> Result<(), String> {
         match WorldState::capture(&self.workspace_path) {
             Ok(ws) => {
                 self.cognitive_state.set_world(ws.clone());
                 self.world = Some(ws);
+                Ok(())
             }
-            Err(e) => {
-                eprintln!("[MissionRuntime] observe_world error: {}", e);
-            }
+            Err(e) => Err(format!("[OBSERVE_WORLD FAILED] {}", e)),
         }
     }
 
@@ -144,7 +148,7 @@ impl MissionRuntime {
         }).unwrap_or(0)
     }
 
-    // ─── Observation Recording ─────────────────────────────────────────────────
+    // â”€â”€â”€ Observation Recording â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Records a structured tool observation and feeds it to StallDetector.
     pub fn record_observation(&mut self, obs: &Observation) {
@@ -199,26 +203,38 @@ impl MissionRuntime {
         self.stall_detector.record_signature(sig);
     }
 
-    // ─── Stall Detection ───────────────────────────────────────────────────────
+    // â”€â”€â”€ Stall Detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     pub fn should_stall_recover(&self, window: usize) -> Option<StallType> {
         self.stall_detector.detect_stall(window)
     }
 
-    // ─── Policy ────────────────────────────────────────────────────────────────
+    // â”€â”€â”€ Policy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     pub fn check_policy(&self, proposal: &ActionProposal) -> PolicyDecision {
         PolicyEngine::authorize(proposal)
     }
 
-    /// H-10: Action Gateway — single point of authorization before any tool execution.
-    /// Combines budget exhaustion check + PolicyEngine authorization.
-    /// Returns Ok(()) if the action is authorized, Err(reason) if denied.
-    /// agent.rs MUST call this before executing any tool.
+    /// H-10 + FINAL-1+2: Action Gateway â€” complete authorization pipeline.
+    /// Order: ToolRegistry â†’ SchemaValidator â†’ Budget â†’ Policy.
+    /// agent.rs MUST call this (via execute_action) before any tool execution.
     pub fn authorize_action(&self, proposal: &ActionProposal) -> Result<(), String> {
+        // 0. ToolRegistry â€” is this a known, registered tool?
+        ToolRegistry::validate(&proposal.tool)?;
+
+        // 1. Schema â€” does the payload match the expected shape for this tool?
+        match SchemaValidator::validate_tool_payload(&proposal.tool, &proposal.arguments) {
+            SchemaValidationResult::Invalid(reason) =>
+                return Err(format!("SCHEMA_INVALID: {}", reason)),
+            SchemaValidationResult::Valid => {}
+        }
+
+        // 2. Budget â€” is there remaining step capacity?
         if self.is_budget_exhausted() {
             return Err("BUDGET_EXHAUSTED: presupuesto de pasos agotado".into());
         }
+
+        // 3. Policy â€” is this action permitted by current security policy?
         match PolicyEngine::authorize(proposal) {
             PolicyDecision::Allow => Ok(()),
             PolicyDecision::Deny(reason) => Err(format!("POLICY_DENY: {}", reason)),
@@ -227,9 +243,9 @@ impl MissionRuntime {
         }
     }
 
-    /// H-12: Execution Gateway — the COMPLETE pipeline for any tool action.
-    /// Enforces: authorize → world snapshot before → execute → world snapshot after
-    ///           → Observation → record_observation → record_tool_call.
+    /// H-12: Execution Gateway â€” the COMPLETE pipeline for any tool action.
+    /// Enforces: authorize â†’ world snapshot before â†’ execute â†’ world snapshot after
+    ///           â†’ Observation â†’ record_observation â†’ record_tool_call.
     ///
     /// The actual tool execution is provided as a closure so agent.rs can keep
     /// its async handles (app_handle, filesystem, network) without moving them into Runtime.
@@ -250,19 +266,25 @@ impl MissionRuntime {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<String, String>>,
     {
-        // 1. Authorization: Budget + Policy (single gate)
+        // 1. Authorization: ToolRegistry â†’ Schema â†’ Budget â†’ Policy
         self.authorize_action(proposal)?;
 
-        // 2. World snapshot BEFORE execution
-        self.observe_world();
+        // 2. World snapshot BEFORE â€” abort if we cannot establish baseline
+        //    (FINAL-3: observe_world returns Result; failure is surfaced, not silenced)
+        if let Err(observe_err) = self.observe_world() {
+            return Err(format!("OBSERVE_BEFORE_FAILED: {}", observe_err));
+        }
         let hash_before = self.current_world_hash();
 
-        // 3. Execute — runtime delegates to the closure provided by agent.rs
+        // 3. Execute â€” runtime delegates to the closure provided by agent.rs
+        //    The closure owns app_handle, filesystem, network â€” Runtime does not.
         let exec_result = executor().await;
 
-        // 4. World snapshot AFTER execution
-        self.observe_world();
-        let hash_after = self.current_world_hash();
+        // 4. World snapshot AFTER â€” failure is recorded in Observation, not hidden
+        let hash_after = match self.observe_world() {
+            Ok(()) => Some(self.current_world_hash()),
+            Err(_) => None, // None = observation failed, not "no change"
+        };
         self.record_tool_call();
 
         // 5. Build Observation from result
@@ -271,15 +293,15 @@ impl MissionRuntime {
             Err(ref err)   => Observation::error(&proposal.tool, err, None, true, None),
         };
         obs.state_hash_before = Some(hash_before);
-        obs.state_hash_after  = Some(hash_after);
+        obs.state_hash_after  = hash_after; // None means observation failed post-exec
 
-        // 6. Record through full circuit (StallDetector, EvidenceGraph, RecoveryEngine)
+        // 6. Record through full circuit (StallDetector, EvidenceGraph)
         self.record_observation(&obs);
 
         Ok(obs)
     }
 
-    // ─── Completion Gate ───────────────────────────────────────────────────────
+    // â”€â”€â”€ Completion Gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// The ONLY authority allowed to declare mission complete.
     /// Never let agent.rs declare completion without calling this.
@@ -287,12 +309,36 @@ impl MissionRuntime {
         CompletionGate::evaluate(&self.contract, &self.cognitive_state, &self.evidence_graph)
     }
 
-    // ─── Recovery ──────────────────────────────────────────────────────────────
+    // â”€â”€â”€ Recovery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     pub fn plan_recovery(&mut self, tool_name: &str, error_msg: &str) -> RecoveryDecision {
         let class = classify_error(error_msg);
         self.cognitive_state.metrics.recovery_actions += 1;
         self.recovery.recover(tool_name, error_msg, class)
+    }
+
+    /// FINAL-4: Routes an Observation through the Recovery circuit after execution.
+    /// Returns Some(RecoveryDecision) for error observations so agent.rs can decide
+    /// what to do next (retry, change tool, replan, ask user, abort).
+    ///
+    /// Separation: Execution Gateway â‰  Recovery Authority.
+    /// execute_action() produces an Observation.
+    /// handle_observation() consults RecoveryEngine and returns a decision.
+    /// agent.rs acts on that decision â€” Runtime never forces the recovery action.
+    pub fn handle_observation(&mut self, obs: &Observation) -> Option<RecoveryDecision> {
+        use crate::core::observation::ObservationStatus;
+        match obs.status {
+            ObservationStatus::Error => {
+                // Error â†’ classify â†’ RecoveryEngine â†’ decision
+                Some(self.plan_recovery(&obs.tool_name, &obs.payload))
+            }
+            ObservationStatus::Cancelled => {
+                // User-initiated cancellation: control event, not a failure.
+                // RecoveryEngine should NOT learn from cancellations.
+                None
+            }
+            _ => None, // Success / BlockedByPolicy / Timeout / SchemaViolation handled by agent
+        }
     }
 }
 
@@ -325,7 +371,7 @@ mod tests {
         assert_eq!(rt.budget_remaining(), 0);
     }
 
-    // ── H-11: Architecture invariant tests ──────────────────────────────────
+    // â”€â”€ H-11: Architecture invariant tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// H-11-A: restore_step() is the ONLY way to set step from outside.
     /// Verifies runtime controls its own restoration.
@@ -347,7 +393,7 @@ mod tests {
         assert!(rt.is_budget_exhausted());
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
-            arguments: serde_json::Value::Null,
+            arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
         };
@@ -372,7 +418,7 @@ mod tests {
     fn test_check_invariants_valid_runtime() {
         let rt = MissionRuntime::new(".", "Build a CLI tool", 50);
         let violations = rt.check_invariants();
-        // mission_id mismatch may fire because cognitive_state.mission.id is default — filter for BUDGET/STEP/WORKSPACE
+        // mission_id mismatch may fire because cognitive_state.mission.id is default â€” filter for BUDGET/STEP/WORKSPACE
         let critical: Vec<_> = violations.iter()
             .filter(|v| v.contains("BUDGET_INVALID") || v.contains("STEP_EXCEEDS") || v.contains("WORKSPACE_EMPTY"))
             .collect();
@@ -390,7 +436,7 @@ mod tests {
         assert!(!obs.retryable, "Cancelled must not be retryable");
     }
 
-    /// H-11-F: Empty contract blocks CompletionGate — no false positives.
+    /// H-11-F: Empty contract blocks CompletionGate â€” no false positives.
     #[test]
     fn test_empty_contract_blocks_completion() {
         let rt = MissionRuntime::new(".", "Do something", 50);
@@ -401,7 +447,7 @@ mod tests {
         );
     }
 
-    /// H-11-G: record_step() is the only way step advances — no += 1 outside runtime.
+    /// H-11-G: record_step() is the only way step advances â€” no += 1 outside runtime.
     #[test]
     fn test_step_advances_only_via_record_step() {
         let mut rt = MissionRuntime::new(".", "Step authority test", 50);
@@ -417,14 +463,14 @@ mod tests {
     }
 
     /// H-15: execute_action() runs the full pipeline through Runtime.
-    /// Verifies: authorize → world before → execute → world after → Observation recorded.
+    /// Verifies: authorize â†’ world before â†’ execute â†’ world after â†’ Observation recorded.
     /// No LLM, no agent.rs, no app_handle required.
     #[tokio::test]
     async fn test_execute_action_full_pipeline() {
         let mut rt = MissionRuntime::new(".", "Test execution gateway", 10);
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
-            arguments: serde_json::Value::Null,
+            arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: "simulate output".into(),
             risk: crate::core::policy::RiskLevel::Safe,
         };
@@ -451,7 +497,7 @@ mod tests {
         rt.record_step(); rt.record_step();
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
-            arguments: serde_json::Value::Null,
+            arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
         };
@@ -461,4 +507,94 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("BUDGET_EXHAUSTED"));
     }
+
+    // â”€â”€ FINAL-5: Integration tests â€” full circuit verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    /// FINAL-5-A: Executor is PHYSICALLY never called when authorization is denied.
+    /// Uses AtomicBool to prove the closure body was never entered â€” stronger than
+    /// just checking the Result return value.
+    #[tokio::test]
+    async fn test_executor_not_called_when_denied() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
+        let mut rt = MissionRuntime::new(".", "Test executor not called", 2);
+        rt.record_step(); rt.record_step(); // exhaust budget
+
+        let executed = Arc::new(AtomicBool::new(false));
+        let executed_clone = executed.clone();
+
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::json!({"comando": "dir"}),
+            expected_effect: String::new(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+
+        let result = rt.execute_action(&proposal, move || async move {
+            executed_clone.store(true, Ordering::SeqCst);
+            Ok("should not run".to_string())
+        }).await;
+
+        assert!(result.is_err(), "Must deny when budget exhausted");
+        assert!(
+            !executed.load(Ordering::SeqCst),
+            "executor MUST NOT be called when authorization is denied"
+        );
+    }
+
+    /// FINAL-5-B: Error Observation â†’ handle_observation() returns RecoveryDecision.
+    /// Verifies the Execution â†’ Observation â†’ Recovery circuit is wired end-to-end.
+    #[tokio::test]
+    async fn test_error_observation_produces_recovery_decision() {
+        let mut rt = MissionRuntime::new(".", "Test recovery circuit", 10);
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::json!({"comando": "rustc nonexistent.rs"}),
+            expected_effect: String::new(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+
+        let obs = rt.execute_action(&proposal, || async {
+            Err("error[E0001]: command not found: rustc".to_string())
+        }).await.expect("execute_action itself should succeed");
+
+        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error,
+            "Failed executor must produce Error observation");
+        let recovery = rt.handle_observation(&obs);
+        assert!(recovery.is_some(),
+            "Error Observation MUST produce a RecoveryDecision via handle_observation()");
+    }
+
+    /// FINAL-5-C: Schema INVALID blocks execution â€” empty command caught before executor runs.
+    #[tokio::test]
+    async fn test_schema_invalid_blocks_execution() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
+        let mut rt = MissionRuntime::new(".", "Test schema gate", 10);
+        let executed = Arc::new(AtomicBool::new(false));
+        let executed_clone = executed.clone();
+
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::json!({"comando": ""}), // empty â†’ SCHEMA_INVALID
+            expected_effect: String::new(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+
+        let result = rt.execute_action(&proposal, move || async move {
+            executed_clone.store(true, Ordering::SeqCst);
+            Ok("should not run".to_string())
+        }).await;
+
+        assert!(result.is_err(), "Empty command must be rejected");
+        assert!(
+            result.unwrap_err().contains("SCHEMA_INVALID"),
+            "Error must be SCHEMA_INVALID from SchemaValidator"
+        );
+        assert!(
+            !executed.load(Ordering::SeqCst),
+            "executor MUST NOT run when Schema validation fails"
+        );
+    }
 }
+
