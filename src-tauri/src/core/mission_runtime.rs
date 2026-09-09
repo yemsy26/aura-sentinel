@@ -55,10 +55,20 @@ impl MissionRuntime {
         self.budget.is_exhausted()
     }
 
+    /// Counts one cognitive cycle (LLM decision). Does NOT count a tool execution.
     pub fn record_step(&mut self) -> u32 {
         self.cognitive_state.update_step();
-        self.cognitive_state.metrics.tool_calls += 1;
         self.budget.record_step()
+    }
+
+    /// Counts an actual tool execution (called only when a tool really ran).
+    pub fn record_tool_call(&mut self) {
+        self.cognitive_state.metrics.tool_calls += 1;
+    }
+
+    /// Returns the current step number from the cognitive state.
+    pub fn current_step(&self) -> u32 {
+        self.cognitive_state.mission.current_step
     }
 
     // ─── World Observation ─────────────────────────────────────────────────────
@@ -74,6 +84,21 @@ impl MissionRuntime {
                 eprintln!("[MissionRuntime] observe_world error: {}", e);
             }
         }
+    }
+
+    /// Returns the current world state hash (0 if world not yet observed).
+    pub fn current_world_hash(&self) -> u64 {
+        self.world.as_ref().map(|w| {
+            use std::hash::{Hash, Hasher};
+            use std::collections::hash_map::DefaultHasher;
+            let mut hasher = DefaultHasher::new();
+            // Hash the set of file paths + sizes as a cheap state fingerprint
+            for (path, state) in &w.files {
+                path.hash(&mut hasher);
+                state.size_bytes.hash(&mut hasher);
+            }
+            hasher.finish()
+        }).unwrap_or(0)
     }
 
     // ─── Observation Recording ─────────────────────────────────────────────────
@@ -103,16 +128,21 @@ impl MissionRuntime {
             }
         }
 
-        // Feed stall detector signature
+        // Feed stall detector with REAL command and state hash from observation
         use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
         let mut hasher = DefaultHasher::new();
         if !ok { obs.payload.hash(&mut hasher); }
         let err_hash = if ok { 0 } else { hasher.finish() };
 
+        // Use real state_hash from observation if available, else fall back to current world hash
+        let state_hash = obs.state_hash_after
+            .or(obs.state_hash_before)
+            .unwrap_or_else(|| self.current_world_hash());
+
         let sig = ProgressSignature {
             step: self.cognitive_state.mission.current_step,
-            state_hash: 0,
+            state_hash,
             files_changed: obs.files_affected.len() as u32,
             criteria_satisfied: self.contract.acceptance_criteria
                 .iter()
@@ -120,7 +150,7 @@ impl MissionRuntime {
                 .count() as u32,
             evidence_count: self.evidence_graph.entries.len() as u32,
             last_tool_used: obs.tool_name.clone(),
-            last_command: String::new(),
+            last_command: obs.command.clone().unwrap_or_default(),
             last_error_hash: err_hash,
         };
         self.stall_detector.record_signature(sig);
@@ -170,9 +200,10 @@ mod tests {
     #[test]
     fn test_runtime_delegates_to_completion_gate() {
         let rt = MissionRuntime::new(".", "Build something", 50);
-        // With no evidence and no criteria, should complete (empty contract).
+        // With no criteria and no evidence, empty contract must NOT complete.
+        // This guards against silent false-positive completions.
         let dec = rt.can_complete();
-        assert_eq!(dec, crate::core::completion_gate::CompletionDecision::Complete);
+        assert!(matches!(dec, crate::core::completion_gate::CompletionDecision::Incomplete(_)));
     }
 
     #[test]

@@ -19,12 +19,23 @@ impl CompletionGate {
         _state: &CognitiveState,
         evidence: &EvidenceGraph,
     ) -> CompletionDecision {
+        // Guard: empty contract must never silently complete a build/coding mission.
+        // A contract with no required criteria AND no required evidence is invalid
+        // for any non-trivial mission — block it explicitly.
+        let has_any_requirements = !contract.acceptance_criteria.is_empty()
+            || !contract.required_evidence.is_empty();
+        if !has_any_requirements {
+            return CompletionDecision::Incomplete(vec![
+                "El contrato de misión no tiene criterios de aceptación ni evidencia requerida. \
+                 Agrega criterios antes de declarar completitud.".to_string(),
+            ]);
+        }
+
         let mut missing = Vec::new();
 
-        // 1. Acceptance criteria that are not yet satisfied
-        // Note: criteria can only be Satisfied via internal evidence verification,
-        // NOT by LLM declaration (mark_criterion is pub(crate)).
-        let pending = contract.pending_criteria();
+        // 1. Only REQUIRED acceptance criteria block completion.
+        // Optional criteria (required=false) are tracked but do NOT block the gate.
+        let pending = contract.pending_required_criteria();
         if !pending.is_empty() {
             missing.extend(pending);
         }

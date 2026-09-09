@@ -867,6 +867,8 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         }
         // CRITICAL FIX: Extend budget by 50 steps so the resumed mission can proceed!
         max_steps = step_count + 50;
+        // Sync runtime budget to match — MissionRuntime must be the single budget authority
+        runtime.budget = crate::core::step_budget::StepBudget::new(50);
         journal.interrupted = false;
         crate::core::session_journal::save_journal(&workspace_path, &journal);
         if let Some(ctx) = &journal.fsm_context {
@@ -877,7 +879,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         emit_event(&app_handle, step_count, &format!("[SESSION RESTORED] Misión retomada exitosamente desde el paso {}. Presupuesto activo extendido a {} pasos.", step_count, max_steps), "SUCCESS");
     }
 
-    while step_count <= max_steps {
+    while !runtime.is_budget_exhausted() {
         // ── Cancellation Check: Interrupción inmediata solicitada por el usuario ──
         if crate::llm::is_agent_cancelled() {
             emit_event(&app_handle, step_count, "🛑 [CANCELADO] Misión detenida por el usuario.", "WARNING");
@@ -934,7 +936,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
 
         // ── EMERGENCY EXIT: step budget exhausted ────────────────────────
-        if step_count >= max_steps {
+        if runtime.is_budget_exhausted() {
                 // ── Evaluate CompletionGate before claiming success at budget limit ──
                 let deliverables_ok = validate_workspace(&workspace_path).await.is_ok();
                 let completion_ok = match runtime.can_complete() {
@@ -1829,8 +1831,15 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         }
 
                         emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
+                        // ── World snapshot BEFORE tool execution ──────────────────────────────
+                        runtime.observe_world();
+                        let world_hash_before = runtime.current_world_hash();
                         match execute_terminal_command(&workspace_path, &comando).await {
                         Ok(out) => {
+                            // ── World snapshot AFTER tool execution ───────────────────────────
+                            runtime.observe_world();
+                            let world_hash_after = runtime.current_world_hash();
+                            runtime.record_tool_call();
 
                             // ── Package-install amnesia fix ──────────────────────────────────────
                             // If the command was a package install (pip install X, npm install X),
@@ -1850,11 +1859,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             }
                             let digested_out = digest_terminal_output(&out, 2500);
                             let res_msg = format!("Éxito: {}", digested_out);
-                            // ── MissionRuntime: record successful observation ──
+                            // ── MissionRuntime: record successful observation with real world data ──
                             {
-                                let obs = crate::core::observation::Observation::success(
+                                let mut obs = crate::core::observation::Observation::success(
                                     "TOOL_TERMINAL", &digested_out, vec![],
                                 );
+                                obs.command = Some(comando.clone());
+                                obs.state_hash_before = Some(world_hash_before);
+                                obs.state_hash_after = Some(world_hash_after);
                                 runtime.record_observation(&obs);
                             }
                             // ── Silent-success auto-verifier ─────────────────────────────────────
@@ -2056,13 +2068,18 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
                                 // ── MissionRuntime: record error Observation → StallDetector + RecoveryEngine ──
                                 {
-                                    let obs = crate::core::observation::Observation::error(
+                                    runtime.observe_world();
+                                    runtime.record_tool_call();
+                                    let world_hash_after = runtime.current_world_hash();
+                                    let mut obs = crate::core::observation::Observation::error(
                                         "TOOL_TERMINAL",
                                         &err,
                                         None,
                                         true,
                                         None,
                                     );
+                                    obs.command = Some(comando.clone());
+                                    obs.state_hash_after = Some(world_hash_after);
                                     runtime.record_observation(&obs);
                                     let recovery_dec = runtime.plan_recovery("TOOL_TERMINAL", &err);
                                     match &recovery_dec {

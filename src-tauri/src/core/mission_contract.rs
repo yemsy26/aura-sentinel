@@ -110,4 +110,15 @@ impl MissionContract {
             .map(|c| format!("[{}] {}", c.id, c.description))
             .collect()
     }
+
+    /// Returns only unsatisfied REQUIRED criteria — the ones that actually block completion.
+    /// Optional criteria (required=false) are NOT returned by this method.
+    pub fn pending_required_criteria(&self) -> Vec<String> {
+        self.acceptance_criteria
+            .iter()
+            .filter(|c| c.required)
+            .filter(|c| c.status != CriterionStatus::Satisfied)
+            .map(|c| format!("[{}] {}", c.id, c.description))
+            .collect()
+    }
 }
