@@ -1928,39 +1928,21 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     let res_msg = "[SISTEMA INTERNO]: Bucle detectado. EstÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s repitiendo exactamente el mismo comando. Si fallÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo. Si ya tuvo ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©xito y solo estabas probando, la tarea estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ lista: usa TOOL_FINISH obligatoriamente.";
                     emit_event(&app_handle, runtime.current_step(), "Comando repetido interceptado", "WARNING");
                     if current_role == AgentRole::Critic {
-                        runtime.contract.mark_criterion("AC-VALIDATION", true);
-                        runtime.evidence_graph.record(
-                            crate::core::evidence::EvidenceKind::RuntimeCheck,
-                            "TOOL_TERMINAL",
-                            "Pruebas reiteradas completadas con éxito en fase de Crítico",
-                            "VALIDATED",
-                            0.95,
-                            runtime.current_step(),
-                        );
-                        let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el Crítico. Estás repitiendo el mismo comando. Esto suele significar que la prueba ya tuvo éxito y no hay más errores. El sistema está FORZANDO la acción TOOL_FINISH para terminar la tarea o la fase actual de forma segura.";
-                        emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Bucle de Terminal en Crítico -> Forzando FINISH", "WARNING");
-                        forced_next_tool = Some(("TOOL_FINISH".to_string(), "Las pruebas parecen haber concluido. Usa TOOL_FINISH.".to_string()));
+                        let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el Crítico. Estás repitiendo el mismo comando. Si las pruebas ya fueron ejecutadas, procede a TOOL_FINISH o revisa con TOOL_PROGRAMMER si se requiere corregir algo.";
+                        emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Bucle de Terminal en Crítico -> Sugiriendo FINISH", "WARNING");
+                        forced_next_tool = Some(("TOOL_FINISH".to_string(), "Las pruebas ya fueron ejecutadas. Procede a concluir o corregir.".to_string()));
                         current_context.push_str(&format!("{}\n\n", msg));
                     } else if current_role == AgentRole::Executor {
-                        // Executor stuck repeating informational commands (dir, ls, etc.) = task is done
+                        // Executor stuck repeating informational commands (dir, ls, etc.)
                         let cmd_lower = comando.to_lowercase();
                         let is_info_cmd = cmd_lower.trim() == "dir"
                             || cmd_lower.trim() == "ls"
                             || cmd_lower.trim() == "ls -la"
                             || cmd_lower.trim() == "dir /b";
                         if is_info_cmd {
-                            runtime.contract.mark_criterion("AC-VALIDATION", true);
-                            runtime.evidence_graph.record(
-                                crate::core::evidence::EvidenceKind::RuntimeCheck,
-                                "TOOL_TERMINAL",
-                                "Comandos de inspección reiterados confirman entrega del workspace",
-                                "VALIDATED",
-                                0.90,
-                                runtime.current_step(),
-                            );
-                            let msg = "[SISTEMA INTERNO]: El Ejecutor estás repitiendo un comando informacional (dir/ls). Esto indica que la tarea ya fue completada. FORZANDO TOOL_FINISH para cerrar la misión.";
-                            emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Ejecutor en loop informacional -> Forzando FINISH", "WARNING");
-                            forced_next_tool = Some(("TOOL_FINISH".to_string(), "La tarea ya fue completada según el historial de comandos. Resume los resultados al usuario.".to_string()));
+                            let msg = "[SISTEMA INTERNO]: El Ejecutor está repitiendo un comando informacional (dir/ls). Esto indica estancamiento. Procede con TOOL_FINISH si los archivos están listos, o usa TOOL_PROGRAMMER si aún debes implementar algo.";
+                            emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Ejecutor en loop informacional -> Sugiriendo FINISH", "WARNING");
+                            forced_next_tool = Some(("TOOL_FINISH".to_string(), "La inspección de archivos ya fue realizada. Resume los resultados o concluye.".to_string()));
                             current_context.push_str(&format!("{}\n\n", msg));
                         } else {
                             current_context.push_str(&format!("{}\n\n", res_msg));

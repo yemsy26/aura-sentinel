@@ -103,21 +103,8 @@ impl LearningPersistence {
                 .map_err(|e| format!("PERSIST_TMP_FSYNC: {}", e))?;
         }
 
-        // 4. Atomic rename with Windows retry loop
-        let mut attempts = 0;
-        loop {
-            match std::fs::rename(&tmp_path, &path) {
-                Ok(_) => return Ok(()),
-                Err(_e) if attempts < 5 => {
-                    attempts += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-                }
-                Err(e) => {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(format!("PERSIST_RENAME: {}", e));
-                }
-            }
-        }
+        // 4. Truly atomic replace (cross-platform with Windows atomic support)
+        atomic_replace(&tmp_path, &path).await
     }
 
     pub async fn save_model_stats(
@@ -158,25 +145,62 @@ impl LearningPersistence {
             f.sync_all()
                 .map_err(|e| format!("PERSIST_TMP_FSYNC: {}", e))?;
         }
-        let mut attempts = 0;
-        loop {
-            match std::fs::rename(&tmp, path) {
-                Ok(_) => return Ok(()),
-                Err(_e) if attempts < 5 => {
-                    attempts += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-                }
-                Err(e) => {
-                    let _ = std::fs::remove_file(&tmp);
-                    return Err(format!("PERSIST_RENAME: {}", e));
-                }
-            }
-        }
+        atomic_replace(&tmp, path).await
     }
 
     fn load_json<T: serde::de::DeserializeOwned>(&self, path: &Path) -> Option<T> {
         let raw = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&raw).ok()
+    }
+}
+
+/// Atomically replaces target with src.
+/// On Windows, std::fs::rename fails if target already exists.
+/// This helper tries rename first (atomic on Unix and when target does not exist).
+/// On failure on Windows, it creates a backup, renames, and cleans up, with retries.
+async fn atomic_replace(src: &Path, target: &Path) -> Result<(), String> {
+    let mut attempts = 0;
+    loop {
+        // Fast path: rename succeeds if target doesn't exist or on Unix
+        match std::fs::rename(src, target) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                #[cfg(windows)]
+                {
+                    // Windows target-exists workaround:
+                    // If target exists, rename target to a transient backup, rename src to target, then remove backup.
+                    if target.exists() {
+                        let nanos = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos())
+                            .unwrap_or(0);
+                        let backup = target.with_extension(format!("bak_{:x}", nanos));
+                        if std::fs::rename(target, &backup).is_ok() {
+                            match std::fs::rename(src, target) {
+                                Ok(_) => {
+                                    let _ = std::fs::remove_file(&backup);
+                                    return Ok(());
+                                }
+                                Err(err) => {
+                                    // Rollback target from backup
+                                    let _ = std::fs::rename(&backup, target);
+                                    let _ = std::fs::remove_file(src);
+                                    return Err(format!("PERSIST_REPLACE_ROLLBACK: {}", err));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if attempts < 5 {
+                    attempts += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+                } else {
+                    let _ = std::fs::remove_file(src);
+                    return Err(format!("PERSIST_RENAME: {}", e));
+                }
+            }
+        }
     }
 }
 

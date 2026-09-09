@@ -296,19 +296,34 @@ mod tests {
         }
     }
 
-    // ── Test 17: Truly atomic persistence ─────────────────────────────────────
+    // ── Test 17: Truly atomic persistence (including when file already exists on Windows) ──
     #[tokio::test]
     async fn test_persistence_truly_atomic() {
         let temp_dir = std::env::temp_dir().join(format!("aura_test_atomic_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let persistence = LearningPersistence::with_dir(temp_dir.clone());
-        let exp = make_exp("atom_model", LearningOutcome::Success, "att_atomic_1");
+        let exp1 = make_exp("atom_model", LearningOutcome::Success, "att_atomic_1");
 
-        let res = persistence.append_experience(&exp).await;
-        assert!(res.is_ok(), "append_experience must succeed: {:?}", res);
+        let res1 = persistence.append_experience(&exp1).await;
+        assert!(res1.is_ok(), "first append_experience must succeed: {:?}", res1);
+
+        // Second append tests the atomic replace when destination file already exists on Windows
+        let exp2 = make_exp("atom_model_2", LearningOutcome::Success, "att_atomic_2");
+        let res2 = persistence.append_experience(&exp2).await;
+        assert!(res2.is_ok(), "subsequent append_experience on existing file must succeed on Windows: {:?}", res2);
+
+        // Verify stats atomic replace on existing file as well
+        let mut model_stats = std::collections::HashMap::new();
+        model_stats.insert("atom_model".to_string(), ModelStats::default());
+        let res_stats1 = persistence.save_model_stats(&model_stats).await;
+        assert!(res_stats1.is_ok(), "first save_model_stats must succeed: {:?}", res_stats1);
+
+        let res_stats2 = persistence.save_model_stats(&model_stats).await;
+        assert!(res_stats2.is_ok(), "second save_model_stats on existing file must succeed on Windows: {:?}", res_stats2);
 
         // Verify the file was created and can be loaded
         let loaded = persistence.load_experiences(500);
         assert!(loaded.experiences.iter().any(|e| e.attempt_id == "att_atomic_1"));
+        assert!(loaded.experiences.iter().any(|e| e.attempt_id == "att_atomic_2"));
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 

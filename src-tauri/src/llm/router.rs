@@ -1,7 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use tokio::process::Command;
 use tauri::AppHandle;
 
@@ -41,81 +39,17 @@ pub struct BrainConfig {
     pub debugger: Vec<String>,
 }
 
-// Sprint 2: Model Telemetry
-// Tracks per-model performance so the router can make data-driven decisions.
+// AL-v1: Per-model telemetry is now unified with core::learning::stats::ModelStats.
+// Experience is the sole source of truth for learning and stats derivation.
+#[allow(unused_imports)]
+pub use crate::core::learning::stats::ModelStats;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct ModelStats {
-    pub total_uses: u32,
-    pub success_count: u32,
-    pub total_steps: u32,
-    #[serde(default)]
-    pub total_latency_ms: u64,
-    #[serde(default)]
-    pub compile_failures: u32,
-    #[serde(default)]
-    pub test_failures: u32,
-}
-
-impl ModelStats {
-    #[allow(dead_code)]
-    pub fn success_rate(&self) -> f32 {
-        if self.total_uses == 0 { return 0.5; }
-        self.success_count as f32 / self.total_uses as f32
-    }
-
-    /// Calcula puntuación de utilidad compuesta (Utility Score)
-    pub fn composite_score(&self) -> f32 {
-        if self.total_uses == 0 { return 50.0; }
-        let base_rate = self.success_rate() * 100.0;
-        let avg_steps = (self.total_steps as f32 / self.total_uses as f32).max(1.0);
-        let step_penalty = (avg_steps * 0.5).min(20.0);
-        let failure_penalty = ((self.compile_failures + self.test_failures) as f32 * 2.0).min(30.0);
-        
-        (base_rate - step_penalty - failure_penalty).max(0.0)
-    }
-}
-
-type StatsMap = HashMap<String, ModelStats>;
-
-fn get_stats_path() -> PathBuf {
-    let mut p = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if p.ends_with("src-tauri") {
-        p = p.parent().unwrap_or(&p).to_path_buf();
-    }
-    p.join("data").join("model_stats.json")
-}
-
-fn load_stats() -> StatsMap {
-    let path = get_stats_path();
-    if let Ok(raw) = fs::read_to_string(&path) {
-        if let Ok(map) = serde_json::from_str(&raw) {
-            return map;
-        }
-    }
-    HashMap::new()
-}
-
-fn save_stats(map: &StatsMap) {
-    let path = get_stats_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(map) {
-        let _ = fs::write(&path, json);
-    }
-}
-
-/// Llamar al final de cada mision para registrar el rendimiento del modelo.
-/// success=true si TOOL_FINISH fue alcanzado, false si ERROR/timeout.
-pub fn record_model_result(model: &str, task_type: &TaskType, success: bool, steps: u32) {
-    let mut stats = load_stats();
-    let key = format!("{}::{}", model, task_type.as_str());
-    let entry = stats.entry(key).or_default();
-    entry.total_uses += 1;
-    entry.total_steps += steps;
-    if success { entry.success_count += 1; }
-    save_stats(&stats);
+/// Legacy helper redirected to AL-v1. Since Experience is the sole source of truth,
+/// learning outcomes are recorded via LearningEngine::record_outcome() at mission close.
+#[allow(dead_code)]
+pub fn record_model_result(_model: &str, _task_type: &TaskType, _success: bool, _steps: u32) {
+    // Deprecated: Experience is the sole writer. LearningEngine computes and persists
+    // ModelStats deterministically from validated Experience records.
 }
 
 #[allow(dead_code)]
@@ -152,24 +86,7 @@ pub async fn get_best_model(
         }
     };
 
-    // Sprint 2: ordenar candidatos por telemetria cuando hay suficientes muestras
-    let stats = load_stats();
     let mut ranked: Vec<String> = preferred_models.clone();
-    ranked.sort_by(|a, b| {
-        let key_a = format!("{}::{}", a, context.task_type.as_str());
-        let key_b = format!("{}::{}", b, context.task_type.as_str());
-        let stats_a = stats.get(&key_a);
-        let stats_b = stats.get(&key_b);
-        let use_stats = stats_a.map(|s| s.total_uses >= 5).unwrap_or(false)
-            && stats_b.map(|s| s.total_uses >= 5).unwrap_or(false);
-        if use_stats {
-            let score_b = stats_b.map(|s| s.composite_score()).unwrap_or(50.0);
-            let score_a = stats_a.map(|s| s.composite_score()).unwrap_or(50.0);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            std::cmp::Ordering::Equal
-        }
-    });
 
     // AL-v1: AdaptiveRouter re-ranks candidates using learned Experience + Stats.
     // Cold-start → brains.json order unchanged (confidence = 0.5, no reorder).
