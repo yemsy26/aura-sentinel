@@ -476,6 +476,32 @@ mod tests {
         );
     }
 
+    /// Satisfied contract criteria allows CompletionGate to approve completion.
+    #[test]
+    fn test_satisfied_contract_allows_completion() {
+        let mut rt = MissionRuntime::new(".", "Do something", 50);
+        rt.contract.add_criterion(
+            "AC-DELIVERABLES",
+            "Generate files",
+            crate::core::mission_contract::VerificationMethod::ManualReview,
+            true,
+        );
+        rt.contract.add_criterion(
+            "AC-VALIDATION",
+            "Run tests",
+            crate::core::mission_contract::VerificationMethod::TestPassed,
+            true,
+        );
+        // Initially incomplete
+        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+
+        // Satisfy criteria
+        rt.contract.mark_criterion("AC-DELIVERABLES", true);
+        rt.contract.mark_criterion("AC-VALIDATION", true);
+
+        assert_eq!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Complete);
+    }
+
     /// H-11-G: record_step() is the only way step advances â€” no += 1 outside runtime.
     #[test]
     fn test_step_advances_only_via_record_step() {

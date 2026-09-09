@@ -83,7 +83,7 @@ impl MissionContract {
         });
     }
 
-    pub(crate) fn mark_criterion(&mut self, id: &str, satisfied: bool) -> bool {
+    pub fn mark_criterion(&mut self, id: &str, satisfied: bool) -> bool {
         if let Some(ac) = self.acceptance_criteria.iter_mut().find(|c| c.id == id) {
             ac.status = if satisfied {
                 CriterionStatus::Satisfied
@@ -94,6 +94,21 @@ impl MissionContract {
         } else {
             false
         }
+    }
+
+    pub fn mark_criteria_by_prefix(&mut self, prefix: &str, satisfied: bool) -> usize {
+        let mut count = 0;
+        for ac in self.acceptance_criteria.iter_mut() {
+            if ac.id.starts_with(prefix) {
+                ac.status = if satisfied {
+                    CriterionStatus::Satisfied
+                } else {
+                    CriterionStatus::Failed
+                };
+                count += 1;
+            }
+        }
+        count
     }
 
     pub fn are_required_criteria_satisfied(&self) -> bool {
