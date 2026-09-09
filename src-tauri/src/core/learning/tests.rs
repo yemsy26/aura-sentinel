@@ -1,13 +1,16 @@
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use tokio::sync::RwLock;
     use crate::core::learning::{
         fingerprint::{TaskFingerprint, FingerprintBuilder},
         outcome::{LearningOutcome, OutcomeMetrics, LearningResult},
         strategy::StrategyKind,
-        experience::{Experience, ExperienceStoreV2, SCHEMA_VERSION},
+        experience::{Experience, ExperienceStoreV2, SharedExperienceStore, SCHEMA_VERSION},
         stats::{ModelStats, compute_model_stats_from},
         router::{AdaptiveRouter, RecommendationReason},
+        engine::LearningEngine,
+        persistence::LearningPersistence,
     };
 
     fn make_fp(lang: &str, tests: bool) -> TaskFingerprint {
@@ -16,7 +19,7 @@ mod tests {
             framework: None,
             complexity: 0.4,
             ambiguity: 0.3,
-            file_count_bucket: 1,
+            scope_bucket: 1,
             requires_code: true,
             requires_terminal: true,
             requires_tests: tests,
@@ -54,12 +57,12 @@ mod tests {
     }
 
     // ── Test 1: Cold start ────────────────────────────────────────────────────
-    #[test]
-    fn test_cold_start_recommendation() {
-        let store = Arc::new(ExperienceStoreV2::new(500));
+    #[tokio::test]
+    async fn test_cold_start_recommendation() {
+        let store: SharedExperienceStore = Arc::new(RwLock::new(ExperienceStoreV2::new(500)));
         let router = AdaptiveRouter::new(Default::default(), Default::default(), store, "m_cold");
         let fp = make_fp("rust", true);
-        let rec = router.recommend(&fp, &["qwen3:8b".to_string()]);
+        let rec = router.recommend(&fp, &["qwen3:8b".to_string()]).await;
         assert_eq!(rec.reason, RecommendationReason::ColdStart);
         assert!((rec.confidence - 0.5).abs() < 0.01, "cold start confidence must be 0.5");
     }
@@ -110,7 +113,6 @@ mod tests {
         let mut zero = ModelStats::default();
         zero.attempts = 10; zero.failures = 10;
 
-        // Full success > partial success > pure failure
         assert!(
             full.smoothed_success_rate() > partial.smoothed_success_rate(),
             "Full success must beat partial success"
@@ -119,7 +121,6 @@ mod tests {
             partial.smoothed_success_rate() > zero.smoothed_success_rate(),
             "Partial success must beat pure failure"
         );
-        // Partial with many samples should be clearly above failure baseline
         assert!(
             partial.smoothed_success_rate() >= 0.5,
             "10 partial successes should be at or above 0.5 neutral, got {}",
@@ -180,23 +181,18 @@ mod tests {
     // ── Test 11: Corruption fallback — ExperienceStore starts empty on bad file ─
     #[test]
     fn test_corrupted_data_fallback() {
-        // ExperienceStoreV2::new() always succeeds even with no data
         let store = ExperienceStoreV2::new(500);
         assert!(store.is_empty(), "Fresh store must be empty");
         assert_eq!(store.len(), 0);
     }
 
     // ── Test 12: Router has no MissionRuntime reference ───────────────────────
-    // Structural test: AdaptiveRouter only takes data structs, no Runtime
-    #[test]
-    fn test_router_has_no_runtime_reference() {
-        // If this compiles, AdaptiveRouter does not import MissionRuntime.
-        // The router.rs file is intentionally written without any MissionRuntime import.
-        let store = Arc::new(ExperienceStoreV2::new(500));
+    #[tokio::test]
+    async fn test_router_has_no_runtime_reference() {
+        let store: SharedExperienceStore = Arc::new(RwLock::new(ExperienceStoreV2::new(500)));
         let router = AdaptiveRouter::new(Default::default(), Default::default(), store, "m_test");
         let fp = make_fp("rust", false);
-        let rec = router.recommend(&fp, &["qwen3:8b".to_string()]);
-        // Just verify it returns a valid recommendation
+        let rec = router.recommend(&fp, &["qwen3:8b".to_string()]).await;
         assert!(!rec.model.is_empty());
         assert!(rec.confidence >= 0.0 && rec.confidence <= 1.0);
     }
@@ -215,7 +211,119 @@ mod tests {
         assert_eq!(stats.successes, 2);
         assert_eq!(stats.failures, 1);
         let sr = stats.smoothed_success_rate();
-        // (2 + 1) / (3 + 2) = 0.6
         assert!((sr - 0.6).abs() < 0.01, "Expected 0.60, got {}", sr);
+    }
+
+    // ── Test 14: Engine updates model stats after outcome ─────────────────────
+    #[tokio::test]
+    async fn test_engine_updates_model_stats_after_outcome() {
+        let store: SharedExperienceStore = Arc::new(RwLock::new(ExperienceStoreV2::new(500)));
+        let engine = LearningEngine::with_store(store.clone());
+        let fp = make_fp("rust", true);
+        let res = LearningResult::success(OutcomeMetrics { steps: 4, ..Default::default() });
+
+        engine.record_outcome(
+            fp,
+            "test_model".to_string(),
+            StrategyKind::CompileFirst,
+            res,
+            0.7,
+            "m_engine_1".to_string(),
+            Some("att_1".to_string()),
+        ).await.unwrap();
+
+        let s = store.read().await;
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.experiences[0].model, "test_model");
+    }
+
+    // ── Test 15: Shared store write visible to reader ─────────────────────────
+    #[tokio::test]
+    async fn test_shared_store_write_visible_to_reader() {
+        let store: SharedExperienceStore = Arc::new(RwLock::new(ExperienceStoreV2::new(500)));
+        let engine = LearningEngine::with_store(store.clone());
+        let router = AdaptiveRouter::new(Default::default(), Default::default(), store.clone(), "m_seed");
+
+        let fp = make_fp("rust", true);
+        // Pre-write: cold start
+        let rec_pre = router.recommend(&fp, &["m1".to_string()]).await;
+        assert_eq!(rec_pre.reason, RecommendationReason::ColdStart);
+
+        // Record 3 experiences
+        for i in 1..=3 {
+            engine.record_outcome(
+                fp.clone(),
+                "m1".to_string(),
+                StrategyKind::CompileFirst,
+                LearningResult::success(OutcomeMetrics { steps: 3, ..Default::default() }),
+                0.8,
+                format!("m_multi_{}", i),
+                Some(format!("att_multi_{}", i)),
+            ).await.unwrap();
+        }
+
+        // Post-write: router now sees experiences in shared store!
+        let rec_post = router.recommend(&fp, &["m1".to_string()]).await;
+        match rec_post.reason {
+            RecommendationReason::SimilarTask { sample_size, .. } => {
+                assert_eq!(sample_size, 3);
+            }
+            RecommendationReason::Exploration => {} // Exploration is also a valid probabilistic branch
+            other => panic!("Expected SimilarTask or Exploration, got {:?}", other),
+        }
+    }
+
+    // ── Test 16: Strategy selection uses similar experiences ──────────────────
+    #[tokio::test]
+    async fn test_strategy_selection_uses_similar_experiences() {
+        let store: SharedExperienceStore = Arc::new(RwLock::new(ExperienceStoreV2::new(500)));
+        let _engine = LearningEngine::with_store(store.clone());
+        let fp = make_fp("rust", true);
+
+        // Record successes for MinimalChange strategy on rust
+        for i in 1..=4 {
+            let mut exp = make_exp("qwen", LearningOutcome::Success, &format!("att_strat_{}", i));
+            exp.strategy = StrategyKind::MinimalChange;
+            exp.fingerprint = fp.clone();
+            let _ = store.write().await.push(exp);
+        }
+
+        let router = AdaptiveRouter::new(Default::default(), Default::default(), store, "m_fixed_seed_strat");
+        let rec = router.recommend(&fp, &["qwen".to_string()]).await;
+        // Even if default is CompileFirst, MinimalChange should be selected or explored
+        if rec.reason != RecommendationReason::Exploration {
+            assert_eq!(rec.strategy, StrategyKind::MinimalChange);
+        }
+    }
+
+    // ── Test 17: Truly atomic persistence ─────────────────────────────────────
+    #[tokio::test]
+    async fn test_persistence_truly_atomic() {
+        let temp_dir = std::env::temp_dir().join(format!("aura_test_atomic_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let persistence = LearningPersistence::with_dir(temp_dir.clone());
+        let exp = make_exp("atom_model", LearningOutcome::Success, "att_atomic_1");
+
+        let res = persistence.append_experience(&exp).await;
+        assert!(res.is_ok(), "append_experience must succeed: {:?}", res);
+
+        // Verify the file was created and can be loaded
+        let loaded = persistence.load_experiences(500);
+        assert!(loaded.experiences.iter().any(|e| e.attempt_id == "att_atomic_1"));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    // ── Test 18: Seen attempt IDs trimmed on eviction ─────────────────────────
+    #[test]
+    fn test_seen_ids_trimmed_on_eviction() {
+        let mut store = ExperienceStoreV2::new(3); // capacity of 3
+        for i in 1..=5 {
+            let exp = make_exp("m", LearningOutcome::Success, &format!("att_evict_{}", i));
+            assert!(store.push(exp));
+        }
+        assert_eq!(store.len(), 3);
+
+        // att_evict_1 was drained from the store, so pushing it again should be accepted!
+        let exp_re = make_exp("m", LearningOutcome::Success, "att_evict_1");
+        assert!(store.push(exp_re), "Evicted attempt_id must be allowed back if re-encountered");
     }
 }

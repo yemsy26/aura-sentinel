@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use crate::core::mission_contract::MissionContract;
 use crate::core::project_profile::{ProjectProfile, PrimaryLanguage};
 
@@ -15,8 +15,8 @@ pub struct TaskFingerprint {
     pub complexity: f32,
     /// Ambiguity 0.0..1.0 — heuristic from objective length and word patterns
     pub ambiguity: f32,
-    /// Estimated file count bucket: 0=1 file, 1=2-5, 2=6-20, 3=21+
-    pub file_count_bucket: u8,
+    /// Scope bucket: 0=minimal, 1=small, 2=medium, 3=large
+    pub scope_bucket: u8,
     pub requires_code: bool,
     pub requires_terminal: bool,
     pub requires_tests: bool,
@@ -55,8 +55,8 @@ impl FingerprintBuilder {
         let ambiguity = ((word_count as f32 / 30.0).min(0.6)
             + (abstract_count as f32 / 4.0).min(0.4)).clamp(0.0, 1.0);
 
-        // File count bucket — estimated from framework/docker signals
-        let file_count_bucket = match complexity_signals {
+        // Scope bucket — estimated from complexity and architecture signals
+        let scope_bucket = match complexity_signals {
             0 => 0, 1 => 1, 2 => 2, _ => 3,
         };
 
@@ -75,7 +75,7 @@ impl FingerprintBuilder {
             else { 0 };
 
         TaskFingerprint {
-            language, framework, complexity, ambiguity, file_count_bucket,
+            language, framework, complexity, ambiguity, scope_bucket,
             requires_code, requires_terminal, requires_tests, requires_network,
             verification_level,
         }

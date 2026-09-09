@@ -1,0 +1,16 @@
+{
+  "m1": {
+    "model": "m1",
+    "language": "rust",
+    "attempts": 3,
+    "successes": 3,
+    "partial": 0,
+    "failures": 0,
+    "total_steps": 9,
+    "total_latency_ms": 0,
+    "tool_failures": 0,
+    "compile_failures": 0,
+    "test_failures": 0,
+    "recoveries": 0
+  }
+}

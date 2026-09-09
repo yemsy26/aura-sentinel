@@ -190,14 +190,14 @@ pub async fn get_best_model(
         let fp = FingerprintBuilder::from_mission(&dummy_contract, &dummy_profile);
 
         let persistence = LearningPersistence::new();
-        let store = Arc::new(persistence.load_experiences(500));
+        let store = Arc::new(tokio::sync::RwLock::new(persistence.load_experiences(500)));
         let model_stats = persistence.load_model_stats();
         let strategy_stats = persistence.load_strategy_stats();
 
         // mission_id not available here — use task_type as seed for determinism
         let seed = context.task_type.as_str();
         let router = AdaptiveRouter::new(model_stats, strategy_stats, store, seed);
-        let rec = router.recommend(&fp, &ranked);
+        let rec = router.recommend(&fp, &ranked).await;
 
         // Only reorder if router has actual experience (not cold-start)
         // Cold-start leaves brains.json order intact

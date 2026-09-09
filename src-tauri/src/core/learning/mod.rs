@@ -32,10 +32,12 @@ pub use outcome::{LearningOutcome, OutcomeMetrics, FailureInfo, RecoveryRecord, 
 #[allow(unused_imports)]
 pub use strategy::StrategyKind;
 #[allow(unused_imports)]
-pub use experience::{Experience, ExperienceStoreV2};
+pub use experience::{Experience, ExperienceStoreV2, SharedExperienceStore};
 #[allow(unused_imports)]
 pub use stats::{ModelStats as LearningModelStats, StrategyStats};
 #[allow(unused_imports)]
 pub use router::{AdaptiveRouter, Recommendation, RecommendationReason};
 #[allow(unused_imports)]
 pub use persistence::LearningPersistence;
+#[allow(unused_imports)]
+pub use engine::{LearningEngine, RuntimeSnapshot};

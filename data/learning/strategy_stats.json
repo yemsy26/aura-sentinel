@@ -1,0 +1,13 @@
+{
+  "CompileFirst": {
+    "strategy": "CompileFirst",
+    "language": "rust",
+    "attempts": 3,
+    "successes": 3,
+    "partial": 0,
+    "failures": 0,
+    "total_steps": 9,
+    "recoveries": 0,
+    "successful_recoveries": 0
+  }
+}
