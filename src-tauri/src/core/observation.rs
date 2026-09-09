@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 pub enum ObservationStatus {
     Success,
     Error,
+    /// User-initiated stop. NOT a tool failure. Adaptive Learning must distinguish
+    /// "user cancelled" from "mission failed" to avoid learning the wrong lesson.
+    Cancelled,
     BlockedByPolicy,
     Timeout,
     SchemaViolation,
@@ -37,6 +40,24 @@ impl Observation {
             payload: payload.into(),
             exit_code: Some(0),
             files_affected: files,
+            command: None,
+            state_hash_before: None,
+            state_hash_after: None,
+            retryable: false,
+            requires_human: false,
+            suggested_fix: None,
+        }
+    }
+
+    /// Creates a cancellation observation — for user-initiated stops only.
+    /// Must NOT be used for tool failures or errors.
+    pub fn cancelled(tool_name: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            status: ObservationStatus::Cancelled,
+            payload: reason.into(),
+            exit_code: None,
+            files_affected: vec![],
             command: None,
             state_hash_before: None,
             state_hash_after: None,
@@ -104,6 +125,7 @@ impl Observation {
         let status_str = match self.status {
             ObservationStatus::Success => "SUCCESS",
             ObservationStatus::Error => "ERROR",
+            ObservationStatus::Cancelled => "CANCELLED",
             ObservationStatus::BlockedByPolicy => "BLOCKED_BY_POLICY",
             ObservationStatus::Timeout => "TIMEOUT",
             ObservationStatus::SchemaViolation => "SCHEMA_VIOLATION",

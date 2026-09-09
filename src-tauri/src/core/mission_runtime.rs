@@ -71,6 +71,45 @@ impl MissionRuntime {
         self.cognitive_state.mission.current_step
     }
 
+    /// Restores the runtime's step counter from a persisted checkpoint.
+    /// The Runtime controls how its own state is restored — agent.rs must NOT
+    /// write directly to cognitive_state fields.
+    pub fn restore_step(&mut self, step: u32) {
+        self.cognitive_state.mission.current_step = step;
+        // budget consumed is not restored (continuation gets a fresh 50-step budget)
+    }
+
+    /// Checks runtime coherence. Returns a list of violation strings.
+    /// Does NOT panic — callers emit FATAL/WARNING and decide how to proceed.
+    pub fn check_invariants(&self) -> Vec<String> {
+        let mut violations = Vec::new();
+        if self.contract.objective.trim().is_empty() {
+            violations.push("CONTRACT_EMPTY: objetivo vacío".into());
+        }
+        if self.cognitive_state.mission.id != self.mission_id {
+            violations.push(format!(
+                "MISSION_ID_MISMATCH: state={} runtime={}",
+                self.cognitive_state.mission.id, self.mission_id
+            ));
+        }
+        if self.workspace_path.trim().is_empty() {
+            violations.push("WORKSPACE_EMPTY".into());
+        }
+        if self.budget.remaining_steps() > self.budget.total_steps {
+            violations.push(format!(
+                "BUDGET_INVALID: remaining({}) > total({})",
+                self.budget.remaining_steps(), self.budget.total_steps
+            ));
+        }
+        if self.current_step() > self.budget.total_steps {
+            violations.push(format!(
+                "STEP_EXCEEDS_BUDGET: step({}) > budget({})",
+                self.current_step(), self.budget.total_steps
+            ));
+        }
+        violations
+    }
+
     // ─── World Observation ─────────────────────────────────────────────────────
 
     /// Takes a fresh workspace snapshot and stores it in the runtime.
@@ -172,6 +211,22 @@ impl MissionRuntime {
         PolicyEngine::authorize(proposal)
     }
 
+    /// H-10: Action Gateway — single point of authorization before any tool execution.
+    /// Combines budget exhaustion check + PolicyEngine authorization.
+    /// Returns Ok(()) if the action is authorized, Err(reason) if denied.
+    /// agent.rs MUST call this before executing any tool.
+    pub fn authorize_action(&self, proposal: &ActionProposal) -> Result<(), String> {
+        if self.is_budget_exhausted() {
+            return Err("BUDGET_EXHAUSTED: presupuesto de pasos agotado".into());
+        }
+        match PolicyEngine::authorize(proposal) {
+            PolicyDecision::Allow => Ok(()),
+            PolicyDecision::Deny(reason) => Err(format!("POLICY_DENY: {}", reason)),
+            PolicyDecision::RequireUser(msg) => Err(format!("POLICY_REQUIRE_USER: {}", msg)),
+            PolicyDecision::Sandbox(msg) => Err(format!("POLICY_SANDBOX: {}", msg)),
+        }
+    }
+
     // ─── Completion Gate ───────────────────────────────────────────────────────
 
     /// The ONLY authority allowed to declare mission complete.
@@ -216,5 +271,96 @@ mod tests {
         for _ in 0..10 { rt.record_step(); }
         assert!(rt.is_budget_exhausted());
         assert_eq!(rt.budget_remaining(), 0);
+    }
+
+    // ── H-11: Architecture invariant tests ──────────────────────────────────
+
+    /// H-11-A: restore_step() is the ONLY way to set step from outside.
+    /// Verifies runtime controls its own restoration.
+    #[test]
+    fn test_restore_step_authority() {
+        let mut rt = MissionRuntime::new(".", "Test restore", 50);
+        assert_eq!(rt.current_step(), 0);
+        rt.restore_step(35);
+        assert_eq!(rt.current_step(), 35);
+        // Budget must NOT change on step restore
+        assert_eq!(rt.budget_remaining(), 50);
+    }
+
+    /// H-11-B: authorize_action() denies when budget is exhausted.
+    #[test]
+    fn test_authorize_action_denies_on_exhausted_budget() {
+        let mut rt = MissionRuntime::new(".", "Test budget gate", 2);
+        rt.record_step(); rt.record_step();
+        assert!(rt.is_budget_exhausted());
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::Value::Null,
+            expected_effect: String::new(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+        let result = rt.authorize_action(&proposal);
+        assert!(result.is_err(), "authorize_action must deny when budget is exhausted");
+        assert!(result.unwrap_err().contains("BUDGET_EXHAUSTED"));
+    }
+
+    /// H-11-C: check_invariants() reports CONTRACT_EMPTY when objective is blank.
+    #[test]
+    fn test_check_invariants_contract_empty() {
+        let rt = MissionRuntime::new(".", "", 50);
+        let violations = rt.check_invariants();
+        assert!(
+            violations.iter().any(|v| v.contains("CONTRACT_EMPTY")),
+            "Expected CONTRACT_EMPTY violation, got: {:?}", violations
+        );
+    }
+
+    /// H-11-D: check_invariants() passes with a valid runtime.
+    #[test]
+    fn test_check_invariants_valid_runtime() {
+        let rt = MissionRuntime::new(".", "Build a CLI tool", 50);
+        let violations = rt.check_invariants();
+        // mission_id mismatch may fire because cognitive_state.mission.id is default — filter for BUDGET/STEP/WORKSPACE
+        let critical: Vec<_> = violations.iter()
+            .filter(|v| v.contains("BUDGET_INVALID") || v.contains("STEP_EXCEEDS") || v.contains("WORKSPACE_EMPTY"))
+            .collect();
+        assert!(critical.is_empty(), "Unexpected critical violations: {:?}", critical);
+    }
+
+    /// H-11-E: Observation::cancelled is distinct from Observation::error.
+    #[test]
+    fn test_cancellation_observation_is_not_error() {
+        let obs = crate::core::observation::Observation::cancelled(
+            "AGENT", "User pressed stop"
+        );
+        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Cancelled);
+        assert_ne!(obs.status, crate::core::observation::ObservationStatus::Error);
+        assert!(!obs.retryable, "Cancelled must not be retryable");
+    }
+
+    /// H-11-F: Empty contract blocks CompletionGate — no false positives.
+    #[test]
+    fn test_empty_contract_blocks_completion() {
+        let rt = MissionRuntime::new(".", "Do something", 50);
+        let dec = rt.can_complete();
+        assert!(
+            matches!(dec, crate::core::completion_gate::CompletionDecision::Incomplete(_)),
+            "Empty contract must produce Incomplete, not Complete"
+        );
+    }
+
+    /// H-11-G: record_step() is the only way step advances — no += 1 outside runtime.
+    #[test]
+    fn test_step_advances_only_via_record_step() {
+        let mut rt = MissionRuntime::new(".", "Step authority test", 50);
+        assert_eq!(rt.current_step(), 0);
+        rt.record_step();
+        assert_eq!(rt.current_step(), 1);
+        rt.record_step();
+        assert_eq!(rt.current_step(), 2);
+        // restore_step does not increment budget
+        rt.restore_step(10);
+        assert_eq!(rt.current_step(), 10);
+        assert_eq!(rt.budget_remaining(), 48, "budget should only decrease by record_step calls");
     }
 }

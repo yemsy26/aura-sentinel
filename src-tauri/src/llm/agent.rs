@@ -28,10 +28,10 @@ fn strip_think_tags(mut text: String) -> String {
     clean_text
 }
 
-/// Intenta recuperar código válido desde respuestas del programador cuando el JSON estricto se rompe.
-/// Busca bloques Markdown (```html, ```python, etc.) o subcadenas JSON para no descartar código funcional.
+/// Intenta recuperar cÃƒÂ³digo vÃƒÂ¡lido desde respuestas del programador cuando el JSON estricto se rompe.
+/// Busca bloques Markdown (```html, ```python, etc.) o subcadenas JSON para no descartar cÃƒÂ³digo funcional.
 fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Option<ProgrammerOutput> {
-    // 1. Intentar encontrar subcadena JSON válida entre el primer '{' y el último '}'
+    // 1. Intentar encontrar subcadena JSON vÃƒÂ¡lida entre el primer '{' y el ÃƒÂºltimo '}'
     if let (Some(first_brace), Some(last_brace)) = (raw.find('{'), raw.rfind('}')) {
         if last_brace > first_brace {
             let candidate = &raw[first_brace..=last_brace];
@@ -41,7 +41,7 @@ fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Optio
         }
     }
     
-    // 2. Extraer bloques de código Markdown estructurados
+    // 2. Extraer bloques de cÃƒÂ³digo Markdown estructurados
     let lang_tags = [
         ("html", "html"),
         ("htm", "html"),
@@ -66,8 +66,8 @@ fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Optio
                         let f_ext = file.split('.').last().unwrap_or("").to_lowercase();
                         if f_ext == *ext_match || requested_files.len() == 1 {
                             return Some(ProgrammerOutput {
-                                pensamiento: Some("Código recuperado automáticamente desde bloque Markdown".to_string()),
-                                explicacion_tecnica: format!("Extracción resiliente de bloque ```{}```", tag),
+                                pensamiento: Some("CÃƒÂ³digo recuperado automÃƒÂ¡ticamente desde bloque Markdown".to_string()),
+                                explicacion_tecnica: format!("ExtracciÃƒÂ³n resiliente de bloque ```{}```", tag),
                                 cambios: vec![
                                     crate::memory::Cambio {
                                         archivo: file.clone(),
@@ -100,8 +100,8 @@ fn has_html_files(workspace_path: &str) -> bool {
     false
 }
 
-/// Resume y compacta salidas verbose de terminal conservando solo lo crítico (errores, advertencias, confirmaciones).
-/// Evita la saturación del contexto del LLM y acelera las inferencias.
+/// Resume y compacta salidas verbose de terminal conservando solo lo crÃƒÂ­tico (errores, advertencias, confirmaciones).
+/// Evita la saturaciÃƒÂ³n del contexto del LLM y acelera las inferencias.
 fn digest_terminal_output(raw: &str, max_chars: usize) -> String {
     if raw.len() <= max_chars {
         return raw.to_string();
@@ -128,7 +128,7 @@ fn digest_terminal_output(raw: &str, max_chars: usize) -> String {
         }
     }
 
-    // Conservar las últimas 15 líneas que suelen tener el resumen final (ej. test summary, exit status)
+    // Conservar las ÃƒÂºltimas 15 lÃƒÂ­neas que suelen tener el resumen final (ej. test summary, exit status)
     let tail_count = 15.min(lines.len());
     for &line in &lines[lines.len() - tail_count..] {
         if !critical_lines.contains(&line) {
@@ -138,7 +138,7 @@ fn digest_terminal_output(raw: &str, max_chars: usize) -> String {
 
     let mut result = String::new();
     if !critical_lines.is_empty() {
-        result.push_str("⚠️ [LÍNEAS CRÍTICAS / ERRORES]:\n");
+        result.push_str("Ã¢Å¡Â Ã¯Â¸Â [LÃƒÂNEAS CRÃƒÂTICAS / ERRORES]:\n");
         for line in critical_lines.iter().take(25) {
             result.push_str(line);
             result.push('\n');
@@ -146,7 +146,7 @@ fn digest_terminal_output(raw: &str, max_chars: usize) -> String {
         result.push('\n');
     }
 
-    result.push_str("📋 [ÚLTIMAS LÍNEAS DE SALIDA]:\n");
+    result.push_str("Ã°Å¸â€œâ€¹ [ÃƒÅ¡LTIMAS LÃƒÂNEAS DE SALIDA]:\n");
     for line in generic_tail {
         result.push_str(line);
         result.push('\n');
@@ -184,11 +184,11 @@ pub struct FinalResponse {
 
 
 
-/// ── Multi-Agent Role FSM ──────────────────────────────────────────────────
+/// Ã¢â€â‚¬Ã¢â€â‚¬ Multi-Agent Role FSM Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 /// Aura Sentinel operates in a three-phase cycle:
-///   Planner  → designs the architecture in RAM (TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK)
-///   Executor → writes physical code to disk (TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ENV_MANAGER)
-///   Critic   → validates correctness (TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH)
+///   Planner  Ã¢â€ â€™ designs the architecture in RAM (TOOL_AST_INJECT, TOOL_MAPPER, TOOL_THINK)
+///   Executor Ã¢â€ â€™ writes physical code to disk (TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_ENV_MANAGER)
+///   Critic   Ã¢â€ â€™ validates correctness (TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH)
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 enum AgentRole {
     Planner,
@@ -196,12 +196,12 @@ enum AgentRole {
     Critic,
 }
 
-/// ── Mission Type Classifier ───────────────────────────────────────────────
+/// Ã¢â€â‚¬Ã¢â€â‚¬ Mission Type Classifier Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 /// Classifies the user intent BEFORE entering the LLM loop.
-/// ANALYSIS tasks never enter the Executor — they resolve via TOOL_FINISH from the Planner.
+/// ANALYSIS tasks never enter the Executor Ã¢â‚¬â€ they resolve via TOOL_FINISH from the Planner.
 #[derive(Debug, Clone, PartialEq)]
 enum MissionType {
-    Analysis,      // "analiza", "describe", "explica", "qué hay"
+    Analysis,      // "analiza", "describe", "explica", "quÃƒÂ© hay"
     Construction,  // "crea", "implementa", "build"
     Refactor,      // "mejora", "optimiza", "refactoriza"
     Debug,         // "arregla", "bug", "error", "fix"
@@ -217,16 +217,16 @@ fn classify_mission(msg: &str) -> MissionType {
     let debug = ["arregla", "corrige", "bug", "falla", "fallo", "fix", "debug", "broken",
                  "no funciona", "no compila", "sale error", "hay un error"];
     let refactor = ["refactoriza", "refactorizar", "mejora", "optimiza", "limpia el", "reorganiza", "simplifica"];
-    let analysis = ["analiza", "analisa", "analice", "analisis", "que hay", "qué hay", "que sistema",
-                    "qué sistema", "describe", "explica", "muéstrame", "muestrame", "que tiene",
-                    "qué tiene", "que contiene", "qué contiene", "inspect", "analyze", "show me",
-                    "que es", "qué es", "que tipo", "qué tipo", "que hace", "qué hace",
+    let analysis = ["analiza", "analisa", "analice", "analisis", "que hay", "quÃƒÂ© hay", "que sistema",
+                    "quÃƒÂ© sistema", "describe", "explica", "muÃƒÂ©strame", "muestrame", "que tiene",
+                    "quÃƒÂ© tiene", "que contiene", "quÃƒÂ© contiene", "inspect", "analyze", "show me",
+                    "que es", "quÃƒÂ© es", "que tipo", "quÃƒÂ© tipo", "que hace", "quÃƒÂ© hace",
                     "analisa este", "analiza este", "revisa este",
-                    "auditoría", "auditoria", "audita", "sat", "lógica", "logica", "satisfacibilidad",
-                    "donde quedaste", "dónde quedaste", "donde te quedaste", "dónde te quedaste",
-                    "en que quedamos", "en qué quedamos", "en que quedaste", "en qué quedaste",
-                    "que falta", "qué falta", "que queda", "qué queda", "como va", "cómo va",
-                    "estado actual", "estado del proyecto", "cual es el estado", "cuál es el estado",
+                    "auditorÃƒÂ­a", "auditoria", "audita", "sat", "lÃƒÂ³gica", "logica", "satisfacibilidad",
+                    "donde quedaste", "dÃƒÂ³nde quedaste", "donde te quedaste", "dÃƒÂ³nde te quedaste",
+                    "en que quedamos", "en quÃƒÂ© quedamos", "en que quedaste", "en quÃƒÂ© quedaste",
+                    "que falta", "quÃƒÂ© falta", "que queda", "quÃƒÂ© queda", "como va", "cÃƒÂ³mo va",
+                    "estado actual", "estado del proyecto", "cual es el estado", "cuÃƒÂ¡l es el estado",
                     "resumen del estado", "informe", "reporte", "status"];
 
     if execution.iter().any(|w| m.contains(w))    { return MissionType::Execution; }
@@ -544,7 +544,7 @@ pub const DEFAULT_PROGRAMMER_MODEL: &str = "qwen2.5-coder:7b";
 
 /// Resuelve el modelo solicitado contra la lista de modelos de Ollama disponibles.
 /// Si el modelo solicitado coincide exactamente o por prefijo, lo usa directamente.
-/// Solo recurre a un fallback si el modelo no está físicamente instalado en Ollama.
+/// Solo recurre a un fallback si el modelo no estÃƒÂ¡ fÃƒÂ­sicamente instalado en Ollama.
 pub fn resolve_model_or_fallback(requested: &str, available_models: &[String]) -> String {
     let req = requested.trim();
     if req.is_empty() {
@@ -590,7 +590,7 @@ pub async fn run_agent_loop(
 ) -> Result<String, String> {
     
     // PRE-FLIGHT CHECK
-    emit_event(&app_handle, 0, "Ejecutando validación ambiental (Pre-Flight Check)...", "ACTION");
+    emit_event(&app_handle, 0, "Ejecutando validaciÃƒÂ³n ambiental (Pre-Flight Check)...", "ACTION");
     let available_models = match crate::core::env_check::validate_environment(&workspace_path).await {
         Ok(models) => models,
         Err(env_errors) => {
@@ -598,21 +598,21 @@ pub async fn run_agent_loop(
             emit_event(&app_handle, 0, &format!("[ENV_FAILURE] Fallo pre-vuelo:\n{}", error_msg), "FATAL");
             let final_res = FinalResponse {
                 status: "FINISH".to_string(),
-                respuesta_conversacional: format!("[ENV_FAILURE] No puedo continuar porque el entorno no cumple con los requisitos mínimos:\n{}\n\nPor favor, soluciona esto e intenta de nuevo.", error_msg),
+                respuesta_conversacional: format!("[ENV_FAILURE] No puedo continuar porque el entorno no cumple con los requisitos mÃƒÂ­nimos:\n{}\n\nPor favor, soluciona esto e intenta de nuevo.", error_msg),
             };
             return Ok(serde_json::to_string(&final_res).unwrap());
         }
     };
     emit_event(&app_handle, 0, "Pre-Flight Check superado.", "SUCCESS");
 
-    // Resolver modelos de forma global respetando estrictamente la selección del usuario.
+    // Resolver modelos de forma global respetando estrictamente la selecciÃƒÂ³n del usuario.
     let orchestrator_model = resolve_model_or_fallback(&orchestrator_model, &available_models);
     let programmer_model = resolve_model_or_fallback(&programmer_model, &available_models);
-    emit_event(&app_handle, 0, &format!("⚙️ [CEREBRO GLOBAL ACTIVO] Modelo: {}", orchestrator_model), "INFO");
+    emit_event(&app_handle, 0, &format!("Ã¢Å¡â„¢Ã¯Â¸Â [CEREBRO GLOBAL ACTIVO] Modelo: {}", orchestrator_model), "INFO");
             
     let mut current_context = String::new();
     
-    // ── Inject current workspace state first ──────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Inject current workspace state first Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     // Always show the LLM what ACTUALLY exists in the workspace right now.
     // This prevents hallucinating a blank-slate project when files already exist.
     {
@@ -642,7 +642,7 @@ pub async fn run_agent_loop(
             ));
         }
 
-        // ── Auto TOOL_MAPPER: inject dependency graph for multi-file projects ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Auto TOOL_MAPPER: inject dependency graph for multi-file projects Ã¢â€â‚¬Ã¢â€â‚¬
         // Count source files (py/js/ts/rs/go) to decide if mapping is worthwhile.
         let source_file_count = existing_files.iter().filter(|f| {
             let fl = f.to_lowercase();
@@ -652,26 +652,26 @@ pub async fn run_agent_loop(
         }).count();
 
         if source_file_count >= 3 {
-            emit_event(&app_handle, 0, "🗺️ [AUTO-MAPPER] Proyecto multi-archivo detectado. Generando grafo de dependencias...", "ACTION");
+            emit_event(&app_handle, 0, "Ã°Å¸â€”ÂºÃ¯Â¸Â [AUTO-MAPPER] Proyecto multi-archivo detectado. Generando grafo de dependencias...", "ACTION");
             let graph = crate::core::dependency_mapper::analyze_workspace(&workspace_path);
             let report = crate::core::dependency_mapper::format_graph_report(&graph);
             current_context.push_str(&format!(
-                "[AUTO-MAPPER] Grafo de dependencias generado automáticamente para este proyecto.\n\n{}\n\n",
+                "[AUTO-MAPPER] Grafo de dependencias generado automÃƒÂ¡ticamente para este proyecto.\n\n{}\n\n",
                 report
             ));
             emit_event(&app_handle, 0,
-                &format!("🗺️ Grafo listo: {} archivos | {} dependencias", graph.nodes.len(), graph.edges.len()),
+                &format!("Ã°Å¸â€”ÂºÃ¯Â¸Â Grafo listo: {} archivos | {} dependencias", graph.nodes.len(), graph.edges.len()),
                 "SUCCESS");
         }
     }
 
-    // ── RAG Memory (secondary, clearly labelled) ───────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ RAG Memory (secondary, clearly labelled) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     // RAG provides OPTIONAL historical patterns. It NEVER overrides the current task.
     // The current task is ALWAYS the user_message above.
     if let Ok(historia) = crate::core::memory::query_memory(&user_message).await {
-        if !historia.contains("vacía") && !historia.contains("No se encontró") {
+        if !historia.contains("vacÃƒÂ­a") && !historia.contains("No se encontrÃƒÂ³") {
             current_context.push_str(&format!(
-                "[CONTEXTO HISTÓRICO OPCIONAL — solo como referencia de patrones, NO como objetivo actual]:\n{}\n\n",
+                "[CONTEXTO HISTÃƒâ€œRICO OPCIONAL Ã¢â‚¬â€ solo como referencia de patrones, NO como objetivo actual]:\n{}\n\n",
                 historia
             ));
         }
@@ -683,16 +683,16 @@ pub async fn run_agent_loop(
     let mut tester_attempts = 0;
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
-    let mut original_prompt_parsed = if let Some(idx) = user_message.find("\n\nGuía de Traducción Técnica") {
+    let mut original_prompt_parsed = if let Some(idx) = user_message.find("\n\nGuÃƒÂ­a de TraducciÃƒÂ³n TÃƒÂ©cnica") {
         let text = &user_message[..idx];
-        text.replace("Petición Original del Usuario: ", "").trim().to_string()
+        text.replace("PeticiÃƒÂ³n Original del Usuario: ", "").trim().to_string()
     } else {
         user_message.clone()
     };
     let mut no_tests_consecutive = 0u32;
     let mut think_consecutive = 0u32;
     let mut _programmer_consecutive = 0u32; // reserved for future per-tool cooldown
-    // ── THINK↔PROGRAMMER alternation loop detector ─────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ THINKÃ¢â€ â€PROGRAMMER alternation loop detector Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     // Tracks consecutive steps that are ONLY THINK or PROGRAMMER with no
     // TERMINAL, TESTER, or FINISH in between. If this reaches >= 8 steps,
     // we force TOOL_TERMINAL to break the loop.
@@ -704,7 +704,7 @@ pub async fn run_agent_loop(
     let mut learn_consecutive = 0u32;
     let mut unknown_tool_consecutive = 0u32;
 
-    // ── Mandatory Tool Checklist (Bug 1 fix) ──────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Mandatory Tool Checklist (Bug 1 fix) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     // Parse user_message for required tools and enforce them before TOOL_FINISH.
     let mandatory_tools_required: std::collections::HashSet<String> = {
         let mut required = std::collections::HashSet::new();
@@ -721,73 +721,72 @@ pub async fn run_agent_loop(
     // FIX-B3: Per-file patch failure counter. When a file accumulates 3+ PATCH_FAILs in a row,
     // escalate to full-file overwrite mode instead of retrying failed patches forever.
     let mut patch_fail_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    // ── Semantic Error Loop Detector — ring buffer of last 7 terminal output hashes ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Semantic Error Loop Detector Ã¢â‚¬â€ ring buffer of last 7 terminal output hashes Ã¢â€â‚¬Ã¢â€â‚¬
     // Populated whenever a TOOL_TERMINAL command produces an error. If identical errors repeat,
     // sanity_monitor escalates to RED and forces TOOL_THINK.
     let mut last_error_hashes: std::collections::VecDeque<u64> = std::collections::VecDeque::with_capacity(7);
 
     let mut retry_tracker = crate::core::error_classifier::RetryTracker::new();
     let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1_048_576).unwrap();
-    // ── Context Window Tiered Monitor (Devin 2.0 / OSS 2025 Pattern) ────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Context Window Tiered Monitor (Devin 2.0 / OSS 2025 Pattern) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     let context_monitor = crate::core::context_monitor::ContextMonitor::new(6000, &original_prompt_parsed);
 
-    // ── Multi-Agent Role State Machine ─────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Multi-Agent Role State Machine Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     let mut current_role = AgentRole::Planner;
     let mut critic_feedback: Option<String> = None;
 
 
-    // ── Fase 5: Sanity Monitor state ─────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 5: Sanity Monitor state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     let mut tool_history: Vec<String> = Vec::new();
     let mut last_progress_step: u32 = 1;
 
-    // ── FASE B: Cached Workspace Tree (RAM invalidation on file modification) ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ FASE B: Cached Workspace Tree (RAM invalidation on file modification) Ã¢â€â‚¬Ã¢â€â‚¬
     let mut cached_workspace_context: Option<(String, bool)> = None;
 
-    // ── Mission Type Classifier ─────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Mission Type Classifier Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     let mission_type = classify_mission(&original_prompt_parsed);
     let mission_label = match &mission_type {
-        MissionType::Analysis     => "🔍 ANÁLISIS",
-        MissionType::Construction => "🏗️ CONSTRUCCIÓN",
-        MissionType::Refactor     => "♻️ REFACTORING",
-        MissionType::Debug        => "🐛 DEBUG",
-        MissionType::Execution    => "⚡ EJECUCIÓN/VERIFICACIÓN",
+        MissionType::Analysis     => "Ã°Å¸â€Â ANÃƒÂLISIS",
+        MissionType::Construction => "Ã°Å¸Ââ€”Ã¯Â¸Â CONSTRUCCIÃƒâ€œN",
+        MissionType::Refactor     => "Ã¢â„¢Â»Ã¯Â¸Â REFACTORING",
+        MissionType::Debug        => "Ã°Å¸Ââ€º DEBUG",
+        MissionType::Execution    => "Ã¢Å¡Â¡ EJECUCIÃƒâ€œN/VERIFICACIÃƒâ€œN",
     };
 
     if mission_type == MissionType::Execution {
         current_role = AgentRole::Executor;
     }
 
-    // ── Acceptance Contract ─────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Acceptance Contract Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     let mut acceptance_contract: Option<String> = None;
 
-    let mut step_count = 1u32;
     let mut json_error_count = 0;
 
-    // ── Session Journal ────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Session Journal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
 
-    // ── Check if the user is sending a continuation command ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Check if the user is sending a continuation command Ã¢â€â‚¬Ã¢â€â‚¬
     let is_continuation_command = {
         let msg_trim = user_message.trim().to_lowercase();
         msg_trim == "continua" || msg_trim == "continuar" || msg_trim == "continue" || msg_trim == "sigue" || msg_trim == "adelante"
     };
 
-    // ── Fase 1: Register workspace in global index for auto-resume ────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 1: Register workspace in global index for auto-resume Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     crate::core::mission_persist::register_workspace(&workspace_path);
 
-    // ── Fase 3: Inject episodic memory context ────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 3: Inject episodic memory context Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     let episode_context = crate::core::episodic_memory::get_episode_context(3);
     if !episode_context.is_empty() {
         current_context.push_str(&episode_context);
     }
 
-    // ── Arquitectura Cognitiva v4: Inyectar Contexto de Experiencias Previas ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Arquitectura Cognitiva v4: Inyectar Contexto de Experiencias Previas Ã¢â€â‚¬Ã¢â€â‚¬
     let exp_context = crate::core::experience::ExperienceStore::build_experience_context(&original_prompt_parsed, "");
     if !exp_context.is_empty() {
         current_context.push_str(&exp_context);
     }
 
-    // ── FASE C: Inyectar Lecciones Consolidadas de Proyectos Previos ────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ FASE C: Inyectar Lecciones Consolidadas de Proyectos Previos Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     let proactive_lessons = crate::core::memory::get_proactive_lessons(3).await;
     if !proactive_lessons.is_empty() {
         current_context.push_str(&proactive_lessons);
@@ -806,7 +805,7 @@ pub async fn run_agent_loop(
         journal.objetivo = user_message.clone();
     }
 
-    // ── MissionRuntime: cognitive governor built AFTER objective is resolved ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ MissionRuntime: cognitive governor built AFTER objective is resolved Ã¢â€â‚¬Ã¢â€â‚¬
     // This ensures the runtime contract has the correct objective for continuations.
     let mut runtime = crate::core::mission_runtime::MissionRuntime::new(
         &workspace_path,
@@ -818,42 +817,42 @@ pub async fn run_agent_loop(
     journal.status = "EN_PROGRESO".to_string();
     journal.herramientas_usadas.clear();
     journal.archivos_tocados.clear();
-crate::core::session_journal::save_journal(&workspace_path, &journal);
-    emit_event(&app_handle, 0, "[DIARIO] Misión registrada en diario de sesión.", "INFO");
-    emit_event(&app_handle, 0, &format!("[MISIÓN] Tipo clasificado: {} — El agente operará en modo apropiado.", mission_label), "INFO");
+if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
+    emit_event(&app_handle, 0, "[DIARIO] MisiÃƒÂ³n registrada en diario de sesiÃƒÂ³n.", "INFO");
+    emit_event(&app_handle, 0, &format!("[MISIÃƒâ€œN] Tipo clasificado: {} Ã¢â‚¬â€ El agente operarÃƒÂ¡ en modo apropiado.", mission_label), "INFO");
     
-    // ─── COMMAND TRAIL (registro estructurado de pasos) ───
+    // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ COMMAND TRAIL (registro estructurado de pasos) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     use crate::core::command_trail::CommandTrail;
     let mut command_trail = CommandTrail::load_or_new(&workspace_path, &original_prompt_parsed);
     command_trail.save(&workspace_path);
     
-    // ─── AUTO-GENERATE RUNNERS (test, build, dev, lint) ───
-    // Detectar lenguaje y generar scripts de ejecución si no existen
+    // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ AUTO-GENERATE RUNNERS (test, build, dev, lint) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // Detectar lenguaje y generar scripts de ejecuciÃƒÂ³n si no existen
     let runners_generated = generate_project_runners(&workspace_path, &original_prompt_parsed).await;
     if !runners_generated.is_empty() {
-        emit_event(&app_handle, 0, &format!("🏃 Runners generados: {}", runners_generated.iter().map(|p| p.file_name().unwrap().to_string_lossy()).collect::<Vec<_>>().join(", ")), "SUCCESS");
+        emit_event(&app_handle, 0, &format!("Ã°Å¸ÂÆ’ Runners generados: {}", runners_generated.iter().map(|p| p.file_name().unwrap().to_string_lossy()).collect::<Vec<_>>().join(", ")), "SUCCESS");
     }
     
     // =======================================================
-    // PESP v2 — Generación del Plan de Fases (Paso 0)
+    // PESP v2 Ã¢â‚¬â€ GeneraciÃƒÂ³n del Plan de Fases (Paso 0)
     // =======================================================
     if !journal.plan_generado && (mission_type == MissionType::Construction || mission_type == MissionType::Refactor) {
-        emit_event(&app_handle, 0, "🏗️ [ARQUITECTO DE FASES] Analizando tarea para dividirla en fases...", "PLANNING");
+        emit_event(&app_handle, 0, "Ã°Å¸Ââ€”Ã¯Â¸Â [ARQUITECTO DE FASES] Analizando tarea para dividirla en fases...", "PLANNING");
         let model_for_planner = &orchestrator_model;
         let fases = crate::llm::phase_planner::generate_phase_plan(&original_prompt_parsed, model_for_planner).await;
         
         journal.fases = fases.clone();
         journal.fase_actual = 0;
         journal.plan_generado = true;
-        crate::core::session_journal::save_journal(&workspace_path, &journal);
+        if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
         
         let plan_desc = fases.iter().map(|f| format!("Fase {}: {}", f.numero, f.descripcion)).collect::<Vec<_>>().join(" | ");
-        emit_event(&app_handle, 0, &format!("🗺️ Plan generado: {}", plan_desc), "SUCCESS");
+        emit_event(&app_handle, 0, &format!("Ã°Å¸â€”ÂºÃ¯Â¸  Plan generado: {}", plan_desc), "SUCCESS");
     }
     let mut _task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::GeneralCode, language: None };
     
     
-    // ── SESSION PERSISTENCE (RESTORE IF INTERRUPTED) ──
+    // â”€â”€ SESSION PERSISTENCE (RESTORE IF INTERRUPTED) â”€â”€
     if journal.interrupted {
         if let Some(saved_role) = &journal.fsm_role {
             match saved_role.as_str() {
@@ -862,36 +861,51 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 _          => current_role = AgentRole::Planner,
             }
         }
+        // H-2: Runtime controls its own state restoration
         if journal.fsm_step > 0 {
-            step_count = journal.fsm_step;
+            runtime.restore_step(journal.fsm_step);
         }
-        // Runtime budget is the SOLE authority — reset to 50 steps for continuation
+        // Runtime budget is the SOLE authority â€” reset to 50 steps for continuation
         runtime.budget = crate::core::step_budget::StepBudget::new(50);
         journal.interrupted = false;
-        crate::core::session_journal::save_journal(&workspace_path, &journal);
+        if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
         if let Some(ctx) = &journal.fsm_context {
             if !ctx.is_empty() {
                 current_context = ctx.clone();
             }
         }
-        emit_event(&app_handle, step_count, &format!("[SESSION RESTORED] Misión retomada exitosamente desde el paso {}. Presupuesto activo extendido a {} pasos.", step_count, runtime.budget_remaining()), "SUCCESS");
+        emit_event(&app_handle, runtime.current_step(), &format!("[SESSION RESTORED] MisiÃ³n retomada exitosamente desde el paso {}. Presupuesto activo extendido a {} pasos.", runtime.current_step(), runtime.budget_remaining()), "SUCCESS");
     }
 
     while !runtime.is_budget_exhausted() {
-        // ── Cancellation Check: Interrupción inmediata solicitada por el usuario ──
+        // â”€â”€ H-3: Runtime Integrity Guard â€” check at each cognitive cycle â”€â”€
+        let invariant_violations = runtime.check_invariants();
+        if !invariant_violations.is_empty() {
+            emit_event(&app_handle, runtime.current_step(),
+                &format!("[INVARIANT] Violaciones detectadas: {:?}", invariant_violations),
+                "WARNING");
+        }
+
+        // â”€â”€ Cancellation Check: InterrupciÃ³n inmediata solicitada por el usuario â”€â”€
         if crate::llm::is_agent_cancelled() {
-            emit_event(&app_handle, step_count, "🛑 [CANCELADO] Misión detenida por el usuario.", "WARNING");
+            // H-5: Cancellation is a control event, NOT a tool failure
+            let cancel_obs = crate::core::observation::Observation::cancelled(
+                "AGENT", "MisiÃ³n detenida por el usuario"
+            );
+            runtime.record_observation(&cancel_obs);
+            emit_event(&app_handle, runtime.current_step(), "ðŸ›‘ [CANCELADO] MisiÃ³n detenida por el usuario.", "WARNING");
             journal.interrupted = true;
             journal.status = "INTERRUMPIDO".to_string();
-            crate::core::session_journal::save_journal(&workspace_path, &journal);
+            journal.fsm_step = runtime.current_step(); // sync step before saving
+            if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
             let final_res = FinalResponse {
                 status: "FINISH".to_string(),
-                respuesta_conversacional: "🛑 **Misión Cancelada**: Has detenido la ejecución del agente. Puedes continuar en cualquier momento con `continua` o enviarle una nueva instrucción.".to_string(),
+                respuesta_conversacional: "ðŸ›‘ **MisiÃ³n Cancelada**: Has detenido la ejecuciÃ³n del agente. Puedes continuar en cualquier momento con `continua` o enviarle una nueva instrucciÃ³n.".to_string(),
             };
             return Ok(serde_json::to_string(&final_res).unwrap());
         }
 
-        // ── FASE 1: Mission Checkpoint for Auto-Resume cross-restart ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ FASE 1: Mission Checkpoint for Auto-Resume cross-restart Ã¢â€â‚¬Ã¢â€â‚¬
         let role_str = match current_role {
             AgentRole::Planner => "Planner",
             AgentRole::Executor => "Executor",
@@ -901,31 +915,31 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             &workspace_path,
             &current_context,
             role_str,
-            step_count,
+            runtime.current_step(),
             Some(&original_prompt_parsed),
         );
 
-        // ── FASE 5: Monitor de Cordura y Salud Cognitiva del Agente ──
-        if step_count % 3 == 0 || step_count == 1 {
+        // Ã¢â€â‚¬Ã¢â€â‚¬ FASE 5: Monitor de Cordura y Salud Cognitiva del Agente Ã¢â€â‚¬Ã¢â€â‚¬
+        if runtime.current_step() % 3 == 0 || runtime.current_step() == 1 {
             let error_hashes_slice: Vec<u64> = last_error_hashes.iter().copied().collect();
             let report = crate::core::sanity_monitor::check(
                 &tool_history,
                 current_context.len(),
                 json_error_count,
-                step_count,
+                runtime.current_step(),
                 last_progress_step,
                 &error_hashes_slice,
             );
             crate::core::sanity_monitor::emit_report(&app_handle, &report);
             if let Some((hint, forced_tool_opt)) = crate::core::sanity_monitor::build_correction_hint(&report) {
                 current_context.push_str(&hint);
-                emit_event(&app_handle, step_count, &format!("[CORDURA] {}", report.recommendation), "WARNING");
-                // RED level: mechanically force the tool — don't just inject text
+                emit_event(&app_handle, runtime.current_step(), &format!("[CORDURA] {}", report.recommendation), "WARNING");
+                // RED level: mechanically force the tool Ã¢â‚¬â€ don't just inject text
                 if let Some(forced_tool_name) = forced_tool_opt {
                     if forced_next_tool.is_none() {
                         forced_next_tool = Some((
                             forced_tool_name.clone(),
-                            format!("[CORDURA-RED] Forzando {} — loop o error semántico detectado.", forced_tool_name),
+                            format!("[CORDURA-RED] Forzando {} Ã¢â‚¬â€ loop o error semÃƒÂ¡ntico detectado.", forced_tool_name),
                         ));
                     }
                 }
@@ -933,9 +947,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         }
 
 
-        // ── EMERGENCY EXIT: step budget exhausted ────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ EMERGENCY EXIT: step budget exhausted Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         if runtime.is_budget_exhausted() {
-                // ── Evaluate CompletionGate before claiming success at budget limit ──
+                // Ã¢â€â‚¬Ã¢â€â‚¬ Evaluate CompletionGate before claiming success at budget limit Ã¢â€â‚¬Ã¢â€â‚¬
                 let deliverables_ok = validate_workspace(&workspace_path).await.is_ok();
                 let completion_ok = match runtime.can_complete() {
                     crate::core::completion_gate::CompletionDecision::Complete => true,
@@ -956,34 +970,34 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         }
                     }
 
-                    emit_event(&app_handle, step_count, "✅ Misión completada. Todos los entregables validados.", "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), "Ã¢Å“â€¦ MisiÃƒÂ³n completada. Todos los entregables validados.", "SUCCESS");
                     let final_res = FinalResponse {
                         status: "FINISH".to_string(),
                         respuesta_conversacional: format!(
-                            "### 🛡️ Misión Completada con Éxito\n\n\
+                            "### Ã°Å¸â€ºÂ¡Ã¯Â¸Â MisiÃƒÂ³n Completada con Ãƒâ€°xito\n\n\
                             Se han implementado y validado todos los componentes del proyecto:\n\
                             {}\n\n\
-                            Todos los archivos pasaron las pruebas de compilación y verificación al 100%.",
+                            Todos los archivos pasaron las pruebas de compilaciÃƒÂ³n y verificaciÃƒÂ³n al 100%.",
                             created_files.iter().map(|f| format!("- `{}`", f)).collect::<Vec<_>>().join("\n")
                         ),
                     };
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 } else if deliverables_ok && !completion_ok {
-                    // Files exist but CompletionGate not satisfied — honest incomplete status
-                    emit_event(&app_handle, step_count, "⏸️ Presupuesto agotado — entregables presentes pero criterios de misión incompletos.", "WARNING");
+                    // Files exist but CompletionGate not satisfied Ã¢â‚¬â€ honest incomplete status
+                    emit_event(&app_handle, runtime.current_step(), "Ã¢ÂÂ¸Ã¯Â¸Â Presupuesto agotado Ã¢â‚¬â€ entregables presentes pero criterios de misiÃƒÂ³n incompletos.", "WARNING");
                     let final_res = FinalResponse {
                         status: "INCOMPLETE".to_string(),
-                        respuesta_conversacional: "⚠️ **Presupuesto agotado**: Los archivos fueron creados pero el agente no pudo verificar el 100% de los criterios de aceptación. Escribe **'continua'** para otorgar otro bloque de pasos.".to_string(),
+                        respuesta_conversacional: "Ã¢Å¡Â Ã¯Â¸Â **Presupuesto agotado**: Los archivos fueron creados pero el agente no pudo verificar el 100% de los criterios de aceptaciÃƒÂ³n. Escribe **'continua'** para otorgar otro bloque de pasos.".to_string(),
                     };
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 }
 
             // Save state for continuation
             journal.interrupted = true;
-            journal.fsm_step = step_count;
+            journal.fsm_step = runtime.current_step();
             journal.fsm_role = Some(role_str.to_string());
             journal.fsm_context = Some(current_context.clone());
-            crate::core::session_journal::save_journal(&workspace_path, &journal);
+            if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
 
             let mut workspace_files: Vec<String> = Vec::new();
             if let Ok(entries) = std::fs::read_dir(&workspace_path) {
@@ -999,12 +1013,12 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             }
 
             let pause_msg = format!(
-                "⏸️ **Pausa de Presupuesto Agéntico (Paso {})**\n\n\
+                "Ã¢ÂÂ¸Ã¯Â¸Â **Pausa de Presupuesto AgÃƒÂ©ntico (Paso {})**\n\n\
                 Se ha completado el bloque de {} pasos asignado a este turno. El proyecto sigue en desarrollo activo en el workspace:\n\n\
-                **📋 Estado de Fases:**\n{}\n\n\
-                **📁 Archivos en Workspace:**\n{}\n\n\
-                💡 Escribe **'continua'** para otorgarme otro bloque de 50 pasos y continuar exactamente donde me quedé sin perder progreso.",
-                step_count, runtime.budget.total_steps,
+                **Ã°Å¸â€œâ€¹ Estado de Fases:**\n{}\n\n\
+                **Ã°Å¸â€œÂ Archivos en Workspace:**\n{}\n\n\
+                Ã°Å¸â€™Â¡ Escribe **'continua'** para otorgarme otro bloque de 50 pasos y continuar exactamente donde me quedÃƒÂ© sin perder progreso.",
+                runtime.current_step(), runtime.budget.total_steps,
                 if journal.fases.is_empty() {
                     "- Fases en desarrollo activo".to_string()
                 } else {
@@ -1016,7 +1030,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     workspace_files.iter().map(|f| format!("- `{}`", f)).collect::<Vec<_>>().join("\n")
                 }
             );
-            emit_event(&app_handle, step_count, &pause_msg, "WARNING");
+            emit_event(&app_handle, runtime.current_step(), &pause_msg, "WARNING");
 
             let final_res = FinalResponse {
                 status: "FINISH".to_string(),
@@ -1025,27 +1039,27 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             return Ok(serde_json::to_string(&final_res).unwrap());
         }
 
-        // ── PESP: Inject micro-meta progress status into context ─────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ PESP: Inject micro-meta progress status into context Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         // Tells the LLM exactly where it is in the global project plan every turn.
 
-        // ── PESP v2: Inject phase progress status into context ─────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ PESP v2: Inject phase progress status into context Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         // Tells the LLM exactly where it is in the global project plan every turn.
         if !journal.fases.is_empty() {
             let total = journal.fases.len();
             let progress: String = journal.fases.iter().enumerate().map(|(i, f)| {
                 let icon = match f.estado.as_str() {
-                    "COMPLETADA"  => "✅",
-                    "EN_PROGRESO" => "🔄",
-                    "FALLIDA"     => "❌",
-                    _             => "⏳",
+                    "COMPLETADA"  => "Ã¢Å“â€¦",
+                    "EN_PROGRESO" => "Ã°Å¸â€â€ž",
+                    "FALLIDA"     => "Ã¢ÂÅ’",
+                    _             => "Ã¢ÂÂ³",
                 };
-                format!("  {} [{}/{}] {} → {}", icon, i + 1, total, f.descripcion, f.estado)
+                format!("  {} [{}/{}] {} Ã¢â€ â€™ {}", icon, i + 1, total, f.descripcion, f.estado)
             }).collect::<Vec<_>>().join("\n");
             let current_f = journal.fases.get(journal.fase_actual)
-                .map(|f| format!("(Fase {}/{}) {}\n    Criterio de Éxito: {}", f.numero, total, f.descripcion, f.criterio_de_exito))
+                .map(|f| format!("(Fase {}/{}) {}\n    Criterio de Ãƒâ€°xito: {}", f.numero, total, f.descripcion, f.criterio_de_exito))
                 .unwrap_or_else(|| "(todas completadas)".to_string());
             let pesp_status = format!(
-                "[ESTADO DE FASES DEL PROYECTO — PESP PROTOCOL]\n{}\n\n📍 FASE ACTUAL EN EJECUCIÓN:\n{}\n\n",
+                "[ESTADO DE FASES DEL PROYECTO Ã¢â‚¬â€ PESP PROTOCOL]\n{}\n\nÃ°Å¸â€œÂ FASE ACTUAL EN EJECUCIÃƒâ€œN:\n{}\n\n",
                 progress,
                 current_f
             );
@@ -1055,18 +1069,18 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             let total = journal.micro_metas.len();
             let progress: String = journal.micro_metas.iter().enumerate().map(|(i, mm)| {
                 let icon = match mm.estado.as_str() {
-                    "VERIFICADA"  => "✅",
-                    "COMPLETADA"  => "✅",
-                    "EN_PROGRESO" => "🔄",
-                    _             => "⏳",
+                    "VERIFICADA"  => "Ã¢Å“â€¦",
+                    "COMPLETADA"  => "Ã¢Å“â€¦",
+                    "EN_PROGRESO" => "Ã°Å¸â€â€ž",
+                    _             => "Ã¢ÂÂ³",
                 };
-                format!("  {} [{}/{}] {} → {}", icon, i + 1, total, mm.descripcion, mm.estado)
+                format!("  {} [{}/{}] {} Ã¢â€ â€™ {}", icon, i + 1, total, mm.descripcion, mm.estado)
             }).collect::<Vec<_>>().join("\n");
             let current_mm = journal.micro_metas.get(journal.micro_meta_actual)
                 .map(|mm| mm.descripcion.clone())
                 .unwrap_or_else(|| "(todas completadas)".to_string());
             let pesp_status = format!(
-                "[ESTADO DE MICRO-METAS DEL PROYECTO — PESP PROTOCOL]\n{}\nMICRO-META ACTUAL: [{}/{}] {}\n\n",
+                "[ESTADO DE MICRO-METAS DEL PROYECTO Ã¢â‚¬â€ PESP PROTOCOL]\n{}\nMICRO-META ACTUAL: [{}/{}] {}\n\n",
                 progress,
                 journal.micro_meta_actual + 1,
                 total,
@@ -1076,27 +1090,27 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             let existing = current_context.clone();
             current_context = format!("{}{}", pesp_status, existing);
         }
-        // ── Context Window Tiered Monitor & Intelligent Compaction (Devin 2.0 / OSS 2025 Pattern) ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Context Window Tiered Monitor & Intelligent Compaction (Devin 2.0 / OSS 2025 Pattern) Ã¢â€â‚¬Ã¢â€â‚¬
         let (fill_pct, ctx_status) = context_monitor.status(current_context.len());
         if context_monitor.should_compact(current_context.len()) {
-            emit_event(&app_handle, step_count, &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct * 100.0), "INFO");
+            emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct * 100.0), "INFO");
             current_context = context_monitor.compact_context(&current_context);
-            emit_event(&app_handle, step_count, "[MEMORIA] Contexto compactado exitosamente sin pérdida del objetivo.", "SUCCESS");
+            emit_event(&app_handle, runtime.current_step(), "[MEMORIA] Contexto compactado exitosamente sin pÃƒÂ©rdida del objetivo.", "SUCCESS");
         } else if ctx_status == crate::core::context_monitor::ContextStatus::ApproachingLimit {
-            emit_event(&app_handle, step_count, &format!("[MEMORIA] Ventana al {:.0}% de capacidad — operando con normalidad.", fill_pct * 100.0), "INFO");
+            emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Ventana al {:.0}% de capacidad Ã¢â‚¬â€ operando con normalidad.", fill_pct * 100.0), "INFO");
         }
 
 
         let mut forced_override: Option<(String, String)> = None;
         if let Some((forced, override_msg)) = forced_next_tool.take() {
-            let intercept_log = format!("[SISTEMA INTERCEPTO] En el turno anterior se decidió forzarte a usar: {}. Razón: {}", forced, override_msg);
+            let intercept_log = format!("[SISTEMA INTERCEPTO] En el turno anterior se decidiÃƒÂ³ forzarte a usar: {}. RazÃƒÂ³n: {}", forced, override_msg);
             current_context.push_str(&format!("{}\n\n", intercept_log));
             forced_override = Some((forced, override_msg));
         }
         
         let mut extra_prompt = String::new();
         if let Some((forced, _)) = &forced_override {
-            extra_prompt = format!("\n\nREGLA ESTRICTA E INQUEBRANTABLE PARA ESTE TURNO:\nDEBES Y TIENES QUE ELEGIR '{}' COMO TU HERRAMIENTA. NO ELIJAS OTRA O EL SISTEMA FALLARÁ. Ignora cualquier otra regla y genera un JSON válido para la herramienta {}.", forced, forced);
+            extra_prompt = format!("\n\nREGLA ESTRICTA E INQUEBRANTABLE PARA ESTE TURNO:\nDEBES Y TIENES QUE ELEGIR '{}' COMO TU HERRAMIENTA. NO ELIJAS OTRA O EL SISTEMA FALLARÃƒÂ. Ignora cualquier otra regla y genera un JSON vÃƒÂ¡lido para la herramienta {}.", forced, forced);
         }
 
         let (live_workspace_context, workspace_is_empty) = match &cached_workspace_context {
@@ -1121,7 +1135,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 scan_live_files(std::path::Path::new(&workspace_path), &mut live_files, 0);
                 let is_empty = live_files.is_empty();
                 let ctx = if is_empty {
-                    "El proyecto está completamente vacío. Aún no has creado ningún archivo físico.".to_string()
+                    "El proyecto estÃƒÂ¡ completamente vacÃƒÂ­o. AÃƒÂºn no has creado ningÃƒÂºn archivo fÃƒÂ­sico.".to_string()
                 } else {
                     let repo_map = crate::core::map::generate_repo_map(std::path::Path::new(&workspace_path));
                     let relative_files: Vec<String> = live_files.iter()
@@ -1144,88 +1158,88 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             current_context = context_monitor.compact_context(&current_context);
         }
 
-        // ── Critic → Executor feedback block ──────────────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Critic Ã¢â€ â€™ Executor feedback block Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         let critic_feedback_block = if let Some(ref fb) = critic_feedback {
-            format!("\n\n[REPORTE DEL CRÍTICO — DEBES CORREGIR ESTOS PROBLEMAS ANTES DE CONTINUAR]:\n{}\n", fb)
+            format!("\n\n[REPORTE DEL CRÃƒÂTICO Ã¢â‚¬â€ DEBES CORREGIR ESTOS PROBLEMAS ANTES DE CONTINUAR]:\n{}\n", fb)
         } else {
             String::new()
         };
 
-        // ── Analysis Fast Path: inject into Planner context ─────────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Analysis Fast Path: inject into Planner context Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         let analysis_fast_path = if mission_type == MissionType::Analysis {
             if workspace_is_empty {
                 "
 
-⚡ [MODO ANÁLISIS]: EL WORKSPACE ESTÁ COMPLETAMENTE VACÍO. \
-                Si el usuario pide analizar el código local, NO INVENTES UN REPORTE ni crees archivos simulados. \
-                Usa TOOL_FINISH inmediatamente indicando: 'El proyecto está vacío, no hay archivos para analizar.'".to_string()
+Ã¢Å¡Â¡ [MODO ANÃƒÂLISIS]: EL WORKSPACE ESTÃƒÂ COMPLETAMENTE VACÃƒÂO. \
+                Si el usuario pide analizar el cÃƒÂ³digo local, NO INVENTES UN REPORTE ni crees archivos simulados. \
+                Usa TOOL_FINISH inmediatamente indicando: 'El proyecto estÃƒÂ¡ vacÃƒÂ­o, no hay archivos para analizar.'".to_string()
             } else {
                 "
 
-⚡ [MODO ANÁLISIS PURO ACTIVADO]: El usuario pidió un análisis. \
-                REGLA ESTRICTA: El resultado de tu análisis DEBE guardarse físicamente en un archivo (ej. 'informe_analisis.md') usando TOOL_PROGRAMMER. NO pongas el reporte gigante en la respuesta conversacional. \
+Ã¢Å¡Â¡ [MODO ANÃƒÂLISIS PURO ACTIVADO]: El usuario pidiÃƒÂ³ un anÃƒÂ¡lisis. \
+                REGLA ESTRICTA: El resultado de tu anÃƒÂ¡lisis DEBE guardarse fÃƒÂ­sicamente en un archivo (ej. 'informe_analisis.md') usando TOOL_PROGRAMMER. NO pongas el reporte gigante en la respuesta conversacional. \
                 Al terminar, usa TOOL_FINISH e indica la ruta exacta del archivo generado para que el usuario pueda abrirlo.".to_string()
             }
         } else {
             String::new()
         };
 
-        // ── Acceptance Contract injection ────────────────────────────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Acceptance Contract injection Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         let contract_block = acceptance_contract.as_deref().map(|c| format!("[CONTRATO DE ACEPTACION DEL PLANIFICADOR]\n{}\n", c)).unwrap_or_default();
 
-        let json_schema = format!("Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON (sin markdown, sin texto extra):\n\
+        let json_schema = format!("Tu respuesta DEBE ser ÃƒÅ¡NICAMENTE un objeto JSON (sin markdown, sin texto extra):\n\
             {{\n\
               \"checklist_mental\": \"<tareas cumplidas vs faltantes>\",\n\
               \"herramienta\": \"<NOMBRE_HERRAMIENTA>\",\n\
-              \"pensamiento\": \"Razonamiento lógico de tu decisión\",\n\
+              \"pensamiento\": \"Razonamiento lÃƒÂ³gico de tu decisiÃƒÂ³n\",\n\
               \"comando\": \"<COMANDO_REAL o null>\",\n\
               \"task_id\": null,\n\
               \"url_a_investigar\": null,\n\
               \"archivos_a_editar\": [\"archivo.ext\", \"otro_archivo.ext\"],\n\
-              \"ast_nodes\": [{{\"intent\": \"<código>\", \"parent_id\": 0, \"opcode\": 2}}],\n\
+              \"ast_nodes\": [{{\"intent\": \"<cÃƒÂ³digo>\", \"parent_id\": 0, \"opcode\": 2}}],\n\
               \"respuesta_conversacional\": \"<respuesta o null>\"\n\
             }}\n\
             REGLAS CRITICAS DEL JSON:
-            1. 'comando' = UN SOLO comando de shell real. NUNCA prosa/descripción. Ejemplos: 'dir', 'start index.html', 'node app.js'.
+            1. 'comando' = UN SOLO comando de shell real. NUNCA prosa/descripciÃƒÂ³n. Ejemplos: 'dir', 'start index.html', 'node app.js'.
             2. 'archivos_a_editar' = SOLO nombres de archivo relativos (sin rutas absolutas). Ej: ['index.html'] NO ['C:\\Users\\...\\index.html'].
             3. El workspace actual es: {ws}. NUNCA uses rutas absolutas de proyectos anteriores ni de otros directorios.",
             ws = workspace_path);
 
         let agent_prompt = match current_role {
-            // Planner - Enrutamiento Semántico Avanzado (Zero-Hint Routing)
+            // Planner - Enrutamiento SemÃƒÂ¡ntico Avanzado (Zero-Hint Routing)
             AgentRole::Planner => format!(
-                "[PLANIFICADOR / ZERO-HINT ROUTER]\nObjetivo del Usuario: {}\nWorkspace Actual: {}\n{}\nHistorial de Conversación:\n{}\n\n\
-                ERES EL ENRUTADOR PRINCIPAL. Tu misión es analizar la intención del usuario de forma 100% implícita y autónoma, SIN depender de que el usuario mencione herramientas por su nombre.\n\
-                HERRAMIENTAS PERMITIDAS (SELECCIONA POR SEMÁNTICA):\n\
-                - TOOL_LOGIC_SOLVER: Dispara esta herramienta AUTOMÁTICAMENTE si el usuario pide analizar esquemas criptográficos, problemas de satisfacibilidad, paridad matemática, restricciones lógicas, álgebra booleana, grafos densos o cuellos de botella de reglas. (¡El motor SpectraSAT lo resolverá en RAM!).\n\
-                - TOOL_SCHEDULER: Usa esto si el usuario pide ejecutar tareas repetitivas o programadas (ej. 'haz esto cada lunes', 'audita cada semana'). Comando: 'cron_expr|descripción'.\n\
-                - TOOL_THINK: Si el objetivo requiere crear, escribir, modificar o debugear código fuente, usa esto para transferir el control al EJECUTOR de forma transparente.\n\
-                - TOOL_MAPPER: Solo para analizar dependencias en proyectos con múltiples archivos existentes.\n\
-                - TOOL_AUDITOR: Para revisiones de seguridad en código fuente existente.\n\
-                - TOOL_SEARCH / TOOL_WEB_SEARCH: Si necesitas buscar documentación o investigar información externa.\n\
-                - TOOL_ASK_USER: Para pedir clarificaciones si la intención del usuario es completamente ambigua (PROHIBIDO para pedir ayuda con código, sintaxis o tests).\n\
-                - TOOL_FINISH: Usa esto ÚNICAMENTE si la tarea ya está 100% completada y verificada (o si reportaste los resultados finales). NUNCA uses esto si aún hay pasos pendientes.\n\
+                "[PLANIFICADOR / ZERO-HINT ROUTER]\nObjetivo del Usuario: {}\nWorkspace Actual: {}\n{}\nHistorial de ConversaciÃƒÂ³n:\n{}\n\n\
+                ERES EL ENRUTADOR PRINCIPAL. Tu misiÃƒÂ³n es analizar la intenciÃƒÂ³n del usuario de forma 100% implÃƒÂ­cita y autÃƒÂ³noma, SIN depender de que el usuario mencione herramientas por su nombre.\n\
+                HERRAMIENTAS PERMITIDAS (SELECCIONA POR SEMÃƒÂNTICA):\n\
+                - TOOL_LOGIC_SOLVER: Dispara esta herramienta AUTOMÃƒÂTICAMENTE si el usuario pide analizar esquemas criptogrÃƒÂ¡ficos, problemas de satisfacibilidad, paridad matemÃƒÂ¡tica, restricciones lÃƒÂ³gicas, ÃƒÂ¡lgebra booleana, grafos densos o cuellos de botella de reglas. (Ã‚Â¡El motor SpectraSAT lo resolverÃƒÂ¡ en RAM!).\n\
+                - TOOL_SCHEDULER: Usa esto si el usuario pide ejecutar tareas repetitivas o programadas (ej. 'haz esto cada lunes', 'audita cada semana'). Comando: 'cron_expr|descripciÃƒÂ³n'.\n\
+                - TOOL_THINK: Si el objetivo requiere crear, escribir, modificar o debugear cÃƒÂ³digo fuente, usa esto para transferir el control al EJECUTOR de forma transparente.\n\
+                - TOOL_MAPPER: Solo para analizar dependencias en proyectos con mÃƒÂºltiples archivos existentes.\n\
+                - TOOL_AUDITOR: Para revisiones de seguridad en cÃƒÂ³digo fuente existente.\n\
+                - TOOL_SEARCH / TOOL_WEB_SEARCH: Si necesitas buscar documentaciÃƒÂ³n o investigar informaciÃƒÂ³n externa.\n\
+                - TOOL_ASK_USER: Para pedir clarificaciones si la intenciÃƒÂ³n del usuario es completamente ambigua (PROHIBIDO para pedir ayuda con cÃƒÂ³digo, sintaxis o tests).\n\
+                - TOOL_FINISH: Usa esto ÃƒÅ¡NICAMENTE si la tarea ya estÃƒÂ¡ 100% completada y verificada (o si reportaste los resultados finales). NUNCA uses esto si aÃƒÂºn hay pasos pendientes.\n\
                 \nPROHIBIDO: TOOL_WORKSPACE_MANAGER, TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER (Estas son exclusivas del Ejecutor).\n\
-                REGLA DE ZERO-HINT: Nunca le pidas al usuario que especifique la herramienta. Deduce la necesidad matemática o de código y actúa en consecuencia.\n\
+                REGLA DE ZERO-HINT: Nunca le pidas al usuario que especifique la herramienta. Deduce la necesidad matemÃƒÂ¡tica o de cÃƒÂ³digo y actÃƒÂºa en consecuencia.\n\
                 {}{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, analysis_fast_path, json_schema
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER (eres el ejecutor: escribe código e implementa directamente).\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semántica (regex o checks independientes de atributos) sin asumir orden rígido en HTML. 2) Comprueba booleanos o 'PASS' correctamente y retorna sys.exit(0) si pasan. 3) Si un test falla, eres 100% autónomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python NUNCA uses llaves '}}' para cerrar bloques y escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
+                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. ÃƒÅ¡salo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER (eres el ejecutor: escribe cÃƒÂ³digo e implementa directamente).\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semÃƒÂ¡ntica (regex o checks independientes de atributos) sin asumir orden rÃƒÂ­gido en HTML. 2) Comprueba booleanos o 'PASS' correctamente y retorna sys.exit(0) si pasan. 3) Si un test falla, eres 100% autÃƒÂ³nomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python NUNCA uses llaves '}}' para cerrar bloques y escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
             // Critic - compressed to <200 tokens
             AgentRole::Critic => format!(
-                "[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos con precisión. Solo TOOL_FINISH si todo pasa al 100%%. PROHIBIDO usar TOOL_ASK_USER para fallos de tests o código (transfiere a TOOL_PROGRAMMER para corregir el código o el test).\n[REGLA FRONTEND]: Si el proyecto contiene archivos HTML (ej. index.html, cyber_sentinel.html, etc.), es frontend. NO uses `node script.js` sobre archivos HTML. Si existe un script de prueba de verificación (ej. verify_*.py o test_*.py), ejecútalo con TOOL_TERMINAL; si pasa al 100%% o no hay tests pendientes, usa TOOL_FINISH.\n\n{}{}",
+                "[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos con precisiÃƒÂ³n. Solo TOOL_FINISH si todo pasa al 100%%. PROHIBIDO usar TOOL_ASK_USER para fallos de tests o cÃƒÂ³digo (transfiere a TOOL_PROGRAMMER para corregir el cÃƒÂ³digo o el test).\n[REGLA FRONTEND]: Si el proyecto contiene archivos HTML (ej. index.html, cyber_sentinel.html, etc.), es frontend. NO uses `node script.js` sobre archivos HTML. Si existe un script de prueba de verificaciÃƒÂ³n (ej. verify_*.py o test_*.py), ejecÃƒÂºtalo con TOOL_TERMINAL; si pasa al 100%% o no hay tests pendientes, usa TOOL_FINISH.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 contract_block, json_schema
             ),
         };
 
-        // ── Context Sanitizer: strip any reference to foreign workspaces ────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Context Sanitizer: strip any reference to foreign workspaces Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         // Prevents the LLM from re-learning stale workspace paths from its own
         // history (e.g. previous sessions or foreign directory paths).
         current_context = {
@@ -1264,34 +1278,34 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             ctx
         };
 
-        // El modelo del orquestador respeta la selección global del usuario (ya resuelto en resolve_model_or_fallback)
+        // El modelo del orquestador respeta la selecciÃƒÂ³n global del usuario (ya resuelto en resolve_model_or_fallback)
         let role_label = match current_role {
-            AgentRole::Planner  => "🧠 PLANIFICADOR",
-            AgentRole::Executor => "⚙️ EJECUTOR",
-            AgentRole::Critic   => "🔬 CRÍTICO",
+            AgentRole::Planner  => "Ã°Å¸Â§Â  PLANIFICADOR",
+            AgentRole::Executor => "Ã¢Å¡â„¢Ã¯Â¸Â EJECUTOR",
+            AgentRole::Critic   => "Ã°Å¸â€Â¬ CRÃƒÂTICO",
         };
-        emit_event(&app_handle, step_count, &format!("[{}] Pensando con {}...", role_label, orchestrator_model), "PLANNING");
+        emit_event(&app_handle, runtime.current_step(), &format!("[{}] Pensando con {}...", role_label, orchestrator_model), "PLANNING");
 
-        // ── Fase 5: Sanity Monitor (cada 5 pasos) ──────────────────────────────
-        if step_count % 5 == 0 {
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 5: Sanity Monitor (cada 5 pasos) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        if runtime.current_step() % 5 == 0 {
             let error_hashes_slice2: Vec<u64> = last_error_hashes.iter().copied().collect();
             let sanity = crate::core::sanity_monitor::check(
                 &tool_history,
                 current_context.len(),
                 json_error_count,
-                step_count,
+                runtime.current_step(),
                 last_progress_step,
                 &error_hashes_slice2,
             );
             crate::core::sanity_monitor::emit_report(&app_handle, &sanity);
             if let Some((hint2, forced_tool_opt2)) = crate::core::sanity_monitor::build_correction_hint(&sanity) {
                 current_context.push_str(&hint2);
-                emit_event(&app_handle, step_count, &format!("[⚕️ CORDURA {}] {}", sanity.level, &sanity.recommendation.chars().take(80).collect::<String>()), "WARNING");
+                emit_event(&app_handle, runtime.current_step(), &format!("[Ã¢Å¡â€¢Ã¯Â¸Â CORDURA {}] {}", sanity.level, &sanity.recommendation.chars().take(80).collect::<String>()), "WARNING");
                 if let Some(forced_tool_name2) = forced_tool_opt2 {
                     if forced_next_tool.is_none() {
                         forced_next_tool = Some((
                             forced_tool_name2.clone(),
-                            format!("[CORDURA-RED] Forzando {} — loop o error semántico detectado.", forced_tool_name2),
+                            format!("[CORDURA-RED] Forzando {} Ã¢â‚¬â€ loop o error semÃƒÂ¡ntico detectado.", forced_tool_name2),
                         ));
                     }
                 }
@@ -1299,14 +1313,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         }
 
 
-        // ── Fase 1: Mission Checkpoint (cada 3 pasos) ───────────────────────────
-        if step_count % 3 == 0 {
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 1: Mission Checkpoint (cada 3 pasos) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        if runtime.current_step() % 3 == 0 {
             let role_str = format!("{:?}", current_role);
             crate::core::mission_persist::save_checkpoint(
                 &workspace_path,
                 &current_context.chars().take(6000).collect::<String>(),
                 &role_str,
-                step_count,
+                runtime.current_step(),
                 Some(&original_prompt_parsed),
             );
         }
@@ -1314,7 +1328,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         let mut agent_res = match call_ollama(&orchestrator_model, &agent_prompt).await {
             Ok(res) => res,
             Err(e) => {
-                emit_event(&app_handle, step_count, &format!("Error de conexión: {}", e), "ERROR");
+                emit_event(&app_handle, runtime.current_step(), &format!("Error de conexiÃƒÂ³n: {}", e), "ERROR");
                 return Err(e);
             }
         };
@@ -1337,13 +1351,13 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 println!("LLM RAW RESPONSE ERROR: {}", agent_res);
                 json_error_count += 1;
                 if json_error_count >= 5 {
-                    emit_event(&app_handle, step_count, &format!("Error parseando decisión ({}). Máximos reintentos (5) alcanzados. Abortando bucle.", e), "ERROR");
-                    let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Fallo crítico persistente en la estructura JSON del planificador.".to_string() };
-                    crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
+                    emit_event(&app_handle, runtime.current_step(), &format!("Error parseando decisiÃƒÂ³n ({}). MÃƒÂ¡ximos reintentos (5) alcanzados. Abortando bucle.", e), "ERROR");
+                    let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Fallo crÃƒÂ­tico persistente en la estructura JSON del planificador.".to_string() };
+                    crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", runtime.current_step());
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 } else {
-                    emit_event(&app_handle, step_count, &format!("Error de sintaxis JSON (intento {}/5). Reintentando...", json_error_count), "WARNING");
-                    current_context.push_str(&format!("[SISTEMA INTERNO] Tu respuesta anterior no era un JSON válido. Error: {}. Genera SOLO un objeto JSON estrictamente válido según la estructura requerida, sin texto adicional antes o después del JSON.\n\n", e));
+                    emit_event(&app_handle, runtime.current_step(), &format!("Error de sintaxis JSON (intento {}/5). Reintentando...", json_error_count), "WARNING");
+                    current_context.push_str(&format!("[SISTEMA INTERNO] Tu respuesta anterior no era un JSON vÃƒÂ¡lido. Error: {}. Genera SOLO un objeto JSON estrictamente vÃƒÂ¡lido segÃƒÂºn la estructura requerida, sin texto adicional antes o despuÃƒÂ©s del JSON.\n\n", e));
                     continue;
                 }
             }
@@ -1356,7 +1370,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         let mut respuesta_conv = raw_value.get("respuesta_conversacional").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
         // Si el modelo solo quiere responder conversacionalmente (ej. "herramienta": null o "null"),
-        // y adjuntó una respuesta para el usuario, enrutar limpiamente como TOOL_FINISH para no entrar en bucle de error.
+        // y adjuntÃƒÂ³ una respuesta para el usuario, enrutar limpiamente como TOOL_FINISH para no entrar en bucle de error.
         if (tool == "UNKNOWN" || tool == "NULL" || tool == "NONE" || tool.is_empty()) && !respuesta_conv.trim().is_empty() {
             tool = "TOOL_FINISH".to_string();
         }
@@ -1364,16 +1378,16 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         // Auto-extract command if tool is TOOL_TERMINAL and comando is empty
         if tool == "TOOL_TERMINAL" && comando.trim().is_empty() {
             if let Some(auto_cmd) = extract_command_from_thought(&pensamiento, &workspace_path) {
-                emit_event(&app_handle, step_count, &format!("[AUTO-EXTRACT] Comando recuperado del pensamiento: {}", auto_cmd), "INFO");
+                emit_event(&app_handle, runtime.current_step(), &format!("[AUTO-EXTRACT] Comando recuperado del pensamiento: {}", auto_cmd), "INFO");
                 comando = auto_cmd;
             }
         }
 
-        // ── MissionRuntime: step tracking + stall detection (single source of truth) ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ MissionRuntime: step tracking + stall detection (single source of truth) Ã¢â€â‚¬Ã¢â€â‚¬
         runtime.record_step();
         if let Some(stall) = runtime.should_stall_recover(4) {
-            let stall_msg = format!("[STALL DETECTOR] {:?} detectado. Forzando verificación real del filesystem.", stall);
-            emit_event(&app_handle, step_count, &stall_msg, "WARNING");
+            let stall_msg = format!("[STALL DETECTOR] {:?} detectado. Forzando verificaciÃƒÂ³n real del filesystem.", stall);
+            emit_event(&app_handle, runtime.current_step(), &stall_msg, "WARNING");
             // RepeatedTool stall: force a dir command to anchor LLM to filesystem reality
             if matches!(stall, crate::core::stall_detector::StallType::RepeatedTool)
                 && forced_next_tool.is_none()
@@ -1382,48 +1396,46 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     "TOOL_TERMINAL".to_string(),
                     format!(
                         "[STALL RECOVERY] Verificando estado real del workspace. {}",
-                        "Ejecuta 'dir' y ajusta tu plan según los archivos que realmente existen."
+                        "Ejecuta 'dir' y ajusta tu plan segÃƒÂºn los archivos que realmente existen."
                     ),
                 ));
                 current_context.push_str(
-                    "[CORRECCIÓN FORZADA]: Estás en un bucle. Verifica los archivos existentes con 'dir' antes de continuar.\n\n"
+                    "[CORRECCIÃƒâ€œN FORZADA]: EstÃƒÂ¡s en un bucle. Verifica los archivos existentes con 'dir' antes de continuar.\n\n"
                 );
             }
         }
 
-        // ── Arquitectura Cognitiva v4: Validación previa de esquema (P1) ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Arquitectura Cognitiva v4: ValidaciÃƒÂ³n previa de esquema (P1) Ã¢â€â‚¬Ã¢â€â‚¬
         if let crate::core::schema_validator::SchemaValidationResult::Invalid(schema_err) = 
             crate::core::schema_validator::SchemaValidator::validate_tool_payload(&tool, &raw_value) {
-            emit_event(&app_handle, step_count, &format!("[SCHEMA ERROR] {}", schema_err), "WARNING");
+            emit_event(&app_handle, runtime.current_step(), &format!("[SCHEMA ERROR] {}", schema_err), "WARNING");
             current_context.push_str(&format!(
-                "[VALIDACIÓN DE ESQUEMA FALLIDA]: {}\nCorrige los argumentos del objeto JSON para la herramienta '{}'.\n\n",
+                "[VALIDACIÃƒâ€œN DE ESQUEMA FALLIDA]: {}\nCorrige los argumentos del objeto JSON para la herramienta '{}'.\n\n",
                 schema_err, tool
-            ));
-            step_count += 1;
-            continue;
+            ));            continue;
         }
 
-        // ── FORCED TOOL VALIDATION ────────────────────────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ FORCED TOOL VALIDATION Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         // If the system has determined the LLM is stuck in a tool-loop,
         // validate its decision against the forced tool constraint.
         if let Some((forced, override_msg)) = &forced_override {
             if tool != *forced {
                 intercept_consecutive += 1;
                 let error_msg = format!(
-                    "[INTERCEPT {}/3] Se te ordenó usar '{}' (razón: '{}'). Elegiste '{}'. Corrige tu elección.",
+                    "[INTERCEPT {}/3] Se te ordenÃƒÂ³ usar '{}' (razÃƒÂ³n: '{}'). Elegiste '{}'. Corrige tu elecciÃƒÂ³n.",
                     intercept_consecutive, forced, override_msg, tool
                 );
                 current_context.push_str(&format!("{}\n\n", error_msg));
-                emit_event(&app_handle, step_count,
-                    &format!("[INTERCEPT {}/3] LLM desobedeció orden de usar {}", intercept_consecutive, forced),
+                emit_event(&app_handle, runtime.current_step(),
+                    &format!("[INTERCEPT {}/3] LLM desobedeciÃƒÂ³ orden de usar {}", intercept_consecutive, forced),
                     "WARNING");
 
-                // FIX-A1: Never give up — if model ignores the forced tool 3 times in a row,
+                // FIX-A1: Never give up Ã¢â‚¬â€ if model ignores the forced tool 3 times in a row,
                 // HARD-EXECUTE the forced action directly without asking the LLM again.
                 // This is the only reliable way to break a loop with a stubborn small model.
                 if intercept_consecutive >= 3 {
-                    emit_event(&app_handle, step_count,
-                        "[INTERCEPT] Modelo ignoró la orden 3 veces. Ejecutando acción forzada directamente...", "WARNING");
+                    emit_event(&app_handle, runtime.current_step(),
+                        "[INTERCEPT] Modelo ignorÃƒÂ³ la orden 3 veces. Ejecutando acciÃƒÂ³n forzada directamente...", "WARNING");
 
                     // Determine what to hard-execute based on the forced tool
                     let forced_cmd_to_run = if forced == "TOOL_TERMINAL" {
@@ -1454,89 +1466,81 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 let out_len = output.len();
                                 let digest = if out_len > 3000 { &output[..3000] } else { &output[..] };
                                 let auto_msg = format!(
-                                    "[INTERCEPTOR AUTO-EXEC] Ejecuté '{}' directamente porque el modelo ignoró la orden.\nResultado:\n{}\n\n",
+                                    "[INTERCEPTOR AUTO-EXEC] EjecutÃƒÂ© '{}' directamente porque el modelo ignorÃƒÂ³ la orden.\nResultado:\n{}\n\n",
                                     forced_cmd_to_run, digest
                                 );
                                 current_context.push_str(&auto_msg);
-                                emit_event(&app_handle, step_count,
-                                    &format!("[INTERCEPTOR AUTO-EXEC] Ejecución directa completada: {} chars", out_len),
+                                emit_event(&app_handle, runtime.current_step(),
+                                    &format!("[INTERCEPTOR AUTO-EXEC] EjecuciÃƒÂ³n directa completada: {} chars", out_len),
                                     "SUCCESS");
                             }
                             Err(e) => {
                                 current_context.push_str(&format!(
-                                    "[INTERCEPTOR AUTO-EXEC] Intenté ejecutar '{}' pero falló: {}\n\n",
+                                    "[INTERCEPTOR AUTO-EXEC] IntentÃƒÂ© ejecutar '{}' pero fallÃƒÂ³: {}\n\n",
                                     forced_cmd_to_run, e
                                 ));
                             }
                         }
                     } else {
                         current_context.push_str(&format!(
-                            "[INTERCEPTOR] Forzando abandono de herramienta '{}'. Razón: {}\n\n",
+                            "[INTERCEPTOR] Forzando abandono de herramienta '{}'. RazÃƒÂ³n: {}\n\n",
                             tool, override_msg
                         ));
                     }
-                    // Reset intercept — the hard-exec counts as having obeyed the intent
+                    // Reset intercept Ã¢â‚¬â€ the hard-exec counts as having obeyed the intent
                     intercept_consecutive = 0;
                     forced_next_tool = None;
-                    // Skip to next iteration — the context is now enriched, model can proceed
-                    step_count += 1;
-                    continue;
+                    // Skip to next iteration Ã¢â‚¬â€ the context is now enriched, model can proceed                    continue;
                 } else {
                     // Re-queue the forced tool for the next iteration
                     forced_next_tool = forced_override.clone();
-                }
-                step_count += 1;
-                continue;
+                }                continue;
             } else {
-                // LLM obeyed — reset counter
+                // LLM obeyed Ã¢â‚¬â€ reset counter
                 intercept_consecutive = 0;
             }
         }
 
-        // ── ROLE HARD LOCKS (FSM ENFORCEMENT) ─────────────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ ROLE HARD LOCKS (FSM ENFORCEMENT) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         let is_forced_and_obeyed = forced_override.as_ref().map_or(false, |(f, _)| f == &tool);
         if !is_forced_and_obeyed && current_role == AgentRole::Planner {
             if tool == "TOOL_PROGRAMMER" || tool == "TOOL_TERMINAL" || tool == "TOOL_BACKGROUND_START" {
                 current_role = AgentRole::Executor;
-                emit_event(&app_handle, step_count, &format!("[FSM] Planificador -> Ejecutor: Transición automática para ejecutar {}.", tool), "INFO");
+                emit_event(&app_handle, runtime.current_step(), &format!("[FSM] Planificador -> Ejecutor: TransiciÃƒÂ³n automÃƒÂ¡tica para ejecutar {}.", tool), "INFO");
             } else if ["TOOL_TESTER", "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL", "TOOL_ENV_MANAGER",
                 "TOOL_ASSET_MANAGER", "TOOL_VISION_EVALUATOR", "TOOL_WORKSPACE_MANAGER"].contains(&tool.as_str()) {
                 let error_msg = format!(
                     "[ACCESO DENEGADO]: Eres el Planificador. No tienes permiso para usar {}. \
-                    Tu rol es SOLO diseñar la arquitectura. \
+                    Tu rol es SOLO diseÃƒÂ±ar la arquitectura. \
                     NUNCA borres archivos existentes. \
-                    Usa TOOL_THINK para transferir el control al Ejecutor cuando estés listo.",
+                    Usa TOOL_THINK para transferir el control al Ejecutor cuando estÃƒÂ©s listo.",
                     tool
                 );
                 current_context.push_str(&format!("{}\n\n", error_msg));
-                emit_event(&app_handle, step_count, &format!("[FSM LOCK] Planificador intentó usar {}", tool), "WARNING");
-                step_count += 1;
-                continue;
+                emit_event(&app_handle, runtime.current_step(), &format!("[FSM LOCK] Planificador intentÃƒÂ³ usar {}", tool), "WARNING");                continue;
             }
         } else if !is_forced_and_obeyed && current_role == AgentRole::Executor {
             if tool == "TOOL_FINISH" {
                 current_role = AgentRole::Critic;
-                emit_event(&app_handle, step_count, "[FSM] EJECUTOR -> CRÍTICO: Implementación concluida. Transfiriendo al Crítico para validación final y cierre.", "INFO");
+                emit_event(&app_handle, runtime.current_step(), "[FSM] EJECUTOR -> CRÃƒÂTICO: ImplementaciÃƒÂ³n concluida. Transfiriendo al CrÃƒÂ­tico para validaciÃƒÂ³n final y cierre.", "INFO");
             } else if ["TOOL_TESTER", "TOOL_VISION_EVALUATOR", "TOOL_MAPPER", "TOOL_AST_INJECT", "TOOL_ASK_USER"].contains(&tool.as_str()) {
-                let error_msg = format!("[ACCESO DENEGADO]: Eres el Ejecutor. No tienes permiso para usar {}. Tu rol es escribir código directamente con TOOL_PROGRAMMER o comandos con TOOL_TERMINAL. Prohibido preguntar o pedir aclaraciones en fase de ejecución.", tool);
+                let error_msg = format!("[ACCESO DENEGADO]: Eres el Ejecutor. No tienes permiso para usar {}. Tu rol es escribir cÃƒÂ³digo directamente con TOOL_PROGRAMMER o comandos con TOOL_TERMINAL. Prohibido preguntar o pedir aclaraciones en fase de ejecuciÃƒÂ³n.", tool);
                 current_context.push_str(&format!("{}\n\n", error_msg));
-                emit_event(&app_handle, step_count, &format!("[FSM LOCK] Ejecutor intentó usar {}", tool), "WARNING");
-                step_count += 1;
-                continue;
+                emit_event(&app_handle, runtime.current_step(), &format!("[FSM LOCK] Ejecutor intentÃƒÂ³ usar {}", tool), "WARNING");                continue;
             }
         } else if !is_forced_and_obeyed && current_role == AgentRole::Critic {
             if ["TOOL_PROGRAMMER", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
                 critic_fsm_lock_consecutive += 1;
-                let error_msg = format!("[ACCESO DENEGADO]: Eres el Crítico. No tienes permiso para usar {}. No puedes escribir código físico. Si el código falla, usa TOOL_TERMINAL, y si hay errores, el sistema te regresará al Ejecutor. NO uses TOOL_PROGRAMMER.", tool);
+                let error_msg = format!("[ACCESO DENEGADO]: Eres el CrÃƒÂ­tico. No tienes permiso para usar {}. No puedes escribir cÃƒÂ³digo fÃƒÂ­sico. Si el cÃƒÂ³digo falla, usa TOOL_TERMINAL, y si hay errores, el sistema te regresarÃƒÂ¡ al Ejecutor. NO uses TOOL_PROGRAMMER.", tool);
                 current_context.push_str(&format!("{}\n\n", error_msg));
-                emit_event(&app_handle, step_count, &format!("[FSM LOCK] Crítico intentó usar {}", tool), "WARNING");
+                emit_event(&app_handle, runtime.current_step(), &format!("[FSM LOCK] CrÃƒÂ­tico intentÃƒÂ³ usar {}", tool), "WARNING");
 
-                // ── Anti-bucle del Crítico: si lleva demasiados FSM LOCKs
-                // seguidos, significa que el modelo está atascado intentando
+                // Ã¢â€â‚¬Ã¢â€â‚¬ Anti-bucle del CrÃƒÂ­tico: si lleva demasiados FSM LOCKs
+                // seguidos, significa que el modelo estÃƒÂ¡ atascado intentando
                 // escribir archivos que faltan. Forzamos retorno al Ejecutor
-                // con un mensaje de feedback específico.
+                // con un mensaje de feedback especÃƒÂ­fico.
                 if critic_fsm_lock_consecutive >= 3 {
-                    // SPRINT 1 FIX: Validación Dinámica FSM.
+                    // SPRINT 1 FIX: ValidaciÃƒÂ³n DinÃƒÂ¡mica FSM.
                     // archivos_vec is declared later in the loop; here we do a live scan
                     // of the workspace to find what's actually on disk, and use current_context
                     // to detect what the LLM intended to produce.
@@ -1575,14 +1579,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     think_consecutive = 0;
                     mapper_consecutive = 0;
                     comandos_ejecutados_historico.clear(); // allow fresh terminal commands
-                    emit_event(&app_handle, step_count, 
+                    emit_event(&app_handle, runtime.current_step(), 
                         "[FSM] CRITICO -> EJECUTOR: Bucle detectado, validacion dinamica aplicada.", 
                         "WARNING");
                     current_context.push_str(&format!("{}\n\n", feedback));
-                }
-
-                step_count += 1;
-                continue;
+                }                continue;
             }
             // Reset lock counter when Critic does something valid
             critic_fsm_lock_consecutive = 0;
@@ -1597,7 +1598,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         if let Some(arr) = raw_value.get("archivos_a_editar").and_then(|v| v.as_array()) {
             for item in arr {
                 if let Some(s) = item.as_str() {
-                    // ── Workspace Contamination Sanitizer (Fix 3) ──────────────────────
+                    // Ã¢â€â‚¬Ã¢â€â‚¬ Workspace Contamination Sanitizer (Fix 3) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                     // The LLM sometimes injects paths from a previous workspace
                     // (e.g. "proxy-stack-windows") or absolute paths outside the current
                     // workspace. Normalize them to bare filenames so TOOL_PROGRAMMER
@@ -1611,19 +1612,19 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 s.replace('/', "\\").starts_with(&workspace_path) ||
                                 s.replace('\\', "/").starts_with(&workspace_path.replace('\\', "/"));
                             if inside_workspace {
-                                // Strip workspace prefix → relative path
+                                // Strip workspace prefix Ã¢â€ â€™ relative path
                                 let stripped = s.trim_start_matches(&workspace_path)
                                     .trim_start_matches('/')
                                     .trim_start_matches('\\');
                                 stripped.to_string()
                             } else {
-                                // Foreign workspace — keep only the filename
+                                // Foreign workspace Ã¢â‚¬â€ keep only the filename
                                 p.file_name()
                                     .map(|f| f.to_string_lossy().to_string())
                                     .unwrap_or_else(|| s.to_string())
                             }
                         } else {
-                            // Already relative — use as-is
+                            // Already relative Ã¢â‚¬â€ use as-is
                             s.to_string()
                         }
                     };
@@ -1647,24 +1648,24 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         }
         
         if !checklist.is_empty() {
-            emit_event(&app_handle, step_count, &format!("Checklist Mental: {}", checklist), "PLANNING");
+            emit_event(&app_handle, runtime.current_step(), &format!("Checklist Mental: {}", checklist), "PLANNING");
         }
 
         // FORCED TOOL OVERRIDE REMOVED. Validation happens above.
 
-        emit_event(&app_handle, step_count, &format!("Decisión: {} - {}", tool, pensamiento), "DECISION");
-        current_context.push_str(&format!("--- PASO {} ---\nChecklist Mental: {}\nDecidiste: {}\nPensamiento: {}\n", step_count, checklist, tool, pensamiento));
+        emit_event(&app_handle, runtime.current_step(), &format!("DecisiÃƒÂ³n: {} - {}", tool, pensamiento), "DECISION");
+        current_context.push_str(&format!("--- PASO {} ---\nChecklist Mental: {}\nDecidiste: {}\nPensamiento: {}\n", runtime.current_step(), checklist, tool, pensamiento));
 
-        // ── Journal: update per-step ─────────────────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Journal: update per-step Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         crate::core::session_journal::update_journal(
             &mut journal,
-            step_count,
-            &format!("[PASO {}] {} - {}", step_count, tool, pensamiento),
+            runtime.current_step(),
+            &format!("[PASO {}] {} - {}", runtime.current_step(), tool, pensamiento),
             &tool,
             &archivos_vec,
             &workspace_path,
         );
-        crate::core::session_journal::save_journal(&workspace_path, &journal);
+        if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
         
         // Registrar herramienta en el historial del Monitor de Cordura
         tool_history.push(tool.clone());
@@ -1679,33 +1680,33 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         if tool != "TOOL_MAPPER" { mapper_consecutive = 0; }
         if tool != "TOOL_LEARN" { learn_consecutive = 0; }
         if tool != "TOOL_ASK_USER" { ask_user_consecutive = 0; }
-        // THINK↔PROGRAMMER alternation counter: only resets when NEITHER THINK nor PROGRAMMER
+        // THINKÃ¢â€ â€PROGRAMMER alternation counter: only resets when NEITHER THINK nor PROGRAMMER
         if tool == "TOOL_THINK" || tool == "TOOL_PROGRAMMER" {
             think_programmer_alternation_count += 1;
         } else {
             think_programmer_alternation_count = 0;
         }
-        // If alternation hits ≥ 8 steps without any TERMINAL/TESTER/FINISH, force TOOL_TERMINAL
+        // If alternation hits Ã¢â€°Â¥ 8 steps without any TERMINAL/TESTER/FINISH, force TOOL_TERMINAL
         if think_programmer_alternation_count >= 8 {
             let loop_msg = format!(
-                "[SISTEMA INTERNO]: ⚠️ LOOP DETECTADO: {} pasos alternando THINK↔PROGRAMMER sin ejecutar nada en terminal. \
+                "[SISTEMA INTERNO]: Ã¢Å¡Â Ã¯Â¸Â LOOP DETECTADO: {} pasos alternando THINKÃ¢â€ â€PROGRAMMER sin ejecutar nada en terminal. \
                 El modelo debe VERIFICAR su trabajo con comandos reales. FORZANDO TOOL_TERMINAL.",
                 think_programmer_alternation_count
             );
             eprintln!("{}", loop_msg);
-            emit_event(&app_handle, step_count, &loop_msg, "WARNING");
+            emit_event(&app_handle, runtime.current_step(), &loop_msg, "WARNING");
             current_context.push_str(&format!("{}\n\n", loop_msg));
             // Force terminal to run the verification/test script
             if forced_next_tool.is_none() {
                 forced_next_tool = Some((
                     "TOOL_TERMINAL".to_string(),
-                    "Ejecuta el script de verificación del proyecto o abre el archivo principal para comprobar que existe y tiene contenido.".to_string(),
+                    "Ejecuta el script de verificaciÃƒÂ³n del proyecto o abre el archivo principal para comprobar que existe y tiene contenido.".to_string(),
                 ));
             }
             think_programmer_alternation_count = 0; // reset after intervention
         }
 
-        // ── Arquitectura Cognitiva v4: Autorización por PolicyEngine ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Arquitectura Cognitiva v4: AutorizaciÃƒÂ³n por PolicyEngine Ã¢â€â‚¬Ã¢â€â‚¬
         let action_proposal = crate::core::policy::ActionProposal {
             tool: tool.clone(),
             arguments: raw_value.clone(),
@@ -1719,14 +1720,12 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
         match runtime.check_policy(&action_proposal) {
             crate::core::policy::PolicyDecision::Deny(reason) => {
-                emit_event(&app_handle, step_count, &format!("[POLICY BLOCK] {}", reason), "ERROR");
-                current_context.push_str(&format!("{}\n[ACCIÓN DENEGADA]: Elige una alternativa segura.\n\n", reason));
-                step_count += 1;
-                continue;
+                emit_event(&app_handle, runtime.current_step(), &format!("[POLICY BLOCK] {}", reason), "ERROR");
+                current_context.push_str(&format!("{}\n[ACCIÃƒâ€œN DENEGADA]: Elige una alternativa segura.\n\n", reason));                continue;
             },
             crate::core::policy::PolicyDecision::RequireUser(prompt) => {
-                emit_event(&app_handle, step_count, &format!("[POLICY USER REQ] {}", prompt), "WARNING");
-                current_context.push_str(&format!("[POLICY] Acción requiere confirmación del usuario: {}\n\n", prompt));
+                emit_event(&app_handle, runtime.current_step(), &format!("[POLICY USER REQ] {}", prompt), "WARNING");
+                current_context.push_str(&format!("[POLICY] AcciÃƒÂ³n requiere confirmaciÃƒÂ³n del usuario: {}\n\n", prompt));
             },
             crate::core::policy::PolicyDecision::Allow | crate::core::policy::PolicyDecision::Sandbox(_) => {}
         }
@@ -1735,43 +1734,43 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             "TOOL_TERMINAL" => {
                 let cmd_lower = comando.to_lowercase();
                 if cmd_lower.contains("http-server") || cmd_lower.contains("npm start") || cmd_lower.contains("npm run dev") || cmd_lower.contains("python -m http.server") || cmd_lower.contains("flask run") || cmd_lower.contains("uvicorn") {
-                    let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, DEBES usar TOOL_BACKGROUND_START. [SISTEMA: Redirigiendo automticamente a TOOL_BACKGROUND_START...]";
+                    let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estÃƒÂ¡tico, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, DEBES usar TOOL_BACKGROUND_START. [SISTEMA: Redirigiendo automticamente a TOOL_BACKGROUND_START...]";
                     current_context.push_str(&format!("{}\n\n", res_msg));
-                    emit_event(&app_handle, step_count, "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
                     programmer_cooldown_hits = 0; forced_next_tool = Some(("TOOL_BACKGROUND_START".to_string(), comando.clone()));
                 } else if comando.trim().is_empty() {
-                    // Track consecutive empties — after 2, force a specific action
+                    // Track consecutive empties Ã¢â‚¬â€ after 2, force a specific action
                     let empty_key = "__EMPTY_CMD__".to_string();
                     let empty_count = comandos_ejecutados_historico.iter().filter(|c| *c == &empty_key).count();
                     comandos_ejecutados_historico.insert(empty_key);
 
                     if empty_count >= 2 && current_role == AgentRole::Critic {
-                        // Critic keeps sending empty commands — force VISION_EVALUATOR
+                        // Critic keeps sending empty commands Ã¢â‚¬â€ force VISION_EVALUATOR
                         let msg = "[SISTEMA]: Has enviado TOOL_TERMINAL sin comando 3 veces seguidas. \
-                            ACCIÓN FORZADA: Debes usar TOOL_VISION_EVALUATOR ahora para verificar \
+                            ACCIÃƒâ€œN FORZADA: Debes usar TOOL_VISION_EVALUATOR ahora para verificar \
                             la UI, o TOOL_FINISH si ya terminaste.";
                         current_context.push_str(&format!("{}\n\n", msg));
-                        emit_event(&app_handle, step_count, "[SISTEMA] Comando vacío repetido — forzando TOOL_VISION_EVALUATOR", "WARNING");
+                        emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Comando vacÃƒÂ­o repetido Ã¢â‚¬â€ forzando TOOL_VISION_EVALUATOR", "WARNING");
                         forced_next_tool = Some(("TOOL_VISION_EVALUATOR".to_string(),
                             "Verifica visualmente la UI del proyecto creado".to_string()));
                     } else {
                         let res_msg = format!(
-                            "Error: El campo 'comando' está vacío. Debes especificar qué ejecutar. \
-                            Ejemplos válidos para este paso: 'start index.html' para abrir el \
+                            "Error: El campo 'comando' estÃƒÂ¡ vacÃƒÂ­o. Debes especificar quÃƒÂ© ejecutar. \
+                            Ejemplos vÃƒÂ¡lidos para este paso: 'start index.html' para abrir el \
                             navegador, 'ls' para listar archivos, 'node script.js' para ejecutar JS. \
-                            Intento vacío #{}/3 — al tercero se forzará TOOL_VISION_EVALUATOR.",
+                            Intento vacÃƒÂ­o #{}/3 Ã¢â‚¬â€ al tercero se forzarÃƒÂ¡ TOOL_VISION_EVALUATOR.",
                             empty_count + 1
                         );
                         current_context.push_str(&format!("{}\n\n", res_msg));
-                        emit_event(&app_handle, step_count, &format!("Comando vacío ({}/3)", empty_count + 1), "ERROR");
+                        emit_event(&app_handle, runtime.current_step(), &format!("Comando vacÃƒÂ­o ({}/3)", empty_count + 1), "ERROR");
                     }
                     programmer_cooldown_hits = 0;
                 } else if comandos_ejecutados_historico.contains(&comando) {
-                    let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
-                    emit_event(&app_handle, step_count, "Comando repetido interceptado", "WARNING");
+                    let res_msg = "[SISTEMA INTERNO]: Bucle detectado. EstÃƒÂ¡s repitiendo exactamente el mismo comando. Si fallÃƒÂ³ anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el cÃƒÂ³digo. Si ya tuvo ÃƒÂ©xito y solo estabas probando, la tarea estÃƒÂ¡ lista: usa TOOL_FINISH obligatoriamente.";
+                    emit_event(&app_handle, runtime.current_step(), "Comando repetido interceptado", "WARNING");
                     if current_role == AgentRole::Critic {
-                        let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el Crítico. Estás repitiendo el mismo comando. Esto suele significar que la prueba ya tuvo éxito y no hay más errores. El sistema está FORZANDO la acción TOOL_FINISH para terminar la tarea o la fase actual de forma segura.";
-                        emit_event(&app_handle, step_count, "[SISTEMA] Bucle de Terminal en Crítico -> Forzando FINISH", "WARNING");
+                        let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el CrÃƒÂ­tico. EstÃƒÂ¡s repitiendo el mismo comando. Esto suele significar que la prueba ya tuvo ÃƒÂ©xito y no hay mÃƒÂ¡s errores. El sistema estÃƒÂ¡ FORZANDO la acciÃƒÂ³n TOOL_FINISH para terminar la tarea o la fase actual de forma segura.";
+                        emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Bucle de Terminal en CrÃƒÂ­tico -> Forzando FINISH", "WARNING");
                         forced_next_tool = Some(("TOOL_FINISH".to_string(), "Las pruebas parecen haber concluido. Usa TOOL_FINISH.".to_string()));
                         current_context.push_str(&format!("{}\n\n", msg));
                     } else if current_role == AgentRole::Executor {
@@ -1782,9 +1781,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             || cmd_lower.trim() == "ls -la"
                             || cmd_lower.trim() == "dir /b";
                         if is_info_cmd {
-                            let msg = "[SISTEMA INTERNO]: El Ejecutor está repitiendo un comando informacional (dir/ls). Esto indica que la tarea ya fue completada. FORZANDO TOOL_FINISH para cerrar la misión.";
-                            emit_event(&app_handle, step_count, "[SISTEMA] Ejecutor en loop informacional -> Forzando FINISH", "WARNING");
-                            forced_next_tool = Some(("TOOL_FINISH".to_string(), "La tarea ya fue completada según el historial de comandos. Resume los resultados al usuario.".to_string()));
+                            let msg = "[SISTEMA INTERNO]: El Ejecutor estÃƒÂ¡ repitiendo un comando informacional (dir/ls). Esto indica que la tarea ya fue completada. FORZANDO TOOL_FINISH para cerrar la misiÃƒÂ³n.";
+                            emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Ejecutor en loop informacional -> Forzando FINISH", "WARNING");
+                            forced_next_tool = Some(("TOOL_FINISH".to_string(), "La tarea ya fue completada segÃƒÂºn el historial de comandos. Resume los resultados al usuario.".to_string()));
                             current_context.push_str(&format!("{}\n\n", msg));
                         } else {
                             current_context.push_str(&format!("{}\n\n", res_msg));
@@ -1795,15 +1794,15 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 } else {
                     let cmd_lower = comando.to_lowercase();
                     if cmd_lower.contains("http-server") || cmd_lower.contains("npm start") || cmd_lower.contains("npm run dev") || cmd_lower.contains("python -m http.server") || cmd_lower.contains("flask run") || cmd_lower.contains("uvicorn") {
-                        let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, DEBES usar TOOL_BACKGROUND_START. [SISTEMA: Redirigiendo automticamente a TOOL_BACKGROUND_START...]";
+                        let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estÃƒÂ¡tico, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, DEBES usar TOOL_BACKGROUND_START. [SISTEMA: Redirigiendo automticamente a TOOL_BACKGROUND_START...]";
                         current_context.push_str(&format!("{}\n\n", res_msg));
-                        emit_event(&app_handle, step_count, "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
+                        emit_event(&app_handle, runtime.current_step(), "Servidor web bloqueado en TOOL_TERMINAL", "WARNING");
                         programmer_cooldown_hits = 0; forced_next_tool = Some(("TOOL_BACKGROUND_START".to_string(), comando.clone()));
                     } else {
                         programmer_cooldown_hits = 0;
                         comandos_ejecutados_historico.insert(comando.clone());
 
-                        // ── Pre-check: verify the script file exists before running it ─────────
+                        // Ã¢â€â‚¬Ã¢â€â‚¬ Pre-check: verify the script file exists before running it Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                         let cmd_lower_check = comando.to_lowercase();
                         let script_file = if cmd_lower_check.starts_with("node ") {
                             Some(comando.trim_start_matches("node ").trim().split_whitespace().next().unwrap_or(""))
@@ -1822,24 +1821,24 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                         script
                                     );
                                     current_context.push_str(&format!("{}\n\n", warn_msg));
-                                    emit_event(&app_handle, step_count, &format!("[PRE-CHECK] Archivo no encontrado: {}", script), "ERROR");
+                                    emit_event(&app_handle, runtime.current_step(), &format!("[PRE-CHECK] Archivo no encontrado: {}", script), "ERROR");
                                     continue;
                                 }
                             }
                         }
 
-                        emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
-                        // ── World snapshot BEFORE tool execution ──────────────────────────────
+                        emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
+                        // Ã¢â€â‚¬Ã¢â€â‚¬ World snapshot BEFORE tool execution Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                         runtime.observe_world();
                         let world_hash_before = runtime.current_world_hash();
                         match execute_terminal_command(&workspace_path, &comando).await {
                         Ok(out) => {
-                            // ── World snapshot AFTER tool execution ───────────────────────────
+                            // Ã¢â€â‚¬Ã¢â€â‚¬ World snapshot AFTER tool execution Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                             runtime.observe_world();
                             let world_hash_after = runtime.current_world_hash();
                             runtime.record_tool_call();
 
-                            // ── Package-install amnesia fix ──────────────────────────────────────
+                            // Ã¢â€â‚¬Ã¢â€â‚¬ Package-install amnesia fix Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                             // If the command was a package install (pip install X, npm install X),
                             // unblock ALL previously-failed python/node script commands so they can
                             // be retried now that the missing dependency is installed.
@@ -1853,11 +1852,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     let cl = c.to_lowercase();
                                     !cl.starts_with("python") && !cl.starts_with("node")
                                 });
-                                current_context.push_str("[SISTEMA: Librería instalada correctamente. Los comandos de ejecución de scripts que fallaron antes por dependencias faltantes han sido desbloqueados y pueden reintentarse ahora.]\n\n");
+                                current_context.push_str("[SISTEMA: LibrerÃƒÂ­a instalada correctamente. Los comandos de ejecuciÃƒÂ³n de scripts que fallaron antes por dependencias faltantes han sido desbloqueados y pueden reintentarse ahora.]\n\n");
                             }
                             let digested_out = digest_terminal_output(&out, 2500);
-                            let res_msg = format!("Éxito: {}", digested_out);
-                            // ── MissionRuntime: record successful observation with real world data ──
+                            let res_msg = format!("Ãƒâ€°xito: {}", digested_out);
+                            // Ã¢â€â‚¬Ã¢â€â‚¬ MissionRuntime: record successful observation with real world data Ã¢â€â‚¬Ã¢â€â‚¬
                             {
                                 let mut obs = crate::core::observation::Observation::success(
                                     "TOOL_TERMINAL", &digested_out, vec![],
@@ -1867,7 +1866,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 obs.state_hash_after = Some(world_hash_after);
                                 runtime.record_observation(&obs);
                             }
-                            // ── Silent-success auto-verifier ─────────────────────────────────────
+                            // Ã¢â€â‚¬Ã¢â€â‚¬ Silent-success auto-verifier Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                             // When a script runs successfully but prints nothing to stdout,
                             // the LLM cannot confirm the task is done and loops. Fix: scan the
                             // workspace for recently-modified output files and inject a preview.
@@ -1911,7 +1910,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                                     content.clone()
                                                                 };
                                                                 found_outputs.push(format!(
-                                                                    "📄 ARCHIVO GENERADO: {} ({} bytes)\nContenido:\n{}", 
+                                                                    "Ã°Å¸â€œâ€ž ARCHIVO GENERADO: {} ({} bytes)\nContenido:\n{}", 
                                                                     fname, content.len(), preview
                                                                 ));
                                                             }
@@ -1924,11 +1923,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 }
                                 if !found_outputs.is_empty() {
                                     current_context.push_str(&format!(
-                                        "Resultado: {}✅\n\n[SISTEMA: El script no imprimió salida en consola, PERO generó los siguientes archivos de salida que CONFIRMAN que la tarea fue completada exitosamente:]\n\n{}\n\n[SISTEMA: Los archivos de salida existen y tienen contenido. Tu ÚNICO PASO VÁLIDO AHORA es usar 'TOOL_FINISH' para reportarle esto al usuario. ESTÁ PROHIBIDO volver a ejecutar el script.]\n\n",
+                                        "Resultado: {}Ã¢Å“â€¦\n\n[SISTEMA: El script no imprimiÃƒÂ³ salida en consola, PERO generÃƒÂ³ los siguientes archivos de salida que CONFIRMAN que la tarea fue completada exitosamente:]\n\n{}\n\n[SISTEMA: Los archivos de salida existen y tienen contenido. Tu ÃƒÅ¡NICO PASO VÃƒÂLIDO AHORA es usar 'TOOL_FINISH' para reportarle esto al usuario. ESTÃƒÂ PROHIBIDO volver a ejecutar el script.]\n\n",
                                         res_msg,
                                         found_outputs.join("\n\n")
                                     ));
-                                    emit_event(&app_handle, step_count, &format!("✅ Script OK — {} archivo(s) de salida generados", found_outputs.len()), "SUCCESS");
+                                    emit_event(&app_handle, runtime.current_step(), &format!("Ã¢Å“â€¦ Script OK Ã¢â‚¬â€ {} archivo(s) de salida generados", found_outputs.len()), "SUCCESS");
                                 } else {
                                     let cmd_lower = comando.to_lowercase();
                                     let stdout_lower = res_msg.to_lowercase();
@@ -1942,31 +1941,31 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     if is_test_cmd && test_passed {
                                         forced_next_tool = Some((
                                             "TOOL_FINISH".to_string(),
-                                            "La verificación pasó al 100%. Genera el reporte final y concluye la tarea.".to_string()
+                                            "La verificaciÃƒÂ³n pasÃƒÂ³ al 100%. Genera el reporte final y concluye la tarea.".to_string()
                                         ));
                                         current_context.push_str(&format!(
-                                            "Resultado: {}\n\n[SISTEMA: ✅ EL SCRIPT DE VERIFICACIÓN PASÓ AL 100%. Tu ÚNICO PASO OBLIGATORIO AHORA es usar 'TOOL_FINISH' para entregar el reporte final. ESTÁ PROHIBIDO volver a ejecutar el test.]\n\n",
+                                            "Resultado: {}\n\n[SISTEMA: Ã¢Å“â€¦ EL SCRIPT DE VERIFICACIÃƒâ€œN PASÃƒâ€œ AL 100%. Tu ÃƒÅ¡NICO PASO OBLIGATORIO AHORA es usar 'TOOL_FINISH' para entregar el reporte final. ESTÃƒÂ PROHIBIDO volver a ejecutar el test.]\n\n",
                                             res_msg
                                         ));
                                     } else {
-                                        current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando en terminal se ejecutó con éxito. Analiza este resultado. Si esto completa el objetivo final del usuario, tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_FINISH'. Si aún faltan pasos, continúa. NO uses TOOL_TESTER a menos que el usuario haya pedido pruebas automatizadas.]\n\n", res_msg));
+                                        current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando en terminal se ejecutÃƒÂ³ con ÃƒÂ©xito. Analiza este resultado. Si esto completa el objetivo final del usuario, tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_FINISH'. Si aÃƒÂºn faltan pasos, continÃƒÂºa. NO uses TOOL_TESTER a menos que el usuario haya pedido pruebas automatizadas.]\n\n", res_msg));
                                     }
-                                    emit_event(&app_handle, step_count, &res_msg, "SUCCESS");
+                                    emit_event(&app_handle, runtime.current_step(), &res_msg, "SUCCESS");
                                 }
                             }
-                            last_progress_step = step_count;
+                            last_progress_step = runtime.current_step();
                             // Guardar los cambios hechos por la terminal en Git-Shield
                             let _ = crate::core::create_git_backup(&workspace_path, "Aura-Sentinel: Git-Shield Auto-Backup (Terminal)").await;
                         },
                         Err(err) => {
-                            // ── Auto ENV_MANAGER: detect binary-not-found and auto-install ──────────
+                            // Ã¢â€â‚¬Ã¢â€â‚¬ Auto ENV_MANAGER: detect binary-not-found and auto-install Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                             let is_binary_missing = err.contains("is not recognized")
                                 || err.contains("not recognized as an internal")
                                 || err.contains("command not found")
                                 || (err.contains("The term") && err.contains("is not recognized"));
 
                             if is_binary_missing {
-                                // ── Step 1: Record error Observation through the full circuit ──
+                                // Ã¢â€â‚¬Ã¢â€â‚¬ Step 1: Record error Observation through the full circuit Ã¢â€â‚¬Ã¢â€â‚¬
                                 runtime.observe_world();
                                 runtime.record_tool_call();
                                 let world_hash_after = runtime.current_world_hash();
@@ -1981,19 +1980,19 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 err_obs.state_hash_after = Some(world_hash_after);
                                 runtime.record_observation(&err_obs);
 
-                                // ── Step 2: RecoveryEngine classifies and produces RepairEnvironment ──
+                                // Ã¢â€â‚¬Ã¢â€â‚¬ Step 2: RecoveryEngine classifies and produces RepairEnvironment Ã¢â€â‚¬Ã¢â€â‚¬
                                 let recovery_dec = runtime.plan_recovery("TOOL_TERMINAL", &err);
 
-                                // ── Step 3: Execute TOOL_ENV_MANAGER as the recovery action ──
+                                // Ã¢â€â‚¬Ã¢â€â‚¬ Step 3: Execute TOOL_ENV_MANAGER as the recovery action Ã¢â€â‚¬Ã¢â€â‚¬
                                 let binary = comando.split_whitespace().next().unwrap_or(&comando);
-                                emit_event(&app_handle, step_count,
-                                    &format!("[RECOVERY→TOOL_ENV_MANAGER] Binario '{}' no encontrado — ejecutando instalación automática por RecoveryEngine...", binary),
+                                emit_event(&app_handle, runtime.current_step(),
+                                    &format!("[RECOVERYÃ¢â€ â€™TOOL_ENV_MANAGER] Binario '{}' no encontrado Ã¢â‚¬â€ ejecutando instalaciÃƒÂ³n automÃƒÂ¡tica por RecoveryEngine...", binary),
                                     "WARNING");
                                 let _ = recovery_dec; // RecoveryEngine already consulted; install proceeds
 
                                 match crate::core::env_manager::install_dependency(binary).await {
                                     Ok(install_msg) => {
-                                        // ── Produce Observation for the ENV_MANAGER action ──
+                                        // Ã¢â€â‚¬Ã¢â€â‚¬ Produce Observation for the ENV_MANAGER action Ã¢â€â‚¬Ã¢â€â‚¬
                                         let env_obs = crate::core::observation::Observation::success(
                                             "TOOL_ENV_MANAGER",
                                             &install_msg,
@@ -2002,28 +2001,28 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                         runtime.record_observation(&env_obs);
                                         runtime.record_tool_call();
                                         current_context.push_str(&format!(
-                                            "[RECOVERY] TOOL_ENV_MANAGER instaló '{}' automáticamente: {}\n\n\
-                                             Tu SIGUIENTE PASO OBLIGATORIO es reintentar el comando que falló: '{}'.\n\n",
+                                            "[RECOVERY] TOOL_ENV_MANAGER instalÃƒÂ³ '{}' automÃƒÂ¡ticamente: {}\n\n\
+                                             Tu SIGUIENTE PASO OBLIGATORIO es reintentar el comando que fallÃƒÂ³: '{}'.\n\n",
                                             binary, install_msg, comando
                                         ));
-                                        emit_event(&app_handle, step_count,
+                                        emit_event(&app_handle, runtime.current_step(),
                                             &format!("Dependencia '{}' instalada. Reintenta el comando.", binary),
                                             "SUCCESS");
                                     },
                                     Err(install_err) => {
-                                        // ── Produce error Observation for the failed ENV_MANAGER ──
+                                        // Ã¢â€â‚¬Ã¢â€â‚¬ Produce error Observation for the failed ENV_MANAGER Ã¢â€â‚¬Ã¢â€â‚¬
                                         let env_err_obs = crate::core::observation::Observation::error(
                                             "TOOL_ENV_MANAGER",
                                             &install_err,
                                             None,
                                             false,
-                                            Some("Intervención manual requerida para instalar la dependencia.".to_string()),
+                                            Some("IntervenciÃƒÂ³n manual requerida para instalar la dependencia.".to_string()),
                                         );
                                         runtime.record_observation(&env_err_obs);
                                         runtime.record_tool_call();
-                                        let res_msg = format!("Error: {}\n[AUTO-ENV FALLÓ] No se pudo instalar '{}': {}\nSe requiere intervención manual.", err, binary, install_err);
+                                        let res_msg = format!("Error: {}\n[AUTO-ENV FALLÃƒâ€œ] No se pudo instalar '{}': {}\nSe requiere intervenciÃƒÂ³n manual.", err, binary, install_err);
                                         current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
-                                        emit_event(&app_handle, step_count, &res_msg, "ERROR");
+                                        emit_event(&app_handle, runtime.current_step(), &res_msg, "ERROR");
                                     }
                                 }
                             } else {
@@ -2039,9 +2038,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                         "<nombre_libreria>"
                                     };
 
-                                    // ── CRITICAL: Distinguish local file vs external package ──────────
+                                    // Ã¢â€â‚¬Ã¢â€â‚¬ CRITICAL: Distinguish local file vs external package Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                                     // If module_hint.py EXISTS in the workspace, this is NOT a missing
-                                    // pip package — it's an internal import error inside that local file.
+                                    // pip package Ã¢â‚¬â€ it's an internal import error inside that local file.
                                     let local_py_exists = {
                                         let candidate = std::path::Path::new(&workspace_path)
                                             .join(format!("{}.py", module_hint));
@@ -2049,15 +2048,15 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     };
 
                                     if local_py_exists {
-                                        // Local file exists but cannot be imported → has internal errors
+                                        // Local file exists but cannot be imported Ã¢â€ â€™ has internal errors
                                         res_msg.push_str(&format!(
-                                            "\n\n[SISTEMA INTERNO] ⚠️ ATENCIÓN CRÍTICA: El archivo '{}.py' SÍ EXISTE en el workspace, \
+                                            "\n\n[SISTEMA INTERNO] Ã¢Å¡Â Ã¯Â¸Â ATENCIÃƒâ€œN CRÃƒÂTICA: El archivo '{}.py' SÃƒÂ EXISTE en el workspace, \
                                             pero Python no puede importarlo. Esto significa que '{}.py' tiene un \
                                             ERROR INTERNO: puede ser un SyntaxError, un ImportError dentro de ese archivo, \
-                                            o que importa otro módulo que aún no existe o tiene errores. \
-                                            SOLUCIÓN OBLIGATORIA: Usa TOOL_AUDITOR para leer '{}.py' e identificar \
-                                            qué línea está fallando. NO intentes 'pip install {}' — ese módulo \
-                                            no es una librería externa, es un archivo LOCAL.",
+                                            o que importa otro mÃƒÂ³dulo que aÃƒÂºn no existe o tiene errores. \
+                                            SOLUCIÃƒâ€œN OBLIGATORIA: Usa TOOL_AUDITOR para leer '{}.py' e identificar \
+                                            quÃƒÂ© lÃƒÂ­nea estÃƒÂ¡ fallando. NO intentes 'pip install {}' Ã¢â‚¬â€ ese mÃƒÂ³dulo \
+                                            no es una librerÃƒÂ­a externa, es un archivo LOCAL.",
                                             module_hint, module_hint, module_hint, module_hint
                                         ));
                                     } else {
@@ -2066,18 +2065,18 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                             .any(|c| c.starts_with("pip install") || c.starts_with("pip3 install"));
                                         if pip_was_tried {
                                             res_msg.push_str(&format!(
-                                                "\n\n[SISTEMA INTERNO] ADVERTENCIA CRÍTICA: Ya intentaste 'pip install {}' pero el módulo SIGUE SIN ENCONTRARSE. \
-                                                Esto ocurre cuando tienes dos instalaciones de Python en tu máquina (ej. Miniconda + Python del sistema). \
-                                                El pip instaló la librería en una instalación diferente a la que usa 'python'. \
-                                                SOLUCIÓN OBLIGATORIA: En tu SIGUIENTE PASO usa TOOL_TERMINAL con el comando exacto: \
-                                                'python -m pip install {}' — esto garantiza que pip usa el MISMO Python que corre el script.",
+                                                "\n\n[SISTEMA INTERNO] ADVERTENCIA CRÃƒÂTICA: Ya intentaste 'pip install {}' pero el mÃƒÂ³dulo SIGUE SIN ENCONTRARSE. \
+                                                Esto ocurre cuando tienes dos instalaciones de Python en tu mÃƒÂ¡quina (ej. Miniconda + Python del sistema). \
+                                                El pip instalÃƒÂ³ la librerÃƒÂ­a en una instalaciÃƒÂ³n diferente a la que usa 'python'. \
+                                                SOLUCIÃƒâ€œN OBLIGATORIA: En tu SIGUIENTE PASO usa TOOL_TERMINAL con el comando exacto: \
+                                                'python -m pip install {}' Ã¢â‚¬â€ esto garantiza que pip usa el MISMO Python que corre el script.",
                                                 module_hint, module_hint
                                             ));
                                         } else {
                                             res_msg.push_str(&format!(
-                                                "\n\n[SISTEMA INTERNO TIP] Te falta una librería de Python. \
+                                                "\n\n[SISTEMA INTERNO TIP] Te falta una librerÃƒÂ­a de Python. \
                                                 Usa TOOL_TERMINAL con el comando: 'python -m pip install {}' \
-                                                (NO uses solo 'pip install', usa 'python -m pip install' para garantizar que se instala en el intérprete correcto). \
+                                                (NO uses solo 'pip install', usa 'python -m pip install' para garantizar que se instala en el intÃƒÂ©rprete correcto). \
                                                 Luego vuelve a correr tu script.",
                                                 module_hint
                                             ));
@@ -2085,9 +2084,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     }
                                 }
                                 current_context.push_str(&format!("Resultado: {}\n\n", res_msg));
-                                emit_event(&app_handle, step_count, &res_msg, "ERROR");
+                                emit_event(&app_handle, runtime.current_step(), &res_msg, "ERROR");
 
-                                // ── Track error hash for semantic loop detection ──
+                                // Ã¢â€â‚¬Ã¢â€â‚¬ Track error hash for semantic loop detection Ã¢â€â‚¬Ã¢â€â‚¬
                                 // If the same error output repeats 3+ times, sanity_monitor will escalate.
                                 {
                                     use std::hash::{Hash, Hasher};
@@ -2099,7 +2098,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     last_error_hashes.push_back(err_hash);
                                 }
 
-                                // ── MissionRuntime: record error Observation → StallDetector + RecoveryEngine ──
+                                // Ã¢â€â‚¬Ã¢â€â‚¬ MissionRuntime: record error Observation Ã¢â€ â€™ StallDetector + RecoveryEngine Ã¢â€â‚¬Ã¢â€â‚¬
                                 {
                                     runtime.observe_world();
                                     runtime.record_tool_call();
@@ -2117,16 +2116,16 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     let recovery_dec = runtime.plan_recovery("TOOL_TERMINAL", &err);
                                     match &recovery_dec {
                                         crate::core::recovery::RecoveryDecision::RepairEnvironment { advice } => {
-                                            emit_event(&app_handle, step_count, &format!("[RECOVERY] Entorno: {}", advice), "WARNING");
+                                            emit_event(&app_handle, runtime.current_step(), &format!("[RECOVERY] Entorno: {}", advice), "WARNING");
                                         }
                                         crate::core::recovery::RecoveryDecision::Abort { reason } => {
-                                            emit_event(&app_handle, step_count, &format!("[RECOVERY] Abort: {}", reason), "FATAL");
+                                            emit_event(&app_handle, runtime.current_step(), &format!("[RECOVERY] Abort: {}", reason), "FATAL");
                                         }
                                         _ => {}
                                     }
                                 }
 
-                                // ── SELF-REPAIR LOOP (ReAct pattern) ───────────────────
+                                // Ã¢â€â‚¬Ã¢â€â‚¬ SELF-REPAIR LOOP (ReAct pattern) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
                                 // Classify the error type and choose the appropriate recovery strategy.
                                 // Professional agents (SWE-agent, Claude) never retry blindly.
@@ -2136,27 +2135,27 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
                                 if should_escalate {
                                     if error_type == crate::core::error_classifier::ErrorType::Blocked {
-                                        // Genuine system/environment blocker — ask the user for help
+                                        // Genuine system/environment blocker Ã¢â‚¬â€ ask the user for help
                                         let escalation_msg = format!(
                                             "[BLOQUEO DEL SISTEMA] Fallo irrecuperable en TOOL_TERMINAL.\n\
-                                            El comando requiere intervención del usuario (dependencia no instalable o permiso de admin).\n\
+                                            El comando requiere intervenciÃƒÂ³n del usuario (dependencia no instalable o permiso de admin).\n\
                                             Error: {}\n\
-                                            Debes usar TOOL_ASK_USER para explicar qué dependencia externa se necesita.",
+                                            Debes usar TOOL_ASK_USER para explicar quÃƒÂ© dependencia externa se necesita.",
                                             err
                                         );
                                         current_context.push_str(&format!("{}\n\n", escalation_msg));
-                                        emit_event(&app_handle, step_count,
+                                        emit_event(&app_handle, runtime.current_step(),
                                             "[SELF-REPAIR] Escalando bloqueo externo al usuario", "WARNING");
                                     } else {
-                                        // Logic or test error — NEVER ask user to fix code!
+                                        // Logic or test error Ã¢â‚¬â€ NEVER ask user to fix code!
                                         let self_heal_msg = format!(
-                                            "[AUTO-REFLEXIÓN PROFUNDA] Múltiples reintentos en '{}'.\n\
+                                            "[AUTO-REFLEXIÃƒâ€œN PROFUNDA] MÃƒÂºltiples reintentos en '{}'.\n\
                                             Salida del comando:\n{}\n\
-                                            INSTRUCCIÓN DE AUTO-REPARACIÓN:\n\
-                                            1. PROHIBIDO usar TOOL_ASK_USER para pedir al usuario que arregle código o tests.\n\
-                                            2. Si un script de prueba (ej. verify_*.py) reporta elementos faltantes que sí existen con otros atributos, o si tiene un error en su conteo o exit code, USA TOOL_PROGRAMMER para corregir el script de prueba.\n\
-                                            3. Si el archivo de la aplicación tiene un error o le falta la etiqueta/función, USA TOOL_PROGRAMMER para corregir el archivo de la aplicación.\n\
-                                            4. Transición forzada a TOOL_PROGRAMMER para aplicar la solución directamente.",
+                                            INSTRUCCIÃƒâ€œN DE AUTO-REPARACIÃƒâ€œN:\n\
+                                            1. PROHIBIDO usar TOOL_ASK_USER para pedir al usuario que arregle cÃƒÂ³digo o tests.\n\
+                                            2. Si un script de prueba (ej. verify_*.py) reporta elementos faltantes que sÃƒÂ­ existen con otros atributos, o si tiene un error en su conteo o exit code, USA TOOL_PROGRAMMER para corregir el script de prueba.\n\
+                                            3. Si el archivo de la aplicaciÃƒÂ³n tiene un error o le falta la etiqueta/funciÃƒÂ³n, USA TOOL_PROGRAMMER para corregir el archivo de la aplicaciÃƒÂ³n.\n\
+                                            4. TransiciÃƒÂ³n forzada a TOOL_PROGRAMMER para aplicar la soluciÃƒÂ³n directamente.",
                                             comando, err
                                         );
                                         current_context.push_str(&format!("{}\n\n", self_heal_msg));
@@ -2164,8 +2163,8 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                             "TOOL_PROGRAMMER".to_string(),
                                             "Corrige el archivo objetivo o flexibiliza el script de prueba.".to_string()
                                         ));
-                                        emit_event(&app_handle, step_count,
-                                            "[AUTO-REFLEXIÓN] Redirigiendo a TOOL_PROGRAMMER para auto-reparar código/tests", "ACTION");
+                                        emit_event(&app_handle, runtime.current_step(),
+                                            "[AUTO-REFLEXIÃƒâ€œN] Redirigiendo a TOOL_PROGRAMMER para auto-reparar cÃƒÂ³digo/tests", "ACTION");
                                     }
                                 } else {
                                     // Inject specific repair guidance based on error type
@@ -2174,8 +2173,8 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                         retry_tracker.transient_retries.max(retry_tracker.logic_retries)
                                     );
                                     current_context.push_str(&format!("{}\n\n", repair_msg));
-                                    emit_event(&app_handle, step_count,
-                                        &format!("[SELF-REPAIR] Error {:?} — guiando al agente con estrategia de reparación",
+                                    emit_event(&app_handle, runtime.current_step(),
+                                        &format!("[SELF-REPAIR] Error {:?} Ã¢â‚¬â€ guiando al agente con estrategia de reparaciÃƒÂ³n",
                                             error_type),
                                         "WARNING");
 
@@ -2183,18 +2182,18 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                     if error_type == crate::core::error_classifier::ErrorType::Logic {
                                         forced_next_tool = Some((
                                             "TOOL_THINK".to_string(),
-                                            format!("Analiza el error: '{}'. Propone la corrección exacta antes de reintentar.", &err[..err.len().min(100)])
+                                            format!("Analiza el error: '{}'. Propone la correcciÃƒÂ³n exacta antes de reintentar.", &err[..err.len().min(100)])
                                         ));
                                         intercept_consecutive = 0;
                                     }
                                 }
 
-                                // ── FSM Transition: Critic → Executor on Terminal Failure ──
+                                // Ã¢â€â‚¬Ã¢â€â‚¬ FSM Transition: Critic Ã¢â€ â€™ Executor on Terminal Failure Ã¢â€â‚¬Ã¢â€â‚¬
                                 if current_role == AgentRole::Critic {
                                     current_role = AgentRole::Executor;
                                     critic_feedback = Some(res_msg.clone());
-                                    emit_event(&app_handle, step_count,
-                                        "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Error en terminal, devolviendo al Ejecutor.",
+                                    emit_event(&app_handle, runtime.current_step(),
+                                        "[FSM] Ã°Å¸â€Â¬ CRÃƒÂTICO Ã¢â€ â€™ Ã¢Å¡â„¢Ã¯Â¸Â EJECUTOR: Error en terminal, devolviendo al Ejecutor.",
                                         "WARNING");
                                 }
                             }
@@ -2208,20 +2207,20 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 if parts.len() != 2 {
                     let err = "Error: El comando para TOOL_ASSET_MANAGER debe tener el formato 'query|output_path'";
                     current_context.push_str(&format!("{}\n\n", err));
-                    emit_event(&app_handle, step_count, err, "ERROR");
+                    emit_event(&app_handle, runtime.current_step(), err, "ERROR");
                 } else {
                     let query = parts[0].trim();
                     let output_path = std::path::Path::new(&workspace_path).join(parts[1].trim());
                     let out_str = output_path.to_string_lossy().to_string();
-                    emit_event(&app_handle, step_count, &format!("Generando asset '{}'...", query), "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Generando asset '{}'...", query), "ACTION");
                     match crate::net::asset_fetcher::download_asset(query, &out_str).await {
                         Ok(msg) => {
                             current_context.push_str(&format!("Resultado TOOL_ASSET_MANAGER: {}\n\n", msg));
-                            emit_event(&app_handle, step_count, "Asset descargado correctamente.", "SUCCESS");
+                            emit_event(&app_handle, runtime.current_step(), "Asset descargado correctamente.", "SUCCESS");
                         },
                         Err(e) => {
                             current_context.push_str(&format!("Error TOOL_ASSET_MANAGER: {}\n\n", e));
-                            emit_event(&app_handle, step_count, &format!("Error: {}", e), "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &format!("Error: {}", e), "ERROR");
                         }
                     }
                 }
@@ -2249,31 +2248,31 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         cmd_trimmed
                     );
                     current_context.push_str(&format!("{}\n\n", warn_msg));
-                    emit_event(&app_handle, step_count, &format!("[ENV_MANAGER] Rechazado comando de terminal: {}", cmd_trimmed), "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), &format!("[ENV_MANAGER] Rechazado comando de terminal: {}", cmd_trimmed), "WARNING");
                 } else if cmd_trimmed.is_empty() {
-                    let res_msg = "Error: El paquete no puede estar vacío.";
+                    let res_msg = "Error: El paquete no puede estar vacÃƒÂ­o.";
                     current_context.push_str(&format!("{}\n\n", res_msg));
-                    emit_event(&app_handle, step_count, "Paquete vacío", "ERROR");
+                    emit_event(&app_handle, runtime.current_step(), "Paquete vacÃƒÂ­o", "ERROR");
                 } else if paquetes_instalados_historico.contains(&comando) {
-                    let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito intentando instalar el mismo paquete repetidamente. Abortando misión.";
-                    emit_event(&app_handle, step_count, res_msg, "FATAL");
+                    let res_msg = "[SISTEMA INTERCEPTO] Error CrÃƒÂ­tico: Bucle infinito intentando instalar el mismo paquete repetidamente. Abortando misiÃƒÂ³n.";
+                    emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
                     let final_res = FinalResponse {
                         status: "FINISH".to_string(), // Frontend safe format
-                        respuesta_conversacional: format!("Se detectó un bucle intentando instalar múltiples veces el paquete '{}'. La instalación ya se ejecutó en este turno. Misión abortada.", comando),
+                        respuesta_conversacional: format!("Se detectÃƒÂ³ un bucle intentando instalar mÃƒÂºltiples veces el paquete '{}'. La instalaciÃƒÂ³n ya se ejecutÃƒÂ³ en este turno. MisiÃƒÂ³n abortada.", comando),
                     };
-                    crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
+                    crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", runtime.current_step());
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 } else {
                     paquetes_instalados_historico.insert(comando.clone());
-                    emit_event(&app_handle, step_count, &format!("Módulo de Ingeniería de Entorno instalando: {}", comando), "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), &format!("MÃƒÂ³dulo de IngenierÃƒÂ­a de Entorno instalando: {}", comando), "ACTION");
                     match crate::core::env_manager::install_dependency(&comando).await {
                         Ok(msg) => {
                             current_context.push_str(&format!("Resultado TOOL_ENV_MANAGER: {}\n\n", msg));
-                            emit_event(&app_handle, step_count, "Dependencia instalada correctamente. PATH recargado en caliente.", "SUCCESS");
+                            emit_event(&app_handle, runtime.current_step(), "Dependencia instalada correctamente. PATH recargado en caliente.", "SUCCESS");
                         },
                         Err(err) => {
                             current_context.push_str(&format!("Resultado TOOL_ENV_MANAGER Error: {}\n\n", err));
-                            emit_event(&app_handle, step_count, &err, "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &err, "ERROR");
                         }
                     }
                 }
@@ -2281,88 +2280,88 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             "TOOL_BACKGROUND_START" => {
                 if comando.trim().is_empty() {
                     if comandos_ejecutados_historico.contains("__EMPTY_BG_CMD__") {
-                        let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás en un bucle infinito de comandos vacíos. Abortando.";
-                        emit_event(&app_handle, step_count, res_msg, "FATAL");
-                        let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Error interno del planificador asíncrono.".to_string() };
-                        crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
+                        let res_msg = "[SISTEMA INTERNO]: Advertencia: EstÃƒÂ¡s en un bucle infinito de comandos vacÃƒÂ­os. Abortando.";
+                        emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
+                        let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Error interno del planificador asÃƒÂ­ncrono.".to_string() };
+                        crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", runtime.current_step());
                         return Ok(serde_json::to_string(&final_res).unwrap());
                     }
                     comandos_ejecutados_historico.insert("__EMPTY_BG_CMD__".to_string());
-                    let err_msg = "Error Crítico: El campo 'comando' está vacío. Debes especificar qué comando ejecutar en la terminal.";
+                    let err_msg = "Error CrÃƒÂ­tico: El campo 'comando' estÃƒÂ¡ vacÃƒÂ­o. Debes especificar quÃƒÂ© comando ejecutar en la terminal.";
                     current_context.push_str(&format!("{}\n\n", err_msg));
-                    emit_event(&app_handle, step_count, err_msg, "ERROR");
+                    emit_event(&app_handle, runtime.current_step(), err_msg, "ERROR");
                 } else if comandos_ejecutados_historico.contains(&comando) {
-                    let res_msg = "[SISTEMA INTERNO]: Advertencia: Este servidor o proceso YA ESTÁ EN EJECUCIÓN en segundo plano. NO necesitas volver a iniciarlo. Usa TOOL_VISION_EVALUATOR o TOOL_FINISH.";
+                    let res_msg = "[SISTEMA INTERNO]: Advertencia: Este servidor o proceso YA ESTÃƒÂ EN EJECUCIÃƒâ€œN en segundo plano. NO necesitas volver a iniciarlo. Usa TOOL_VISION_EVALUATOR o TOOL_FINISH.";
                     current_context.push_str(&format!("{}\n\n", res_msg));
-                    emit_event(&app_handle, step_count, "Servidor ya en ejecución (bucle evitado).", "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), "Servidor ya en ejecuciÃƒÂ³n (bucle evitado).", "WARNING");
                 } else {
                     comandos_ejecutados_historico.insert(comando.clone());
-                    emit_event(&app_handle, step_count, &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando), "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Iniciando tarea asÃƒÂ­ncrona '{}': {}", task_id, comando), "ACTION");
                     match start_background_task(&workspace_path, &task_id, &comando).await {
                         Ok(out) => {
 
                             let sys_guidance = "[SISTEMA INTERNO]: El proceso en segundo plano ha sido INICIADO EXITOSAMENTE. NO repitas este comando. Ahora DEBES continuar con la misin usando otras herramientas (por ejemplo, TOOL_VISION_EVALUATOR, TOOL_TESTER, o TOOL_FINISH si has terminado).";
                             current_context.push_str(&format!("Resultado: {}\n{}\n\n", out, sys_guidance));
-                            emit_event(&app_handle, step_count, &out, "SUCCESS");
+                            emit_event(&app_handle, runtime.current_step(), &out, "SUCCESS");
                         },
                         Err(err) => {
                             current_context.push_str(&format!("Resultado: Error iniciando tarea: {}\n\n", err));
-                            emit_event(&app_handle, step_count, &format!("Error: {}", err), "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &format!("Error: {}", err), "ERROR");
                         }
                     }
                 }
             },
             "TOOL_BACKGROUND_READ" => {
-                emit_event(&app_handle, step_count, &format!("Leyendo logs asíncronos de '{}'", task_id), "ACTION");
+                emit_event(&app_handle, runtime.current_step(), &format!("Leyendo logs asÃƒÂ­ncronos de '{}'", task_id), "ACTION");
                 match read_task_logs(&task_id).await {
                     Ok(logs) => {
                         current_context.push_str(&format!("Logs obtenidos:\n{}\n\n", logs));
-                        emit_event(&app_handle, step_count, "Logs leídos correctamente.", "SUCCESS");
+                        emit_event(&app_handle, runtime.current_step(), "Logs leÃƒÂ­dos correctamente.", "SUCCESS");
                     },
                     Err(err) => {
                         let fmt_err = format_system_error(&err).await;
                         current_context.push_str(&format!("[AUTO-DEBUGGER] Error al leer logs: {}\n\n", fmt_err));
-                        emit_event(&app_handle, step_count, &fmt_err, "ERROR");
+                        emit_event(&app_handle, runtime.current_step(), &fmt_err, "ERROR");
                     }
                 }
             },
             "TOOL_BACKGROUND_KILL" => {
-                emit_event(&app_handle, step_count, &format!("Destruyendo tarea asíncrona '{}'", task_id), "ACTION");
+                emit_event(&app_handle, runtime.current_step(), &format!("Destruyendo tarea asÃƒÂ­ncrona '{}'", task_id), "ACTION");
                 match kill_task(&task_id).await {
                     Ok(msg) => {
                         current_context.push_str(&format!("Resultado: {}\n\n", msg));
-                        emit_event(&app_handle, step_count, &msg, "SUCCESS");
+                        emit_event(&app_handle, runtime.current_step(), &msg, "SUCCESS");
                     },
                     Err(err) => {
                         let fmt_err = format_system_error(&err).await;
                         current_context.push_str(&format!("[AUTO-DEBUGGER] Error matando tarea: {}\n\n", fmt_err));
-                        emit_event(&app_handle, step_count, &fmt_err, "ERROR");
+                        emit_event(&app_handle, runtime.current_step(), &fmt_err, "ERROR");
                     }
                 }
             },
             "TOOL_WEB_SCRAPER" => {
-                emit_event(&app_handle, step_count, &format!("Extrayendo contenido de: {}", url), "ACTION");
+                emit_event(&app_handle, runtime.current_step(), &format!("Extrayendo contenido de: {}", url), "ACTION");
                 match crate::net::fetch_url_text(&url).await {
                     Ok(content) => {
                         let preview = if content.len() > 1000 { format!("{}... (truncado)", &content[..1000]) } else { content.clone() };
                         current_context.push_str(&format!("Contenido web:\n{}\n\n", preview));
-                        emit_event(&app_handle, step_count, "Contenido extraído con éxito.", "SUCCESS");
+                        emit_event(&app_handle, runtime.current_step(), "Contenido extraÃƒÂ­do con ÃƒÂ©xito.", "SUCCESS");
                     },
                     Err(err) => {
                         current_context.push_str(&format!("Error web: {}\n\n", err));
-                        emit_event(&app_handle, step_count, &err, "ERROR");
+                        emit_event(&app_handle, runtime.current_step(), &err, "ERROR");
                     }
                 }
             },
             "TOOL_AUDITOR" => {
                 auditor_consecutive += 1;
                 if auditor_consecutive > 2 {
-                    let msg = "[SISTEMA INTERNO]: Loop de auditoría detectado. Estás auditando demasiadas veces seguidas sin actuar. FORZANDO TOOL_THINK en el siguiente turno.";
+                    let msg = "[SISTEMA INTERNO]: Loop de auditorÃƒÂ­a detectado. EstÃƒÂ¡s auditando demasiadas veces seguidas sin actuar. FORZANDO TOOL_THINK en el siguiente turno.";
                     current_context.push_str(&format!("{}\n\n", msg));
-                    emit_event(&app_handle, step_count, msg, "WARNING");
-                    forced_next_tool = Some(("TOOL_THINK".to_string(), "Analizar auditorias previas y decidir siguiente paso. Si los archivos ya existen usa TOOL_PROGRAMMER para mejorarlos o TOOL_FINISH si todo está correcto.".to_string()));
+                    emit_event(&app_handle, runtime.current_step(), msg, "WARNING");
+                    forced_next_tool = Some(("TOOL_THINK".to_string(), "Analizar auditorias previas y decidir siguiente paso. Si los archivos ya existen usa TOOL_PROGRAMMER para mejorarlos o TOOL_FINISH si todo estÃƒÂ¡ correcto.".to_string()));
                 } else {
-                    emit_event(&app_handle, step_count, "Auditando archivos locales...", "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), "Auditando archivos locales...", "ACTION");
                     // Bug 2 fix: always scan workspace directly instead of relying on archivos_vec
                     // archivos_vec may be empty if the LLM didn't populate it, causing "0 archivos"
                     let files_to_audit = if archivos_vec.is_empty() {
@@ -2398,12 +2397,12 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         .unwrap_or_else(|_| raw_reporte.clone());
                     let structured = structured.trim().to_string();
                     current_context.push_str(&format!("[REPORTE AUDITOR ESTRUCTURADO]\n{}\n\n", structured));
-                    emit_event(&app_handle, step_count, &format!("Auditoria completada. {} archivos.", files_to_audit.len()), "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Auditoria completada. {} archivos.", files_to_audit.len()), "SUCCESS");
                 }
                 mandatory_tools_executed.insert("TOOL_AUDITOR".to_string());
             },
             "TOOL_LOGIC_SOLVER" => {
-                // ─── MODO 1A: SAT nativo — n_vars + clauses en el JSON del agente ───
+                // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ MODO 1A: SAT nativo Ã¢â‚¬â€ n_vars + clauses en el JSON del agente Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                 let n_vars_opt  = raw_value.get("n_vars").and_then(|v| v.as_u64()).map(|v| v as usize);
                 let clauses_opt = raw_value.get("clauses").and_then(|v| v.as_array()).map(|arr| {
                     arr.iter().filter_map(|row| {
@@ -2411,10 +2410,10 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     }).collect::<Vec<Vec<i32>>>()
                 });
 
-                // ─── MODO 1B: Auto-extracción desde user_message cuando el LLM no proveyó clauses ───
+                // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ MODO 1B: Auto-extracciÃƒÂ³n desde user_message cuando el LLM no proveyÃƒÂ³ clauses Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                 // Busca el primer array de arrays de enteros en el mensaje original del usuario.
                 let (n_vars_opt, clauses_opt) = if n_vars_opt.is_none() || clauses_opt.is_none() {
-                    // Buscar patrón [[...], [...], ...] en user_message
+                    // Buscar patrÃƒÂ³n [[...], [...], ...] en user_message
                     let extracted = (|| -> Option<(usize, Vec<Vec<i32>>)> {
                         let text = &user_message;
                         let start = text.find("[[").or_else(|| text.find("[ ["))?;
@@ -2455,14 +2454,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 };
 
                 let verdict = if let (Some(n_vars), Some(clauses)) = (n_vars_opt, clauses_opt) {
-                    // ⚡ Invocación nativa SpectraSAT — cero latencia de subproceso
-                    emit_event(&app_handle, step_count, &format!("⚡ [SPECTRASAT] Resolviendo instancia SAT: {} vars, {} cláusulas...", n_vars, clauses.len()), "ACTION");
+                    // Ã¢Å¡Â¡ InvocaciÃƒÂ³n nativa SpectraSAT Ã¢â‚¬â€ cero latencia de subproceso
+                    emit_event(&app_handle, runtime.current_step(), &format!("Ã¢Å¡Â¡ [SPECTRASAT] Resolviendo instancia SAT: {} vars, {} clÃƒÂ¡usulas...", n_vars, clauses.len()), "ACTION");
                     let result = crate::llm::solve_with_spectrasat(n_vars, clauses);
-                    emit_event(&app_handle, step_count, &format!("⚡ [SPECTRASAT] Veredicto: {}", result), "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Ã¢Å¡Â¡ [SPECTRASAT] Veredicto: {}", result), "SUCCESS");
                     result
                 } else {
-                    // ─── MODO 2: Análisis semántico de código vía LLM (fallback real) ───
-                    emit_event(&app_handle, step_count, "🔍 [LOGIC_SOLVER] Analizando código con motor lógico-semántico...", "ACTION");
+                    // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ MODO 2: AnÃƒÂ¡lisis semÃƒÂ¡ntico de cÃƒÂ³digo vÃƒÂ­a LLM (fallback real) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+                    emit_event(&app_handle, runtime.current_step(), "Ã°Å¸â€Â [LOGIC_SOLVER] Analizando cÃƒÂ³digo con motor lÃƒÂ³gico-semÃƒÂ¡ntico...", "ACTION");
                     let real_files: Vec<String> = {
                         let hallucinated = archivos_vec.iter().any(|f| {
                             !std::path::Path::new(&workspace_path).join(f).exists()
@@ -2501,47 +2500,47 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         let vars: Vec<String> = arr.iter().enumerate().map(|(i, v)| {
                             format!("v{} = {}", i + 1, v.as_bool().unwrap_or(false))
                         }).collect();
-                        assignment_msg = format!("\n\n[ASIGNACIÓN BOOLEANA ENCONTRADA]:\n{}", vars.join("\n"));
+                        assignment_msg = format!("\n\n[ASIGNACIÃƒâ€œN BOOLEANA ENCONTRADA]:\n{}", vars.join("\n"));
                     }
                 }
 
-                // ─── FSM: Veredicto obtenido → generar reporte y condicionar TOOL_FINISH ───
+                // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ FSM: Veredicto obtenido Ã¢â€ â€™ generar reporte y condicionar TOOL_FINISH Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                 if parsed_status.starts_with("UNSAT") {
                     let unsat_msg = format!(
-                        "⛔ VEREDICTO SPECTRASAT: {}\n\n\
-                        AUDITORÍA DE INTEGRIDAD LÓGICA — SISTEMA CONTRADICTORIO DETECTADO\n\
-                        El motor matemático SpectraSAT ha certificado que el sistema analizado \
-                        es INSATISFACIBLE (UNSAT). No existe ninguna combinación de valores booleanos \
-                        que cumpla todas las restricciones simultáneamente. Se detectó una contradicción lógica irresoluble.",
+                        "Ã¢â€ºâ€ VEREDICTO SPECTRASAT: {}\n\n\
+                        AUDITORÃƒÂA DE INTEGRIDAD LÃƒâ€œGICA Ã¢â‚¬â€ SISTEMA CONTRADICTORIO DETECTADO\n\
+                        El motor matemÃƒÂ¡tico SpectraSAT ha certificado que el sistema analizado \
+                        es INSATISFACIBLE (UNSAT). No existe ninguna combinaciÃƒÂ³n de valores booleanos \
+                        que cumpla todas las restricciones simultÃƒÂ¡neamente. Se detectÃƒÂ³ una contradicciÃƒÂ³n lÃƒÂ³gica irresoluble.",
                         parsed_status
                     );
                     current_context.push_str(&format!("{}\n\n", unsat_msg));
-                    emit_event(&app_handle, step_count, &format!("⛔ [SPECTRASAT] UNSAT certificado — sistema contradictorio"), "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Ã¢â€ºâ€ [SPECTRASAT] UNSAT certificado Ã¢â‚¬â€ sistema contradictorio"), "WARNING");
                     if mission_type == MissionType::Analysis {
                         forced_next_tool = Some(("TOOL_FINISH".to_string(), unsat_msg));
                     }
                 } else if parsed_status.starts_with("SAT") {
                     let sat_msg = format!(
-                        "✅ VEREDICTO SPECTRASAT: {}\n\n\
-                        AUDITORÍA DE INTEGRIDAD LÓGICA — SISTEMA SATISFACIBLE\n\
-                        El motor matemático SpectraSAT ha certificado que el conjunto de restricciones \
-                        ES SATISFACIBLE (SAT). Existe al menos una asignación exacta de variables booleanas \
-                        que cumple todas las restricciones simultáneamente.{}",
+                        "Ã¢Å“â€¦ VEREDICTO SPECTRASAT: {}\n\n\
+                        AUDITORÃƒÂA DE INTEGRIDAD LÃƒâ€œGICA Ã¢â‚¬â€ SISTEMA SATISFACIBLE\n\
+                        El motor matemÃƒÂ¡tico SpectraSAT ha certificado que el conjunto de restricciones \
+                        ES SATISFACIBLE (SAT). Existe al menos una asignaciÃƒÂ³n exacta de variables booleanas \
+                        que cumple todas las restricciones simultÃƒÂ¡neamente.{}",
                         parsed_status, assignment_msg
                     );
                     current_context.push_str(&format!("{}\n\n", sat_msg));
-                    emit_event(&app_handle, step_count, "✅ [SPECTRASAT] SAT certificado — sistema seguro", "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), "Ã¢Å“â€¦ [SPECTRASAT] SAT certificado Ã¢â‚¬â€ sistema seguro", "SUCCESS");
                     if mission_type == MissionType::Analysis {
                         forced_next_tool = Some(("TOOL_FINISH".to_string(), sat_msg));
                     }
                 } else {
                     current_context.push_str(&format!("Veredicto SpectraSAT: {}\n\n", parsed_status));
-                    emit_event(&app_handle, step_count, "✅ Verificación lógica completada.", "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), "Ã¢Å“â€¦ VerificaciÃƒÂ³n lÃƒÂ³gica completada.", "SUCCESS");
                 }
 
             },
             "TOOL_WORKSPACE_MANAGER" => {
-                emit_event(&app_handle, step_count, "Gestionando archivos del workspace...", "ACTION");
+                emit_event(&app_handle, runtime.current_step(), "Gestionando archivos del workspace...", "ACTION");
                 if archivos_vec.is_empty() {
                     workspace_manager_error_consecutive += 1;
                     let err_msg = if workspace_manager_error_consecutive >= 3 {
@@ -2554,15 +2553,15 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         ));
                         workspace_manager_error_consecutive = 0;
                         "[SISTEMA]: Bucle de TOOL_WORKSPACE_MANAGER detectado. No hay archivos que eliminar. \
-                        El workspace ya está listo. DEBES usar TOOL_THINK ahora para planificar \
-                        la creación de los archivos del proyecto con TOOL_PROGRAMMER."
+                        El workspace ya estÃƒÂ¡ listo. DEBES usar TOOL_THINK ahora para planificar \
+                        la creaciÃƒÂ³n de los archivos del proyecto con TOOL_PROGRAMMER."
                     } else {
                         "Error: TOOL_WORKSPACE_MANAGER requiere una lista de archivos a eliminar. \
-                        Si el workspace está vacío o no necesitas borrar nada, usa TOOL_THINK \
+                        Si el workspace estÃƒÂ¡ vacÃƒÂ­o o no necesitas borrar nada, usa TOOL_THINK \
                         para avanzar al siguiente paso."
                     };
                     current_context.push_str(&format!("{}\n\n", err_msg));
-                    emit_event(&app_handle, step_count, err_msg, "ERROR");
+                    emit_event(&app_handle, runtime.current_step(), err_msg, "ERROR");
                 } else {
                     workspace_manager_error_consecutive = 0;
                     let mut borrados = Vec::new();
@@ -2587,29 +2586,29 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     }
                     let mut res_msg = String::new();
                     if !borrados.is_empty() {
-                        res_msg.push_str(&format!("Éxito: Se borraron permanentemente los siguientes archivos/carpetas: {:?}\n", borrados));
+                        res_msg.push_str(&format!("Ãƒâ€°xito: Se borraron permanentemente los siguientes archivos/carpetas: {:?}\n", borrados));
                     }
                     if !errores.is_empty() {
                         res_msg.push_str(&format!("Errores durante la limpieza: {:?}\n", errores));
                     }
                     current_context.push_str(&format!("{}\n\n", res_msg));
-                    emit_event(&app_handle, step_count, &format!("Limpieza finalizada. {} borrados.", borrados.len()), "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Limpieza finalizada. {} borrados.", borrados.len()), "SUCCESS");
                 }
             },
             "TOOL_THINK" => {
                     think_consecutive += 1;
                     if think_consecutive > 3 {
-                        emit_event(&app_handle, step_count, "[COOLDOWN] Bucle TOOL_THINK interceptado. Usa otra herramienta.", "WARNING");
-                        current_context.push_str(&format!("PASO {}:\nTOOL_THINK bloqueado: bucle detectado. DEBES usar TOOL_PROGRAMMER, TOOL_TERMINAL o TOOL_FINISH.\n\n", step_count));
+                        emit_event(&app_handle, runtime.current_step(), "[COOLDOWN] Bucle TOOL_THINK interceptado. Usa otra herramienta.", "WARNING");
+                        current_context.push_str(&format!("PASO {}:\nTOOL_THINK bloqueado: bucle detectado. DEBES usar TOOL_PROGRAMMER, TOOL_TERMINAL o TOOL_FINISH.\n\n", runtime.current_step()));
                         forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Forzado para romper bucle de reflexion. Escribe codigo real.".to_string()));
                     } else {
-                        emit_event(&app_handle, step_count, "Pensando y planificando...", "ACTION");
+                        emit_event(&app_handle, runtime.current_step(), "Pensando y planificando...", "ACTION");
                         current_context.push_str(&format!("Reflexion Interna del Agente: {}\n\n", &comando));
-                        emit_event(&app_handle, step_count, "Reflexion completada.", "SUCCESS");
+                        emit_event(&app_handle, runtime.current_step(), "Reflexion completada.", "SUCCESS");
                         // Sprint 1+2 FSM: Planner -> Executor on TOOL_THINK (except Analysis missions)
                         if current_role == AgentRole::Planner {
                             if mission_type == MissionType::Analysis {
-                                emit_event(&app_handle, step_count, "[FSM] MODO ANALISIS: Planificador permanece activo. Usa TOOL_FINISH para responder.", "INFO");
+                                emit_event(&app_handle, runtime.current_step(), "[FSM] MODO ANALISIS: Planificador permanece activo. Usa TOOL_FINISH para responder.", "INFO");
                             } else {
                                 if !comando.trim().is_empty() {
                                     acceptance_contract = Some(formato_contrato(&comando));
@@ -2619,11 +2618,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                         crate::core::mission_contract::VerificationMethod::ManualReview,
                                         false,
                                     );
-                                    emit_event(&app_handle, step_count, &format!("[CONTRATO] Criterios definidos: {}", comando.chars().take(80).collect::<String>()), "INFO");
+                                    emit_event(&app_handle, runtime.current_step(), &format!("[CONTRATO] Criterios definidos: {}", comando.chars().take(80).collect::<String>()), "INFO");
                                 }
                                 current_role = AgentRole::Executor;
                                 critic_feedback = None;
-                                emit_event(&app_handle, step_count, "[FSM] PLANIFICADOR -> EJECUTOR: Plan aprobado. Iniciando escritura de codigo.", "INFO");
+                                emit_event(&app_handle, runtime.current_step(), "[FSM] PLANIFICADOR -> EJECUTOR: Plan aprobado. Iniciando escritura de codigo.", "INFO");
                             }
                         }
                     }
@@ -2633,14 +2632,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 if mapper_consecutive > 1 {
                     let msg = "[SISTEMA INTERNO]: Loop de TOOL_MAPPER detectado. El workspace no cambiara magicamente. FORZANDO TOOL_THINK en el siguiente turno.";
                     current_context.push_str(&format!("{}\n\n", msg));
-                    emit_event(&app_handle, step_count, msg, "WARNING");
-                    forced_next_tool = Some(("TOOL_THINK".to_string(), "El mapper ha terminado. Iniciar ejecución de plan.".to_string()));
+                    emit_event(&app_handle, runtime.current_step(), msg, "WARNING");
+                    forced_next_tool = Some(("TOOL_THINK".to_string(), "El mapper ha terminado. Iniciar ejecuciÃƒÂ³n de plan.".to_string()));
                 } else {
-                    emit_event(&app_handle, step_count, "🗺️ Iniciando análisis de dependencias del workspace...", "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), "Ã°Å¸â€”ÂºÃ¯Â¸Â Iniciando anÃƒÂ¡lisis de dependencias del workspace...", "ACTION");
                     let graph = crate::core::dependency_mapper::analyze_workspace(&workspace_path);
                     let report = crate::core::dependency_mapper::format_graph_report(&graph);
                     let summary = format!(
-                        "📊 Grafo generado: {} archivos | {} dependencias | {} nodos críticos | {} ciclos detectados",
+                        "Ã°Å¸â€œÅ  Grafo generado: {} archivos | {} dependencias | {} nodos crÃƒÂ­ticos | {} ciclos detectados",
                         graph.nodes.len(),
                         graph.edges.len(),
                         graph.god_nodes.len(),
@@ -2648,22 +2647,22 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     );
                     if graph.nodes.is_empty() {
                         current_context.push_str(&format!(
-                            "[TOOL_MAPPER] Análisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
-                            [ADVERTENCIA INTERNA]: El workspace está completamente vacío (0 archivos). No hay nada que mapear.\n\
-                            Para avanzar, DEBES usar TOOL_THINK para diseñar los archivos a crear, o usar TOOL_AST_INJECT para estructurar el proyecto.\n\n",
+                            "[TOOL_MAPPER] AnÃƒÂ¡lisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
+                            [ADVERTENCIA INTERNA]: El workspace estÃƒÂ¡ completamente vacÃƒÂ­o (0 archivos). No hay nada que mapear.\n\
+                            Para avanzar, DEBES usar TOOL_THINK para diseÃƒÂ±ar los archivos a crear, o usar TOOL_AST_INJECT para estructurar el proyecto.\n\n",
                             report
                         ));
                     } else {
                         current_context.push_str(&format!(
-                            "[TOOL_MAPPER] Análisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
-                            [INSTRUCCIÓN CRÍTICA]: El grafo de arriba es la REALIDAD FÍSICA del proyecto. \
+                            "[TOOL_MAPPER] AnÃƒÂ¡lisis completado. Grafo persistido en .aura_graph.json\n\n{}\n\n\
+                            [INSTRUCCIÃƒâ€œN CRÃƒÂTICA]: El grafo de arriba es la REALIDAD FÃƒÂSICA del proyecto. \
                             Sigue el 'Orden de Escritura Recomendado' AL PIE DE LA LETRA. \
                             Usa TOOL_PROGRAMMER para escribir cada archivo en ese orden exacto. \
-                            NO empieces por archivos que dependen de otros que aún no existen.\n\n",
+                            NO empieces por archivos que dependen de otros que aÃƒÂºn no existen.\n\n",
                             report
                         ));
                     }
-                    emit_event(&app_handle, step_count, &summary, "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), &summary, "SUCCESS");
                 }
             },
             "TOOL_PROGRAMMER" => {
@@ -2702,19 +2701,19 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 if is_cooldown_blocked {
                     programmer_cooldown_hits += 1;
                     if programmer_cooldown_hits >= 3 {
-                        let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de TOOL_PROGRAMMER detectado. Abortando misión.";
-                        emit_event(&app_handle, step_count, res_msg, "FATAL");
+                        let res_msg = "[SISTEMA INTERCEPTO] Error CrÃƒÂ­tico: Bucle infinito de TOOL_PROGRAMMER detectado. Abortando misiÃƒÂ³n.";
+                        emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
                         let final_res = FinalResponse {
                             status: "ERROR".to_string(),
-                            respuesta_conversacional: format!("Me he quedado atascado editando repetidamente el mismo archivo ({:?}) sin probarlo en la terminal. He detenido la ejecución por seguridad.", archivos_vec),
+                            respuesta_conversacional: format!("Me he quedado atascado editando repetidamente el mismo archivo ({:?}) sin probarlo en la terminal. He detenido la ejecuciÃƒÂ³n por seguridad.", archivos_vec),
                         };
-                        crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
+                        crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", runtime.current_step());
                         return Ok(serde_json::to_string(&final_res).unwrap());
                     } else {
-                        let interception = "[SISTEMA INTERCEPTO] Error Lógico: Estás intentando editar los mismos archivos por segunda vez consecutiva sin haber probado tu código en la terminal. DEBES ejecutar 'TOOL_TERMINAL' para probar el script y ver los errores antes de seguir programando.";
+                        let interception = "[SISTEMA INTERCEPTO] Error LÃƒÂ³gico: EstÃƒÂ¡s intentando editar los mismos archivos por segunda vez consecutiva sin haber probado tu cÃƒÂ³digo en la terminal. DEBES ejecutar 'TOOL_TERMINAL' para probar el script y ver los errores antes de seguir programando.";
                         current_context.push_str(&format!("{}\n\n", interception));
-                        emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown", "WARNING");
-                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "Se forzó 'TOOL_TERMINAL'. DEBES ejecutar el script en la terminal para probarlo ahora mismo antes de seguir programando. RECUERDA: Debes proporcionar un comando válido en el campo 'comando' (ej. 'python main.py', 'npm start', o 'ls'). NO DEJES EL COMANDO VACÍO.".to_string()));
+                        emit_event(&app_handle, runtime.current_step(), "Bucle interceptado por Cooldown", "WARNING");
+                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "Se forzÃƒÂ³ 'TOOL_TERMINAL'. DEBES ejecutar el script en la terminal para probarlo ahora mismo antes de seguir programando. RECUERDA: Debes proporcionar un comando vÃƒÂ¡lido en el campo 'comando' (ej. 'python main.py', 'npm start', o 'ls'). NO DEJES EL COMANDO VACÃƒÂO.".to_string()));
                     }
                 } else {
                     // Valid programming action. 
@@ -2729,13 +2728,13 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         let failing_files = crate::core::extract_workspace_files_from_error(&workspace_path, &compile_err);
                         if !failing_files.is_empty() {
                             compile_alert_note = format!(
-                                "\n\n⚠️ ALERTA CRÍTICA DE AUTO-HEAL: El workspace tiene un error de sintaxis/compilación en los archivos {:?}:\n{}\nDEBES incluir {:?} en tu lista de 'cambios' y reparar el error de sintaxis.",
+                                "\n\nÃ¢Å¡Â Ã¯Â¸Â ALERTA CRÃƒÂTICA DE AUTO-HEAL: El workspace tiene un error de sintaxis/compilaciÃƒÂ³n en los archivos {:?}:\n{}\nDEBES incluir {:?} en tu lista de 'cambios' y reparar el error de sintaxis.",
                                 failing_files, compile_err, failing_files
                             );
                         }
                         for ff in failing_files {
                             if !archivos_vec.contains(&ff) {
-                                emit_event(&app_handle, step_count, &format!("[AUTO-HEAL] Archivo con error detectado e inyectado a programación: {}", ff), "INFO");
+                                emit_event(&app_handle, runtime.current_step(), &format!("[AUTO-HEAL] Archivo con error detectado e inyectado a programaciÃƒÂ³n: {}", ff), "INFO");
                                 archivos_vec.push(ff);
                             }
                         }
@@ -2744,7 +2743,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     let mut safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
                     let mut context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
-                let mut qwen_prompt = format!("Instrucción principal: {}{}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message, compile_alert_note);
+                let mut qwen_prompt = format!("InstrucciÃƒÂ³n principal: {}{}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacÃƒÂ­as, NotImplementedError o cualquier placeholder. Cada funciÃƒÂ³n debe tener lÃƒÂ³gica funcional real.", user_message, compile_alert_note);
 
                 let target_model = resolve_model_or_fallback(
                     if !programmer_model.is_empty() && !programmer_model.to_lowercase().contains("embed") {
@@ -2754,14 +2753,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     },
                     &available_models,
                 );
-                emit_event(&app_handle, step_count, &format!("[ROUTER] Cerebro Programador Seleccionado: {}", target_model), "INFO");
+                emit_event(&app_handle, runtime.current_step(), &format!("[ROUTER] Cerebro Programador Seleccionado: {}", target_model), "INFO");
 
                 let mut exito_bucle_programador = false;
                 let mut max_intentos = 3;
                 
                 while max_intentos > 0 && !exito_bucle_programador {
                     if crate::llm::is_agent_cancelled() {
-                        emit_event(&app_handle, step_count, "🛑 [CANCELADO] Deteniendo iteración de programación por usuario.", "WARNING");
+                        emit_event(&app_handle, runtime.current_step(), "Ã°Å¸â€ºâ€˜ [CANCELADO] Deteniendo iteraciÃƒÂ³n de programaciÃƒÂ³n por usuario.", "WARNING");
                         break;
                     }
                     match delegate_to_programmer(&qwen_prompt, &context_for_qwen, &target_model).await {
@@ -2782,15 +2781,15 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
                             if let Some(prog_output) = parsed_output {
                                 if !prog_output.cambios.is_empty() {
-                                    emit_event(&app_handle, step_count, "Activando Git-Shield: Creando punto de retorno...", "PLANNING");
+                                    emit_event(&app_handle, runtime.current_step(), "Activando Git-Shield: Creando punto de retorno...", "PLANNING");
                                     if let Err(e) = crate::core::create_git_backup(&workspace_path, "Aura-Sentinel: Git-Shield Auto-Backup").await {
-                                        emit_event(&app_handle, step_count, &format!("Fallo Crítico en Git-Shield: {}", e), "FATAL");
+                                        emit_event(&app_handle, runtime.current_step(), &format!("Fallo CrÃƒÂ­tico en Git-Shield: {}", e), "FATAL");
                                         current_context.push_str(&format!("Git-Shield Error: {}. NO SE REALIZARON CAMBIOS.\n\n", e));
                                         break;
                                     }
                                     match memory::apply_code_changes(&workspace_path, prog_output.cambios.clone()).await {
                                         Ok(msg) => {
-                                            emit_event(&app_handle, step_count, &msg, "SUCCESS");
+                                            emit_event(&app_handle, runtime.current_step(), &msg, "SUCCESS");
                                             
                                             // SPRINT 3: Emit file-updated for Hot Reloading
                                             for cambio in &prog_output.cambios {
@@ -2800,10 +2799,10 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                 }));
                                             }
 
-                                            // FASE B: Invalidar caché del árbol en RAM para que el siguiente paso re-escanee
+                                            // FASE B: Invalidar cachÃƒÂ© del ÃƒÂ¡rbol en RAM para que el siguiente paso re-escanee
                                             cached_workspace_context = None;
 
-                                            // ── CAPA 2: ANTI-STUB ENFORCER ────────────────────────────────────
+                                            // Ã¢â€â‚¬Ã¢â€â‚¬ CAPA 2: ANTI-STUB ENFORCER Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                                             // Inspect every file for stub patterns BEFORE running validation.
                                             let mut stub_rejections: Vec<String> = Vec::new();
                                             for cambio in &prog_output.cambios {
@@ -2816,26 +2815,26 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                             }
 
                                             if !stub_rejections.is_empty() {
-                                                // Stubs found — reject the write and force a rewrite
+                                                // Stubs found Ã¢â‚¬â€ reject the write and force a rewrite
                                                 let combined = stub_rejections.join("\n\n");
-                                                emit_event(&app_handle, step_count, &format!("[ANTI-STUB] ❌ {} archivo(s) rechazados por código incompleto. Exigiendo reescritura...", stub_rejections.len()), "FATAL");
+                                                emit_event(&app_handle, runtime.current_step(), &format!("[ANTI-STUB] Ã¢ÂÅ’ {} archivo(s) rechazados por cÃƒÂ³digo incompleto. Exigiendo reescritura...", stub_rejections.len()), "FATAL");
                                                 // Rollback the written files
                                                 let _ = crate::core::restore_git_backup(&workspace_path).await;
                                                 qwen_prompt = format!(
-                                                    "{}\n\n[ERROR DE REVISIÓN]: Los archivos fueron rechazados por el sistema Anti-Stub:\n{}\n\nREESCRIBE COMPLETAMENTE O CORRIGE EL CÓDIGO. IMPLEMENTACIÓN REAL OBLIGATORIA.",
+                                                    "{}\n\n[ERROR DE REVISIÃƒâ€œN]: Los archivos fueron rechazados por el sistema Anti-Stub:\n{}\n\nREESCRIBE COMPLETAMENTE O CORRIGE EL CÃƒâ€œDIGO. IMPLEMENTACIÃƒâ€œN REAL OBLIGATORIA.",
                                                     qwen_prompt, combined
                                                 );
                                                 max_intentos -= 1;
                                             } else {
-                                                // Stubs passed — now run full compile validation
-                                                emit_event(&app_handle, step_count, "Validando compilación...", "VALIDATING");
+                                                // Stubs passed Ã¢â‚¬â€ now run full compile validation
+                                                emit_event(&app_handle, runtime.current_step(), "Validando compilaciÃƒÂ³n...", "VALIDATING");
                                                 match validate_workspace(&workspace_path).await {
                                                     Ok(_) => {
-                                                        emit_event(&app_handle, step_count, "Validación exitosa.", "SUCCESS");
-                                                        let _ = memory::update_last_memory_status(&workspace_path, "COMPILACIÓN_EXITOSA").await;
+                                                        emit_event(&app_handle, runtime.current_step(), "ValidaciÃƒÂ³n exitosa.", "SUCCESS");
+                                                        let _ = memory::update_last_memory_status(&workspace_path, "COMPILACIÃƒâ€œN_EXITOSA").await;
 
                                                         if true {
-                                                            // ── CAPA 4: Advance micro-meta in journal ───────────────────────
+                                                            // Ã¢â€â‚¬Ã¢â€â‚¬ CAPA 4: Advance micro-meta in journal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                                                             let written_files: Vec<String> = prog_output.cambios.iter()
                                                                 .map(|c| c.archivo.clone()).collect();
                                                             if !journal.micro_metas.is_empty() {
@@ -2845,31 +2844,44 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                                     });
                                                                     if all_done {
                                                                         mm.estado = "VERIFICADA".to_string();
-                                                                        emit_event(&app_handle, step_count, &format!("[PESP] ✅ Micro-Meta [{}/{}] VERIFICADA.", journal.micro_meta_actual + 1, journal.micro_metas.len()), "SUCCESS");
+                                                                        emit_event(&app_handle, runtime.current_step(), &format!("[PESP] Ã¢Å“â€¦ Micro-Meta [{}/{}] VERIFICADA.", journal.micro_meta_actual + 1, journal.micro_metas.len()), "SUCCESS");
                                                                         if journal.micro_meta_actual + 1 < journal.micro_metas.len() {
                                                                             journal.micro_meta_actual += 1;
                                                                             let next = journal.micro_metas[journal.micro_meta_actual].descripcion.clone();
-                                                                            emit_event(&app_handle, step_count, &format!("[PESP] 🔄 Avanzando a Micro-Meta [{}/{}]: {}", journal.micro_meta_actual + 1, journal.micro_metas.len(), next), "INFO");
+                                                                            emit_event(&app_handle, runtime.current_step(), &format!("[PESP] Ã°Å¸â€â€ž Avanzando a Micro-Meta [{}/{}]: {}", journal.micro_meta_actual + 1, journal.micro_metas.len(), next), "INFO");
                                                                         }
                                                                     } else {
                                                                         mm.estado = "EN_PROGRESO".to_string();
                                                                     }
-                                                                    crate::core::session_journal::save_journal(&workspace_path, &journal);
+                                                                    if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
                                                                 }
                                                             }
 
-                                                            let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos con éxito, Anti-Stub APROBADO.\n⚠️ REGLA DE ESTADO OBLIGATORIA: Ahora DEBES usar 'TOOL_TERMINAL' en tu próximo turno para ejecutar el script o archivo principal y verificar que funciona sin errores. NO repitas TOOL_PROGRAMMER ni uses TOOL_FINISH hasta ver los resultados en la terminal.\n\n", written_files);
+                                                            let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos con ÃƒÂ©xito, Anti-Stub APROBADO.\nÃ¢Å¡Â Ã¯Â¸Â REGLA DE ESTADO OBLIGATORIA: Ahora DEBES usar 'TOOL_TERMINAL' en tu prÃƒÂ³ximo turno para ejecutar el script o archivo principal y verificar que funciona sin errores. NO repitas TOOL_PROGRAMMER ni uses TOOL_FINISH hasta ver los resultados en la terminal.\n\n", written_files);
                                                             current_context.push_str(&explicit_msg);
                                                             exito_bucle_programador = true;
-                                                            last_progress_step = step_count;
+                                                            last_progress_step = runtime.current_step();
                                                             comandos_ejecutados_historico.clear();
+
+                                                            // ── H-6: TOOL_PROGRAMMER → Observation + World diff ──
+                                                            runtime.observe_world();
+                                                            let prog_hash_after = runtime.current_world_hash();
+                                                            let mut prog_obs = crate::core::observation::Observation::success(
+                                                                "TOOL_PROGRAMMER",
+                                                                &format!("{} archivos escritos y validados exitosamente", written_files.len()),
+                                                                written_files.clone(),
+                                                            );
+                                                            prog_obs.state_hash_after = Some(prog_hash_after);
+                                                            runtime.record_observation(&prog_obs);
+                                                            runtime.record_tool_call();
+
                                                             // Sprint 2: Micrometa-gated Executor->Critic transition
                                                             let all_metas_done = journal.micro_metas.is_empty()
                                                                 || journal.micro_metas.iter().all(|mm| mm.estado == "VERIFICADA");
                                                             if all_metas_done {
                                                                 current_role = AgentRole::Critic;
                                                                 critic_feedback = None;
-                                                                emit_event(&app_handle, step_count, "[FSM] EJECUTOR -> CRITICO: Todas las micro-metas completadas. Iniciando validacion.", "INFO");
+                                                                emit_event(&app_handle, runtime.current_step(), "[FSM] EJECUTOR -> CRITICO: Todas las micro-metas completadas. Iniciando validacion.", "INFO");
                                                             } else {
                                                                 let pending: Vec<String> = journal.micro_metas.iter()
                                                                     .filter(|mm| mm.estado != "VERIFICADA")
@@ -2878,39 +2890,39 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                                 let pending_str = pending.join(", ");
                                                                 let msg = format!("[FSM] Ejecutor permanece activo. Micro-metas pendientes: {}. Completa todos los archivos antes de pasar al Critico.", pending_str);
                                                                 current_context.push_str(&format!("{}\n\n", &msg));
-                                                                emit_event(&app_handle, step_count, &msg, "INFO");
+                                                                emit_event(&app_handle, runtime.current_step(), &msg, "INFO");
                                                             }
                                                             for f in &written_files {
                                                                 archivos_editados_historico.insert(f.clone());
-                                                                // ── HECHO INMUTABLE: Previene que el modelo olvide archivos recién creados ──
+                                                                // Ã¢â€â‚¬Ã¢â€â‚¬ HECHO INMUTABLE: Previene que el modelo olvide archivos reciÃƒÂ©n creados Ã¢â€â‚¬Ã¢â€â‚¬
                                                                 current_context.push_str(&format!(
-                                                                    "[HECHO INMUTABLE — NO IGNORAR]: El archivo '{}' fue creado/modificado exitosamente en el paso {}. NO debe recrearse ni editarse sin razón técnica explícita.\n",
-                                                                    f, step_count
+                                                                    "[HECHO INMUTABLE Ã¢â‚¬â€ NO IGNORAR]: El archivo '{}' fue creado/modificado exitosamente en el paso {}. NO debe recrearse ni editarse sin razÃƒÂ³n tÃƒÂ©cnica explÃƒÂ­cita.\n",
+                                                                    f, runtime.current_step()
                                                                 ));
                                                             }
                                                         } else {
-                                                            // Integration failed — revert and force fix
+                                                            // Integration failed Ã¢â‚¬â€ revert and force fix
                                                             let _ = crate::core::restore_git_backup(&workspace_path).await;
                                                             archivos_editados_historico.clear();
                                                             max_intentos -= 1;
                                                         }
                                                     },
                                                     Err(e) => {
-                                                        emit_event(&app_handle, step_count, &format!("Error detectado: {}", e), "ERROR");
+                                                        emit_event(&app_handle, runtime.current_step(), &format!("Error detectado: {}", e), "ERROR");
                                                         
                                                         // Auto-inject any broken workspace files into archivos_vec
                                                         let new_failing = crate::core::extract_workspace_files_from_error(&workspace_path, &e);
                                                         let mandatory_note = if !new_failing.is_empty() {
-                                                            format!("\n⚠️ OBLIGATORIO: Tu lista de 'cambios' DEBE incluir un arreglo para los archivos {:?}. No modifiques otros archivos hasta que este error esté resuelto.", new_failing)
+                                                            format!("\nÃ¢Å¡Â Ã¯Â¸Â OBLIGATORIO: Tu lista de 'cambios' DEBE incluir un arreglo para los archivos {:?}. No modifiques otros archivos hasta que este error estÃƒÂ© resuelto.", new_failing)
                                                         } else {
                                                             String::new()
                                                         };
 
-                                                        qwen_prompt = format!("{}\n\n[ERROR DE COMPILACIÓN/EJECUCIÓN]: El código causó este error:\n{}\n{}\nSoluciónalo y genera un nuevo JSON asegurándote de escapar correctamente los strings y reparar todos los archivos afectados. REGLA ESTRICTA: DEBES RESPONDER ÚNICAMENTE CON UN JSON VÁLIDO (sin texto fuera del JSON).", qwen_prompt, e, mandatory_note);
+                                                        qwen_prompt = format!("{}\n\n[ERROR DE COMPILACIÃƒâ€œN/EJECUCIÃƒâ€œN]: El cÃƒÂ³digo causÃƒÂ³ este error:\n{}\n{}\nSoluciÃƒÂ³nalo y genera un nuevo JSON asegurÃƒÂ¡ndote de escapar correctamente los strings y reparar todos los archivos afectados. REGLA ESTRICTA: DEBES RESPONDER ÃƒÅ¡NICAMENTE CON UN JSON VÃƒÂLIDO (sin texto fuera del JSON).", qwen_prompt, e, mandatory_note);
                                                         
                                                         for ff in &new_failing {
                                                             if !archivos_vec.contains(ff) {
-                                                                emit_event(&app_handle, step_count, &format!("[AUTO-HEAL] Inyectando archivo afectado para reintento: {}", ff), "INFO");
+                                                                emit_event(&app_handle, runtime.current_step(), &format!("[AUTO-HEAL] Inyectando archivo afectado para reintento: {}", ff), "INFO");
                                                                 archivos_vec.push(ff.clone());
                                                             }
                                                         }
@@ -2929,7 +2941,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                             } // end stubs-clean else
                                         },
                                         Err(e) => {
-                                            emit_event(&app_handle, step_count, &format!("Error escribiendo archivos: {}", e), "ERROR");
+                                            emit_event(&app_handle, runtime.current_step(), &format!("Error escribiendo archivos: {}", e), "ERROR");
 
                                             // FIX-B3: Track per-file patch failures. After 3 consecutive
                                             // failures on the same file, escalate to full-file overwrite mode.
@@ -2952,16 +2964,16 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                 if !overwrite_files.is_empty() {
                                                     // Escalate: inject overwrite instruction and force TOOL_PROGRAMMER
                                                     let overwrite_msg = format!(
-                                                        "\n\n⛔ ESCALACIÓN CRÍTICA DE PATCH: Los archivos {:?} han fallado {} veces seguidas con parches.\n\
-                                                         El modelo está alucinando el contenido del archivo.\n\
-                                                         INSTRUCCIÓN OBLIGATORIA: En tu PRÓXIMA llamada a TOOL_PROGRAMMER, usa buscar: \"\" (cadena vacía)\n\
+                                                        "\n\nÃ¢â€ºâ€ ESCALACIÃƒâ€œN CRÃƒÂTICA DE PATCH: Los archivos {:?} han fallado {} veces seguidas con parches.\n\
+                                                         El modelo estÃƒÂ¡ alucinando el contenido del archivo.\n\
+                                                         INSTRUCCIÃƒâ€œN OBLIGATORIA: En tu PRÃƒâ€œXIMA llamada a TOOL_PROGRAMMER, usa buscar: \"\" (cadena vacÃƒÂ­a)\n\
                                                          para SOBREESCRIBIR el archivo completo. NO uses fragmentos de texto en 'buscar'.\n\
                                                          Escribe el archivo COMPLETO en el campo 'reemplazar'.",
                                                         overwrite_files,
                                                         patch_fail_counts.get(&overwrite_files[0]).copied().unwrap_or(3)
                                                     );
                                                     current_context.push_str(&overwrite_msg);
-                                                    emit_event(&app_handle, step_count,
+                                                    emit_event(&app_handle, runtime.current_step(),
                                                         &format!("[PATCH-ESCALATION] {} archivo(s) requieren overwrite completo tras 3 fallos", overwrite_files.len()),
                                                         "WARNING");
                                                     // Reset counters for these files so next cycle is fresh
@@ -2969,30 +2981,30 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                         patch_fail_counts.insert(fname.clone(), 0);
                                                     }
                                                 } else {
-                                                    // Not yet at 3 fails — normal error feedback
-                                                    current_context.push_str(&format!("Programador Falló al escribir (PATCH_FAIL): {}\n\n", e));
+                                                    // Not yet at 3 fails Ã¢â‚¬â€ normal error feedback
+                                                    current_context.push_str(&format!("Programador FallÃƒÂ³ al escribir (PATCH_FAIL): {}\n\n", e));
                                                 }
                                             } else {
-                                                current_context.push_str(&format!("Programador Falló al escribir: {}\n\n", e));
+                                                current_context.push_str(&format!("Programador FallÃƒÂ³ al escribir: {}\n\n", e));
                                             }
                                             break;
                                         }
                                     }
                                 } else {
-                                    // No changes proposed — this can be legitimate (files already correct)
-                                    emit_event(&app_handle, step_count, "El programador no propuso cambios. Los archivos ya están al día.", "WARNING");
-                                    current_context.push_str("Programador: No se propusieron cambios (los archivos ya están correctos o no hay nada que modificar). El Ejecutor puede usar TOOL_TERMINAL para verificar o TOOL_FINISH si la tarea está lista.\n\n");
+                                    // No changes proposed Ã¢â‚¬â€ this can be legitimate (files already correct)
+                                    emit_event(&app_handle, runtime.current_step(), "El programador no propuso cambios. Los archivos ya estÃƒÂ¡n al dÃƒÂ­a.", "WARNING");
+                                    current_context.push_str("Programador: No se propusieron cambios (los archivos ya estÃƒÂ¡n correctos o no hay nada que modificar). El Ejecutor puede usar TOOL_TERMINAL para verificar o TOOL_FINISH si la tarea estÃƒÂ¡ lista.\n\n");
                                     exito_bucle_programador = true; // treat as success, not failure
                                     break;
                                 }
                             } else {
-                                emit_event(&app_handle, step_count, &format!("El programador devolvió JSON inválido (Intento {} restantes)", max_intentos - 1), "ERROR");
-                                qwen_prompt = format!("{}\n\n[ERROR CRÍTICO]: Tu respuesta anterior NO fue un JSON válido o falló la serialización. REGLA ESTRICTA: Tu salida debe ser ÚNICAMENTE un objeto JSON analizable, sin texto adicional antes o después. Si usas bloques markdown, asegúrate de que el JSON interno sea correcto.", qwen_prompt);
+                                emit_event(&app_handle, runtime.current_step(), &format!("El programador devolviÃƒÂ³ JSON invÃƒÂ¡lido (Intento {} restantes)", max_intentos - 1), "ERROR");
+                                qwen_prompt = format!("{}\n\n[ERROR CRÃƒÂTICO]: Tu respuesta anterior NO fue un JSON vÃƒÂ¡lido o fallÃƒÂ³ la serializaciÃƒÂ³n. REGLA ESTRICTA: Tu salida debe ser ÃƒÅ¡NICAMENTE un objeto JSON analizable, sin texto adicional antes o despuÃƒÂ©s. Si usas bloques markdown, asegÃƒÂºrate de que el JSON interno sea correcto.", qwen_prompt);
                                 max_intentos -= 1;
                             }
                         },
                         Err(e) => {
-                            emit_event(&app_handle, step_count, &format!("Error llamando a Qwen: {}", e), "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &format!("Error llamando a Qwen: {}", e), "ERROR");
                             current_context.push_str(&format!("Programador: Falla de red: {}\n\n", e));
                             break;
                         }
@@ -3000,11 +3012,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 }
                 
                 if !exito_bucle_programador {
-                    emit_event(&app_handle, step_count, "El programador no pudo resolver la tarea tras varios intentos. Replanificando...", "WARNING");
-                    current_context.push_str("Programador: Fracasó tras múltiples intentos. [SISTEMA]: NO uses TOOL_FINISH para cerrar la fase. Si el archivo es demasiado complejo, debes dividirlo en subarchivos o implementar funciones más simples en pasos sucesivos.\n\n");
+                    emit_event(&app_handle, runtime.current_step(), "El programador no pudo resolver la tarea tras varios intentos. Replanificando...", "WARNING");
+                    current_context.push_str("Programador: FracasÃƒÂ³ tras mÃƒÂºltiples intentos. [SISTEMA]: NO uses TOOL_FINISH para cerrar la fase. Si el archivo es demasiado complejo, debes dividirlo en subarchivos o implementar funciones mÃƒÂ¡s simples en pasos sucesivos.\n\n");
                     current_role = AgentRole::Planner;
                 } else if exito_bucle_programador {
-                    // TOOL_PROGRAMMER succeeded — reset the NoTests loop counter
+                    // TOOL_PROGRAMMER succeeded Ã¢â‚¬â€ reset the NoTests loop counter
                     // so TOOL_TESTER can be used again to verify the newly created test files
                     no_tests_consecutive = 0;
                 }
@@ -3013,19 +3025,19 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
             "TOOL_ARCHITECT" => {
                 if architect_used {
-                    emit_event(&app_handle, step_count, "Bucle interceptado por Cooldown (Architect)", "WARNING");
-                    current_context.push_str(&format!("PASO {}:\nAcción: TOOL_ARCHITECT\nResultado: [SISTEMA INTERCEPTO] Error: Ya ejecutaste TOOL_ARCHITECT en este bucle. Tu única opción válida ahora es usar TOOL_FINISH para detenerte y resumir los resultados al usuario.\n\n", step_count));
+                    emit_event(&app_handle, runtime.current_step(), "Bucle interceptado por Cooldown (Architect)", "WARNING");
+                    current_context.push_str(&format!("PASO {}:\nAcciÃƒÂ³n: TOOL_ARCHITECT\nResultado: [SISTEMA INTERCEPTO] Error: Ya ejecutaste TOOL_ARCHITECT en este bucle. Tu ÃƒÂºnica opciÃƒÂ³n vÃƒÂ¡lida ahora es usar TOOL_FINISH para detenerte y resumir los resultados al usuario.\n\n", runtime.current_step()));
                 } else {
                     architect_used = true;
-                    emit_event(&app_handle, step_count, "Generando mapa arquitectónico del sistema...", "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), "Generando mapa arquitectÃƒÂ³nico del sistema...", "ACTION");
                     let graph = crate::core::dependency_mapper::analyze_workspace(&workspace_path);
                     let report = crate::core::dependency_mapper::format_graph_report(&graph);
-                    current_context.push_str(&format!("Reporte Arquitectónico:\n{}\n\n", report));
-                    emit_event(&app_handle, step_count, "Mapa arquitectónico generado.", "SUCCESS");
+                    current_context.push_str(&format!("Reporte ArquitectÃƒÂ³nico:\n{}\n\n", report));
+                    emit_event(&app_handle, runtime.current_step(), "Mapa arquitectÃƒÂ³nico generado.", "SUCCESS");
                 }
             },
             "TOOL_VISION_EVALUATOR" => {
-                emit_event(&app_handle, step_count, "[VISION] Capturando pantalla y evaluando calidad visual...", "ACTION");
+                emit_event(&app_handle, runtime.current_step(), "[VISION] Capturando pantalla y evaluando calidad visual...", "ACTION");
                 // Sprint 3: Connect evaluate_vision from core::vision
                 let vision_prompt = if !comando.trim().is_empty() {
                     comando.clone()
@@ -3039,7 +3051,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 if let Some(idx) = text_lower.find("http://").or_else(|| text_lower.find("https://")) {
                     let end_idx = text_to_search[idx..].find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`').unwrap_or(text_to_search.len() - idx);
                     let url = &text_to_search[idx..idx + end_idx];
-                    emit_event(&app_handle, step_count, &format!("[VISION] Abriendo navegador en {}", url), "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), &format!("[VISION] Abriendo navegador en {}", url), "ACTION");
                     
                     #[cfg(target_os = "windows")]
                     let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
@@ -3052,35 +3064,35 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
 
                 match crate::core::vision::evaluate_vision(&vision_prompt, false, None).await {
                     Ok(vision_result) => {
-                        current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LA VALIDACIÓN VISUAL HA SIDO COMPLETADA. SI EL MANDATO DEL USUARIO FUE CUMPLIDO, EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS HERRAMIENTAS DE VALIDACIÓN.\n\n", vision_result));
-                        emit_event(&app_handle, step_count, &format!("[VISION] Evaluacion completada: {}", &vision_result.chars().take(120).collect::<String>()), "SUCCESS");
+                        current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÃƒâ€œN ESTRICTA DE SEGURIDAD]: LA VALIDACIÃƒâ€œN VISUAL HA SIDO COMPLETADA. SI EL MANDATO DEL USUARIO FUE CUMPLIDO, EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS HERRAMIENTAS DE VALIDACIÃƒâ€œN.\n\n", vision_result));
+                        emit_event(&app_handle, runtime.current_step(), &format!("[VISION] Evaluacion completada: {}", &vision_result.chars().take(120).collect::<String>()), "SUCCESS");
                     },
                     Err(e) => {
                         let msg = format!("[VISION] Error al capturar pantalla: {}. Verifica que haya una ventana abierta.", e);
                         current_context.push_str(&format!("{}\n\n", &msg));
-                        emit_event(&app_handle, step_count, &msg, "ERROR");
+                        emit_event(&app_handle, runtime.current_step(), &msg, "ERROR");
                     }
                 }
                 // Mark as executed for mandatory checklist (whether it succeeded or not)
                 mandatory_tools_executed.insert("TOOL_VISION_EVALUATOR".to_string());
             },
             "TOOL_TESTER" => {
-                emit_event(&app_handle, step_count, "Ejecutando suite de pruebas automatizadas...", "ACTION");
+                emit_event(&app_handle, runtime.current_step(), "Ejecutando suite de pruebas automatizadas...", "ACTION");
                 // Mark as executed for mandatory checklist regardless of result
                 mandatory_tools_executed.insert("TOOL_TESTER".to_string());
                 match crate::core::tester::run_tests(&workspace_path).await {
                     crate::core::tester::TestResult::NoTests => {
-                        // ── Web project detection ────────────────────────────────────────────
+                        // Ã¢â€â‚¬Ã¢â€â‚¬ Web project detection Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                         // HTML/CSS/JS projects have no test runner. Treat them as PASSED and
                         // auto-advance to TOOL_VISION_EVALUATOR instead of looping endlessly.
                         let is_web_project = has_html_files(&workspace_path);
                         if is_web_project {
-                            let web_pass_msg = "[TOOL_TESTER] Proyecto web estático detectado (archivos HTML encontrados). \
+                            let web_pass_msg = "[TOOL_TESTER] Proyecto web estÃƒÂ¡tico detectado (archivos HTML encontrados). \
                                 No existe una suite de tests unitarios del sistema, pero la estructura ha sido validada. \
                                 TESTER: APROBADO para proyectos web. \
                                 SIGUIENTE PASO: usa TOOL_VISION_EVALUATOR para verificar la UI o TOOL_FINISH si completaste todos los requerimientos.";
                             current_context.push_str(&format!("{}\n\n", web_pass_msg));
-                            emit_event(&app_handle, step_count, "[TESTER] Proyecto web → APROBADO.", "SUCCESS");
+                            emit_event(&app_handle, runtime.current_step(), "[TESTER] Proyecto web Ã¢â€ â€™ APROBADO.", "SUCCESS");
                             forced_next_tool = Some(("TOOL_VISION_EVALUATOR".to_string(),
                                 "Verificar visualmente la UI del dashboard creado".to_string()));
                             // Skip the rest of NoTests handling
@@ -3105,7 +3117,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             }
                             list_dir_recursive(std::path::Path::new(&workspace_path), &mut files, 0);
                             if files.is_empty() {
-                                "(directorio vacío)".to_string()
+                                "(directorio vacÃƒÂ­o)".to_string()
                             } else {
                                 files.join("\n")
                             }
@@ -3115,52 +3127,52 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             let force_msg = format!(
                                 "[SISTEMA INTERCEPTO] TOOL_TESTER fue llamado {} veces sin detectar tests. \
                                 El sistema cambia de estrategia. Si esto es un script simple, NO crees tests. \
-                                En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL' para probar manualmente, o 'TOOL_FINISH' si ya terminaste y confirmaste que todo funciona (especialmente si es HTML).\n\
+                                En tu prÃƒÂ³ximo turno DEBES ELEGIR 'TOOL_TERMINAL' para probar manualmente, o 'TOOL_FINISH' si ya terminaste y confirmaste que todo funciona (especialmente si es HTML).\n\
                                 Archivos actuales en el workspace:\n{}\n",
                                 no_tests_consecutive, workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", force_msg));
-                            emit_event(&app_handle, step_count, &format!("[SISTEMA] Cambiando estrategia a TOOL_TERMINAL tras {} intentos.", no_tests_consecutive), "WARNING");
-                            forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "El proyecto no tiene archivos de test. Se forzó TOOL_TERMINAL para que ejecutes el script manualmente (ej. 'python script.py' o 'start index.html'). NUNCA uses 'node' para ejecutar archivos .html. Si es un archivo HTML web o ya lo verificaste, puedes simplemente no hacer nada y prepararte para terminar.".to_string()));
+                            emit_event(&app_handle, runtime.current_step(), &format!("[SISTEMA] Cambiando estrategia a TOOL_TERMINAL tras {} intentos.", no_tests_consecutive), "WARNING");
+                            forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "El proyecto no tiene archivos de test. Se forzÃƒÂ³ TOOL_TERMINAL para que ejecutes el script manualmente (ej. 'python script.py' o 'start index.html'). NUNCA uses 'node' para ejecutar archivos .html. Si es un archivo HTML web o ya lo verificaste, puedes simplemente no hacer nada y prepararte para terminar.".to_string()));
 
                         } else {
-                            // First hit — tell the LLM clearly
+                            // First hit Ã¢â‚¬â€ tell the LLM clearly
                             let no_test_msg = format!(
-                                "[SISTEMA] No se detectaron archivos de test reconocidos para ningún lenguaje soportado. \
+                                "[SISTEMA] No se detectaron archivos de test reconocidos para ningÃƒÂºn lenguaje soportado. \
                                 Archivos actuales en el workspace:\n{}\n\n\
                                 Si tu proyecto es un script sencillo, NO INTENTES CREAR TESTS. Usa TOOL_TERMINAL para ejecutarlo.\n\
-                                SOLO si el usuario pidió tests explícitamente: usa TOOL_PROGRAMMER para crearlos.",
+                                SOLO si el usuario pidiÃƒÂ³ tests explÃƒÂ­citamente: usa TOOL_PROGRAMMER para crearlos.",
                                 workspace_listing
                             );
                             current_context.push_str(&format!("{}\n\n", no_test_msg));
-                            emit_event(&app_handle, step_count, "Sin suite de tests detectada. Usa TOOL_TERMINAL para scripts simples.", "WARNING");
+                            emit_event(&app_handle, runtime.current_step(), "Sin suite de tests detectada. Usa TOOL_TERMINAL para scripts simples.", "WARNING");
                         } // end else (non-web project)
                         } // end else (is_web_project check)
                     },
                     crate::core::tester::TestResult::Passed(success_msg) => {
                         tester_attempts = 0;
                         if tester_success_hits >= 1 {
-                            let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de pruebas exitosas detectado. Abortando misión.";
-                            emit_event(&app_handle, step_count, res_msg, "FATAL");
+                            let res_msg = "[SISTEMA INTERCEPTO] Error CrÃƒÂ­tico: Bucle infinito de pruebas exitosas detectado. Abortando misiÃƒÂ³n.";
+                            emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
                             let final_res = FinalResponse {
                                 status: "FINISH".to_string(),
-                                respuesta_conversacional: "Los tests ya pasaron con éxito, pero me quedé atascado ejecutándolos en bucle. He detenido el proceso para evitar un ciclo infinito. Misión cumplida.".to_string(),
+                                respuesta_conversacional: "Los tests ya pasaron con ÃƒÂ©xito, pero me quedÃƒÂ© atascado ejecutÃƒÂ¡ndolos en bucle. He detenido el proceso para evitar un ciclo infinito. MisiÃƒÂ³n cumplida.".to_string(),
                             };
-                            crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
+                            crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", runtime.current_step());
                             return Ok(serde_json::to_string(&final_res).unwrap());
                         } else {
                             tester_success_hits += 1;
                             runtime.cognitive_state.metrics.successful_verifications += 1;
-                            runtime.evidence_graph.record(
-                                crate::core::evidence::EvidenceKind::Test,
+                            // ── H-7: TOOL_TESTER → Observation only. Runtime derives Evidence. ──
+                            let test_obs = crate::core::observation::Observation::success(
                                 "TOOL_TESTER",
-                                "tests_passed",
-                                "PASSED",
-                                1.0,
-                                step_count,
+                                &success_msg,
+                                vec![],
                             );
+                            runtime.record_observation(&test_obs);
+                            runtime.record_tool_call();
                             current_context.push_str(&format!("Resultado Tests:\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LOS TESTS PASARON EXITOSAMENTE. LA TAREA ESTÁ COMPLETADA. EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS TOOL_TESTER.\n\n", success_msg));
-                            emit_event(&app_handle, step_count, "Todos los tests pasaron exitosamente. Iniciando Auto-Indexación...", "SUCCESS");
+                            emit_event(&app_handle, runtime.current_step(), "Todos los tests pasaron exitosamente. Iniciando Auto-Indexación...", "SUCCESS");
                             // AUTO INDEXACIÓN SILENCIOSA
                             if let Ok(msg) = crate::core::memory::index_project(&workspace_path).await {
                                 current_context.push_str(&format!("Memoria Vectorial: {}\n\n", msg));
@@ -3170,16 +3182,16 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     crate::core::tester::TestResult::Failed(fail_msg) => {
                         tester_attempts += 1;
                         if tester_attempts >= 3 {
-                            emit_event(&app_handle, step_count, "[CRITICAL_FAILURE] Fallos de test superan el límite (3). Revertiendo...", "FATAL");
+                            emit_event(&app_handle, runtime.current_step(), "[CRITICAL_FAILURE] Fallos de test superan el lÃƒÂ­mite (3). Revertiendo...", "FATAL");
                             let _ = crate::core::restore_git_backup(&workspace_path).await;
                             let final_res = FinalResponse {
                                 status: "FINISH".to_string(),
-                                respuesta_conversacional: "He alcanzado el límite máximo de fallos de pruebas. El código era inviable. He restaurado el proyecto a su último estado funcional (Rollback). Por favor, revisa mi código y ayuda a solucionar los tests.".to_string(),
+                                respuesta_conversacional: "He alcanzado el lÃƒÂ­mite mÃƒÂ¡ximo de fallos de pruebas. El cÃƒÂ³digo era inviable. He restaurado el proyecto a su ÃƒÂºltimo estado funcional (Rollback). Por favor, revisa mi cÃƒÂ³digo y ayuda a solucionar los tests.".to_string(),
                             };
-                            crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
+                            crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", runtime.current_step());
                             return Ok(serde_json::to_string(&final_res).unwrap());
                         } else {
-                            // ── Detect dependency/install errors vs logic errors ─────────────
+                            // Ã¢â€â‚¬Ã¢â€â‚¬ Detect dependency/install errors vs logic errors Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                             // If jest/npm/module is missing, auto-fix by running npm install
                             // instead of asking Qwen to rewrite code (which won't help).
                             let is_dep_error = fail_msg.contains("Cannot find module")
@@ -3205,14 +3217,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 || fail_msg.contains("non-local installation of Hardhat");
 
                             if is_dep_error {
-                                // Don't revert — the code itself is fine, deps are just missing
+                                // Don't revert Ã¢â‚¬â€ the code itself is fine, deps are just missing
                                 tester_attempts -= 1; // Don't count this as a real test failure
 
-                                // ── Auto ENV_MANAGER: if a specific binary is missing, install it ──
+                                // Ã¢â€â‚¬Ã¢â€â‚¬ Auto ENV_MANAGER: if a specific binary is missing, install it Ã¢â€â‚¬Ã¢â€â‚¬
                                 let is_env_failure = fail_msg.contains("[ENV_FAILURE]");
                                 if is_env_failure {
                                     // Extract the missing binary name from the [ENV_FAILURE] message
-                                    // Pattern: "No se encontró el comando 'X'"
+                                    // Pattern: "No se encontrÃƒÂ³ el comando 'X'"
                                     let binary = fail_msg
                                         .split('\'')
                                         .nth(1)
@@ -3220,8 +3232,8 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                         .trim();
 
                                     if !binary.is_empty() && !paquetes_instalados_historico.contains(binary) {
-                                        emit_event(&app_handle, step_count,
-                                            &format!("[AUTO-ENV] Tester detectó binario faltante '{}'. Instalando automáticamente...", binary),
+                                        emit_event(&app_handle, runtime.current_step(),
+                                            &format!("[AUTO-ENV] Tester detectÃƒÂ³ binario faltante '{}'. Instalando automÃƒÂ¡ticamente...", binary),
                                             "WARNING");
                                         paquetes_instalados_historico.insert(binary.to_string());
 
@@ -3231,68 +3243,68 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                                 archivos_editados_historico.clear();
                                                 comandos_ejecutados_historico.clear();
                                                 current_context.push_str(&format!(
-                                                    "[AUTO-ENV] Binario '{}' instalado automáticamente: {}\n\n\
+                                                    "[AUTO-ENV] Binario '{}' instalado automÃƒÂ¡ticamente: {}\n\n\
                                                      Tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER.\n\n",
                                                     binary, install_msg
                                                 ));
-                                                emit_event(&app_handle, step_count,
+                                                emit_event(&app_handle, runtime.current_step(),
                                                     &format!("'{}' instalado. Reintenta TOOL_TESTER.", binary),
                                                     "SUCCESS");
                                             },
                                             Err(install_err) => {
                                                 current_context.push_str(&format!(
-                                                    "[AUTO-ENV FALLÓ] No se pudo instalar '{}': {}\n\
-                                                     Requiere intervención manual. Usa TOOL_FINISH.\n\n",
+                                                    "[AUTO-ENV FALLÃƒâ€œ] No se pudo instalar '{}': {}\n\
+                                                     Requiere intervenciÃƒÂ³n manual. Usa TOOL_FINISH.\n\n",
                                                     binary, install_err
                                                 ));
-                                                emit_event(&app_handle, step_count,
+                                                emit_event(&app_handle, runtime.current_step(),
                                                     &format!("Fallo al auto-instalar '{}': {}", binary, install_err),
                                                     "ERROR");
                                             }
                                         }
                                     } else {
-                                        // Already attempted or no binary name found — fall back to guidance
-                                    emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
+                                        // Already attempted or no binary name found Ã¢â‚¬â€ fall back to guidance
+                                    emit_event(&app_handle, runtime.current_step(), "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
                                     current_context.push_str(&format!(
-                                        "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante:\n{}\n\n\
+                                        "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuraciÃƒÂ³n faltante:\n{}\n\n\
                                         Tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_TERMINAL' con 'npm install' o el instalador adecuado al lenguaje.\n\n",
                                         fail_msg
                                     ));
                                     
                                 }
                             } else {
-                                // Dependency error but no specific binary — guide the LLM
-                                emit_event(&app_handle, step_count, "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
+                                // Dependency error but no specific binary Ã¢â‚¬â€ guide the LLM
+                                emit_event(&app_handle, runtime.current_step(), "Tests fallaron por dependencias faltantes. Solicito TOOL_TERMINAL...", "ERROR");
                                 current_context.push_str(&format!(
-                                    "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuración faltante (no por errores de lógica):\n{}\n\n\
-                                    En tu próximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
+                                    "[AUTO-FIX DEPENDENCIAS] Los tests fallaron por dependencias o configuraciÃƒÂ³n faltante (no por errores de lÃƒÂ³gica):\n{}\n\n\
+                                    En tu prÃƒÂ³ximo turno DEBES ELEGIR 'TOOL_TERMINAL'. \
                                     Si el proyecto es Node.js: Rellena el campo 'comando' con 'npm install'. \
                                     Si el proyecto es Go: Rellena el campo 'comando' con 'go mod init app && go mod tidy'. \
-                                    REGLA ESTRICTA: Después de ejecutar TOOL_TERMINAL con éxito, tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER.",
+                                    REGLA ESTRICTA: DespuÃƒÂ©s de ejecutar TOOL_TERMINAL con ÃƒÂ©xito, tu SIGUIENTE PASO OBLIGATORIO es volver a usar TOOL_TESTER.",
                                     fail_msg
                                 ));
                                 
                             }
                             } else {
-                                // Real test logic failure — revert and let Qwen fix the code
-                                emit_event(&app_handle, step_count, "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
+                                // Real test logic failure Ã¢â‚¬â€ revert and let Qwen fix the code
+                                emit_event(&app_handle, runtime.current_step(), "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
                                 let _ = crate::core::restore_git_backup(&workspace_path).await;
                                 archivos_editados_historico.clear();
                                 comandos_ejecutados_historico.clear();
                                 _task_complexity = crate::llm::router::TaskContext { task_type: crate::llm::router::TaskType::HighComplexityFix, language: None };
-                            emit_event(&app_handle, step_count, "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
+                            emit_event(&app_handle, runtime.current_step(), "[ROUTER] Tarea compleja detectada tras fallo de tests. Escalando modelo experto...", "ACTION");
                                 current_role = AgentRole::Executor;
                                 critic_feedback = Some(fail_msg.clone());
-                                emit_event(&app_handle, step_count, "[FSM] 🔬 CRÍTICO → ⚙️ EJECUTOR: Tests fallaron, enviando feedback al Ejecutor.", "WARNING");
-                                current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva y mejor solución usando TOOL_PROGRAMMER.\n", fail_msg));
-                                forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Los tests fallaron estrepitosamente, el sistema forzó TOOL_PROGRAMMER para que generes una nueva y mejor solución.".to_string()));
+                                emit_event(&app_handle, runtime.current_step(), "[FSM] Ã°Å¸â€Â¬ CRÃƒÂTICO Ã¢â€ â€™ Ã¢Å¡â„¢Ã¯Â¸Â EJECUTOR: Tests fallaron, enviando feedback al Ejecutor.", "WARNING");
+                                current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron estrepitosamente:\n{}\n\nEl sistema ha restaurado el cÃƒÂ³digo usando Git-Shield. Debes generar una nueva y mejor soluciÃƒÂ³n usando TOOL_PROGRAMMER.\n", fail_msg));
+                                forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Los tests fallaron estrepitosamente, el sistema forzÃƒÂ³ TOOL_PROGRAMMER para que generes una nueva y mejor soluciÃƒÂ³n.".to_string()));
                             }
                         }
                     }
                 }
             },
             "TOOL_AST_INJECT" => {
-                emit_event(&app_handle, step_count, "Inyectando nodos AST en Memoria Lógica (Zero-Trace)...", "ACTION");
+                emit_event(&app_handle, runtime.current_step(), "Inyectando nodos AST en Memoria LÃƒÂ³gica (Zero-Trace)...", "ACTION");
                 let mut report = String::new();
                 for (idx, (intent, parent_id, opcode)) in ast_nodes_vec.iter().enumerate() {
                     let node_id = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64) + idx as u64;
@@ -3309,103 +3321,103 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     let node_hash_display = node.content_hash.clone();
                     let node_op_display   = node.opcode.clone();
                     if let Err(_) = agent_workspace.push_node(node) {
-                        report.push_str(&format!("- Error crítico: Buffer Zero-Trace lleno al insertar nodo {}\n", node_id));
+                        report.push_str(&format!("- Error crÃƒÂ­tico: Buffer Zero-Trace lleno al insertar nodo {}\n", node_id));
                         break;
                     }
                     report.push_str(&format!("- Inyectado: NodeID={} Hash={}\n  Opcode: {:?}\n  Contenido: {}\n", node_id_display, node_hash_display, node_op_display, intent));
                 }
-                current_context.push_str(&format!("PASO {}:\nAcción: TOOL_AST_INJECT\nResultado:\n{}\n\n", step_count, report));
-                emit_event(&app_handle, step_count, &format!("{} nodos AST inyectados exitosamente en RAM.", ast_nodes_vec.len()), "SUCCESS");
+                current_context.push_str(&format!("PASO {}:\nAcciÃƒÂ³n: TOOL_AST_INJECT\nResultado:\n{}\n\n", runtime.current_step(), report));
+                emit_event(&app_handle, runtime.current_step(), &format!("{} nodos AST inyectados exitosamente en RAM.", ast_nodes_vec.len()), "SUCCESS");
             },
             "TOOL_LEARN" => {
                 learn_consecutive += 1;
                 if learn_consecutive > 1 {
                     let msg = "[SISTEMA INTERNO]: Ya has aprendido este proyecto (loop infinito TOOL_LEARN detectado). DEBES USAR TOOL_FINISH INMEDIATAMENTE PARA TERMINAR LA TAREA.";
-                    forced_next_tool = Some(("TOOL_FINISH".to_string(), "La memoria ya está indexada, finalizando tarea obligatoriamente.".to_string()));
+                    forced_next_tool = Some(("TOOL_FINISH".to_string(), "La memoria ya estÃƒÂ¡ indexada, finalizando tarea obligatoriamente.".to_string()));
                     current_context.push_str(&format!("{}\n\n", msg));
-                    emit_event(&app_handle, step_count, "Bucle de TOOL_LEARN detectado, forzando finalización.", "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), "Bucle de TOOL_LEARN detectado, forzando finalizaciÃƒÂ³n.", "WARNING");
                 } else {
-                    emit_event(&app_handle, step_count, "Guardando conocimiento en la Memoria Permanente (RAG)...", "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), "Guardando conocimiento en la Memoria Permanente (RAG)...", "ACTION");
                     match crate::core::memory::index_project(&workspace_path).await {
                         Ok(msg) => {
                             current_context.push_str(&format!("Resultado TOOL_LEARN: {}\n\n", msg));
-                            emit_event(&app_handle, step_count, "Memoria indexada correctamente.", "SUCCESS");
+                            emit_event(&app_handle, runtime.current_step(), "Memoria indexada correctamente.", "SUCCESS");
                         },
                         Err(err) => {
                             current_context.push_str(&format!("Error en TOOL_LEARN: {}\n\n", err));
-                            emit_event(&app_handle, step_count, &err, "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &err, "ERROR");
                         }
                     }
                 }
             },
             "TOOL_CREATE_RUNNER" => {
-                emit_event(&app_handle, step_count, "🏃 Generando runners de ejecución (test, build, dev, lint)...", "ACTION");
+                emit_event(&app_handle, runtime.current_step(), "Ã°Å¸ÂÆ’ Generando runners de ejecuciÃƒÂ³n (test, build, dev, lint)...", "ACTION");
                 let runners = generate_project_runners(&workspace_path, &original_prompt_parsed).await;
                 if runners.is_empty() {
                     current_context.push_str("[TOOL_CREATE_RUNNER] No se generaron runners (lenguaje no detectado o no soportado).\n\n");
-                    emit_event(&app_handle, step_count, "No se generaron runners (lenguaje desconocido).", "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), "No se generaron runners (lenguaje desconocido).", "WARNING");
                 } else {
                     let names: Vec<String> = runners.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
                     current_context.push_str(&format!("[TOOL_CREATE_RUNNER] Runners generados: {}\n\n", names.join(", ")));
-                    emit_event(&app_handle, step_count, &format!("Runners generados: {}", names.join(", ")), "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Runners generados: {}", names.join(", ")), "SUCCESS");
                 }
             },
-            // ── Fase 2: TOOL_CONTAINER (Docker/Podman) ──
+            // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 2: TOOL_CONTAINER (Docker/Podman) Ã¢â€â‚¬Ã¢â€â‚¬
             "TOOL_CONTAINER" => {
                 let parts: Vec<&str> = comando.splitn(3, ' ').collect();
                 if parts.len() < 2 {
                     let err = "Error: El comando TOOL_CONTAINER debe ser 'accion imagen/id [comando]'. Ejemplo: 'run nginx:latest'";
                     current_context.push_str(&format!("Error en TOOL_CONTAINER: {}\n\n", err));
-                    emit_event(&app_handle, step_count, err, "ERROR");
+                    emit_event(&app_handle, runtime.current_step(), err, "ERROR");
                 } else {
                     let action_str = parts[0];
                     let image_or_id = parts[1];
                     let run_cmd = if parts.len() > 2 { parts[2] } else { "" };
                     
-                    emit_event(&app_handle, step_count, &format!("Contenedor: {} {}", action_str, image_or_id), "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Contenedor: {} {}", action_str, image_or_id), "ACTION");
                     
                     let action_enum = crate::core::container::ContainerAction::from_str(action_str);
                     match crate::core::container::container_exec(action_enum, image_or_id, run_cmd, &workspace_path).await {
                         Ok(out) => {
                             current_context.push_str(&format!("Resultado TOOL_CONTAINER:\n{}\n\n", out));
-                            emit_event(&app_handle, step_count, "Comando de contenedor exitoso.", "SUCCESS");
-                            last_progress_step = step_count;
+                            emit_event(&app_handle, runtime.current_step(), "Comando de contenedor exitoso.", "SUCCESS");
+                            last_progress_step = runtime.current_step();
                         },
                         Err(e) => {
                             current_context.push_str(&format!("Error TOOL_CONTAINER:\n{}\n\n", e));
-                            emit_event(&app_handle, step_count, &e, "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &e, "ERROR");
                         }
                     }
                 }
             },
-            // ── Fase 4: TOOL_SCHEDULER (Cron tasks) ──
+            // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 4: TOOL_SCHEDULER (Cron tasks) Ã¢â€â‚¬Ã¢â€â‚¬
             "TOOL_SCHEDULER" => {
                 let parts: Vec<&str> = comando.splitn(2, '|').collect();
                 if parts.len() < 2 {
                     let err = "Error: TOOL_SCHEDULER requiere 'cron_expr|objetivo_descriptivo'. Ejemplo: '0 9 * * 1|auditar seguridad'";
                     current_context.push_str(&format!("Error TOOL_SCHEDULER: {}\n\n", err));
-                    emit_event(&app_handle, step_count, err, "ERROR");
+                    emit_event(&app_handle, runtime.current_step(), err, "ERROR");
                 } else {
                     let cron = parts[0].trim();
                     let desc = parts[1].trim();
                     let id = crate::core::scheduler::register_task(desc, &workspace_path, cron, desc);
                     current_context.push_str(&format!("Tarea programada exitosamente (ID: {}). Cron: {}\n\n", id, cron));
-                    emit_event(&app_handle, step_count, &format!("📅 Tarea '{}' programada ({})", desc, cron), "SUCCESS");
-                    last_progress_step = step_count;
+                    emit_event(&app_handle, runtime.current_step(), &format!("Ã°Å¸â€œâ€¦ Tarea '{}' programada ({})", desc, cron), "SUCCESS");
+                    last_progress_step = runtime.current_step();
                 }
             },
             "TOOL_SEARCH" => {
                 // FALLO #6 FIX: use `comando` as query first, fall back to `url_a_investigar`.
                 let search_query = if !comando.trim().is_empty() { comando.clone() } else { url.clone() };
-                emit_event(&app_handle, step_count, &format!("Consultando Memoria Permanente para: {}", search_query), "ACTION");
+                emit_event(&app_handle, runtime.current_step(), &format!("Consultando Memoria Permanente para: {}", search_query), "ACTION");
                 match crate::core::memory::query_memory(&search_query).await {
                     Ok(msg) => {
                         current_context.push_str(&format!("Resultado TOOL_SEARCH:\n{}\n\n", msg));
-                        emit_event(&app_handle, step_count, "Búsqueda en memoria completada.", "SUCCESS");
+                        emit_event(&app_handle, runtime.current_step(), "BÃƒÂºsqueda en memoria completada.", "SUCCESS");
                     },
                     Err(err) => {
                         current_context.push_str(&format!("Error en TOOL_SEARCH: {}\n\n", err));
-                        emit_event(&app_handle, step_count, &err, "ERROR");
+                        emit_event(&app_handle, runtime.current_step(), &err, "ERROR");
                     }
                 }
             },
@@ -3413,16 +3425,14 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 ask_user_consecutive += 1;
                 if ask_user_consecutive > 1 {
                     // Anti-stalling protection: Do not allow the agent to prompt the user repeatedly
-                    let abort_msg = "[SISTEMA INTERNO]: ⚠️ TOOL_ASK_USER BLOQUEADO. Ya consultaste al usuario en el turno inmediato anterior. Prohibido volver a preguntar. Debes implementar o verificar la solución de inmediato con TOOL_PROGRAMMER o TOOL_TERMINAL.";
+                    let abort_msg = "[SISTEMA INTERNO]: Ã¢Å¡Â Ã¯Â¸Â TOOL_ASK_USER BLOQUEADO. Ya consultaste al usuario en el turno inmediato anterior. Prohibido volver a preguntar. Debes implementar o verificar la soluciÃƒÂ³n de inmediato con TOOL_PROGRAMMER o TOOL_TERMINAL.";
                     current_context.push_str(&format!("{}\n\n", abort_msg));
-                    emit_event(&app_handle, step_count, "TOOL_ASK_USER bloqueado por repetición consecutiva. Forzando implementación.", "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), "TOOL_ASK_USER bloqueado por repeticiÃƒÂ³n consecutiva. Forzando implementaciÃƒÂ³n.", "WARNING");
                     current_role = AgentRole::Executor;
-                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Implementa el código directamente sin hacer más preguntas al usuario.".to_string()));
-                    step_count += 1;
-                    continue;
+                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Implementa el cÃƒÂ³digo directamente sin hacer mÃƒÂ¡s preguntas al usuario.".to_string()));                    continue;
                 }
 
-                emit_event(&app_handle, step_count, "Solicitando información al usuario...", "ACTION");
+                emit_event(&app_handle, runtime.current_step(), "Solicitando informaciÃƒÂ³n al usuario...", "ACTION");
                 let mut question = comando.clone();
                 if question.trim().is_empty() {
                     question = raw_value.get("respuesta_conversacional")
@@ -3433,7 +3443,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 if question.trim().is_empty() {
                     question = raw_value.get("pensamiento")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("El sistema se atascó o completó una tarea, pero no dejó un mensaje. ¿Cómo deseas proceder?")
+                        .unwrap_or("El sistema se atascÃƒÂ³ o completÃƒÂ³ una tarea, pero no dejÃƒÂ³ un mensaje. Ã‚Â¿CÃƒÂ³mo deseas proceder?")
                         .to_string();
                 }
 
@@ -3441,19 +3451,19 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                 match crate::core::ask_user::ask_user_async(&app_handle, question.clone(), options, current_context.clone()).await {
                     Ok(answer) => {
                         current_context.push_str(&format!("Pregunta al usuario: {}\nRespuesta del usuario: {}\n\n", question, answer));
-                        emit_event(&app_handle, step_count, "Respuesta del usuario recibida.", "SUCCESS");
-                        // User clarified the task — immediately transition to Executor with TOOL_PROGRAMMER
+                        emit_event(&app_handle, runtime.current_step(), "Respuesta del usuario recibida.", "SUCCESS");
+                        // User clarified the task Ã¢â‚¬â€ immediately transition to Executor with TOOL_PROGRAMMER
                         current_role = AgentRole::Executor;
-                        forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), format!("El usuario ya aclaró los requerimientos: '{}'. Implementa el código inmediatamente.", answer)));
+                        forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), format!("El usuario ya aclarÃƒÂ³ los requerimientos: '{}'. Implementa el cÃƒÂ³digo inmediatamente.", answer)));
                     },
                     Err(e) => {
                         current_context.push_str(&format!("Error al consultar al usuario: {}\n\n", e));
-                        emit_event(&app_handle, step_count, &format!("Error ASK_USER: {}", e), "ERROR");
+                        emit_event(&app_handle, runtime.current_step(), &format!("Error ASK_USER: {}", e), "ERROR");
                     }
                 }
             },
             "TOOL_FINISH" => {
-                // ── Mandatory Tool Checklist enforcement (Bug 1 fix) ─────────────────
+                // Ã¢â€â‚¬Ã¢â€â‚¬ Mandatory Tool Checklist enforcement (Bug 1 fix) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                 // If the user's prompt required specific tools (TOOL_TESTER, TOOL_VISION_EVALUATOR)
                 // and they haven't been executed yet, block TOOL_FINISH and instruct the agent.
                 let missing_mandatory: Vec<&String> = mandatory_tools_required
@@ -3465,25 +3475,23 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     let block_msg = format!(
                         "[SISTEMA]: TOOL_FINISH BLOQUEADO. El mandato del usuario exige que ejecutes \
                         las siguientes herramientas ANTES de finalizar: {:?}. \
-                        Debes ejecutarlas ahora. No puedes usar TOOL_FINISH hasta que todas estén completas.",
+                        Debes ejecutarlas ahora. No puedes usar TOOL_FINISH hasta que todas estÃƒÂ©n completas.",
                         missing_list
                     );
                     current_context.push_str(&format!("{}\n\n", block_msg));
-                    emit_event(&app_handle, step_count,
+                    emit_event(&app_handle, runtime.current_step(),
                         &format!("[FINISH BLOQUEADO] Faltan herramientas obligatorias: {:?}", missing_list),
-                        "WARNING");
-                    step_count += 1;
-                    continue;
+                        "WARNING");                    continue;
                 }
 
                 // =======================================================
-                // PESP v2 — Intercept TOOL_FINISH for Phase Advancement
+                // PESP v2 Ã¢â‚¬â€ Intercept TOOL_FINISH for Phase Advancement
                 // =======================================================
                 if !journal.fases.is_empty() && journal.fase_actual < journal.fases.len() - 1 {
                     let phase_num = journal.fases[journal.fase_actual].numero;
                     let phase_desc = journal.fases[journal.fase_actual].descripcion.clone();
 
-                    // ── GATEKEEPER ESTRICTO DE FASE (Con resolución inteligente de alias) ──
+                    // Ã¢â€â‚¬Ã¢â€â‚¬ GATEKEEPER ESTRICTO DE FASE (Con resoluciÃƒÂ³n inteligente de alias) Ã¢â€â‚¬Ã¢â€â‚¬
                     let current_phase = &journal.fases[journal.fase_actual];
                     let missing_files: Vec<String> = current_phase.archivos.iter()
                         .filter(|arch| !is_phase_file_satisfied(&workspace_path, arch))
@@ -3491,67 +3499,58 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         .collect();
 
                     if !missing_files.is_empty() {
-                        let block_msg = format!("[GATEKEEPER] ❌ Fase {} BLOQUEADA. Faltan archivos requeridos en disco: {:?}", phase_num, missing_files);
-                        emit_event(&app_handle, step_count, &block_msg, "FATAL");
-                        current_context.push_str(&format!("{}\n[ACCIÓN OBLIGATORIA]: No puedes avanzar de fase sin crear estos archivos. Usa TOOL_PROGRAMMER para crearlos.\n\n", block_msg));
-                        current_role = AgentRole::Executor;
-                        step_count += 1;
-                        continue;
+                        let block_msg = format!("[GATEKEEPER] Ã¢ÂÅ’ Fase {} BLOQUEADA. Faltan archivos requeridos en disco: {:?}", phase_num, missing_files);
+                        emit_event(&app_handle, runtime.current_step(), &block_msg, "FATAL");
+                        current_context.push_str(&format!("{}\n[ACCIÃƒâ€œN OBLIGATORIA]: No puedes avanzar de fase sin crear estos archivos. Usa TOOL_PROGRAMMER para crearlos.\n\n", block_msg));
+                        current_role = AgentRole::Executor;                        continue;
                     }
 
                     if let Err(compile_err) = validate_workspace(&workspace_path).await {
-                        let block_msg = format!("[GATEKEEPER] ❌ Fase {} BLOQUEADA. Errores de sintaxis/compilación detectados:\n{}", phase_num, compile_err);
-                        emit_event(&app_handle, step_count, &format!("[GATEKEEPER] ❌ Fase {} BLOQUEADA por errores de sintaxis en el código.", phase_num), "FATAL");
-                        current_context.push_str(&format!("{}\n[ACCIÓN OBLIGATORIA]: El código generado está incompleto o tiene errores de sintaxis. Usa TOOL_PROGRAMMER para corregir o completar el archivo.\n\n", block_msg));
-                        current_role = AgentRole::Executor;
-                        step_count += 1;
-                        continue;
+                        let block_msg = format!("[GATEKEEPER] Ã¢ÂÅ’ Fase {} BLOQUEADA. Errores de sintaxis/compilaciÃƒÂ³n detectados:\n{}", phase_num, compile_err);
+                        emit_event(&app_handle, runtime.current_step(), &format!("[GATEKEEPER] Ã¢ÂÅ’ Fase {} BLOQUEADA por errores de sintaxis en el cÃƒÂ³digo.", phase_num), "FATAL");
+                        current_context.push_str(&format!("{}\n[ACCIÃƒâ€œN OBLIGATORIA]: El cÃƒÂ³digo generado estÃƒÂ¡ incompleto o tiene errores de sintaxis. Usa TOOL_PROGRAMMER para corregir o completar el archivo.\n\n", block_msg));
+                        current_role = AgentRole::Executor;                        continue;
                     }
                     
-                    emit_event(&app_handle, step_count, &format!("⏸ [PAUSA INTERACTIVA] Fase {} completada. Esperando aprobación del usuario...", phase_num), "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Ã¢ÂÂ¸ [PAUSA INTERACTIVA] Fase {} completada. Esperando aprobaciÃƒÂ³n del usuario...", phase_num), "WARNING");
                     
-                    let question = format!("He completado la Fase {}: '{}'. ¿Deseas que avance a la siguiente fase, o quieres revisar/cambiar algo?", phase_num, phase_desc);
+                    let question = format!("He completado la Fase {}: '{}'. Ã‚Â¿Deseas que avance a la siguiente fase, o quieres revisar/cambiar algo?", phase_num, phase_desc);
                     let options = vec!["Aprobar y Continuar".to_string(), "Modificar Instrucciones".to_string(), "Detener Agente".to_string()];
                     
                     // Pause execution and ask user
                     match crate::core::ask_user::ask_user_async(&app_handle, question, options, current_context.clone()).await {
                         Ok(reply) => {
                             if reply == "Detener Agente" {
-                                emit_event(&app_handle, step_count, "El usuario detuvo la ejecución.", "ERROR");
+                                emit_event(&app_handle, runtime.current_step(), "El usuario detuvo la ejecuciÃƒÂ³n.", "ERROR");
                                 let final_res = FinalResponse { status: "FINISH".to_string(), respuesta_conversacional: "Detenido por el usuario".to_string() };
                                 return Ok(serde_json::to_string(&final_res).unwrap());
                             } else if reply != "Aprobar y Continuar" {
                                 let user_feedback = format!("[FEEDBACK DEL USUARIO EN PAUSA INTERACTIVA]: {}", reply);
                                 current_context.push_str(&format!("{}\n\n", user_feedback));
-                                emit_event(&app_handle, step_count, "Feedback del usuario recibido. Ajustando plan.", "ACTION");
-                                step_count += 1;
-                                continue;
+                                emit_event(&app_handle, runtime.current_step(), "Feedback del usuario recibido. Ajustando plan.", "ACTION");                                continue;
                             }
                         },
                         Err(e) => {
-                            emit_event(&app_handle, step_count, &format!("Pausa interactiva interrumpida: {}", e), "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &format!("Pausa interactiva interrumpida: {}", e), "ERROR");
                             let final_res = FinalResponse { status: "FINISH".to_string(), respuesta_conversacional: "Interrumpido".to_string() };
                             return Ok(serde_json::to_string(&final_res).unwrap());
                         }
                     }
-                    emit_event(&app_handle, step_count, &format!("✅ [FASE {} COMPLETADA] Avanzando a la siguiente...", journal.fases[journal.fase_actual].numero), "SUCCESS");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Ã¢Å“â€¦ [FASE {} COMPLETADA] Avanzando a la siguiente...", journal.fases[journal.fase_actual].numero), "SUCCESS");
                     
                     // Mark current phase as completed
                     journal.fases[journal.fase_actual].estado = "COMPLETADA".to_string();
                     // Advance to next phase
                     journal.fase_actual += 1;
                     journal.fases[journal.fase_actual].estado = "EN_PROGRESO".to_string();
-                    crate::core::session_journal::save_journal(&workspace_path, &journal);
+                    if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
                     
                     let new_phase_msg = format!(
                         "[SISTEMA PESP] Fase anterior completada. Iniciando Fase {}/{}: {}\nUsa TOOL_PROGRAMMER o TOOL_THINK para comenzar el trabajo de esta nueva fase.",
                         journal.fase_actual + 1, journal.fases.len(), journal.fases[journal.fase_actual].descripcion
                     );
                     current_context.push_str(&format!("{}\n\n", new_phase_msg));
-                    current_role = AgentRole::Planner; // Reset role
-                    
-                    step_count += 1;
-                    continue; // Do NOT terminate the agent loop
+                    current_role = AgentRole::Planner; // Reset role                    continue; // Do NOT terminate the agent loop
                 } else if !journal.fases.is_empty() && journal.fase_actual == journal.fases.len() - 1 {
                     let current_phase = &journal.fases[journal.fase_actual];
                     let phase_num = current_phase.numero;
@@ -3562,56 +3561,48 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         .collect();
 
                     if !missing_files.is_empty() {
-                        let block_msg = format!("[GATEKEEPER FINAL] ❌ Misión NO puede cerrarse. Faltan archivos requeridos de la Fase {}: {:?}", phase_num, missing_files);
-                        emit_event(&app_handle, step_count, &block_msg, "FATAL");
-                        current_context.push_str(&format!("{}\n[ACCIÓN OBLIGATORIA]: Crea los archivos pendientes usando TOOL_PROGRAMMER antes de concluir.\n\n", block_msg));
-                        current_role = AgentRole::Executor;
-                        step_count += 1;
-                        continue;
+                        let block_msg = format!("[GATEKEEPER FINAL] Ã¢ÂÅ’ MisiÃƒÂ³n NO puede cerrarse. Faltan archivos requeridos de la Fase {}: {:?}", phase_num, missing_files);
+                        emit_event(&app_handle, runtime.current_step(), &block_msg, "FATAL");
+                        current_context.push_str(&format!("{}\n[ACCIÃƒâ€œN OBLIGATORIA]: Crea los archivos pendientes usando TOOL_PROGRAMMER antes de concluir.\n\n", block_msg));
+                        current_role = AgentRole::Executor;                        continue;
                     }
 
                     if let Err(compile_err) = validate_workspace(&workspace_path).await {
-                        let block_msg = format!("[GATEKEEPER FINAL] ❌ Misión NO puede cerrarse por error sintáctico:\n{}", compile_err);
-                        emit_event(&app_handle, step_count, "[GATEKEEPER FINAL] Error sintáctico en disco. Exigiendo corrección.", "FATAL");
-                        current_context.push_str(&format!("{}\n[ACCIÓN OBLIGATORIA]: Corrige los errores de sintaxis antes de finalizar.\n\n", block_msg));
-                        current_role = AgentRole::Executor;
-                        step_count += 1;
-                        continue;
+                        let block_msg = format!("[GATEKEEPER FINAL] Ã¢ÂÅ’ MisiÃƒÂ³n NO puede cerrarse por error sintÃƒÂ¡ctico:\n{}", compile_err);
+                        emit_event(&app_handle, runtime.current_step(), "[GATEKEEPER FINAL] Error sintÃƒÂ¡ctico en disco. Exigiendo correcciÃƒÂ³n.", "FATAL");
+                        current_context.push_str(&format!("{}\n[ACCIÃƒâ€œN OBLIGATORIA]: Corrige los errores de sintaxis antes de finalizar.\n\n", block_msg));
+                        current_role = AgentRole::Executor;                        continue;
                     }
 
                     journal.fases[journal.fase_actual].estado = "COMPLETADA".to_string();
                 }
 
-                // ── CompletionGate delegado a MissionRuntime (fuente única de verdad) ──
+                // Ã¢â€â‚¬Ã¢â€â‚¬ CompletionGate delegado a MissionRuntime (fuente ÃƒÂºnica de verdad) Ã¢â€â‚¬Ã¢â€â‚¬
                 let completion_decision = runtime.can_complete();
                 match completion_decision {
                     crate::core::completion_gate::CompletionDecision::Incomplete(missing_reasons) => {
-                        let block_msg = format!("[COMPLETION GATE] ⚠️ Finalización rechazada. Requisitos pendientes:\n{}", missing_reasons.join("\n"));
-                        emit_event(&app_handle, step_count, "[COMPLETION GATE] Criterios de misión aún no satisfechos.", "WARNING");
-                        current_context.push_str(&format!("{}\n[ACCIÓN OBLIGATORIA]: Resuelve estos puntos antes de llamar a TOOL_FINISH.\n\n", block_msg));
-                        step_count += 1;
-                        continue;
+                        let block_msg = format!("[COMPLETION GATE] Ã¢Å¡Â Ã¯Â¸Â FinalizaciÃƒÂ³n rechazada. Requisitos pendientes:\n{}", missing_reasons.join("\n"));
+                        emit_event(&app_handle, runtime.current_step(), "[COMPLETION GATE] Criterios de misiÃƒÂ³n aÃƒÂºn no satisfechos.", "WARNING");
+                        current_context.push_str(&format!("{}\n[ACCIÃƒâ€œN OBLIGATORIA]: Resuelve estos puntos antes de llamar a TOOL_FINISH.\n\n", block_msg));                        continue;
                     },
                     crate::core::completion_gate::CompletionDecision::Blocked(block_reasons) => {
-                        let block_msg = format!("[COMPLETION GATE] 🛑 Misión bloqueada por restricciones:\n{}", block_reasons.join("\n"));
-                        emit_event(&app_handle, step_count, "[COMPLETION GATE] Bloqueado por restricciones.", "FATAL");
-                        current_context.push_str(&format!("{}\n\n", block_msg));
-                        step_count += 1;
-                        continue;
+                        let block_msg = format!("[COMPLETION GATE] Ã°Å¸â€ºâ€˜ MisiÃƒÂ³n bloqueada por restricciones:\n{}", block_reasons.join("\n"));
+                        emit_event(&app_handle, runtime.current_step(), "[COMPLETION GATE] Bloqueado por restricciones.", "FATAL");
+                        current_context.push_str(&format!("{}\n\n", block_msg));                        continue;
                     },
                     crate::core::completion_gate::CompletionDecision::Complete => {
-                        emit_event(&app_handle, step_count, "🎯 [COMPLETION GATE] Verificación superada: Todos los criterios cumplidos.", "SUCCESS");
+                        emit_event(&app_handle, runtime.current_step(), "Ã°Å¸Å½Â¯ [COMPLETION GATE] VerificaciÃƒÂ³n superada: Todos los criterios cumplidos.", "SUCCESS");
                     }
                 }
 
-                emit_event(&app_handle, step_count, "Bucle completado exitosamente.", "FINISH");
-                // ── Journal: mark completed ──
+                emit_event(&app_handle, runtime.current_step(), "Bucle completado exitosamente.", "FINISH");
+                // Ã¢â€â‚¬Ã¢â€â‚¬ Journal: mark completed Ã¢â€â‚¬Ã¢â€â‚¬
                 crate::core::session_journal::close_journal(&mut journal, "COMPLETADO", &workspace_path);
                 
-                // ── Fase 1: Clear interrupt flag ──
+                // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 1: Clear interrupt flag Ã¢â€â‚¬Ã¢â€â‚¬
                 crate::core::mission_persist::clear_interrupt(&workspace_path);
 
-                // ── Fase 3: Guardar Memoria Episódica (Multi-sesión) ──
+                // Ã¢â€â‚¬Ã¢â€â‚¬ Fase 3: Guardar Memoria EpisÃƒÂ³dica (Multi-sesiÃƒÂ³n) Ã¢â€â‚¬Ã¢â€â‚¬
                 crate::core::episodic_memory::save_episode(
                     &workspace_path,
                     &journal.objetivo,
@@ -3620,7 +3611,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     &journal.archivos_tocados,
                 );
 
-                // ── Arquitectura Cognitiva v4: Registrar Experiencia en Memoria ──
+                // Ã¢â€â‚¬Ã¢â€â‚¬ Arquitectura Cognitiva v4: Registrar Experiencia en Memoria Ã¢â€â‚¬Ã¢â€â‚¬
                 let profile = crate::core::project_profile::ProjectProfile::detect(&workspace_path);
                 let lang_str = format!("{:?}", profile.primary);
                 let exp_rec = crate::core::experience::ExperienceStore::create_record(
@@ -3628,9 +3619,9 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     &journal.objetivo,
                     &lang_str,
                     journal.herramientas_usadas.clone(),
-                    step_count,
+                    runtime.current_step(),
                     crate::core::experience::ExperienceOutcome::Success,
-                    vec!["Misión completada con todos los criterios y pruebas aprobados.".to_string()],
+                    vec!["MisiÃƒÂ³n completada con todos los criterios y pruebas aprobados.".to_string()],
                 );
                 let _ = crate::core::experience::ExperienceStore::record_experience(&exp_rec);
 
@@ -3641,10 +3632,10 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                         files_summary.push_str(&format!("- `{}`\n", f));
                     }
                     respuesta_conv = format!(
-                        "🎯 **Misión Concluida Exitosamente**\n\n\
+                        "Ã°Å¸Å½Â¯ **MisiÃƒÂ³n Concluida Exitosamente**\n\n\
                         **Objetivo:** {}\n\n\
                         **Archivos Verificados en Disco:**\n{}\n\
-                        Todas las fases completaron sus criterios de aceptación y pasaron las pruebas de sintaxis.",
+                        Todas las fases completaron sus criterios de aceptaciÃƒÂ³n y pasaron las pruebas de sintaxis.",
                         journal.objetivo,
                         if files_summary.is_empty() { "- Archivos del proyecto validados\n".to_string() } else { files_summary }
                     );
@@ -3654,11 +3645,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     status: "FINISH".to_string(),
                     respuesta_conversacional: respuesta_conv,
                 };
-                crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", step_count);
+                crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", runtime.current_step());
                 return Ok(serde_json::to_string(&final_res).unwrap());
             },
             _ => {
-                // ── Smart unknown-tool interceptor ──────────────────────────────────────
+                // Ã¢â€â‚¬Ã¢â€â‚¬ Smart unknown-tool interceptor Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
                 // Detect common patterns where the LLM invents tool names that are
                 // actually shell commands. Auto-redirect to TOOL_TERMINAL.
                 let tool_lower = tool.to_lowercase();
@@ -3680,26 +3671,26 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                     } else {
                         format!("{} {}", tool, comando)
                     };
-                    emit_event(&app_handle, step_count, &format!("[AUTO-REDIRECT] '{}' → TOOL_TERMINAL: {}", tool, terminal_cmd), "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), &format!("[AUTO-REDIRECT] '{}' Ã¢â€ â€™ TOOL_TERMINAL: {}", tool, terminal_cmd), "WARNING");
                     current_context.push_str(&format!(
-                        "[SISTEMA]: La herramienta '{}' no existe. Fue redirigida automáticamente a TOOL_TERMINAL con el comando '{}'.\n\
+                        "[SISTEMA]: La herramienta '{}' no existe. Fue redirigida automÃƒÂ¡ticamente a TOOL_TERMINAL con el comando '{}'.\n\
                         RECUERDA: Para ejecutar comandos de shell SIEMPRE usa TOOL_TERMINAL con el campo 'comando'. Ejemplos: TOOL_TERMINAL+npm audit fix, TOOL_TERMINAL+npm install, TOOL_TERMINAL+pip install X.\n\n",
                         tool, terminal_cmd
                     ));
                     tool = format!("TOOL_TERMINAL");
                     comando = terminal_cmd;
                     // Re-enter as TOOL_TERMINAL by continuing the outer loop
-                    // We need to push back and re-process — instead, execute inline
-                    emit_event(&app_handle, step_count, &format!("Ejecutando en terminal: {}", comando), "ACTION");
+                    // We need to push back and re-process Ã¢â‚¬â€ instead, execute inline
+                    emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
                     comandos_ejecutados_historico.insert(comando.clone());
                     match execute_terminal_command(&workspace_path, &comando).await {
                         Ok(out) => {
                             current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto): {}\n\n", out));
-                            emit_event(&app_handle, step_count, &format!("Auto-terminal OK: {}", &out[..out.len().min(120)]), "SUCCESS");
+                            emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal OK: {}", &out[..out.len().min(120)]), "SUCCESS");
                         }
                         Err(e) => {
                             current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto) Error: {}\n\n", e));
-                            emit_event(&app_handle, step_count, &format!("Auto-terminal Error: {}", e), "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal Error: {}", e), "ERROR");
                         }
                     }
                 } else if tool == "TOOL_READ_FILE" {
@@ -3714,11 +3705,11 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                             std::path::Path::new(&workspace_path).join(comando.trim())
                         }
                     } else {
-                        // No filename given — fallback: list workspace root
+                        // No filename given Ã¢â‚¬â€ fallback: list workspace root
                         std::path::Path::new(&workspace_path).to_path_buf()
                     };
 
-                    emit_event(&app_handle, step_count, &format!("[TOOL_READ_FILE] Leyendo: {}", file_to_read.display()), "ACTION");
+                    emit_event(&app_handle, runtime.current_step(), &format!("[TOOL_READ_FILE] Leyendo: {}", file_to_read.display()), "ACTION");
                     match tokio::fs::read_to_string(&file_to_read).await {
                         Ok(contents) => {
                             let c_len = contents.len();
@@ -3730,36 +3721,36 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
                                 file_to_read.display(), display
                             );
                             current_context.push_str(&read_msg);
-                            emit_event(&app_handle, step_count, &format!("Archivo leído: {} chars", c_len), "SUCCESS");
+                            emit_event(&app_handle, runtime.current_step(), &format!("Archivo leÃƒÂ­do: {} chars", c_len), "SUCCESS");
                         }
                         Err(e) => {
                             current_context.push_str(&format!(
                                 "[TOOL_READ_FILE] Error leyendo '{}': {}. \
-                                 Puede que el archivo no exista todavía — usa TOOL_PROGRAMMER con buscar: \"\" para crearlo.\n\n",
+                                 Puede que el archivo no exista todavÃƒÂ­a Ã¢â‚¬â€ usa TOOL_PROGRAMMER con buscar: \"\" para crearlo.\n\n",
                                 file_to_read.display(), e
                             ));
-                            emit_event(&app_handle, step_count, &format!("TOOL_READ_FILE Error: {}", e), "ERROR");
+                            emit_event(&app_handle, runtime.current_step(), &format!("TOOL_READ_FILE Error: {}", e), "ERROR");
                         }
                     }
                 } else {
                     unknown_tool_consecutive += 1;
-                    emit_event(&app_handle, step_count, &format!("Herramienta desconocida: {}", tool), "WARNING");
+                    emit_event(&app_handle, runtime.current_step(), &format!("Herramienta desconocida: {}", tool), "WARNING");
                     if unknown_tool_consecutive >= 3 {
                         forced_next_tool = Some((
                             "TOOL_THINK".to_string(),
-                            "El sistema bloqueó mi acceso porque intenté usar herramientas inventadas que no existen en el prompt. Transfiero el control para evitar bucles de alucinación.".to_string()
+                            "El sistema bloqueÃƒÂ³ mi acceso porque intentÃƒÂ© usar herramientas inventadas que no existen en el prompt. Transfiero el control para evitar bucles de alucinaciÃƒÂ³n.".to_string()
                         ));
                         unknown_tool_consecutive = 0;
-                        current_context.push_str(&format!("Error crítico: uso de herramienta desconocida '{}'. [FSM FORZANDO TOOL_THINK]\n\n", tool));
-                        emit_event(&app_handle, step_count, "[FSM] Agente inventando herramientas. Forzando TOOL_THINK.", "WARNING");
+                        current_context.push_str(&format!("Error crÃƒÂ­tico: uso de herramienta desconocida '{}'. [FSM FORZANDO TOOL_THINK]\n\n", tool));
+                        emit_event(&app_handle, runtime.current_step(), "[FSM] Agente inventando herramientas. Forzando TOOL_THINK.", "WARNING");
                     } else {
-                        current_context.push_str(&format!("Advertencia: Intentaste usar herramienta desconocida '{}'. Para comandos de shell usa TOOL_TERMINAL. Usa solo herramientas del catálogo.\n\n", tool));
+                        current_context.push_str(&format!("Advertencia: Intentaste usar herramienta desconocida '{}'. Para comandos de shell usa TOOL_TERMINAL. Usa solo herramientas del catÃƒÂ¡logo.\n\n", tool));
                     }
                 }
             }
         }
         
-        // ─── RECORD COMMAND TRAIL ───
+        // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ RECORD COMMAND TRAIL Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         let trail_role = match current_role {
             AgentRole::Planner => "Planner",
             AgentRole::Executor => "Executor",
@@ -3794,7 +3785,7 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
         let trail_error = if trail_result == StepResult::Error { Some(format!("Tool: {}", tool)) } else { None };
 
         command_trail.add_step(
-            step_count,
+            runtime.current_step(),
             trail_role,
             &tool,
             &comando,
@@ -3804,25 +3795,27 @@ crate::core::session_journal::save_journal(&workspace_path, &journal);
             0, // duration - could be enhanced later
             &current_context,
         );
-        command_trail.save(&workspace_path);
-        
-        step_count += 1;
-    }
+        command_trail.save(&workspace_path);    }
     
-    emit_event(&app_handle, step_count, "Límite máximo de pasos alcanzado. Bucle abortado.", "FATAL");
-    // ── Journal: mark as waiting for user ──
+    emit_event(&app_handle, runtime.current_step(), "LÃƒÂ­mite mÃƒÂ¡ximo de pasos alcanzado. Bucle abortado.", "FATAL");
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Journal: mark as waiting for user Ã¢â€â‚¬Ã¢â€â‚¬
     journal.status = "ESPERANDO".to_string();
-    crate::core::session_journal::save_journal(&workspace_path, &journal);
+    if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
     let final_res = FinalResponse {
         status: "FINISH".to_string(),
         respuesta_conversacional: format!(
-            "He alcanzado el límite máximo de {} pasos sin llegar a una conclusión. \
-             Por favor, revisa el historial de pasos y proporciona más contexto.",
+            "He alcanzado el lÃƒÂ­mite mÃƒÂ¡ximo de {} pasos sin llegar a una conclusiÃƒÂ³n. \
+             Por favor, revisa el historial de pasos y proporciona mÃƒÂ¡s contexto.",
             runtime.budget.total_steps
         ),
     };
     Ok(serde_json::to_string(&final_res).unwrap())
 }
+
+
+
+
+
 
 
 

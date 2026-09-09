@@ -1,4 +1,4 @@
-use crate::core::session_journal::{load_journal, save_journal};
+﻿use crate::core::session_journal::{load_journal, save_journal};
 use tauri::AppHandle;
 use tauri::Emitter;
 
@@ -24,7 +24,7 @@ pub fn save_checkpoint(
     journal.fsm_role = Some(role.to_string());
     journal.fsm_step = step;
     journal.interrupted = true; // mark as interrupted until TOOL_FINISH clears it
-    save_journal(workspace_path, &journal);
+    let _ = save_journal(workspace_path, &journal);
 }
 
 /// Clears the interrupted flag when a mission completes normally.
@@ -34,7 +34,7 @@ pub fn clear_interrupt(workspace_path: &str) {
     journal.status = "COMPLETADO".to_string();
     journal.fsm_context = None;
     journal.fsm_role = None;
-    save_journal(workspace_path, &journal);
+    let _ = save_journal(workspace_path, &journal);
 }
 
 /// Represents a resumable mission state loaded from disk.
@@ -114,3 +114,4 @@ fn dirs_or_fallback() -> String {
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string())
 }
+
