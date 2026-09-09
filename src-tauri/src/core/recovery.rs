@@ -78,6 +78,11 @@ pub struct RecoveryEngine {
 impl RecoveryEngine {
     pub fn new() -> Self { Self::default() }
 
+    /// Total recovery actions taken across all tools (for LearningEngine snapshot).
+    pub fn total_recoveries(&self) -> u32 {
+        self.failure_counts.values().sum::<usize>() as u32
+    }
+
     /// Records a failure and returns the best recovery decision based on
     /// error classification and failure history.
     pub fn recover(&mut self, tool_name: &str, error_msg: &str, error_class: ErrorClass) -> RecoveryDecision {

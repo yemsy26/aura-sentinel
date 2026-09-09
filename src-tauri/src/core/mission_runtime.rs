@@ -60,6 +60,26 @@ impl MissionRuntime {
         self.budget.is_exhausted()
     }
 
+    /// Read-only metric accessors for LearningEngine snapshot.
+    /// Returns plain data — no authority or state transfer to Learning.
+    pub fn steps_taken(&self) -> u32 {
+        self.cognitive_state.mission.current_step
+    }
+
+    pub fn budget_total(&self) -> u32 {
+        self.budget.total_steps
+    }
+
+    /// Total recovery actions attempted (sum of all failure counts)
+    pub fn recovery_count(&self) -> u32 {
+        self.recovery.total_recoveries()
+    }
+
+    /// Number of stall signatures recorded
+    pub fn stall_count(&self) -> u32 {
+        self.stall_detector.total_stalls()
+    }
+
     /// Counts one cognitive cycle (LLM decision). Does NOT count a tool execution.
     pub fn record_step(&mut self) -> u32 {
         self.cognitive_state.update_step();

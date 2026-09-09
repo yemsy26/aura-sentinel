@@ -19,6 +19,7 @@ pub mod experience;
 pub mod stats;
 pub mod persistence;
 pub mod router;
+pub mod engine;
 
 #[cfg(test)]
 mod tests;

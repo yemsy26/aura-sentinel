@@ -33,6 +33,11 @@ impl StallDetector {
         Self { signatures: Vec::new(), max_history }
     }
 
+    /// Number of stall signatures recorded (for LearningEngine snapshot).
+    pub fn total_stalls(&self) -> u32 {
+        self.signatures.len() as u32
+    }
+
     pub fn record_signature(&mut self, sig: ProgressSignature) {
         if self.signatures.len() >= self.max_history {
             self.signatures.remove(0);
