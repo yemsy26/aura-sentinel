@@ -154,48 +154,90 @@ impl LearningPersistence {
     }
 }
 
-/// Atomically replaces target with src.
-/// On Windows, std::fs::rename fails if target already exists.
-/// This helper tries rename first (atomic on Unix and when target does not exist).
-/// On failure on Windows, it creates a backup, renames, and cleans up, with retries.
-async fn atomic_replace(src: &Path, target: &Path) -> Result<(), String> {
+/// Atomically replaces target with src asynchronously.
+/// On Unix, std::fs::rename is atomically replacing target if it already exists.
+/// On Windows, std::fs::rename fails if target exists. We invoke Windows' native ReplaceFileW
+/// API, which is atomic at the filesystem/NTFS level without exposing an intermediate missing-target window.
+pub(crate) async fn atomic_replace(src: &Path, target: &Path) -> Result<(), String> {
+    atomic_replace_sync(src, target)
+}
+
+/// Atomically replaces target with src synchronously.
+pub(crate) fn atomic_replace_sync(src: &Path, target: &Path) -> Result<(), String> {
     let mut attempts = 0;
     loop {
-        // Fast path: rename succeeds if target doesn't exist or on Unix
-        match std::fs::rename(src, target) {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                #[cfg(windows)]
-                {
-                    // Windows target-exists workaround:
-                    // If target exists, rename target to a transient backup, rename src to target, then remove backup.
-                    if target.exists() {
-                        let nanos = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_nanos())
-                            .unwrap_or(0);
-                        let backup = target.with_extension(format!("bak_{:x}", nanos));
-                        if std::fs::rename(target, &backup).is_ok() {
-                            match std::fs::rename(src, target) {
-                                Ok(_) => {
-                                    let _ = std::fs::remove_file(&backup);
-                                    return Ok(());
-                                }
-                                Err(err) => {
-                                    // Rollback target from backup
-                                    let _ = std::fs::rename(&backup, target);
-                                    let _ = std::fs::remove_file(src);
-                                    return Err(format!("PERSIST_REPLACE_ROLLBACK: {}", err));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if attempts < 5 {
+        // Fast path: if target does not exist, rename is atomic on all platforms.
+        if !target.exists() {
+            match std::fs::rename(src, target) {
+                Ok(_) => return Ok(()),
+                Err(_e) if attempts < 5 => {
                     attempts += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(15));
+                    continue;
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(src);
+                    return Err(format!("PERSIST_RENAME_NEW: {}", e));
+                }
+            }
+        }
+
+        // Target already exists:
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let mut target_wide: Vec<u16> = target.as_os_str().encode_wide().collect();
+            target_wide.push(0);
+            let mut src_wide: Vec<u16> = src.as_os_str().encode_wide().collect();
+            src_wide.push(0);
+
+            extern "system" {
+                fn ReplaceFileW(
+                    lpReplacedFileName: *const u16,
+                    lpReplacementFileName: *const u16,
+                    lpBackupFileName: *const u16,
+                    dwReplaceFlags: u32,
+                    lpExclude: *const std::ffi::c_void,
+                    lpReserved: *const std::ffi::c_void,
+                ) -> i32;
+            }
+
+            // ReplaceFileW atomically replaces target with replacement file.
+            let success = unsafe {
+                ReplaceFileW(
+                    target_wide.as_ptr(),
+                    src_wide.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+
+            if success != 0 {
+                return Ok(());
+            }
+
+            let win_err = std::io::Error::last_os_error();
+            if attempts < 5 {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                continue;
+            } else {
+                let _ = std::fs::remove_file(src);
+                return Err(format!("PERSIST_REPLACE_FILE_W: {}", win_err));
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            match std::fs::rename(src, target) {
+                Ok(_) => return Ok(()),
+                Err(_e) if attempts < 5 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(15));
+                }
+                Err(e) => {
                     let _ = std::fs::remove_file(src);
                     return Err(format!("PERSIST_RENAME: {}", e));
                 }

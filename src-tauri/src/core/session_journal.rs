@@ -141,7 +141,7 @@ pub fn save_journal(workspace_path: &str, journal: &SessionJournal) -> Result<()
         f.sync_all()
             .map_err(|e| format!("[JOURNAL] fsync: {}", e))?;
     }
-    std::fs::rename(&tmp_path, &journal_path)
+    crate::core::learning::persistence::atomic_replace_sync(&tmp_path, &journal_path)
         .map_err(|e| format!("[JOURNAL] rename: {}", e))?;
     Ok(())
 }
