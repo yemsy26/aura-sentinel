@@ -872,6 +872,32 @@ pub async fn run_agent_loop(
         }
     }
 
+    // ── AL-v1: Adaptive Learning Setup ───────────────────────────────────────
+    let al_project_profile = crate::core::project_profile::ProjectProfile::detect(&workspace_path);
+    let al_fingerprint = crate::core::learning::FingerprintBuilder::from_mission(
+        &runtime.contract, &al_project_profile,
+    );
+    let al_persistence = crate::core::learning::LearningPersistence::new();
+    let al_store: crate::core::learning::SharedExperienceStore = {
+        let s = al_persistence.load_experiences(500);
+        std::sync::Arc::new(tokio::sync::RwLock::new(s))
+    };
+    let al_model_stats = al_persistence.load_model_stats();
+    let al_strategy_stats = al_persistence.load_strategy_stats();
+    let al_router = crate::core::learning::AdaptiveRouter::new(
+        al_model_stats, al_strategy_stats,
+        al_store.clone(), &runtime.mission_id,
+    );
+    let al_recommendation = al_router.recommend(&al_fingerprint, &available_models).await;
+    let al_engine = crate::core::learning::LearningEngine::with_store(al_store.clone());
+    let al_start_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64).unwrap_or(0);
+    emit_event(&app_handle, 0,
+        &format!("[ADAPTIVE LEARNING] Estrategia recomendada: {:?} | Modelo: {} (confianza: {:.0}%)",
+            al_recommendation.strategy, al_recommendation.model, al_recommendation.confidence * 100.0),
+        "INFO");
+
     journal.workspace_path = workspace_path.clone();
     journal.status = "EN_PROGRESO".to_string();
     journal.herramientas_usadas.clear();
@@ -1030,10 +1056,39 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     }
 
                     emit_event(&app_handle, runtime.current_step(), "ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ MisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n completada. Todos los entregables validados.", "SUCCESS");
+
+                    let al_elapsed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64).unwrap_or(0)
+                        .saturating_sub(al_start_ms);
+                    let al_result = crate::core::learning::LearningResult {
+                        outcome: crate::core::learning::LearningOutcome::Success,
+                        metrics: crate::core::learning::OutcomeMetrics {
+                            steps: runtime.steps_taken(),
+                            tool_calls: runtime.cognitive_state.metrics.tool_calls,
+                            failed_actions: 0,
+                            recovery_actions: runtime.recovery_count(),
+                            verification_attempts: 1,
+                            successful_verifications: 1,
+                            elapsed_ms: al_elapsed,
+                        },
+                        failures: vec![],
+                        recovery: None,
+                    };
+                    let _ = al_engine.record_outcome(
+                        al_fingerprint.clone(),
+                        orchestrator_model.clone(),
+                        al_recommendation.strategy.clone(),
+                        al_result,
+                        al_recommendation.confidence,
+                        runtime.mission_id.clone(),
+                        None,
+                    ).await;
+
                     let final_res = FinalResponse {
                         status: "FINISH".to_string(),
                         respuesta_conversacional: format!(
-                            "### ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂºÃƒâ€šÃ‚Â¡ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â MisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n Completada con ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°xito\n\n\
+                            "### ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂºÃƒâ€šÃ‚Â¡ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â  MisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n Completada con ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°xito\n\n\
                             Se han implementado y validado todos los componentes del proyecto:\n\
                             {}\n\n\
                             Todos los archivos pasaron las pruebas de compilaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y verificaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n al 100%.",
@@ -1042,11 +1097,40 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     };
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 } else if deliverables_ok && !completion_ok {
-                    // Files exist but CompletionGate not satisfied ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â honest incomplete status
-                    emit_event(&app_handle, runtime.current_step(), "ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â¸ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Presupuesto agotado ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â entregables presentes pero criterios de misiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n incompletos.", "WARNING");
+                    // Files exist but CompletionGate not satisfied ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â  honest incomplete status
+                    emit_event(&app_handle, runtime.current_step(), "ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚Â Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â  Presupuesto agotado ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â  entregables presentes pero criterios de misiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n incompletos.", "WARNING");
+
+                    let al_elapsed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64).unwrap_or(0)
+                        .saturating_sub(al_start_ms);
+                    let al_result = crate::core::learning::LearningResult {
+                        outcome: crate::core::learning::LearningOutcome::PartialSuccess,
+                        metrics: crate::core::learning::OutcomeMetrics {
+                            steps: runtime.steps_taken(),
+                            tool_calls: runtime.cognitive_state.metrics.tool_calls,
+                            failed_actions: runtime.recovery_count(),
+                            recovery_actions: runtime.recovery_count(),
+                            verification_attempts: 1,
+                            successful_verifications: 0,
+                            elapsed_ms: al_elapsed,
+                        },
+                        failures: vec![],
+                        recovery: None,
+                    };
+                    let _ = al_engine.record_outcome(
+                        al_fingerprint.clone(),
+                        orchestrator_model.clone(),
+                        al_recommendation.strategy.clone(),
+                        al_result,
+                        al_recommendation.confidence,
+                        runtime.mission_id.clone(),
+                        None,
+                    ).await;
+
                     let final_res = FinalResponse {
                         status: "INCOMPLETE".to_string(),
-                        respuesta_conversacional: "ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â **Presupuesto agotado**: Los archivos fueron creados pero el agente no pudo verificar el 100% de los criterios de aceptaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n. Escribe **'continua'** para otorgar otro bloque de pasos.".to_string(),
+                        respuesta_conversacional: "ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â  **Presupuesto agotado**: Los archivos fueron creados pero el agente no pudo verificar el 100% de los criterios de aceptaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n. Escribe **'continua'** para otorgar otro bloque de pasos.".to_string(),
                     };
                     return Ok(serde_json::to_string(&final_res).unwrap());
                 }
@@ -3683,6 +3767,36 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     vec!["MisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n completada con todos los criterios y pruebas aprobados.".to_string()],
                 );
                 let _ = crate::core::experience::ExperienceStore::record_experience(&exp_rec);
+
+                // ── AL-v1: Registrar Experiencia en Adaptive Learning ─────────────────
+                let al_elapsed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64).unwrap_or(0)
+                    .saturating_sub(al_start_ms);
+
+                let al_result = crate::core::learning::LearningResult {
+                    outcome: crate::core::learning::LearningOutcome::Success,
+                    metrics: crate::core::learning::OutcomeMetrics {
+                        steps: runtime.steps_taken(),
+                        tool_calls: runtime.cognitive_state.metrics.tool_calls,
+                        failed_actions: 0,
+                        recovery_actions: runtime.recovery_count(),
+                        verification_attempts: 1,
+                        successful_verifications: 1,
+                        elapsed_ms: al_elapsed,
+                    },
+                    failures: vec![],
+                    recovery: None,
+                };
+                let _ = al_engine.record_outcome(
+                    al_fingerprint.clone(),
+                    orchestrator_model.clone(),
+                    al_recommendation.strategy.clone(),
+                    al_result,
+                    al_recommendation.confidence,
+                    runtime.mission_id.clone(),
+                    None,
+                ).await;
 
                 let mut respuesta_conv = respuesta_conv;
                 if respuesta_conv.trim().is_empty() {
