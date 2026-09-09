@@ -45,6 +45,7 @@ pub mod world_state;         // Snapshot determinista del estado del workspace y
 pub mod observation;         // Envelope estructurado de observaciones y ejecución de herramientas
 pub mod recovery;            // Motor determinista de recuperación de fallos y alternativas
 pub mod tool_registry;       // FINAL-2: Autoridad de nombres de herramientas permitidas (ToolRegistry)
+pub mod learning;            // AL-v1: Adaptive Learning — Experience, Stats, Router (recommend only)
 
 
 use std::path::Path;
