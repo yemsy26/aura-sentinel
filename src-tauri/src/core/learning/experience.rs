@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -80,10 +80,12 @@ impl ExperienceStoreV2 {
         scored.into_iter().take(limit).map(|(_, e)| e).collect()
     }
 
+    #[allow(dead_code)]
     pub fn by_model<'a>(&'a self, model: &str) -> Vec<&'a Experience> {
         self.experiences.iter().filter(|e| e.model == model).collect()
     }
 
     pub fn len(&self) -> usize { self.experiences.len() }
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool { self.experiences.is_empty() }
 }

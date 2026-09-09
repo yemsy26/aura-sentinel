@@ -9,6 +9,7 @@ use crate::core::learning::strategy::StrategyKind;
 /// Read-only snapshot of MissionRuntime metrics for LearningEngine.
 /// LearningEngine DOES NOT hold a reference to MissionRuntime — it receives a plain data copy.
 /// This preserves the authority boundary: Runtime v4 remains the sole execution authority.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
     pub steps_taken: u32,
@@ -27,6 +28,7 @@ pub struct LearningEngine {
 }
 
 impl LearningEngine {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         let persistence = LearningPersistence::new();
         let store = persistence.load_experiences(500);
@@ -44,6 +46,7 @@ impl LearningEngine {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_store_and_persistence(store: SharedExperienceStore, persistence: LearningPersistence) -> Self {
         Self {
             store,
@@ -51,6 +54,7 @@ impl LearningEngine {
         }
     }
 
+    #[allow(dead_code)]
     pub fn store(&self) -> SharedExperienceStore {
         self.store.clone()
     }

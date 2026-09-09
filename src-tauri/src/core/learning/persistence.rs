@@ -31,6 +31,7 @@ impl LearningPersistence {
         Self { dir }
     }
 
+    #[allow(dead_code)]
     pub fn with_dir(dir: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&dir);
         Self { dir }

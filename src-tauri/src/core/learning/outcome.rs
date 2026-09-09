@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// Why a mission ended — with enough detail to drive negative learning.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -12,6 +12,7 @@ pub enum LearningOutcome {
 
 impl LearningOutcome {
     /// Weight for success-rate calculations (0.0, 0.5, or 1.0)
+    #[allow(dead_code)]
     pub fn success_weight(&self) -> f32 {
         match self {
             LearningOutcome::Success        => 1.0,
@@ -60,6 +61,7 @@ pub struct LearningResult {
     pub recovery: Option<RecoveryRecord>,
 }
 
+#[allow(dead_code)]
 impl LearningResult {
     pub fn success(metrics: OutcomeMetrics) -> Self {
         Self {

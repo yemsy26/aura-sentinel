@@ -1365,9 +1365,10 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
               \"respuesta_conversacional\": \"<respuesta o null>\"\n\
             }}\n\
             REGLAS CRITICAS DEL JSON:
-            1. 'comando' = UN SOLO comando de shell real. NUNCA prosa/descripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n. Ejemplos: 'dir', 'start index.html', 'node app.js'.
-            2. 'archivos_a_editar' = SOLO nombres de archivo relativos (sin rutas absolutas). Ej: ['index.html'] NO ['C:\\Users\\...\\index.html'].
-            3. El workspace actual es: {ws}. NUNCA uses rutas absolutas de proyectos anteriores ni de otros directorios.",
+            1. 'comando' = UN SOLO comando de shell real. NUNCA prosa/descripción. Ejemplos: 'dir', 'start index.html', 'node app.js'.
+            2. 'archivos_a_editar' = Si eliges TOOL_PROGRAMMER, DEBES incluir al menos un nombre de archivo relativo a crear o editar. NUNCA lo dejes vacío [].
+            3. Si el workspace está vacío o no hay archivos creados, tu tarea NO está cumplida: usa TOOL_PROGRAMMER con el nombre de los archivos a crear.
+            4. El workspace actual es: {ws}. NUNCA uses rutas absolutas de proyectos anteriores ni de otros directorios.",
             ws = workspace_path);
 
         let agent_prompt = match current_role {
@@ -1392,7 +1393,7 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡salo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). UN archivo por TOOL_PROGRAMMER. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER (eres el ejecutor: escribe cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo e implementa directamente).\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ntica (regex o checks independientes de atributos) sin asumir orden rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­gido en HTML. 2) Comprueba booleanos o 'PASS' correctamente y retorna sys.exit(0) si pasan. 3) Si un test falla, eres 100% autÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³nomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python NUNCA uses llaves '}}' para cerrar bloques y escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
+                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). Si el workspace está vacío o la tarea no está terminada, TU PRIMERA ACCION OBLIGATORIA ES TOOL_PROGRAMMER con el nombre de los archivos a crear en 'archivos_a_editar' (NUNCA [] vacío). Genera código modular, atómico y preferiblemente archivo por archivo para evitar respuestas gigantes. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER (eres el ejecutor: escribe código e implementa directamente).\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semántica (regex o checks independientes de atributos) sin asumir orden rígido en HTML. 2) Comprueba booleanos o 'PASS' correctamente y retorna sys.exit(0) si pasan. 3) Si un test falla, eres 100% autónomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python NUNCA uses llaves '}}' para cerrar bloques y escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
                 user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),

@@ -1,4 +1,4 @@
-﻿use std::collections::HashMap;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
 use crate::core::learning::experience::{Experience, SharedExperienceStore};
@@ -7,6 +7,7 @@ use crate::core::learning::stats::{ModelStats, StrategyStats};
 use crate::core::learning::strategy::StrategyKind;
 
 /// Why this recommendation was produced.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecommendationReason {
     ColdStart,
@@ -18,6 +19,7 @@ pub enum RecommendationReason {
 
 /// A model + strategy recommendation for the next mission.
 /// Runtime v4 decides whether to accept it — this is advisory only.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Recommendation {
     pub model: String,

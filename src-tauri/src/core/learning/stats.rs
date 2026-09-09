@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::core::learning::experience::Experience;
 use crate::core::learning::outcome::LearningOutcome;
@@ -36,6 +36,7 @@ impl ModelStats {
         self.total_steps as f32 / self.attempts as f32
     }
 
+    #[allow(dead_code)]
     pub fn average_latency_ms(&self) -> f32 {
         if self.attempts == 0 { return 0.0; }
         self.total_latency_ms as f32 / self.attempts as f32
@@ -90,6 +91,7 @@ impl StrategyStats {
         (effective / (self.attempts as f32 + 2.0)).clamp(0.0, 1.0)
     }
 
+    #[allow(dead_code)]
     pub fn recovery_success_rate(&self) -> f32 {
         if self.recoveries == 0 { return 0.5; }
         self.successful_recoveries as f32 / self.recoveries as f32
