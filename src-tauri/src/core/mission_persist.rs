@@ -1,16 +1,16 @@
-﻿use crate::core::session_journal::{load_journal, save_journal};
+use crate::core::session_journal::{load_journal, save_journal};
 use tauri::AppHandle;
 use tauri::Emitter;
 
 /// Saves a checkpoint of the FSM mid-loop state so that it survives restarts.
-/// Called from agent.rs every N steps.
+/// Returns Err if persistence fails — callers must treat this as a FATAL event.
 pub fn save_checkpoint(
     workspace_path: &str,
     context: &str,
     role: &str,
     step: u32,
     objective: Option<&str>,
-) {
+) -> Result<(), String> {
     let mut journal = load_journal(workspace_path);
     if let Some(obj) = objective {
         if !obj.is_empty() {
@@ -24,17 +24,20 @@ pub fn save_checkpoint(
     journal.fsm_role = Some(role.to_string());
     journal.fsm_step = step;
     journal.interrupted = true; // mark as interrupted until TOOL_FINISH clears it
-    let _ = save_journal(workspace_path, &journal);
+    save_journal(workspace_path, &journal)
+        .map_err(|e| format!("[CHECKPOINT FATAL] save_checkpoint: {}", e))
 }
 
 /// Clears the interrupted flag when a mission completes normally.
-pub fn clear_interrupt(workspace_path: &str) {
+/// Returns Err if persistence fails — callers must treat this as a FATAL event.
+pub fn clear_interrupt(workspace_path: &str) -> Result<(), String> {
     let mut journal = load_journal(workspace_path);
     journal.interrupted = false;
     journal.status = "COMPLETADO".to_string();
     journal.fsm_context = None;
     journal.fsm_role = None;
-    let _ = save_journal(workspace_path, &journal);
+    save_journal(workspace_path, &journal)
+        .map_err(|e| format!("[CHECKPOINT FATAL] clear_interrupt: {}", e))
 }
 
 /// Represents a resumable mission state loaded from disk.

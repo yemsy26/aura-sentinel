@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use chrono::{DateTime, Utc};
 
@@ -241,10 +241,12 @@ pub fn update_journal(
 }
 
 /// Marks the mission as completed or failed.
-pub fn close_journal(journal: &mut SessionJournal, status: &str, workspace_path: &str) {
+/// Returns Err if persistence fails — callers must treat this as a FATAL event.
+pub fn close_journal(journal: &mut SessionJournal, status: &str, workspace_path: &str) -> Result<(), String> {
     journal.status = status.to_string();
     journal.ultima_actualizacion = current_timestamp();
-    let _ = save_journal(workspace_path, journal);
+    save_journal(workspace_path, journal)
+        .map_err(|e| format!("[CHECKPOINT FATAL] close_journal: {}", e))
 }
 
 fn current_timestamp() -> String {
@@ -252,3 +254,22 @@ fn current_timestamp() -> String {
     now.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// H-16: save_journal() fails visibly with invalid path.
+    /// Verifies checkpoint failure is NEVER silently discarded.
+    #[test]
+    fn test_save_journal_fails_visibly_on_invalid_path() {
+        let journal = SessionJournal::default();
+        // Use a path that cannot exist on any OS
+        let result = save_journal("Z:\\nonexistent\\cannot\\exist\\path", &journal);
+        assert!(result.is_err(), "save_journal must return Err on invalid path");
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.contains("[JOURNAL]"),
+            "Error must include [JOURNAL] prefix for traceability, got: {}", err_msg
+        );
+    }
+}

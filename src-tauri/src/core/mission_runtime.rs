@@ -227,6 +227,58 @@ impl MissionRuntime {
         }
     }
 
+    /// H-12: Execution Gateway — the COMPLETE pipeline for any tool action.
+    /// Enforces: authorize → world snapshot before → execute → world snapshot after
+    ///           → Observation → record_observation → record_tool_call.
+    ///
+    /// The actual tool execution is provided as a closure so agent.rs can keep
+    /// its async handles (app_handle, filesystem, network) without moving them into Runtime.
+    ///
+    /// agent.rs usage:
+    /// ```ignore
+    /// let obs = runtime.execute_action(&proposal, || async {
+    ///     execute_terminal_command(&comando, &workspace_path).await
+    ///         .map_err(|e| e.to_string())
+    /// }).await;
+    /// ```
+    pub async fn execute_action<F, Fut>(
+        &mut self,
+        proposal: &ActionProposal,
+        executor: F,
+    ) -> Result<Observation, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<String, String>>,
+    {
+        // 1. Authorization: Budget + Policy (single gate)
+        self.authorize_action(proposal)?;
+
+        // 2. World snapshot BEFORE execution
+        self.observe_world();
+        let hash_before = self.current_world_hash();
+
+        // 3. Execute — runtime delegates to the closure provided by agent.rs
+        let exec_result = executor().await;
+
+        // 4. World snapshot AFTER execution
+        self.observe_world();
+        let hash_after = self.current_world_hash();
+        self.record_tool_call();
+
+        // 5. Build Observation from result
+        let mut obs = match exec_result {
+            Ok(ref output) => Observation::success(&proposal.tool, output, vec![]),
+            Err(ref err)   => Observation::error(&proposal.tool, err, None, true, None),
+        };
+        obs.state_hash_before = Some(hash_before);
+        obs.state_hash_after  = Some(hash_after);
+
+        // 6. Record through full circuit (StallDetector, EvidenceGraph, RecoveryEngine)
+        self.record_observation(&obs);
+
+        Ok(obs)
+    }
+
     // ─── Completion Gate ───────────────────────────────────────────────────────
 
     /// The ONLY authority allowed to declare mission complete.
@@ -362,5 +414,51 @@ mod tests {
         rt.restore_step(10);
         assert_eq!(rt.current_step(), 10);
         assert_eq!(rt.budget_remaining(), 48, "budget should only decrease by record_step calls");
+    }
+
+    /// H-15: execute_action() runs the full pipeline through Runtime.
+    /// Verifies: authorize → world before → execute → world after → Observation recorded.
+    /// No LLM, no agent.rs, no app_handle required.
+    #[tokio::test]
+    async fn test_execute_action_full_pipeline() {
+        let mut rt = MissionRuntime::new(".", "Test execution gateway", 10);
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::Value::Null,
+            expected_effect: "simulate output".into(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+
+        // Execute via gateway with a simulated successful closure
+        let obs = rt.execute_action(&proposal, || async {
+            Ok("simulated terminal output".to_string())
+        }).await;
+
+        assert!(obs.is_ok(), "execute_action must succeed for authorized action");
+        let o = obs.unwrap();
+        assert_eq!(o.status, crate::core::observation::ObservationStatus::Success);
+        assert!(o.state_hash_before.is_some(), "world hash before must be recorded");
+        assert!(o.state_hash_after.is_some(), "world hash after must be recorded");
+        assert_eq!(o.tool_name, "TOOL_TERMINAL");
+        // record_tool_call was called inside execute_action
+        assert_eq!(rt.cognitive_state.metrics.tool_calls, 1);
+    }
+
+    /// H-15b: execute_action() denies when budget is exhausted.
+    #[tokio::test]
+    async fn test_execute_action_denies_on_exhausted_budget() {
+        let mut rt = MissionRuntime::new(".", "Test deny on exhausted", 2);
+        rt.record_step(); rt.record_step();
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::Value::Null,
+            expected_effect: String::new(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+        let result = rt.execute_action(&proposal, || async {
+            Ok("should not run".to_string())
+        }).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("BUDGET_EXHAUSTED"));
     }
 }
