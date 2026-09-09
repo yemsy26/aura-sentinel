@@ -44,6 +44,13 @@ impl LearningEngine {
         }
     }
 
+    pub fn with_store_and_persistence(store: SharedExperienceStore, persistence: LearningPersistence) -> Self {
+        Self {
+            store,
+            persistence,
+        }
+    }
+
     pub fn store(&self) -> SharedExperienceStore {
         self.store.clone()
     }

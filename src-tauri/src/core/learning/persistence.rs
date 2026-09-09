@@ -19,6 +19,7 @@ fn data_dir() -> PathBuf {
     PathBuf::from(base).join("data").join("learning")
 }
 
+#[derive(Clone, Debug)]
 pub struct LearningPersistence {
     dir: PathBuf,
 }

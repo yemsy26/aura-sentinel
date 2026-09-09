@@ -876,10 +876,15 @@ pub async fn run_agent_loop(
 
         // Remaining tools: stub dispatchers satisfy registry validation.
         // Match arm handles actual execution for each.
-        for tool in &["TOOL_ENV_MANAGER", "TOOL_MAPPER", "TOOL_AST_INJECT",
-                       "TOOL_CONTAINER", "TOOL_WORKSPACE_MANAGER",
-                       "TOOL_BACKGROUND_START", "TOOL_BACKGROUND_QUERY",
-                       "TOOL_BROWSE", "TOOL_GIT"] {
+        for tool in &[
+            "TOOL_ENV_MANAGER", "TOOL_MAPPER", "TOOL_AST_INJECT",
+            "TOOL_CONTAINER", "TOOL_WORKSPACE_MANAGER",
+            "TOOL_BACKGROUND_START", "TOOL_BACKGROUND_QUERY",
+            "TOOL_BROWSE", "TOOL_GIT", "TOOL_THINK",
+            "TOOL_AUDITOR", "TOOL_VISION_EVALUATOR", "TOOL_ASK_USER",
+            "TOOL_READ_FILE", "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL",
+            "TOOL_ASSET_MANAGER", "TOOL_WEB_SCRAPER", "TOOL_LEARN",
+        ] {
             let tool_name = tool.to_string();
             let _ = runtime.tool_registry.register(tool, Arc::new(move |_args| {
                 let name = tool_name.clone();
@@ -890,8 +895,9 @@ pub async fn run_agent_loop(
 
     // ── AL-v1: Adaptive Learning Setup ───────────────────────────────────────
     let al_project_profile = crate::core::project_profile::ProjectProfile::detect(&workspace_path);
-    let al_fingerprint = crate::core::learning::FingerprintBuilder::from_mission(
-        &runtime.contract, &al_project_profile,
+    let _ = runtime.observe_world();
+    let al_fingerprint = crate::core::learning::FingerprintBuilder::from_mission_with_world(
+        &runtime.contract, &al_project_profile, runtime.world.as_ref(),
     );
     let al_persistence = crate::core::learning::LearningPersistence::new();
     let al_store: crate::core::learning::SharedExperienceStore = {
@@ -1619,25 +1625,42 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     };
 
                     if !forced_cmd_to_run.is_empty() {
-                        // Execute directly using the same function as TOOL_TERMINAL
-                        match execute_terminal_command(&workspace_path, &forced_cmd_to_run).await {
-                            Ok(output) => {
-                                let out_len = output.len();
-                                let digest = if out_len > 3000 { &output[..3000] } else { &output[..] };
-                                let auto_msg = format!(
-                                    "[INTERCEPTOR AUTO-EXEC] EjecutÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© '{}' directamente porque el modelo ignorÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ la orden.\nResultado:\n{}\n\n",
-                                    forced_cmd_to_run, digest
-                                );
-                                current_context.push_str(&auto_msg);
-                                emit_event(&app_handle, runtime.current_step(),
-                                    &format!("[INTERCEPTOR AUTO-EXEC] EjecuciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n directa completada: {} chars", out_len),
-                                    "SUCCESS");
-                            }
-                            Err(e) => {
-                                current_context.push_str(&format!(
-                                    "[INTERCEPTOR AUTO-EXEC] IntentÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© ejecutar '{}' pero fallÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³: {}\n\n",
-                                    forced_cmd_to_run, e
-                                ));
+                        let intercept_proposal = crate::core::policy::ActionProposal {
+                            tool: "TOOL_TERMINAL".to_string(),
+                            arguments: serde_json::json!({ "comando": forced_cmd_to_run.clone() }),
+                            expected_effect: "Interceptor auto-exec after persistent loop".to_string(),
+                            risk: crate::core::policy::PolicyEngine::classify_terminal_command(&forced_cmd_to_run),
+                        };
+
+                        if let Err(auth_err) = runtime.authorize_action(&intercept_proposal) {
+                            current_context.push_str(&format!(
+                                "[INTERCEPTOR AUTO-EXEC BLOQUEADO]: {}\n\n",
+                                auth_err
+                            ));
+                            emit_event(&app_handle, runtime.current_step(),
+                                &format!("[INTERCEPTOR AUTO-EXEC BLOQUEADO] {}", auth_err),
+                                "ERROR");
+                        } else {
+                            // Execute authorized action
+                            match execute_terminal_command(&workspace_path, &forced_cmd_to_run).await {
+                                Ok(output) => {
+                                    let out_len = output.len();
+                                    let digest = if out_len > 3000 { &output[..3000] } else { &output[..] };
+                                    let auto_msg = format!(
+                                        "[INTERCEPTOR AUTO-EXEC] Ejecuté '{}' bajo autorización de runtime.\nResultado:\n{}\n\n",
+                                        forced_cmd_to_run, digest
+                                    );
+                                    current_context.push_str(&auto_msg);
+                                    emit_event(&app_handle, runtime.current_step(),
+                                        &format!("[INTERCEPTOR AUTO-EXEC] Ejecución directa completada: {} chars", out_len),
+                                        "SUCCESS");
+                                }
+                                Err(e) => {
+                                    current_context.push_str(&format!(
+                                        "[INTERCEPTOR AUTO-EXEC] Intenté ejecutar '{}' pero falló: {}\n\n",
+                                        forced_cmd_to_run, e
+                                    ));
+                                }
                             }
                         }
                     } else {
@@ -1877,16 +1900,10 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
             },
         };
 
-        match runtime.check_policy(&action_proposal) {
-            crate::core::policy::PolicyDecision::Deny(reason) => {
-                emit_event(&app_handle, runtime.current_step(), &format!("[POLICY BLOCK] {}", reason), "ERROR");
-                current_context.push_str(&format!("{}\n[ACCIÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œN DENEGADA]: Elige una alternativa segura.\n\n", reason));                continue;
-            },
-            crate::core::policy::PolicyDecision::RequireUser(prompt) => {
-                emit_event(&app_handle, runtime.current_step(), &format!("[POLICY USER REQ] {}", prompt), "WARNING");
-                current_context.push_str(&format!("[POLICY] AcciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n requiere confirmaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n del usuario: {}\n\n", prompt));
-            },
-            crate::core::policy::PolicyDecision::Allow | crate::core::policy::PolicyDecision::Sandbox(_) => {}
+        if let Err(auth_err) = runtime.authorize_action(&action_proposal) {
+            emit_event(&app_handle, runtime.current_step(), &format!("[ACTION REJECTED] {}", auth_err), "ERROR");
+            current_context.push_str(&format!("{}\n[ACCIÓN RECHAZADA]: Corrige los parámetros o la herramienta elegida.\n\n", auth_err));
+            continue;
         }
 
         match tool.as_str() {
@@ -3905,18 +3922,34 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     ));
                     tool = format!("TOOL_TERMINAL");
                     comando = terminal_cmd;
-                    // Re-enter as TOOL_TERMINAL by continuing the outer loop
-                    // We need to push back and re-process ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â instead, execute inline
-                    emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
-                    comandos_ejecutados_historico.insert(comando.clone());
-                    match execute_terminal_command(&workspace_path, &comando).await {
-                        Ok(out) => {
-                            current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto): {}\n\n", out));
-                            emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal OK: {}", &out[..out.len().min(120)]), "SUCCESS");
-                        }
-                        Err(e) => {
-                            current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto) Error: {}\n\n", e));
-                            emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal Error: {}", e), "ERROR");
+                    // Authorize redirected command via runtime
+                    let auto_proposal = crate::core::policy::ActionProposal {
+                        tool: "TOOL_TERMINAL".to_string(),
+                        arguments: serde_json::json!({ "comando": comando.clone() }),
+                        expected_effect: "Auto-redirected shell command".to_string(),
+                        risk: crate::core::policy::PolicyEngine::classify_terminal_command(&comando),
+                    };
+
+                    if let Err(auth_err) = runtime.authorize_action(&auto_proposal) {
+                        current_context.push_str(&format!(
+                            "[AUTO-REDIRECT RECHAZADO]: {}\n\n",
+                            auth_err
+                        ));
+                        emit_event(&app_handle, runtime.current_step(),
+                            &format!("[AUTO-REDIRECT RECHAZADO] {}", auth_err),
+                            "ERROR");
+                    } else {
+                        emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
+                        comandos_ejecutados_historico.insert(comando.clone());
+                        match execute_terminal_command(&workspace_path, &comando).await {
+                            Ok(out) => {
+                                current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto): {}\n\n", out));
+                                emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal OK: {}", &out[..out.len().min(120)]), "SUCCESS");
+                            }
+                            Err(e) => {
+                                current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto) Error: {}\n\n", e));
+                                emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal Error: {}", e), "ERROR");
+                            }
                         }
                     }
                 } else if tool == "TOOL_READ_FILE" {

@@ -29,23 +29,39 @@ pub struct FingerprintBuilder;
 
 impl FingerprintBuilder {
     /// Build a deterministic TaskFingerprint from contract + project profile.
-    /// No LLM calls, no I/O errors.
+    /// Backward-compatible shortcut without explicit WorldState.
     pub fn from_mission(contract: &MissionContract, profile: &ProjectProfile) -> TaskFingerprint {
+        Self::from_mission_with_world(contract, profile, None)
+    }
+
+    /// Build a deterministic TaskFingerprint incorporating contract and WorldState context.
+    /// No LLM calls, no I/O errors.
+    pub fn from_mission_with_world(
+        contract: &MissionContract,
+        profile: &ProjectProfile,
+        world_state: Option<&crate::core::world_state::WorldState>,
+    ) -> TaskFingerprint {
         let language = Some(language_str(&profile.primary).to_string());
-
         let framework = profile.frameworks.first().cloned();
-
         let obj = contract.objective.to_lowercase();
 
-        // Complexity signals (max 6)
+        // Complexity signals (max 8 with world & contract context)
         let mut complexity_signals: u32 = 0;
         if !profile.secondary.is_empty()     { complexity_signals += 1; }
-        if !profile.frameworks.is_empty()     { complexity_signals += 1; }
-        if profile.has_docker                 { complexity_signals += 1; }
+        if !profile.frameworks.is_empty()    { complexity_signals += 1; }
+        if profile.has_docker                { complexity_signals += 1; }
         if obj.contains("test") || obj.contains("prueba") { complexity_signals += 1; }
         if obj.contains("integra") || obj.contains("connect") { complexity_signals += 1; }
         if obj.contains("refactor") || obj.contains("restructur") { complexity_signals += 1; }
-        let complexity = (complexity_signals as f32 / 6.0).clamp(0.0, 1.0);
+        // Contract criteria depth
+        if contract.acceptance_criteria.len() >= 3 { complexity_signals += 1; }
+        // World state workspace size / existing code scale
+        if let Some(ws) = world_state {
+            if ws.files.len() > 10 {
+                complexity_signals += 1;
+            }
+        }
+        let complexity = (complexity_signals as f32 / 8.0).clamp(0.0, 1.0);
 
         // Ambiguity: long + abstract objective → higher ambiguity
         let word_count = obj.split_whitespace().count();
@@ -57,15 +73,21 @@ impl FingerprintBuilder {
 
         // Scope bucket — estimated from complexity and architecture signals
         let scope_bucket = match complexity_signals {
-            0 => 0, 1 => 1, 2 => 2, _ => 3,
+            0..=1 => 0,
+            2..=3 => 1,
+            4..=5 => 2,
+            _ => 3,
         };
 
         let requires_code     = obj.contains("creat") || obj.contains("implement")
-            || obj.contains("escrib") || obj.contains("add") || obj.contains("añad");
+            || obj.contains("escrib") || obj.contains("add") || obj.contains("añad")
+            || !contract.acceptance_criteria.is_empty();
         let requires_terminal = obj.contains("ejecut") || obj.contains("run")
-            || obj.contains("compil") || obj.contains("build") || obj.contains("instala");
+            || obj.contains("compil") || obj.contains("build") || obj.contains("instala")
+            || contract.acceptance_criteria.iter().any(|c| matches!(c.verification, crate::core::mission_contract::VerificationMethod::CommandExitZero(_)));
         let requires_tests    = obj.contains("test") || obj.contains("prueba")
-            || obj.contains("verif") || obj.contains("assert");
+            || obj.contains("verif") || obj.contains("assert")
+            || contract.acceptance_criteria.iter().any(|c| matches!(c.verification, crate::core::mission_contract::VerificationMethod::TestPassed));
         let requires_network  = obj.contains("http") || obj.contains("api")
             || obj.contains("fetch") || obj.contains("request") || obj.contains("endpoint");
 

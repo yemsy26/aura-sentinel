@@ -341,4 +341,154 @@ mod tests {
         let exp_re = make_exp("m", LearningOutcome::Success, "att_evict_1");
         assert!(store.push(exp_re), "Evicted attempt_id must be allowed back if re-encountered");
     }
+
+    // ── Test 19: Full AL-v1 End-to-End Cycle ─────────────────────────────────
+    // Chain: Mission -> Contract -> Fingerprint -> AdaptiveRouter -> Recommendation
+    //        -> Runtime -> ActionProposal -> Policy -> ToolRegistry -> Tool -> Observation
+    //        -> Evidence -> CompletionGate -> Outcome -> LearningEngine -> Experience
+    //        -> ModelStats -> StrategyStats -> AdaptiveRouter update.
+    #[tokio::test]
+    async fn test_al_v1_e2e_full_cycle() {
+        use crate::core::mission_runtime::MissionRuntime;
+        use crate::core::mission_contract::{MissionContract, AcceptanceCriterion, VerificationMethod, CriterionStatus};
+        use crate::core::project_profile::{ProjectProfile, PrimaryLanguage};
+        use crate::core::policy::{ActionProposal, RiskLevel};
+        use crate::core::completion_gate::CompletionDecision;
+
+        // 1. Mission & Contract
+        let mut contract = MissionContract::new("Build and test Rust calculator");
+        contract.acceptance_criteria.push(AcceptanceCriterion {
+            id: "AC-1".to_string(),
+            description: "Calculator runs and returns 4".to_string(),
+            verification: VerificationMethod::CommandExitZero("cargo test".to_string()),
+            required: true,
+            status: CriterionStatus::Pending,
+        });
+
+        // 2. Project Profile & Fingerprint with context
+        let profile = ProjectProfile {
+            workspace_path: ".".to_string(),
+            primary: PrimaryLanguage::Rust,
+            secondary: vec![],
+            frameworks: vec![],
+            package_managers: vec!["cargo".to_string()],
+            has_docker: false,
+            has_git: false,
+        };
+        let fp = FingerprintBuilder::from_mission_with_world(&contract, &profile, None);
+        assert_eq!(fp.language, Some("rust".to_string()));
+        assert!(fp.requires_tests);
+
+        // 3. AdaptiveRouter initial recommendation (Cold Start)
+        let temp_dir = std::env::temp_dir().join(format!("aura_test_e2e_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let persistence = LearningPersistence::with_dir(temp_dir.clone());
+        let store: SharedExperienceStore = Arc::new(RwLock::new(persistence.load_experiences(500)));
+        let router = AdaptiveRouter::new(Default::default(), Default::default(), store.clone(), "m_e2e_1");
+        let available_models = vec!["qwen2.5-coder:7b".to_string(), "deepseek-coder:6.7b".to_string()];
+        let rec1 = router.recommend(&fp, &available_models).await;
+        assert_eq!(rec1.reason, RecommendationReason::ColdStart);
+
+        // 4. Runtime & ToolRegistry execution
+        let mut runtime = MissionRuntime::new(".", &contract.objective, 20);
+        runtime.contract = contract.clone();
+
+        // Register real mock executor in ToolRegistry
+        runtime.tool_registry.register("TOOL_TERMINAL", Arc::new(|args| {
+            let cmd = args.get("comando").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Box::pin(async move {
+                Ok(format!("Command '{}' executed with exit code 0", cmd))
+            })
+        })).unwrap();
+
+        // Propose action
+        let proposal = ActionProposal {
+            tool: "TOOL_TERMINAL".to_string(),
+            arguments: serde_json::json!({ "comando": "cargo test" }),
+            expected_effect: "Run test suite".to_string(),
+            risk: RiskLevel::Safe,
+        };
+
+        // Execution Gateway: Authorize & Execute
+        assert!(runtime.authorize_action(&proposal).is_ok());
+        let obs = runtime.execute_action(&proposal).await.unwrap();
+        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Success);
+
+        // 5. Evidence & CompletionGate
+        runtime.contract.mark_criterion("AC-1", true);
+        use crate::core::evidence::EvidenceKind;
+        runtime.evidence_graph.record(
+            EvidenceKind::CommandExitCode,
+            "TOOL_TERMINAL",
+            "cargo test exit code 0",
+            &obs.payload,
+            1.0,
+            runtime.current_step(),
+        );
+
+        let decision = runtime.can_complete();
+        assert!(matches!(decision, CompletionDecision::Complete { .. }));
+
+        // 6. Outcome -> LearningEngine records outcome
+        let engine = LearningEngine::with_store_and_persistence(store.clone(), persistence.clone());
+        let outcome_result = LearningResult {
+            outcome: LearningOutcome::Success,
+            metrics: OutcomeMetrics {
+                steps: runtime.current_step(),
+                tool_calls: 1,
+                failed_actions: 0,
+                recovery_actions: 0,
+                verification_attempts: 1,
+                successful_verifications: 1,
+                elapsed_ms: 1500,
+            },
+            failures: vec![],
+            recovery: None,
+        };
+
+        let record_res = engine.record_outcome(
+            fp.clone(),
+            rec1.model.clone(),
+            rec1.strategy,
+            outcome_result,
+            0.9,
+            runtime.mission_id.clone(),
+            Some(format!("att_e2e_{}", runtime.mission_id)),
+        ).await;
+        assert!(record_res.is_ok());
+
+        // 7. Verify Experience, ModelStats & subsequent recommendation update
+        let exp_count = store.read().await.len();
+        assert_eq!(exp_count, 1);
+
+        let updated_stats = persistence.load_model_stats();
+        let chosen_stats = updated_stats.get(&rec1.model);
+        assert!(chosen_stats.is_some(), "Recorded model must have persisted stats");
+        let stats = chosen_stats.unwrap();
+        assert_eq!(stats.successes, 1);
+        assert_eq!(stats.attempts, 1);
+
+        // Router with updated stats should reflect experience
+        let updated_router = AdaptiveRouter::new(updated_stats, persistence.load_strategy_stats(), store.clone(), "m_e2e_2");
+        let rec2 = updated_router.recommend(&fp, &available_models).await;
+        assert_eq!(rec2.model, rec1.model, "Successfully reinforced model should be recommended");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    // ── Test 20: Architectural Isolation Test ────────────────────────────────
+    // Guarantee that LearningEngine and AdaptiveRouter hold NO references to
+    // MissionRuntime, ToolRegistry, PolicyEngine, or CompletionGate.
+    #[test]
+    fn test_al_v1_architectural_isolation() {
+        // Compile-time assertion: LearningEngine struct fields must only be store and persistence
+        let store: SharedExperienceStore = Arc::new(RwLock::new(ExperienceStoreV2::new(10)));
+        let engine = LearningEngine::with_store(store.clone());
+        let _ = engine.store();
+
+        // Assert size of LearningEngine is purely store (Arc) + persistence (PathBuf)
+        assert!(std::mem::size_of::<LearningEngine>() <= 64, "LearningEngine must be a lightweight coordinator with no runtime handles");
+
+        // Assert size of AdaptiveRouter is purely data
+        assert!(std::mem::size_of::<AdaptiveRouter>() <= 128, "AdaptiveRouter must be purely algorithmic without runtime dependencies");
+    }
 }

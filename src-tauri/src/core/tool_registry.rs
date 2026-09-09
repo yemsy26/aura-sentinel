@@ -1,4 +1,4 @@
-﻿/// FINAL-6: ToolRegistry — Real dispatch authority for tool execution.
+/// FINAL-6: ToolRegistry — Real dispatch authority for tool execution.
 ///
 /// Upgraded from FINAL-2 (name validator) to FINAL-6 (executor registry).
 /// The LLM delivers an ActionProposal. The Runtime resolves and dispatches
@@ -36,6 +36,16 @@ pub static KNOWN_TOOLS: &[&str] = &[
     "TOOL_BACKGROUND_QUERY",
     "TOOL_BROWSE",
     "TOOL_GIT",
+    "TOOL_THINK",
+    "TOOL_AUDITOR",
+    "TOOL_VISION_EVALUATOR",
+    "TOOL_ASK_USER",
+    "TOOL_READ_FILE",
+    "TOOL_BACKGROUND_READ",
+    "TOOL_BACKGROUND_KILL",
+    "TOOL_ASSET_MANAGER",
+    "TOOL_WEB_SCRAPER",
+    "TOOL_LEARN",
 ];
 
 /// ToolRegistry owns the dispatch table: tool_name → ExecutorFn.
