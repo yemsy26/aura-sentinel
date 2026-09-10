@@ -1,4 +1,4 @@
-﻿//! recovery_index.rs — AL-v2.4 Adaptive Recovery Pattern Index
+//! recovery_index.rs — AL-v2.4 Adaptive Recovery Pattern Index
 //!
 //! Aggregates historical RecoverySequences extracted from Trajectories into
 //! a queryable index: given an error class and optional StateSignature,
@@ -28,20 +28,20 @@ pub struct RecoveryPattern {
     pub attempts: u32,
     /// Times the recovery actually resolved the error (state improved)
     pub successes: u32,
-    /// Average StateSignature similarity of the initial (error) state
-    /// compared to the stored reference state — higher = more applicable
-    pub avg_initial_state_similarity: f32,
+    /// Representative StateSignature of the error context
+    /// Used to match future errors by contextual similarity
+    pub representative_state: StateSignature,
 }
 
 impl RecoveryPattern {
-    fn new(trigger_error: String, strategy: StrategyKind, tool: String) -> Self {
+    fn new(trigger_error: String, strategy: StrategyKind, tool: String, representative_state: StateSignature) -> Self {
         Self {
             trigger_error,
             strategy,
             tool,
             attempts: 0,
             successes: 0,
-            avg_initial_state_similarity: 0.0,
+            representative_state,
         }
     }
 
@@ -50,12 +50,9 @@ impl RecoveryPattern {
         (self.successes as f32 + 0.5) / (self.attempts as f32 + 1.0)
     }
 
-    fn record(&mut self, state_similarity: f32) {
+    fn record(&mut self) {
         self.attempts += 1;
         self.successes += 1; // All RecoverySequences are successful by definition (extracted only on success)
-        let n = self.attempts as f32;
-        self.avg_initial_state_similarity =
-            (self.avg_initial_state_similarity * (n - 1.0) + state_similarity) / n;
     }
 }
 
@@ -95,19 +92,16 @@ impl RecoveryIndex {
             let pattern = patterns.iter_mut()
                 .find(|p| p.strategy == seq.strategy && p.tool == seq.tool);
 
-            // Compute similarity of the stored initial state to itself
-            // (first occurrence: perfect match; subsequent: averaged in)
-            let similarity = seq.initial_state.similarity(&seq.initial_state); // 1.0 for new
-
             if let Some(p) = pattern {
-                p.record(similarity);
+                p.record();
             } else {
                 let mut p = RecoveryPattern::new(
                     seq.trigger_error.clone(),
                     seq.strategy.clone(),
                     seq.tool.clone(),
+                    seq.initial_state.clone(),
                 );
-                p.record(1.0); // First observation is a perfect match
+                p.record();
                 patterns.push(p);
             }
         }
@@ -160,8 +154,8 @@ impl RecoveryIndex {
     // Composite score: 70% success rate + 30% state similarity affinity
     fn pattern_score(&self, pattern: &RecoveryPattern, state: Option<&StateSignature>) -> f32 {
         let success_component = pattern.smoothed_success_rate() * 0.7;
-        let similarity_component = if state.is_some() {
-            pattern.avg_initial_state_similarity * 0.3
+        let similarity_component = if let Some(current) = state {
+            current.similarity(&pattern.representative_state) * 0.3
         } else {
             pattern.smoothed_success_rate() * 0.3
         };

@@ -138,7 +138,7 @@ impl LearningEngine {
 
             // 4. Update StateStrategyIndex from trajectory (AL-v2.3)
             // Derived cache — rebuilt from experience trajectory on each call
-            if let Some(ref traj) = exp.trajectory {
+            if exp.trajectory.is_some() {
                 let mut state_idx = StateStrategyIndex::new();
                 for ex in &all_exps {
                     if let Some(ref t) = ex.trajectory {
@@ -151,14 +151,6 @@ impl LearningEngine {
                         );
                     }
                 }
-                // Also include the current experience's trajectory
-                let recovery = exp.result.metrics.recovery_actions as f32;
-                state_idx.update_from_experience(
-                    &traj.steps,
-                    traj.total_duration_ms,
-                    &exp.result.outcome,
-                    recovery,
-                );
                 if let Err(e) = self.persistence.save_state_strategy_index(&state_idx).await {
                     eprintln!("[LearningEngine] PERSIST_STATE_STATS_WARN: {}", e);
                 }
@@ -172,9 +164,6 @@ impl LearningEngine {
                         rec_idx.update_from_recoveries(&recoveries);
                     }
                 }
-                // Include current trajectory
-                let current_recoveries = traj.extract_recoveries();
-                rec_idx.update_from_recoveries(&current_recoveries);
                 if let Err(e) = self.persistence.save_recovery_index(&rec_idx).await {
                     eprintln!("[LearningEngine] PERSIST_RECOVERY_IDX_WARN: {}", e);
                 }

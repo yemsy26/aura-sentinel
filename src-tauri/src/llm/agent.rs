@@ -913,7 +913,12 @@ pub async fn run_agent_loop(
         al_model_stats, al_strategy_stats,
         al_store.clone(), &runtime.mission_id,
     );
-    let al_recommendation = al_router.recommend(&al_fingerprint, &available_models).await;
+    let al_recommendation = al_router.recommend_with_context(
+        &al_fingerprint,
+        None, // No StateSignature yet at mission start
+        Some(runtime.budget_remaining()), // remaining budget from runtime
+        &available_models,
+    ).await;
     let al_engine = crate::core::learning::LearningEngine::with_store(al_store.clone());
     let al_start_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2008,14 +2013,15 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                         }
 
                         emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
-                        // ── World snapshot BEFORE tool execution ──────────────────────────────
-                        let _ = runtime.observe_world();
-                        let world_hash_before = runtime.current_world_hash();
-                        match execute_terminal_command(&workspace_path, &comando).await {
-                        Ok(out) => {
-                            // ── World snapshot AFTER tool execution ───────────────────────────
-                            let _ = runtime.observe_world();
-                            let world_hash_after = runtime.current_world_hash();
+                        // ── Route through Runtime Gateway (P0 fix) ───────────────────────────
+                        // execute_action() = authorize_action (already passed) + ToolRegistry.dispatch()
+                        // The TOOL_TERMINAL executor is registered above and calls execute_terminal_command().
+                        match runtime.execute_action(&action_proposal).await {
+                        Ok(observation) => {
+                            // execute_action() already records world snapshots before/after internally
+                            let out = observation.payload.clone();
+                            let world_hash_before = observation.state_hash_before.unwrap_or(0);
+                            let world_hash_after = observation.state_hash_after.unwrap_or(0);
                             runtime.record_tool_call();
 
                             // ── Package-install amnesia fix ──────────────────────────────────────
@@ -3946,10 +3952,11 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     } else {
                         emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
                         comandos_ejecutados_historico.insert(comando.clone());
-                        match execute_terminal_command(&workspace_path, &comando).await {
-                            Ok(out) => {
-                                current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto): {}\n\n", out));
-                                emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal OK: {}", &out[..out.len().min(120)]), "SUCCESS");
+                        // P0 fix: route through Runtime Gateway, not direct execution
+                        match runtime.execute_action(&auto_proposal).await {
+                            Ok(obs) => {
+                                current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto): {}\n\n", obs.payload));
+                                emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal OK: {}", &obs.payload[..obs.payload.len().min(120)]), "SUCCESS");
                             }
                             Err(e) => {
                                 current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto) Error: {}\n\n", e));

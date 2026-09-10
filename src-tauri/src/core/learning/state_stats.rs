@@ -127,22 +127,9 @@ impl StateStrategyIndex {
             }
         }
 
-        // Fallback: scan all buckets, pick highest success rate record
-        let mut best_strategy: Option<StrategyKind> = None;
-        let mut best_score = 0.0f32;
-
-        for records in self.index.values() {
-            for rec in records {
-                if rec.attempts < min_attempts { continue; }
-                let score = rec.smoothed_success_rate();
-                if score > best_score {
-                    best_score = score;
-                    best_strategy = Some(rec.strategy.clone());
-                }
-            }
-        }
-
-        best_strategy.map(|s| (s, best_score))
+        // AL-v2.3 Fix: Do NOT scan all buckets globally. If the specific state bucket
+        // has no data, return None and let the AdaptiveRouter fall back to AL-v1 behavior.
+        None
     }
 
     pub fn total_records(&self) -> usize {
