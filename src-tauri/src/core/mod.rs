@@ -275,8 +275,12 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
     let gitignore_content = "\
 # === Aura-Sentinel internal files (never roll back) ===\n\
 .aura_session.json\n\
+.aura_command_trail.json\n\
+.aura_graph.json\n\
+.aura_logs.jsonl\n\
 .fenix_memory.json\n\
 .fenix_chat.json\n\
+.fenix_index.json\n\
 \n\
 # Node.js\n\
 node_modules/\n\
@@ -284,15 +288,18 @@ node_modules/\n\
     if !gitignore_path.exists() {
         if let Err(e) = std::fs::write(&gitignore_path, gitignore_content) {
             eprintln!("Aura-Sentinel Warning: No se pudo escribir .gitignore - {}", e);
+        } else {
+            hide_file_windows_sync(&gitignore_path);
         }
     } else {
         if let Ok(existing) = std::fs::read_to_string(&gitignore_path) {
-            if !existing.contains(".fenix_memory.json") {
+            if !existing.contains(".fenix_memory.json") || !existing.contains(".aura_command_trail.json") {
                 if let Err(e) = std::fs::write(&gitignore_path, format!("{}\n{}", existing.trim_end(), gitignore_content)) {
                     eprintln!("Aura-Sentinel Warning: No se pudo actualizar .gitignore - {}", e);
                 }
             }
         }
+        hide_file_windows_sync(&gitignore_path);
     }
 
     // Init if needed
@@ -340,27 +347,13 @@ pub async fn restore_git_backup(workspace_path: &str) -> Result<(), String> {
             .output()
             .await;
 
-        // 2. Only clean files that were explicitly staged/added by Aura (not pre-existing user files)
-        // We use `git clean -fd --dry-run` first to inspect, then selectively clean only
-        // files that appear in the git index (were added via `git add .` by Aura)
-        let staged = Command::new(get_shell())
-            .args([get_shell_args(), "git diff --name-only --cached"])
+        // 2. Safely clean only untracked files added during this run, protecting user-created files
+        let _ = Command::new(get_shell())
+            .args([get_shell_args(), "git clean -fd"])
             .current_dir(workspace_path)
             .stdin(Stdio::null())
             .output()
             .await;
-
-        if let Ok(out) = staged {
-            let files = String::from_utf8_lossy(&out.stdout);
-            for file in files.lines() {
-                let file = file.trim();
-                if !file.is_empty() {
-                    let full_path = path.join(file);
-                    // Only remove if it exists and was staged by Aura
-                    let _ = std::fs::remove_file(&full_path);
-                }
-            }
-        }
 
         // 3. Reset the index so the removed files are unstaged
         let _ = Command::new(get_shell())
@@ -373,13 +366,60 @@ pub async fn restore_git_backup(workspace_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Hides a file or directory specifically on Windows systems (synchronous, direct Win32 API).
+pub fn hide_file_windows_sync(path: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        if !path.exists() {
+            return;
+        }
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        wide.push(0);
+        extern "system" {
+            fn GetFileAttributesW(lpFileName: *const u16) -> u32;
+            fn SetFileAttributesW(lpFileName: *const u16, dwFileAttributes: u32) -> i32;
+        }
+        const INVALID_FILE_ATTRIBUTES: u32 = 0xFFFFFFFF;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+
+        unsafe {
+            let attr = GetFileAttributesW(wide.as_ptr());
+            if attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_HIDDEN) == 0 {
+                let _ = SetFileAttributesW(wide.as_ptr(), attr | FILE_ATTRIBUTE_HIDDEN);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+    }
+}
+
 /// Hides a file specifically on Windows systems.
 pub async fn hide_file_windows(path: &Path) {
-    if cfg!(target_os = "windows") {
-        let _ = Command::new("attrib")
-            .args(["+h", path.to_str().unwrap_or("")])
-            .output()
-            .await;
+    hide_file_windows_sync(path);
+}
+
+/// Hides all known internal Aura dotfiles in a workspace so they do not pollute user directories.
+pub fn hide_workspace_internal_files(workspace_path: &str) {
+    let base = Path::new(workspace_path);
+    let internal_names = [
+        ".aura_session.json",
+        ".aura_command_trail.json",
+        ".aura_graph.json",
+        ".aura_logs.jsonl",
+        ".fenix_memory.json",
+        ".fenix_chat.json",
+        ".fenix_index.json",
+        ".gitignore",
+        ".git",
+    ];
+    for name in &internal_names {
+        let p = base.join(name);
+        if p.exists() {
+            hide_file_windows_sync(&p);
+        }
     }
 }
 
@@ -735,3 +775,37 @@ pub async fn format_system_error(error_msg: &str) -> String {
         error_msg.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hide_file_windows_sync() {
+        let temp_dir = std::env::temp_dir().join(format!("aura_test_hide_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join(".aura_test_dotfile.json");
+        let _ = std::fs::write(&test_file, b"{}");
+
+        hide_file_windows_sync(&test_file);
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let mut wide: Vec<u16> = test_file.as_os_str().encode_wide().collect();
+            wide.push(0);
+            extern "system" {
+                fn GetFileAttributesW(lpFileName: *const u16) -> u32;
+            }
+            unsafe {
+                let attr = GetFileAttributesW(wide.as_ptr());
+                assert_ne!(attr, 0xFFFFFFFF);
+                assert_ne!(attr & 0x2, 0, "File should have FILE_ATTRIBUTE_HIDDEN set");
+            }
+        }
+
+        let _ = std::fs::remove_file(&test_file);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
+}
+

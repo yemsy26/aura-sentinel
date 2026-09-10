@@ -171,7 +171,12 @@ pub(crate) fn atomic_replace_sync(src: &Path, target: &Path) -> Result<(), Strin
         // Fast path: if target does not exist, rename is atomic on all platforms.
         if !target.exists() {
             match std::fs::rename(src, target) {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    if target.file_name().and_then(|n| n.to_str()).map_or(false, |s| s.starts_with('.')) {
+                        crate::core::hide_file_windows_sync(target);
+                    }
+                    return Ok(());
+                }
                 Err(_e) if attempts < 5 => {
                     attempts += 1;
                     std::thread::sleep(std::time::Duration::from_millis(15));
@@ -217,6 +222,9 @@ pub(crate) fn atomic_replace_sync(src: &Path, target: &Path) -> Result<(), Strin
             };
 
             if success != 0 {
+                if target.file_name().and_then(|n| n.to_str()).map_or(false, |s| s.starts_with('.')) {
+                    crate::core::hide_file_windows_sync(target);
+                }
                 return Ok(());
             }
 

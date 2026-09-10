@@ -416,7 +416,9 @@ pub fn analyze_workspace(workspace_path: &str) -> DependencyGraph {
     // Persist to disk
     let graph_path = workspace.join(".aura_graph.json");
     if let Ok(json) = serde_json::to_string_pretty(&graph) {
-        let _ = std::fs::write(&graph_path, json);
+        if std::fs::write(&graph_path, json).is_ok() {
+            crate::core::hide_file_windows_sync(&graph_path);
+        }
     }
 
     graph

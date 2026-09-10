@@ -105,6 +105,7 @@ impl CommandTrail {
     /// Carga trail existente o crea nuevo
     pub fn load_or_new(workspace_path: &str, objetivo: &str) -> Self {
         let path = Path::new(workspace_path).join(TRAIL_FILE);
+        crate::core::hide_file_windows_sync(&path);
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(mut trail) = serde_json::from_str::<CommandTrail>(&content) {
                 // Asegurar capacidad
@@ -125,7 +126,9 @@ impl CommandTrail {
     pub fn save(&self, workspace_path: &str) {
         let path = Path::new(workspace_path).join(TRAIL_FILE);
         if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(&path, json);
+            if std::fs::write(&path, json).is_ok() {
+                crate::core::hide_file_windows_sync(&path);
+            }
         }
     }
 

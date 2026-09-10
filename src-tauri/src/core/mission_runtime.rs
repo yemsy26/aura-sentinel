@@ -97,7 +97,7 @@ impl MissionRuntime {
     }
 
     /// Restores the runtime's step counter from a persisted checkpoint.
-    /// The Runtime controls how its own state is restored â€” agent.rs must NOT
+    /// The Runtime controls how its own state is restored — agent.rs must NOT
     /// write directly to cognitive_state fields.
     pub fn restore_step(&mut self, step: u32) {
         self.cognitive_state.mission.current_step = step;
@@ -105,11 +105,11 @@ impl MissionRuntime {
     }
 
     /// Checks runtime coherence. Returns a list of violation strings.
-    /// Does NOT panic â€” callers emit FATAL/WARNING and decide how to proceed.
+    /// Does NOT panic — callers emit FATAL/WARNING and decide how to proceed.
     pub fn check_invariants(&self) -> Vec<String> {
         let mut violations = Vec::new();
         if self.contract.objective.trim().is_empty() {
-            violations.push("CONTRACT_EMPTY: objetivo vacÃ­o".into());
+            violations.push("CONTRACT_EMPTY: objetivo vacío".into());
         }
         if self.cognitive_state.mission.id != self.mission_id {
             violations.push(format!(
@@ -135,12 +135,12 @@ impl MissionRuntime {
         violations
     }
 
-    // â”€â”€â”€ World Observation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── World Observation ─────────────────────────────────────────────────────
 
     /// FINAL-3: Takes a fresh workspace snapshot and stores it in the runtime.
     /// Returns Err if the snapshot fails so callers can distinguish
     /// "no world change" (hash equal) from "observation failed" (None hash).
-    /// NEVER silences the error â€” eprintln is eliminated.
+    /// NEVER silences the error — eprintln is eliminated.
     pub fn observe_world(&mut self) -> Result<(), String> {
         match WorldState::capture(&self.workspace_path) {
             Ok(ws) => {
@@ -171,7 +171,7 @@ impl MissionRuntime {
         }).unwrap_or(0)
     }
 
-    // â”€â”€â”€ Observation Recording â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Observation Recording ─────────────────────────────────────────────────
 
     /// Records a structured tool observation and feeds it to StallDetector.
     pub fn record_observation(&mut self, obs: &Observation) {
@@ -226,13 +226,13 @@ impl MissionRuntime {
         self.stall_detector.record_signature(sig);
     }
 
-    // â”€â”€â”€ Stall Detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Stall Detection ───────────────────────────────────────────────────────
 
     pub fn should_stall_recover(&self, window: usize) -> Option<StallType> {
         self.stall_detector.detect_stall(window)
     }
 
-    // â”€â”€â”€ Policy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Policy ────────────────────────────────────────────────────────────────
 
     pub fn check_policy(&self, proposal: &ActionProposal) -> PolicyDecision {
         PolicyEngine::authorize(proposal)
@@ -325,7 +325,7 @@ impl MissionRuntime {
         Ok(obs)
     }
 
-    // â”€â”€â”€ Completion Gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Completion Gate ───────────────────────────────────────────────────────
 
     /// The ONLY authority allowed to declare mission complete.
     /// Never let agent.rs declare completion without calling this.
@@ -333,7 +333,7 @@ impl MissionRuntime {
         CompletionGate::evaluate(&self.contract, &self.cognitive_state, &self.evidence_graph)
     }
 
-    // â”€â”€â”€ Recovery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Recovery ──────────────────────────────────────────────────────────────
 
     pub fn plan_recovery(&mut self, tool_name: &str, error_msg: &str) -> RecoveryDecision {
         let class = classify_error(error_msg);
@@ -345,15 +345,15 @@ impl MissionRuntime {
     /// Returns Some(RecoveryDecision) for error observations so agent.rs can decide
     /// what to do next (retry, change tool, replan, ask user, abort).
     ///
-    /// Separation: Execution Gateway â‰  Recovery Authority.
+    /// Separation: Execution Gateway ≠ Recovery Authority.
     /// execute_action() produces an Observation.
     /// handle_observation() consults RecoveryEngine and returns a decision.
-    /// agent.rs acts on that decision â€” Runtime never forces the recovery action.
+    /// agent.rs acts on that decision — Runtime never forces the recovery action.
     pub fn handle_observation(&mut self, obs: &Observation) -> Option<RecoveryDecision> {
         use crate::core::observation::ObservationStatus;
         match obs.status {
             ObservationStatus::Error => {
-                // Error â†’ classify â†’ RecoveryEngine â†’ decision
+                // Error → classify → RecoveryEngine → decision
                 Some(self.plan_recovery(&obs.tool_name, &obs.payload))
             }
             ObservationStatus::Cancelled => {
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(rt.budget_remaining(), 0);
     }
 
-    // â”€â”€ H-11: Architecture invariant tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── H-11: Architecture invariant tests ──────────────────────────────────
 
     /// H-11-A: restore_step() is the ONLY way to set step from outside.
     /// Verifies runtime controls its own restoration.
@@ -447,7 +447,7 @@ mod tests {
     fn test_check_invariants_valid_runtime() {
         let rt = MissionRuntime::new(".", "Build a CLI tool", 50);
         let violations = rt.check_invariants();
-        // mission_id mismatch may fire because cognitive_state.mission.id is default â€” filter for BUDGET/STEP/WORKSPACE
+        // mission_id mismatch may fire because cognitive_state.mission.id is default — filter for BUDGET/STEP/WORKSPACE
         let critical: Vec<_> = violations.iter()
             .filter(|v| v.contains("BUDGET_INVALID") || v.contains("STEP_EXCEEDS") || v.contains("WORKSPACE_EMPTY"))
             .collect();
@@ -465,7 +465,7 @@ mod tests {
         assert!(!obs.retryable, "Cancelled must not be retryable");
     }
 
-    /// H-11-F: Empty contract blocks CompletionGate â€” no false positives.
+    /// H-11-F: Empty contract blocks CompletionGate — no false positives.
     #[test]
     fn test_empty_contract_blocks_completion() {
         let rt = MissionRuntime::new(".", "Do something", 50);
@@ -502,7 +502,7 @@ mod tests {
         assert_eq!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Complete);
     }
 
-    /// H-11-G: record_step() is the only way step advances â€” no += 1 outside runtime.
+    /// H-11-G: record_step() is the only way step advances — no += 1 outside runtime.
     #[test]
     fn test_step_advances_only_via_record_step() {
         let mut rt = MissionRuntime::new(".", "Step authority test", 50);
