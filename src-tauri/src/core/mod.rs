@@ -274,6 +274,7 @@ pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Re
     let gitignore_path = path.join(".gitignore");
     let gitignore_content = "\
 # === Aura-Sentinel internal files (never roll back) ===\n\
+.aura/\n\
 .aura_session.json\n\
 .aura_command_trail.json\n\
 .aura_graph.json\n\
@@ -405,6 +406,7 @@ pub async fn hide_file_windows(path: &Path) {
 pub fn hide_workspace_internal_files(workspace_path: &str) {
     let base = Path::new(workspace_path);
     let internal_names = [
+        ".aura",
         ".aura_session.json",
         ".aura_command_trail.json",
         ".aura_graph.json",

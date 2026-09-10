@@ -9,7 +9,7 @@ pub enum TestResult {
     Failed(String),   // Tests ran and actually failed
 }
 
-/// Check if a runner script exists for the given language
+/// Check if a runner script exists for the given language (checks .aura/runtime/runners/ first)
 fn find_runner_script(workspace_path: &str, runner_name: &str) -> Option<std::path::PathBuf> {
     let exts = if cfg!(target_os = "windows") {
         vec![".bat", ".ps1"]
@@ -17,8 +17,24 @@ fn find_runner_script(workspace_path: &str, runner_name: &str) -> Option<std::pa
         vec![".sh"]
     };
     
+    let root = Path::new(workspace_path);
+    let internal_dir = root.join(".aura").join("runtime").join("runners");
+
     for ext in exts {
-        let path = Path::new(workspace_path).join(format!("{}{}", runner_name, ext));
+        // 1. Check in .aura/runtime/runners/ with language-specific name
+        let p_lang = internal_dir.join(format!("{}{}", runner_name, ext));
+        if p_lang.exists() {
+            return Some(p_lang);
+        }
+
+        // 2. Check in .aura/runtime/runners/ with standard run_tests name
+        let p_test = internal_dir.join(format!("run_tests{}", ext));
+        if p_test.exists() {
+            return Some(p_test);
+        }
+
+        // 3. Fallback to workspace root (backward compatibility)
+        let path = root.join(format!("{}{}", runner_name, ext));
         if path.exists() {
             // Check if executable on Unix
             #[cfg(unix)]

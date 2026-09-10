@@ -937,10 +937,10 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
     command_trail.save(&workspace_path);
     
     // ─── AUTO-GENERATE RUNNERS (test, build, dev, lint) ───
-    // Detectar lenguaje y generar scripts de ejecución si no existen
+    // Detectar lenguaje y generar scripts de ejecución internamente en .aura/runtime/runners
     let runners_generated = generate_project_runners(&workspace_path, &original_prompt_parsed).await;
     if !runners_generated.is_empty() {
-        emit_event(&app_handle, 0, &format!("🏃 Runners generados: {}", runners_generated.iter().map(|p| p.file_name().unwrap().to_string_lossy()).collect::<Vec<_>>().join(", ")), "SUCCESS");
+        emit_event(&app_handle, 0, &format!("🏃 Runners internos activos en .aura/runtime/runners: {}", runners_generated.iter().map(|p| p.file_name().unwrap().to_string_lossy()).collect::<Vec<_>>().join(", ")), "SUCCESS");
     }
     
     // =======================================================
@@ -3558,8 +3558,8 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     emit_event(&app_handle, runtime.current_step(), "No se generaron runners (lenguaje desconocido).", "WARNING");
                 } else {
                     let names: Vec<String> = runners.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
-                    current_context.push_str(&format!("[TOOL_CREATE_RUNNER] Runners generados: {}\n\n", names.join(", ")));
-                    emit_event(&app_handle, runtime.current_step(), &format!("Runners generados: {}", names.join(", ")), "SUCCESS");
+                    current_context.push_str(&format!("[TOOL_CREATE_RUNNER] Runners internos generados en .aura/runtime/runners: {}\n\n", names.join(", ")));
+                    emit_event(&app_handle, runtime.current_step(), &format!("Runners internos generados en .aura/runtime/runners: {}", names.join(", ")), "SUCCESS");
                 }
             },
             // ── Fase 2: TOOL_CONTAINER (Docker/Podman) ──

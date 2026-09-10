@@ -179,13 +179,15 @@ impl AutoValidator {
         }
     }
 
-    /// Valida runners de prueba
+    /// Valida runners de prueba (en .aura/runtime/runners o en la raíz)
     async fn validate_runners(&self, result: &mut ValidationResult) {
-        let runners = ["run_tests.bat", "run_tests.ps1", "run_game.bat", "run_game.ps1", "dev.sh", "dev.bat"];
+        let runners = ["run_tests.bat", "run_tests.ps1", "run_tests.sh", "run_game.bat", "run_game.ps1", "dev.sh", "dev.bat"];
+        let root = Path::new(&self.workspace_path);
+        let internal_runners = root.join(".aura").join("runtime").join("runners");
         
         let mut found = false;
         for runner in &runners {
-            if Path::new(&self.workspace_path).join(runner).exists() {
+            if internal_runners.join(runner).exists() || root.join(runner).exists() {
                 found = true;
                 break;
             }

@@ -59,6 +59,7 @@ pub struct RunnerConfig {
     pub runner_type: RunnerType,
     pub language: String,
     pub project_root: PathBuf,
+    pub output_dir: Option<PathBuf>,
     pub test_command: Option<String>,
     pub build_command: Option<String>,
     pub dev_command: Option<String>,
@@ -83,6 +84,7 @@ impl Default for RunnerConfig {
             runner_type: RunnerType::Test,
             language: "unknown".to_string(),
             project_root: PathBuf::from("."),
+            output_dir: None,
             test_command: None,
             build_command: None,
             dev_command: None,
@@ -515,33 +517,66 @@ fn generate_powershell_script(config: &RunnerConfig) -> String {
     script
 }
 
-/// Punto de entrada público: genera todos los runners para un proyecto
+/// Limpia runners obsoletos que hayan sido creados en la raíz del proyecto para evitar contaminación.
+pub fn cleanup_legacy_root_runners(project_root: &Path) {
+    let legacy_names = [
+        "run_tests.bat", "run_tests.ps1", "run_tests.sh",
+        "build.bat", "build.ps1", "build.sh",
+        "dev.bat", "dev.ps1", "dev.sh",
+        "lint.bat", "lint.ps1", "lint.sh",
+        "docker.bat", "docker.ps1", "docker.sh",
+    ];
+    for name in &legacy_names {
+        let p = project_root.join(name);
+        if p.exists() {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
+/// Punto de entrada público: genera todos los runners para un proyecto dentro de `.aura/runtime/runners/`
 pub async fn generate_runners(config: RunnerConfig) -> Result<Vec<PathBuf>, String> {
     let mut generated = Vec::new();
     let project_root = &config.project_root;
 
-    // Asegurar directorio
-    fs::create_dir_all(project_root).await
-        .map_err(|e| format!("Error creando directorio: {}", e))?;
+    // Limpiar runners legados en la raíz del workspace
+    cleanup_legacy_root_runners(project_root);
+
+    // Destino: .aura/runtime/runners/ a menos que se haya especificado un output_dir explícito
+    let target_dir = config.output_dir.clone().unwrap_or_else(|| {
+        project_root.join(".aura").join("runtime").join("runners")
+    });
+
+    // Asegurar directorio interno
+    fs::create_dir_all(&target_dir).await
+        .map_err(|e| format!("Error creando directorio de runners: {}", e))?;
+
+    // Ocultar directorio .aura en Windows
+    let aura_dir = project_root.join(".aura");
+    if aura_dir.exists() {
+        crate::core::hide_file_windows_sync(&aura_dir);
+    }
 
     // Generar según OS
     if cfg!(target_os = "windows") {
         // .bat
-        let bat_path = project_root.join(format!("{}.bat", config.runner_type.base_name()));
+        let bat_path = target_dir.join(format!("{}.bat", config.runner_type.base_name()));
         let bat_content = generate_batch_script(&config);
         fs::write(&bat_path, bat_content).await
             .map_err(|e| format!("Error escribiendo .bat: {}", e))?;
+        crate::core::hide_file_windows_sync(&bat_path);
         generated.push(bat_path);
 
         // .ps1
-        let ps1_path = project_root.join(format!("{}.ps1", config.runner_type.base_name()));
+        let ps1_path = target_dir.join(format!("{}.ps1", config.runner_type.base_name()));
         let ps1_content = generate_powershell_script(&config);
         fs::write(&ps1_path, ps1_content).await
             .map_err(|e| format!("Error escribiendo .ps1: {}", e))?;
+        crate::core::hide_file_windows_sync(&ps1_path);
         generated.push(ps1_path);
     } else {
         // .sh
-        let sh_path = project_root.join(format!("{}.sh", config.runner_type.base_name()));
+        let sh_path = target_dir.join(format!("{}.sh", config.runner_type.base_name()));
         let sh_content = generate_bash_script(&config);
         fs::write(&sh_path, sh_content).await
             .map_err(|e| format!("Error escribiendo .sh: {}", e))?;
@@ -692,5 +727,39 @@ mod tests {
         assert_eq!(detect_prerequisites("rust"), vec!["cargo"]);
         assert_eq!(detect_prerequisites("python"), vec!["python", "pip"]);
         assert_eq!(detect_prerequisites("javascript"), vec!["node", "npm"]);
+    }
+
+    #[tokio::test]
+    async fn test_generate_runners_internal_location_and_cleanup() {
+        let temp_dir = std::env::temp_dir().join(format!("aura_runner_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // Simulate a legacy runner in project root
+        let legacy_file = temp_dir.join("run_tests.bat");
+        let _ = std::fs::write(&legacy_file, b"rem old runner");
+        assert!(legacy_file.exists());
+
+        let config = RunnerConfig {
+            runner_type: RunnerType::Test,
+            language: "rust".to_string(),
+            project_root: temp_dir.clone(),
+            test_command: Some("cargo test".to_string()),
+            ..Default::default()
+        };
+
+        let generated = generate_runners(config).await.unwrap();
+        assert!(!generated.is_empty());
+
+        // The legacy file in root must have been cleaned up
+        assert!(!legacy_file.exists(), "Legacy runner in workspace root should be deleted");
+
+        // The generated runner must be inside .aura/runtime/runners/
+        for p in &generated {
+            assert!(p.to_string_lossy().contains(".aura"), "Runner path must be inside .aura");
+            assert!(p.to_string_lossy().contains("runners"), "Runner path must be inside runners directory");
+            assert!(p.exists(), "Generated runner must exist");
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
