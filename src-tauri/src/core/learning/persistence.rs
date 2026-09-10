@@ -129,6 +129,22 @@ impl LearningPersistence {
         self.load_json(&self.strategy_stats_path()).unwrap_or_default()
     }
 
+    /// Persist the StateStrategyIndex as a derived cache (AL-v2.3).
+    /// Corruption-safe: if this file is missing, it is rebuilt from experiences.
+    pub async fn save_state_strategy_index(
+        &self,
+        index: &crate::core::learning::state_stats::StateStrategyIndex,
+    ) -> Result<(), String> {
+        self.atomic_json_write(&self.dir.join("state_strategy_index.json"), index).await
+    }
+
+    #[allow(dead_code)]
+    pub fn load_state_strategy_index(&self) -> crate::core::learning::state_stats::StateStrategyIndex {
+        self.load_json(&self.dir.join("state_strategy_index.json"))
+            .unwrap_or_default()
+    }
+
+
     async fn atomic_json_write<T: serde::Serialize>(
         &self, path: &Path, value: &T,
     ) -> Result<(), String> {

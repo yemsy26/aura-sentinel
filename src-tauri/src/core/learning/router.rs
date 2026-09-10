@@ -5,6 +5,8 @@ use crate::core::learning::experience::{Experience, SharedExperienceStore};
 use crate::core::learning::fingerprint::{TaskFingerprint, FingerprintBuilder};
 use crate::core::learning::stats::{ModelStats, StrategyStats};
 use crate::core::learning::strategy::StrategyKind;
+use crate::core::learning::signature::StateSignature;
+use crate::core::learning::state_stats::StateStrategyIndex;
 
 /// Why this recommendation was produced.
 #[allow(dead_code)]
@@ -29,6 +31,8 @@ pub struct Recommendation {
     pub reason: RecommendationReason,
     pub fallback_model: Option<String>,
     pub fallback_strategy: Option<StrategyKind>,
+    /// AL-v2.3 — true if StateSignature data influenced strategy selection
+    pub state_informed: bool,
 }
 
 /// AdaptiveRouter — the ONLY interface between Learning and the LLM selection layer.
@@ -39,6 +43,8 @@ pub struct AdaptiveRouter {
     model_stats: HashMap<String, ModelStats>,
     strategy_stats: HashMap<String, StrategyStats>,
     store: SharedExperienceStore,
+    /// AL-v2.3 — StateSignature-indexed strategy performance cache
+    state_index: StateStrategyIndex,
     /// Deterministic exploration seed from hash(mission_id)
     exploration_seed: u64,
 }
@@ -52,14 +58,38 @@ impl AdaptiveRouter {
     ) -> Self {
         let mut hasher = DefaultHasher::new();
         mission_id.hash(&mut hasher);
-        Self { model_stats, strategy_stats, store, exploration_seed: hasher.finish() }
+        Self {
+            model_stats, strategy_stats, store,
+            state_index: StateStrategyIndex::new(),
+            exploration_seed: hasher.finish(),
+        }
+    }
+
+    /// AL-v2.3 — construct with a pre-loaded StateStrategyIndex.
+    #[allow(dead_code)]
+    pub fn with_state_index(mut self, index: StateStrategyIndex) -> Self {
+        self.state_index = index;
+        self
     }
 
     /// Produce a recommendation for the given fingerprint and available models.
     /// NEVER executes. NEVER writes to ExperienceStore.
+    /// Delegates to recommend_with_state with no state override (backward-compatible).
     pub async fn recommend(
         &self,
         fp: &TaskFingerprint,
+        available_models: &[String],
+    ) -> Recommendation {
+        self.recommend_with_state(fp, None, available_models).await
+    }
+
+    /// AL-v2.3 — recommend with optional StateSignature context.
+    /// When `state` is Some, blends state-indexed strategy score with fingerprint score.
+    /// When `state` is None, behaves identically to the original recommend().
+    pub async fn recommend_with_state(
+        &self,
+        fp: &TaskFingerprint,
+        state: Option<&StateSignature>,
         available_models: &[String],
     ) -> Recommendation {
         if available_models.is_empty() {
@@ -70,7 +100,23 @@ impl AdaptiveRouter {
         // Gather similar experiences from the shared store
         let similar = store_guard.find_similar(fp, 20);
 
+
         if similar.is_empty() && store_guard.len() < 3 {
+            // AL-v2.3: even on cold-start, consult the state index if a StateSignature is provided
+            if let Some(sig) = state {
+                if let Some((state_strat, _rate)) = self.state_index.best_strategy_for_state(sig, 2) {
+                    return Recommendation {
+                        model: available_models.first().cloned()
+                            .unwrap_or_else(|| "default".to_string()),
+                        strategy: state_strat,
+                        confidence: 0.5,
+                        reason: RecommendationReason::ColdStart,
+                        fallback_model: None,
+                        fallback_strategy: None,
+                        state_informed: true,
+                    };
+                }
+            }
             return self.cold_start(fp, available_models.first().cloned());
         }
 
@@ -89,12 +135,33 @@ impl AdaptiveRouter {
                 reason: RecommendationReason::Exploration,
                 fallback_model: available_models.first().cloned(),
                 fallback_strategy: None,
+                state_informed: false,
             };
         }
 
         // Score each available model using contextual & global weighting
         let (best_model, model_confidence) = self.best_model(fp, available_models, &similar);
-        let best_strategy = self.best_strategy(fp, &similar);
+        let fp_strategy = self.best_strategy(fp, &similar);
+
+        // AL-v2.3 — blend state-indexed strategy when state data is available
+        let (final_strategy, state_informed) = if let Some(sig) = state {
+            if let Some((state_strat, state_score)) = self.state_index.best_strategy_for_state(sig, 2) {
+                // Compute fingerprint strategy score for comparison
+                let fp_score = self.strategy_score_for(&fp_strategy, fp, &similar);
+                // Blend: 60% state evidence + 40% fingerprint evidence
+                let state_weighted = state_score * 0.6;
+                let fp_weighted = fp_score * 0.4;
+                if state_weighted + fp_weighted > fp_score {
+                    (state_strat, true)
+                } else {
+                    (fp_strategy, false)
+                }
+            } else {
+                (fp_strategy, false)
+            }
+        } else {
+            (fp_strategy, false)
+        };
 
         // Determine reason and sample depth
         let reason = if similar.is_empty() {
@@ -117,12 +184,13 @@ impl AdaptiveRouter {
 
         Recommendation {
             model: best_model.clone(),
-            strategy: best_strategy,
+            strategy: final_strategy,
             confidence,
             reason,
             fallback_model: available_models.iter()
                 .find(|m| **m != best_model).cloned(),
             fallback_strategy: Some(StrategyKind::default_for(fp)),
+            state_informed,
         }
     }
 
@@ -136,8 +204,10 @@ impl AdaptiveRouter {
             reason: RecommendationReason::ColdStart,
             fallback_model: None,
             fallback_strategy: None,
+            state_informed: false,
         }
     }
+
 
     fn should_explore(&self) -> bool {
         let total: u64 = self.model_stats.values().map(|s| s.attempts).sum();
@@ -222,5 +292,21 @@ impl AdaptiveRouter {
             }
         }
         best_strat
+    }
+
+    /// Returns the smoothed success rate for a given strategy+fingerprint combo.
+    /// Used as baseline for state-vs-fingerprint blending in AL-v2.3.
+    fn strategy_score_for(&self, strat: &StrategyKind, fp: &TaskFingerprint, similar: &[&Experience]) -> f32 {
+        let lang = fp.language.as_deref();
+        if !similar.is_empty() {
+            use crate::core::learning::stats::compute_strategy_stats_from;
+            let stats = compute_strategy_stats_from(strat, lang, similar);
+            if stats.attempts > 0 {
+                return stats.smoothed_success_rate();
+            }
+        }
+        self.strategy_stats.get(strat.as_str())
+            .map(|s| s.smoothed_success_rate())
+            .unwrap_or(0.50)
     }
 }

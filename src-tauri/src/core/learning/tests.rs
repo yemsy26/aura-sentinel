@@ -489,8 +489,8 @@ mod tests {
         // Assert size of LearningEngine is purely store (Arc) + persistence (PathBuf)
         assert!(std::mem::size_of::<LearningEngine>() <= 64, "LearningEngine must be a lightweight coordinator with no runtime handles");
 
-        // Assert size of AdaptiveRouter is purely data
-        assert!(std::mem::size_of::<AdaptiveRouter>() <= 128, "AdaptiveRouter must be purely algorithmic without runtime dependencies");
+        // Assert size of AdaptiveRouter is purely data (StateStrategyIndex adds a HashMap — still no runtime handles)
+        assert!(std::mem::size_of::<AdaptiveRouter>() <= 256, "AdaptiveRouter must be purely algorithmic without runtime dependencies");
     }
 
     // ── AL-v2 Tests: StateSignature & Trajectory Foundation ──────────────────
@@ -687,5 +687,125 @@ mod tests {
         let loaded_traj = deserialized_v2.trajectory.unwrap();
         assert_eq!(loaded_traj.mission_id, "m_v2");
         assert_eq!(loaded_traj.step_count(), 1);
+    }
+
+    // ── AL-v2.3 Tests — Strategy Learning (StateSignature → Strategy → Outcome) ──
+
+    #[test]
+    fn test_al_v2_3_state_strategy_index_update_from_experience() {
+        use crate::core::learning::state_stats::StateStrategyIndex;
+        use crate::core::learning::signature::StateSignatureBuilder;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
+        use crate::core::learning::strategy::StrategyKind;
+        use crate::core::learning::outcome::LearningOutcome;
+
+        let mut idx = StateStrategyIndex::new();
+        let state = StateSignatureBuilder::new("fp_v2_3")
+            .phase(0).compile_failures(2).progress_stalled(true).build();
+
+        // Record one successful DiagnoseThenRepair step
+        let mut traj = Trajectory::new("m_v2_3_a", "fp_v2_3");
+        traj.record_step(TrajectoryStep {
+            step: 1, from_state: state.clone(),
+            strategy: StrategyKind::DiagnoseThenRepair,
+            tool: "TOOL_TERMINAL".to_string(), success: true,
+            error_encountered: None, to_state: None,
+        });
+        traj.finalize(LearningOutcome::Success, 5000);
+
+        idx.update_from_experience(&traj.steps, traj.total_duration_ms, &traj.outcome, 1.0);
+
+        assert_eq!(idx.total_records(), 1, "Must have 1 record after one trajectory");
+        let (strat, rate) = idx.best_strategy_for_state(&state, 1).unwrap();
+        assert_eq!(strat, StrategyKind::DiagnoseThenRepair);
+        assert!(rate > 0.5, "Success rate must exceed 0.5 after one mission success");
+    }
+
+    #[tokio::test]
+    async fn test_al_v2_3_router_uses_state_signature_when_available() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::core::learning::experience::ExperienceStoreV2;
+        use crate::core::learning::router::AdaptiveRouter;
+        use crate::core::learning::state_stats::StateStrategyIndex;
+        use crate::core::learning::signature::StateSignatureBuilder;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
+        use crate::core::learning::strategy::StrategyKind;
+        use crate::core::learning::outcome::LearningOutcome;
+
+        // Build a StateStrategyIndex with clear evidence for IncrementalPatch
+        // under a stalled/compile-error state
+        let state = StateSignatureBuilder::new("fp_router_state")
+            .phase(1).compile_failures(3).progress_stalled(true).build();
+
+        let mut idx = StateStrategyIndex::new();
+        // Record multiple successful IncrementalPatch in this state
+        for i in 0..4u32 {
+            let mut traj = Trajectory::new(format!("m_rs_{}", i), "fp_router_state");
+            traj.record_step(TrajectoryStep {
+                step: 1, from_state: state.clone(),
+                strategy: StrategyKind::IncrementalPatch,
+                tool: "TOOL_PROGRAMMER".to_string(), success: true,
+                error_encountered: None, to_state: None,
+            });
+            traj.finalize(LearningOutcome::Success, 3000);
+            idx.update_from_experience(&traj.steps, traj.total_duration_ms, &traj.outcome, 0.0);
+        }
+
+        // Verify the index recommends IncrementalPatch for this state
+        let (recommended, _) = idx.best_strategy_for_state(&state, 2).unwrap();
+        assert_eq!(recommended, StrategyKind::IncrementalPatch,
+            "Index must recommend IncrementalPatch with 4 successful observations");
+
+        // Wire the router with this index and empty experience store
+        let store = Arc::new(RwLock::new(ExperienceStoreV2::new(100)));
+        let router = AdaptiveRouter::new(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            store,
+            "mission_router_state_test",
+        ).with_state_index(idx);
+
+        let fp = make_fp("rust", true);
+        let models = vec!["model-a".to_string()];
+
+        // Without state: cold start (no experience data)
+        let rec_no_state = router.recommend(&fp, &models).await;
+        assert!(!rec_no_state.state_informed,
+            "Without state arg, state_informed must be false");
+
+        // With state: should be state_informed = true since index has data
+        let rec_with_state = router.recommend_with_state(&fp, Some(&state), &models).await;
+        assert!(rec_with_state.state_informed,
+            "With state arg and index data, state_informed must be true");
+        assert_eq!(rec_with_state.strategy, StrategyKind::IncrementalPatch,
+            "Router must select state-informed strategy over fingerprint default");
+    }
+
+    #[tokio::test]
+    async fn test_al_v2_3_router_falls_back_to_fingerprint_when_no_state_data() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::core::learning::experience::ExperienceStoreV2;
+        use crate::core::learning::router::AdaptiveRouter;
+        use crate::core::learning::signature::StateSignatureBuilder;
+
+        let store = Arc::new(RwLock::new(ExperienceStoreV2::new(100)));
+        let router = AdaptiveRouter::new(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            store,
+            "mission_fallback_test",
+        );
+        // Empty StateStrategyIndex (default)
+
+        let fp = make_fp("rust", true);
+        let state = StateSignatureBuilder::new("fp_no_data")
+            .phase(0).build();
+        let models = vec!["model-x".to_string()];
+
+        let rec = router.recommend_with_state(&fp, Some(&state), &models).await;
+        assert!(!rec.state_informed,
+            "With empty index, state_informed must be false (fingerprint fallback)");
     }
 }

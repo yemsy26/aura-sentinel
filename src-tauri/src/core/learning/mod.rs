@@ -22,6 +22,7 @@ pub mod router;
 pub mod engine;
 pub mod signature;
 pub mod trajectory;
+pub mod state_stats;
 
 #[cfg(test)]
 mod tests;
@@ -47,3 +48,5 @@ pub use engine::{LearningEngine, RuntimeSnapshot};
 pub use signature::{StateSignature, StateSignatureBuilder, VerificationLevel};
 #[allow(unused_imports)]
 pub use trajectory::{Trajectory, TrajectoryStep, RecoverySequence};
+#[allow(unused_imports)]
+pub use state_stats::{StateStrategyIndex, StateStrategyRecord, hash_state};

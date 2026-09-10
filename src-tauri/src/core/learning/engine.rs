@@ -5,6 +5,7 @@ use crate::core::learning::fingerprint::TaskFingerprint;
 use crate::core::learning::outcome::LearningResult;
 use crate::core::learning::persistence::LearningPersistence;
 use crate::core::learning::strategy::StrategyKind;
+use crate::core::learning::state_stats::StateStrategyIndex;
 
 /// Read-only snapshot of MissionRuntime metrics for LearningEngine.
 /// LearningEngine DOES NOT hold a reference to MissionRuntime — it receives a plain data copy.
@@ -133,6 +134,34 @@ impl LearningEngine {
             }
             if let Err(e) = self.persistence.save_strategy_stats(&strategy_stats).await {
                 eprintln!("[LearningEngine] PERSIST_STRATEGY_STATS_WARN: {}", e);
+            }
+
+            // 4. Update StateStrategyIndex from trajectory (AL-v2.3)
+            // Derived cache — rebuilt from experience trajectory on each call
+            if let Some(ref traj) = exp.trajectory {
+                let mut state_idx = StateStrategyIndex::new();
+                for ex in &all_exps {
+                    if let Some(ref t) = ex.trajectory {
+                        let recovery = ex.result.metrics.recovery_actions as f32;
+                        state_idx.update_from_experience(
+                            &t.steps,
+                            t.total_duration_ms,
+                            &ex.result.outcome,
+                            recovery,
+                        );
+                    }
+                }
+                // Also include the current experience's trajectory
+                let recovery = exp.result.metrics.recovery_actions as f32;
+                state_idx.update_from_experience(
+                    &traj.steps,
+                    traj.total_duration_ms,
+                    &exp.result.outcome,
+                    recovery,
+                );
+                if let Err(e) = self.persistence.save_state_strategy_index(&state_idx).await {
+                    eprintln!("[LearningEngine] PERSIST_STATE_STATS_WARN: {}", e);
+                }
             }
         }
 
