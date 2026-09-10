@@ -187,13 +187,14 @@ impl MissionRuntime {
                     "{} exitoso en paso {}",
                     obs.tool_name, self.cognitive_state.mission.current_step
                 );
-                self.evidence_graph.record(
+                self.evidence_graph.record_with_hash(
                     EvidenceKind::CommandExitCode,
                     &obs.tool_name,
                     &claim,
                     &obs.payload,
                     0.85,
                     self.cognitive_state.mission.current_step,
+                    obs.state_hash_after
                 );
             }
         }
@@ -330,7 +331,12 @@ impl MissionRuntime {
     /// The ONLY authority allowed to declare mission complete.
     /// Never let agent.rs declare completion without calling this.
     pub fn can_complete(&self) -> CompletionDecision {
-        CompletionGate::evaluate(&self.contract, &self.cognitive_state, &self.evidence_graph)
+        CompletionGate::evaluate(
+            &self.contract, 
+            &self.cognitive_state, 
+            &self.evidence_graph,
+            self.current_world_hash()
+        )
     }
 
     // ─── Recovery ──────────────────────────────────────────────────────────────
@@ -495,9 +501,18 @@ mod tests {
         // Initially incomplete
         assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
 
-        // Satisfy criteria
+        // Satisfy manual criterion
         rt.contract.mark_criterion("AC-DELIVERABLES", true);
-        rt.contract.mark_criterion("AC-VALIDATION", true);
+        // Provide actual evidence for TestPassed criterion to satisfy CompletionGate dynamically
+        rt.evidence_graph.record_with_hash(
+            crate::core::evidence::EvidenceKind::Test,
+            "cargo test",
+            "cargo test passes",
+            "0",
+            0.9,
+            1,
+            Some(rt.current_world_hash())
+        );
 
         assert_eq!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Complete);
     }

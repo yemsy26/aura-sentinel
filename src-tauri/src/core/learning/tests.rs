@@ -415,15 +415,17 @@ mod tests {
         assert_eq!(obs.status, crate::core::observation::ObservationStatus::Success);
 
         // 5. Evidence & CompletionGate
-        runtime.contract.mark_criterion("AC-1", true);
+        // Mark manual criteria as satisfied if any exist (not needed here since AC-1 is automated)
+        // Provide exact evidence required by CommandExitZero("cargo test")
         use crate::core::evidence::EvidenceKind;
-        runtime.evidence_graph.record(
+        runtime.evidence_graph.record_with_hash(
             EvidenceKind::CommandExitCode,
             "TOOL_TERMINAL",
-            "cargo test exit code 0",
+            "cargo test passes", // This is the exact claim expected by CompletionGate for CommandExitZero("cargo test")
             &obs.payload,
             1.0,
             runtime.current_step(),
+            Some(runtime.current_world_hash())
         );
 
         let decision = runtime.can_complete();

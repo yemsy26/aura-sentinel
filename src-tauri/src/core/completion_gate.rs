@@ -18,6 +18,7 @@ impl CompletionGate {
         contract: &MissionContract,
         _state: &CognitiveState,
         evidence: &EvidenceGraph,
+        current_world_hash: u64,
     ) -> CompletionDecision {
         // Guard: empty contract must never silently complete a build/coding mission.
         // A contract with no required criteria AND no required evidence is invalid
@@ -33,18 +34,43 @@ impl CompletionGate {
 
         let mut missing = Vec::new();
 
-        // 1. Only REQUIRED acceptance criteria block completion.
-        // Optional criteria (required=false) are tracked but do NOT block the gate.
-        let pending = contract.pending_required_criteria();
-        if !pending.is_empty() {
-            missing.extend(pending);
+        // 1. Evaluate REQUIRED acceptance criteria DYNAMICALLY based on EvidenceGraph.
+        // We do NOT trust 'status == Satisfied' set by the LLM.
+        for ac in &contract.acceptance_criteria {
+            if !ac.required {
+                continue;
+            }
+
+            let is_satisfied = match &ac.verification {
+                crate::core::mission_contract::VerificationMethod::TestPassed => {
+                    evidence.has_valid_evidence_for_state("cargo test passes", 0.5, current_world_hash)
+                    || evidence.has_valid_evidence_for_state("tests pass", 0.5, current_world_hash)
+                },
+                crate::core::mission_contract::VerificationMethod::CommandExitZero(cmd) => {
+                    let claim = format!("{} passes", cmd);
+                    evidence.has_valid_evidence_for_state(&claim, 0.5, current_world_hash)
+                },
+                crate::core::mission_contract::VerificationMethod::FileExistence(file) => {
+                    let claim = format!("file {} exists", file);
+                    // File existence evidence should ideally match the hash when it was checked
+                    evidence.has_valid_evidence_for_state(&claim, 0.5, current_world_hash)
+                },
+                // For other methods that don't have direct automated evidence yet,
+                // we fallback to checking if it was marked Satisfied, BUT this should
+                // be minimized.
+                _ => ac.status == crate::core::mission_contract::CriterionStatus::Satisfied,
+            };
+
+            if !is_satisfied {
+                missing.push(format!("[{}] {}", ac.id, ac.description));
+            }
         }
 
-        // 2. Required evidence — uses STRICT exact match + min_reliability
+        // 2. Required evidence – uses STRICT exact match + state_hash validation
         for req in &contract.required_evidence {
-            if !evidence.has_valid_evidence_for(&req.claim, req.min_reliability) {
+            if !evidence.has_valid_evidence_for_state(&req.claim, req.min_reliability, current_world_hash) {
                 missing.push(format!(
-                    "Evidencia requerida ausente: '{}' (confiabilidad mínima: {:.0}%)",
+                    "Evidencia requerida ausente o inválida por cambio de código: '{}' (confiabilidad mínima: {:.0}%)",
                     req.claim, req.min_reliability * 100.0
                 ));
             }
@@ -74,19 +100,25 @@ mod tests {
 
         let mut evidence = EvidenceGraph::new();
         let state = CognitiveState::new("m1", "Build app");
+        let hash = 12345;
 
         // No evidence at all -> Incomplete
-        let dec = CompletionGate::evaluate(&contract, &state, &evidence);
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash);
         assert!(matches!(dec, CompletionDecision::Incomplete(_)));
 
         // Evidence with insufficient reliability -> still Incomplete
-        evidence.record(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.6, 1);
-        let dec2 = CompletionGate::evaluate(&contract, &state, &evidence);
+        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.6, 1, Some(hash));
+        let dec2 = CompletionGate::evaluate(&contract, &state, &evidence, hash);
         assert!(matches!(dec2, CompletionDecision::Incomplete(_)));
 
-        // Evidence with sufficient reliability -> Complete
-        evidence.record(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 2);
-        let dec3 = CompletionGate::evaluate(&contract, &state, &evidence);
-        assert_eq!(dec3, CompletionDecision::Complete);
+        // Evidence with sufficient reliability but WRONG hash -> Incomplete
+        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 2, Some(99999));
+        let dec3 = CompletionGate::evaluate(&contract, &state, &evidence, hash);
+        assert!(matches!(dec3, CompletionDecision::Incomplete(_)));
+
+        // Evidence with sufficient reliability AND CORRECT hash -> Complete
+        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 3, Some(hash));
+        let dec4 = CompletionGate::evaluate(&contract, &state, &evidence, hash);
+        assert_eq!(dec4, CompletionDecision::Complete);
     }
 }

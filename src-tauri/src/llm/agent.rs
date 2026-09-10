@@ -2012,6 +2012,25 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                             }
                         }
 
+                        // ── P1: Intercept concatenated commands (&&) in PowerShell ─────────────
+                        if comando.contains("&&") {
+                            let warn_msg = "[SISTEMA]: En este entorno (PowerShell), el operador '&&' no está soportado para concatenar comandos en una sola línea de TOOL_TERMINAL.\nPor favor, ejecuta los comandos uno por uno en pasos separados (ej. usa TOOL_TERMINAL para el primero, evalúa el resultado, y luego usa TOOL_TERMINAL para el segundo).";
+                            current_context.push_str(&format!("Resultado TOOL_TERMINAL Error: {}\n\n", warn_msg));
+                            emit_event(&app_handle, runtime.current_step(), "[PRE-CHECK] Comando concatenado rechazado", "ERROR");
+                            continue;
+                        }
+
+                        // ── P1: Pre-check Cargo.toml exists for cargo commands ─────────────
+                        if cmd_lower_check.starts_with("cargo ") {
+                            let cargo_toml_path = std::path::Path::new(&workspace_path).join("Cargo.toml");
+                            if !cargo_toml_path.exists() {
+                                let warn_msg = "[SISTEMA]: PROJECT STRUCTURE INVALID: No se encontró `Cargo.toml`. Debes inicializar el proyecto Rust (ej. `cargo init` o crear el archivo) antes de poder usar comandos de cargo.";
+                                current_context.push_str(&format!("Resultado TOOL_TERMINAL Error: {}\n\n", warn_msg));
+                                emit_event(&app_handle, runtime.current_step(), "[PRE-CHECK] Cargo.toml faltante", "ERROR");
+                                continue;
+                            }
+                        }
+
                         emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
                         // ── Route through Runtime Gateway (P0 fix) ───────────────────────────
                         // execute_action() = authorize_action (already passed) + ToolRegistry.dispatch()
@@ -2108,15 +2127,14 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                     }
                                 }
                                 if !found_outputs.is_empty() {
-                                    runtime.contract.mark_criterion("AC-VALIDATION", true);
-                                    runtime.contract.mark_criterion("AC-DELIVERABLES", true);
-                                    runtime.evidence_graph.record(
+                                    runtime.evidence_graph.record_with_hash(
                                         crate::core::evidence::EvidenceKind::RuntimeCheck,
                                         "TOOL_TERMINAL",
                                         "Script generó archivos de salida verificados",
                                         &format!("{} archivos encontrados", found_outputs.len()),
                                         0.95,
                                         runtime.current_step(),
+                                        Some(world_hash_after)
                                     );
                                     current_context.push_str(&format!(
                                         "Resultado: {}✅\n\n[SISTEMA: El script no imprimió salida en consola, PERO generó los siguientes archivos de salida que CONFIRMAN que la tarea fue completada exitosamente:]\n\n{}\n\n[SISTEMA: Los archivos de salida existen y tienen contenido. Tu ÚNICO PASO VàLIDO AHORA es usar 'TOOL_FINISH' para reportarle esto al usuario. ESTà PROHIBIDO volver a ejecutar el script.]\n\n",
@@ -2133,16 +2151,17 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                         || stdout_lower.contains("fully verified")
                                         || stdout_lower.contains("verification passed")
                                         || (stdout_lower.contains("[pass]") && !stdout_lower.contains("[fail]"));
+                                    let test_passed = (out.contains("0 failed") || out.contains("tests passed") || out.contains("100%")) && !out.contains("FAILED");
 
                                     if is_test_cmd && test_passed {
-                                        runtime.contract.mark_criterion("AC-VALIDATION", true);
-                                        runtime.evidence_graph.record(
+                                        runtime.evidence_graph.record_with_hash(
                                             crate::core::evidence::EvidenceKind::Test,
                                             "TOOL_TERMINAL",
                                             "Script de verificación pasó al 100%",
                                             "PASSED",
-                                            1.0,
+                                            0.99,
                                             runtime.current_step(),
+                                            Some(world_hash_after)
                                         );
                                         forced_next_tool = Some((
                                             "TOOL_FINISH".to_string(),
@@ -3079,7 +3098,6 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                                             prog_obs.state_hash_after = Some(prog_hash_after);
                                                             runtime.record_observation(&prog_obs);
                                                             runtime.record_tool_call();
-                                                            runtime.contract.mark_criterion("AC-DELIVERABLES", true);
 
                                                             // Sprint 2: Micrometa-gated Executor->Critic transition
                                                             let all_metas_done = journal.micro_metas.is_empty()
@@ -3785,17 +3803,17 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
 
                 // If workspace files exist and syntax validation passes, ensure contract criteria and evidence are satisfied
                 if validate_workspace(&workspace_path).await.is_ok() {
-                    runtime.contract.mark_criterion("AC-VALIDATION", true);
-                    runtime.contract.mark_criterion("AC-DELIVERABLES", true);
-                    if !runtime.evidence_graph.has_valid_evidence_for("cargo test passes", 0.5) 
-                        && !runtime.evidence_graph.has_valid_evidence_for("syntax validation passes", 0.5) {
-                        runtime.evidence_graph.record(
+                    let hash = runtime.current_world_hash();
+                    if !runtime.evidence_graph.has_valid_evidence_for_state("cargo test passes", 0.5, hash) 
+                        && !runtime.evidence_graph.has_valid_evidence_for_state("syntax validation passes", 0.5, hash) {
+                        runtime.evidence_graph.record_with_hash(
                             crate::core::evidence::EvidenceKind::StaticAnalysis,
                             "TOOL_FINISH",
                             "Validación estática y sintáctica del workspace aprobada",
                             "VALIDATED",
                             1.0,
                             runtime.current_step(),
+                            Some(hash)
                         );
                     }
                 }

@@ -1,4 +1,4 @@
-﻿#![allow(dead_code)]
+#![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +26,7 @@ pub struct Evidence {
     pub timestamp: String,
     pub reliability: f32,
     pub mission_step: u32,
+    pub state_hash: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -40,13 +41,38 @@ impl EvidenceGraph {
         &mut self, kind: EvidenceKind, source: &str, claim: &str,
         value: &str, reliability: f32, step: u32,
     ) -> String {
+        self.record_with_hash(kind, source, claim, value, reliability, step, None)
+    }
+
+    pub fn record_with_hash(
+        &mut self, kind: EvidenceKind, source: &str, claim: &str,
+        value: &str, reliability: f32, step: u32, state_hash: Option<u64>
+    ) -> String {
         let id = format!("ev_{:x}", self.entries.len() + 1);
         self.entries.push(Evidence {
             id: id.clone(), kind, source: source.to_string(),
             claim: claim.to_string(), value: value.to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(), reliability, mission_step: step,
+            state_hash,
         });
         id
+    }
+
+    /// Strict exact-match evidence lookup with minimum reliability threshold AND workspace state hash verification.
+    /// This prevents using old evidence (e.g., tests passing) after the workspace has been modified.
+    pub fn has_valid_evidence_for_state(&self, claim: &str, min_reliability: f32, current_state_hash: u64) -> bool {
+        self.entries.iter().any(|e| {
+            if e.claim != claim || e.reliability < min_reliability {
+                return false;
+            }
+            // If evidence doesn't have a hash, it's considered permanently valid (e.g. system state).
+            // But if it's tied to a workspace state, it MUST match the current state.
+            if let Some(hash) = e.state_hash {
+                hash == current_state_hash
+            } else {
+                true
+            }
+        })
     }
 
     /// Strict exact-match evidence lookup with minimum reliability threshold.
