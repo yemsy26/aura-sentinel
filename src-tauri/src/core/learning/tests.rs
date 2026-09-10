@@ -46,6 +46,7 @@ mod tests {
             },
             confidence: 0.5,
             lesson: None,
+            trajectory: None,
         }
     }
 
@@ -490,5 +491,201 @@ mod tests {
 
         // Assert size of AdaptiveRouter is purely data
         assert!(std::mem::size_of::<AdaptiveRouter>() <= 128, "AdaptiveRouter must be purely algorithmic without runtime dependencies");
+    }
+
+    // ── AL-v2 Tests: StateSignature & Trajectory Foundation ──────────────────
+
+    #[test]
+    fn test_al_v2_state_signature_creation_and_similarity() {
+        use crate::core::learning::signature::{StateSignatureBuilder, VerificationLevel};
+
+        let sig1 = StateSignatureBuilder::new("fp_hash_rust_app")
+            .phase(1)
+            .files_changed(2)
+            .files_created(1)
+            .compile_failures(1)
+            .test_failures(0)
+            .verification_level(VerificationLevel::SyntaxOrStatic)
+            .criteria(1, 1)
+            .recovery_count(1)
+            .replan_count(0)
+            .last_error_class(Some("CompileError".to_string()))
+            .progress_stalled(false)
+            .build();
+
+        // Identical signature must have similarity = 1.0
+        assert_eq!(sig1.similarity(&sig1), 1.0);
+
+        // Highly similar signature (same task and error class, slightly different counts)
+        let sig2 = StateSignatureBuilder::new("fp_hash_rust_app")
+            .phase(1)
+            .files_changed(3)
+            .files_created(1)
+            .compile_failures(2)
+            .test_failures(0)
+            .verification_level(VerificationLevel::SyntaxOrStatic)
+            .criteria(1, 1)
+            .recovery_count(1)
+            .replan_count(0)
+            .last_error_class(Some("CompileError".to_string()))
+            .progress_stalled(false)
+            .build();
+
+        let sim_close = sig1.similarity(&sig2);
+        assert!(sim_close > 0.85, "Close signatures should have high similarity, got {}", sim_close);
+
+        // Very distant signature (different task, different error, stalled)
+        let sig_far = StateSignatureBuilder::new("fp_hash_python_script")
+            .phase(3)
+            .files_changed(0)
+            .files_created(0)
+            .compile_failures(5)
+            .test_failures(4)
+            .verification_level(VerificationLevel::None)
+            .criteria(0, 5)
+            .recovery_count(4)
+            .replan_count(2)
+            .last_error_class(Some("TimeoutError".to_string()))
+            .progress_stalled(true)
+            .build();
+
+        let sim_distant = sig1.similarity(&sig_far);
+        assert!(sim_distant < 0.35, "Distant signatures should have low similarity, got {}", sim_distant);
+    }
+
+    #[test]
+    fn test_al_v2_trajectory_step_recording_and_recovery_extraction() {
+        use crate::core::learning::signature::{StateSignatureBuilder, VerificationLevel};
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
+        use crate::core::learning::strategy::StrategyKind;
+
+        let mut traj = Trajectory::new("mission_rec_1", "fp_hash_rust_app");
+
+        // Step 1: Encountered compile error
+        let state1 = StateSignatureBuilder::new("fp_hash_rust_app")
+            .phase(0)
+            .compile_failures(1)
+            .last_error_class(Some("CompileError".to_string()))
+            .progress_stalled(true)
+            .build();
+
+        // Step 2: Successfully applied tool to fix compile error
+        let state2 = StateSignatureBuilder::new("fp_hash_rust_app")
+            .phase(0)
+            .compile_failures(1)
+            .verification_level(VerificationLevel::SyntaxOrStatic)
+            .last_error_class(None) // Resolved
+            .progress_stalled(false)
+            .build();
+
+        let step1 = TrajectoryStep {
+            step: 1,
+            from_state: state1.clone(),
+            strategy: StrategyKind::DirectImplementation,
+            tool: "TOOL_PROGRAMMER".to_string(),
+            success: false,
+            error_encountered: Some("unresolved import `crate::foo`".to_string()),
+            to_state: Some(state1.clone()),
+        };
+        traj.record_step(step1);
+
+        let step2 = TrajectoryStep {
+            step: 2,
+            from_state: state1.clone(),
+            strategy: StrategyKind::CompileFirst,
+            tool: "TOOL_PROGRAMMER".to_string(),
+            success: true,
+            error_encountered: None,
+            to_state: Some(state2.clone()),
+        };
+        traj.record_step(step2);
+
+        traj.finalize(LearningOutcome::Success, 3200);
+
+        assert_eq!(traj.step_count(), 2);
+        let recoveries = traj.extract_recoveries();
+        assert_eq!(recoveries.len(), 1, "Must extract 1 successful recovery sequence");
+        assert_eq!(recoveries[0].trigger_error, "CompileError");
+        assert_eq!(recoveries[0].strategy, StrategyKind::CompileFirst);
+        assert_eq!(recoveries[0].tool, "TOOL_PROGRAMMER");
+        assert!(recoveries[0].resolved_state.last_error_class.is_none());
+    }
+
+    #[test]
+    fn test_al_v2_experience_serialization_with_trajectory_backward_compatibility() {
+        use crate::core::learning::signature::StateSignatureBuilder;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
+        use crate::core::learning::strategy::StrategyKind;
+
+        // 1. Deserializing legacy JSON without "trajectory" field defaults to None
+        let legacy_json = r#"{
+            "schema_version": 2,
+            "id": "exp_legacy_1",
+            "attempt_id": "att_legacy_1",
+            "mission_id": "m_leg",
+            "timestamp": 1700000000,
+            "fingerprint": {
+                "language": "rust",
+                "framework": null,
+                "complexity": 0.4,
+                "ambiguity": 0.2,
+                "scope_bucket": 1,
+                "requires_code": true,
+                "requires_terminal": false,
+                "requires_tests": false,
+                "requires_network": false,
+                "verification_level": 1
+            },
+            "model": "deepseek-coder",
+            "strategy": "DirectImplementation",
+            "result": {
+                "outcome": "Success",
+                "metrics": {
+                    "steps": 1,
+                    "tool_calls": 1,
+                    "failed_actions": 0,
+                    "recovery_actions": 0,
+                    "verification_attempts": 1,
+                    "successful_verifications": 1,
+                    "elapsed_ms": 1000
+                },
+                "failures": [],
+                "recovery": null
+            },
+            "confidence": 0.85,
+            "lesson": null
+        }"#;
+
+        let loaded_legacy: Result<Experience, _> = serde_json::from_str(legacy_json);
+        assert!(loaded_legacy.is_ok(), "Legacy experience without trajectory must deserialize successfully");
+        let exp_legacy = loaded_legacy.unwrap();
+        assert!(exp_legacy.trajectory.is_none(), "Legacy experience must have trajectory = None");
+
+        // 2. Serializing and deserializing experience with an AL-v2 trajectory preserves all data
+        let mut traj = Trajectory::new("m_v2", "hash_rust");
+        let state = StateSignatureBuilder::new("hash_rust")
+            .phase(1)
+            .build();
+        traj.record_step(TrajectoryStep {
+            step: 1,
+            from_state: state.clone(),
+            strategy: StrategyKind::CompileFirst,
+            tool: "TOOL_TERMINAL".to_string(),
+            success: true,
+            error_encountered: None,
+            to_state: Some(state),
+        });
+        traj.finalize(LearningOutcome::Success, 1200);
+
+        let mut exp_v2 = exp_legacy.clone();
+        exp_v2.id = "exp_v2_1".to_string();
+        exp_v2.trajectory = Some(traj);
+
+        let serialized_v2 = serde_json::to_string(&exp_v2).unwrap();
+        let deserialized_v2: Experience = serde_json::from_str(&serialized_v2).unwrap();
+        assert!(deserialized_v2.trajectory.is_some());
+        let loaded_traj = deserialized_v2.trajectory.unwrap();
+        assert_eq!(loaded_traj.mission_id, "m_v2");
+        assert_eq!(loaded_traj.step_count(), 1);
     }
 }

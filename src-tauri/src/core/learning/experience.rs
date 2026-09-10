@@ -29,6 +29,9 @@ pub struct Experience {
     /// Confidence score of the original Recommendation that was applied
     pub confidence: f32,
     pub lesson: Option<String>,
+    /// Optional AL-v2 trajectory recording step-by-step state transitions
+    #[serde(default)]
+    pub trajectory: Option<crate::core::learning::trajectory::Trajectory>,
 }
 
 /// In-memory store. Loaded from JSONL at startup. Idempotent on insert.

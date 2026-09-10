@@ -72,6 +72,23 @@ impl LearningEngine {
         mission_id: String,
         attempt_id: Option<String>,
     ) -> Result<(), String> {
+        self.record_outcome_with_trajectory(
+            fingerprint, model, strategy, result, confidence, mission_id, attempt_id, None,
+        ).await
+    }
+
+    /// Record the outcome of a completed mission, optionally with an execution trajectory.
+    pub async fn record_outcome_with_trajectory(
+        &self,
+        fingerprint: TaskFingerprint,
+        model: String,
+        strategy: StrategyKind,
+        result: LearningResult,
+        confidence: f32,
+        mission_id: String,
+        attempt_id: Option<String>,
+        trajectory: Option<crate::core::learning::trajectory::Trajectory>,
+    ) -> Result<(), String> {
         let final_attempt_id = attempt_id.unwrap_or_else(|| {
             Self::generate_attempt_id(&mission_id)
         });
@@ -88,6 +105,7 @@ impl LearningEngine {
             result,
             confidence,
             lesson: None,
+            trajectory,
         };
 
         // Write to in-memory store (idempotent)

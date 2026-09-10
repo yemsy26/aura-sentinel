@@ -20,11 +20,13 @@ pub mod stats;
 pub mod persistence;
 pub mod router;
 pub mod engine;
+pub mod signature;
+pub mod trajectory;
 
 #[cfg(test)]
 mod tests;
 
-// Public surface — used by agent.rs wiring in Commit 7
+// Public surface — used by agent.rs wiring and AL-v2
 #[allow(unused_imports)]
 pub use fingerprint::{TaskFingerprint, FingerprintBuilder};
 #[allow(unused_imports)]
@@ -41,3 +43,7 @@ pub use router::{AdaptiveRouter, Recommendation, RecommendationReason};
 pub use persistence::LearningPersistence;
 #[allow(unused_imports)]
 pub use engine::{LearningEngine, RuntimeSnapshot};
+#[allow(unused_imports)]
+pub use signature::{StateSignature, StateSignatureBuilder, VerificationLevel};
+#[allow(unused_imports)]
+pub use trajectory::{Trajectory, TrajectoryStep, RecoverySequence};
