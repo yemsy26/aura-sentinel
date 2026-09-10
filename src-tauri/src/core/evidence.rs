@@ -37,17 +37,31 @@ pub struct EvidenceGraph {
 impl EvidenceGraph {
     pub fn new() -> Self { Self { entries: Vec::new() } }
 
+    pub fn kind_requires_workspace_hash(kind: &EvidenceKind) -> bool {
+        match kind {
+            EvidenceKind::FileHash | EvidenceKind::FileCreated | EvidenceKind::FileModified |
+            EvidenceKind::CommandExitCode | EvidenceKind::CommandOutput | EvidenceKind::Compilation |
+            EvidenceKind::Test | EvidenceKind::Lint | EvidenceKind::StaticAnalysis |
+            EvidenceKind::RuntimeCheck => true,
+            EvidenceKind::UserConfirmation => false,
+        }
+    }
+
     pub fn record(
         &mut self, kind: EvidenceKind, source: &str, claim: &str,
         value: &str, reliability: f32, step: u32,
-    ) -> String {
+    ) -> Result<String, String> {
         self.record_with_hash(kind, source, claim, value, reliability, step, None)
     }
 
     pub fn record_with_hash(
         &mut self, kind: EvidenceKind, source: &str, claim: &str,
         value: &str, reliability: f32, step: u32, state_hash: Option<u64>
-    ) -> String {
+    ) -> Result<String, String> {
+        if Self::kind_requires_workspace_hash(&kind) && state_hash.is_none() {
+            return Err(format!("Security Violation: EvidenceKind {:?} requires a state_hash but None was provided.", kind));
+        }
+
         let id = format!("ev_{:x}", self.entries.len() + 1);
         self.entries.push(Evidence {
             id: id.clone(), kind, source: source.to_string(),
@@ -55,7 +69,7 @@ impl EvidenceGraph {
             timestamp: chrono::Utc::now().to_rfc3339(), reliability, mission_step: step,
             state_hash,
         });
-        id
+        Ok(id)
     }
 
     /// Strict exact-match evidence lookup with minimum reliability threshold AND workspace state hash verification.
@@ -102,7 +116,7 @@ mod tests {
     #[test]
     fn test_exact_match_required() {
         let mut g = EvidenceGraph::new();
-        g.record(EvidenceKind::Compilation, "cargo", "cargo check passes", "0", 0.9, 1);
+        g.record_with_hash(EvidenceKind::Compilation, "cargo", "cargo check passes", "0", 0.9, 1, Some(123)).unwrap();
 
         // Exact match succeeds
         assert!(g.has_valid_evidence_for("cargo check passes", 0.5));

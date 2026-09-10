@@ -1954,9 +1954,9 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
                     emit_event(&app_handle, runtime.current_step(), "Comando repetido interceptado", "WARNING");
                     if current_role == AgentRole::Critic {
-                        let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el Crítico. Estás repitiendo el mismo comando. Si las pruebas ya fueron ejecutadas, procede a TOOL_FINISH o revisa con TOOL_PROGRAMMER si se requiere corregir algo.";
-                        emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Bucle de Terminal en Crítico -> Sugiriendo FINISH", "WARNING");
-                        forced_next_tool = Some(("TOOL_FINISH".to_string(), "Las pruebas ya fueron ejecutadas. Procede a concluir o corregir.".to_string()));
+                        let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el Crítico. Estás repitiendo el mismo comando de validación. Debes replantear tu estrategia de validación o solicitar correcciones con TOOL_PROGRAMMER.";
+                        emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Bucle de Terminal en Crítico -> Forzando Replan", "WARNING");
+                        forced_next_tool = Some(("TOOL_THINK".to_string(), "Bucle detectado. Replantea tu estrategia de validación.".to_string()));
                         current_context.push_str(&format!("{}\n\n", msg));
                     } else if current_role == AgentRole::Executor {
                         // Executor stuck repeating informational commands (dir, ls, etc.)
@@ -1966,9 +1966,9 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                             || cmd_lower.trim() == "ls -la"
                             || cmd_lower.trim() == "dir /b";
                         if is_info_cmd {
-                            let msg = "[SISTEMA INTERNO]: El Ejecutor está repitiendo un comando informacional (dir/ls). Esto indica estancamiento. Procede con TOOL_FINISH si los archivos están listos, o usa TOOL_PROGRAMMER si aún debes implementar algo.";
-                            emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Ejecutor en loop informacional -> Sugiriendo FINISH", "WARNING");
-                            forced_next_tool = Some(("TOOL_FINISH".to_string(), "La inspección de archivos ya fue realizada. Resume los resultados o concluye.".to_string()));
+                            let msg = "[SISTEMA INTERNO]: El Ejecutor está repitiendo un comando informacional (dir/ls). Esto indica estancamiento (STALL). Reevalúa qué acción falta para completar los criterios.";
+                            emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Ejecutor en loop informacional -> Forzando Replan", "WARNING");
+                            forced_next_tool = Some(("TOOL_THINK".to_string(), "Estancamiento en comandos de información. Revisa el plan original y continúa trabajando.".to_string()));
                             current_context.push_str(&format!("{}\n\n", msg));
                         } else {
                             current_context.push_str(&format!("{}\n\n", res_msg));
@@ -2127,7 +2127,7 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                     }
                                 }
                                 if !found_outputs.is_empty() {
-                                    runtime.evidence_graph.record_with_hash(
+                                    let _ = runtime.evidence_graph.record_with_hash(
                                         crate::core::evidence::EvidenceKind::RuntimeCheck,
                                         "TOOL_TERMINAL",
                                         "Script generó archivos de salida verificados",
@@ -2154,7 +2154,7 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                     let test_passed = (out.contains("0 failed") || out.contains("tests passed") || out.contains("100%")) && !out.contains("FAILED");
 
                                     if is_test_cmd && test_passed {
-                                        runtime.evidence_graph.record_with_hash(
+                                        let _ = runtime.evidence_graph.record_with_hash(
                                             crate::core::evidence::EvidenceKind::Test,
                                             "TOOL_TERMINAL",
                                             "Script de verificación pasó al 100%",
@@ -3806,7 +3806,7 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     let hash = runtime.current_world_hash();
                     if !runtime.evidence_graph.has_valid_evidence_for_state("cargo test passes", 0.5, hash) 
                         && !runtime.evidence_graph.has_valid_evidence_for_state("syntax validation passes", 0.5, hash) {
-                        runtime.evidence_graph.record_with_hash(
+                        let _ = runtime.evidence_graph.record_with_hash(
                             crate::core::evidence::EvidenceKind::StaticAnalysis,
                             "TOOL_FINISH",
                             "Validación estática y sintáctica del workspace aprobada",

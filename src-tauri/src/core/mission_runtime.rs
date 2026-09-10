@@ -187,7 +187,7 @@ impl MissionRuntime {
                     "{} exitoso en paso {}",
                     obs.tool_name, self.cognitive_state.mission.current_step
                 );
-                self.evidence_graph.record_with_hash(
+                let _ = self.evidence_graph.record_with_hash(
                     EvidenceKind::CommandExitCode,
                     &obs.tool_name,
                     &claim,
@@ -502,9 +502,9 @@ mod tests {
         assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
 
         // Satisfy manual criterion
-        rt.contract.mark_criterion("AC-DELIVERABLES", true);
+        rt.evidence_graph.record_with_hash(crate::core::evidence::EvidenceKind::UserConfirmation, "USER", "AC-DELIVERABLES verified manually", "OK", 1.0, 1, None).unwrap();
         // Provide actual evidence for TestPassed criterion to satisfy CompletionGate dynamically
-        rt.evidence_graph.record_with_hash(
+        let _ = rt.evidence_graph.record_with_hash(
             crate::core::evidence::EvidenceKind::Test,
             "cargo test",
             "cargo test passes",
@@ -712,5 +712,45 @@ mod tests {
         let obs = rt.execute_action(&proposal).await;
         assert!(obs.is_ok());
         assert_eq!(obs.unwrap().payload, "registry_dispatched");
+    }
+
+    #[test]
+    fn test_integration_word_stats_mission_flow() {
+        let mut rt = MissionRuntime::new(".", "Crea CLI word-stats", 50);
+        
+        rt.contract.add_criterion("AC-BUILD", "cargo build exitoso", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        rt.contract.add_criterion("AC-TEST", "cargo test con 3 tests", crate::core::mission_contract::VerificationMethod::TestPassed, true);
+        rt.contract.add_criterion("AC-JSON", "Genera word_stats.json válido", crate::core::mission_contract::VerificationMethod::FileExistence("word_stats.json".to_string()), true);
+
+        // 1. Initial State -> Missing files, LLM attempts FINISH
+        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+
+        // 2. LLM creates Cargo.toml and src/main.rs (simulated hash change)
+        let hash_after_code = 12345;
+        
+        // 3. LLM executes cargo build successfully
+        let _ = rt.evidence_graph.record_with_hash(
+            crate::core::evidence::EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, rt.current_step(), Some(hash_after_code)
+        ).unwrap();
+
+        // Still incomplete
+        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+
+        // 4. LLM executes cargo test successfully
+        let _ = rt.evidence_graph.record_with_hash(
+            crate::core::evidence::EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, rt.current_step(), Some(hash_after_code)
+        ).unwrap();
+
+        // 5. LLM runs the tool, generating word_stats.json
+        let _ = rt.evidence_graph.record_with_hash(
+            crate::core::evidence::EvidenceKind::FileCreated, "TOOL_TERMINAL", "file word_stats.json exists", "0", 1.0, rt.current_step(), Some(hash_after_code)
+        ).unwrap();
+
+        // 6. Complete
+        let mut contract_valid = false;
+        if let crate::core::completion_gate::CompletionDecision::Complete = crate::core::completion_gate::CompletionGate::evaluate(&rt.contract, &rt.cognitive_state, &rt.evidence_graph, hash_after_code) {
+            contract_valid = true;
+        }
+        assert!(contract_valid);
     }
 }

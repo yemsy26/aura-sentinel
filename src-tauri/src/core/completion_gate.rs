@@ -55,10 +55,10 @@ impl CompletionGate {
                     // File existence evidence should ideally match the hash when it was checked
                     evidence.has_valid_evidence_for_state(&claim, 0.5, current_world_hash)
                 },
-                // For other methods that don't have direct automated evidence yet,
-                // we fallback to checking if it was marked Satisfied, BUT this should
-                // be minimized.
-                _ => ac.status == crate::core::mission_contract::CriterionStatus::Satisfied,
+                
+                
+                
+                crate::core::mission_contract::VerificationMethod::ContentMatches { file, regex } => evidence.has_valid_evidence_for_state(&format!("file {} matches {}", file, regex), 0.5, current_world_hash), crate::core::mission_contract::VerificationMethod::ManualReview => evidence.has_valid_evidence_for_state(&format!("{} verified manually", ac.id), 1.0, current_world_hash),
             };
 
             if !is_satisfied {
@@ -107,18 +107,45 @@ mod tests {
         assert!(matches!(dec, CompletionDecision::Incomplete(_)));
 
         // Evidence with insufficient reliability -> still Incomplete
-        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.6, 1, Some(hash));
+        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.6, 1, Some(hash)).unwrap();
         let dec2 = CompletionGate::evaluate(&contract, &state, &evidence, hash);
         assert!(matches!(dec2, CompletionDecision::Incomplete(_)));
 
         // Evidence with sufficient reliability but WRONG hash -> Incomplete
-        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 2, Some(99999));
+        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 2, Some(99999)).unwrap();
         let dec3 = CompletionGate::evaluate(&contract, &state, &evidence, hash);
         assert!(matches!(dec3, CompletionDecision::Incomplete(_)));
 
         // Evidence with sufficient reliability AND CORRECT hash -> Complete
-        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 3, Some(hash));
+        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 3, Some(hash)).unwrap();
         let dec4 = CompletionGate::evaluate(&contract, &state, &evidence, hash);
         assert_eq!(dec4, CompletionDecision::Complete);
+    }
+
+    #[test]
+    fn test_regression_false_satisfied() {
+        let mut contract = MissionContract::new("Build");
+        contract.add_criterion(
+            "AC-1",
+            "Tests pass",
+            crate::core::mission_contract::VerificationMethod::TestPassed,
+            true
+        );
+        contract.mark_criterion("AC-1", true);
+
+        let evidence = EvidenceGraph::new();
+        let state = CognitiveState::new("m1", "Build app");
+        let hash = 111;
+
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash);
+        assert!(matches!(dec, CompletionDecision::Incomplete(_)));
+    }
+
+    #[test]
+    fn test_regression_evidence_without_hash_rejected() {
+        let mut evidence = EvidenceGraph::new();
+        let res = evidence.record(EvidenceKind::Compilation, "tool", "claim", "value", 1.0, 1);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Security Violation"));
     }
 }
