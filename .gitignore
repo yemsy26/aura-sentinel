@@ -56,3 +56,12 @@ Modelfile*
 .aura_episodes.jsonl
 src-tauri/brains.json
 data/model_stats.json
+
+# AL-v2 derived caches — rebuilt automatically from ExperienceStore on each mission.
+# These are runtime data, NOT source of truth. Never commit them.
+data/learning/model_stats.json
+data/learning/strategy_stats.json
+data/learning/state_strategy_index.json
+data/learning/recovery_index.json
+data/learning/budget_index.json
+data/learning/learning_experiences.jsonl
