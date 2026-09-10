@@ -808,4 +808,99 @@ mod tests {
         assert!(!rec.state_informed,
             "With empty index, state_informed must be false (fingerprint fallback)");
     }
+
+    // ── AL-v2.4 Tests — Adaptive Recovery ────────────────────────────────────
+
+    #[test]
+    fn test_al_v2_4_recovery_index_learns_from_trajectory() {
+        use crate::core::learning::recovery_index::RecoveryIndex;
+        use crate::core::learning::signature::StateSignatureBuilder;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
+        use crate::core::learning::strategy::StrategyKind;
+        use crate::core::learning::outcome::LearningOutcome;
+
+        let mut rec_idx = RecoveryIndex::new();
+
+        // Build a trajectory with an error → recovery → success transition
+        let error_state = StateSignatureBuilder::new("fp_al24")
+            .compile_failures(3)
+            .last_error_class(Some("CompileError".to_string()))
+            .progress_stalled(true)
+            .build();
+        let clean_state = StateSignatureBuilder::new("fp_al24")
+            .compile_failures(0)
+            .progress_stalled(false)
+            .build();
+
+        let mut traj = Trajectory::new("m_al24", "fp_al24");
+        // Step 1: failed attempt
+        traj.record_step(TrajectoryStep {
+            step: 1,
+            from_state: error_state.clone(),
+            strategy: StrategyKind::DirectImplementation,
+            tool: "TOOL_PROGRAMMER".to_string(),
+            success: false,
+            error_encountered: Some("unresolved import".to_string()),
+            to_state: Some(error_state.clone()),
+        });
+        // Step 2: successful recovery via DiagnoseThenRepair
+        traj.record_step(TrajectoryStep {
+            step: 2,
+            from_state: error_state.clone(),
+            strategy: StrategyKind::DiagnoseThenRepair,
+            tool: "TOOL_TERMINAL".to_string(),
+            success: true,
+            error_encountered: None,
+            to_state: Some(clean_state.clone()),
+        });
+        traj.finalize(LearningOutcome::Success, 6000);
+
+        // Extract recoveries and update the index
+        let recoveries = traj.extract_recoveries();
+        assert_eq!(recoveries.len(), 1, "Must extract exactly one recovery sequence");
+        assert_eq!(recoveries[0].trigger_error, "CompileError");
+        assert_eq!(recoveries[0].strategy, StrategyKind::DiagnoseThenRepair);
+
+        rec_idx.update_from_recoveries(&recoveries);
+
+        // Query the index
+        let rec = rec_idx.best_recovery_for("CompileError", Some(&error_state), 1).unwrap();
+        assert_eq!(rec.strategy, StrategyKind::DiagnoseThenRepair);
+        assert_eq!(rec.tool, "TOOL_TERMINAL");
+        assert!(rec.confidence > 0.5, "Confidence must be > 0.5 for a successful recovery");
+    }
+
+    #[test]
+    fn test_al_v2_4_recovery_index_unknown_error_returns_none() {
+        use crate::core::learning::recovery_index::RecoveryIndex;
+        let idx = RecoveryIndex::new();
+        assert!(idx.best_recovery_for("UnknownError", None, 1).is_none(),
+            "Empty index must return None for any error class");
+    }
+
+    #[test]
+    fn test_al_v2_4_recovery_recommendation_respects_min_attempts() {
+        use crate::core::learning::recovery_index::RecoveryIndex;
+        use crate::core::learning::signature::StateSignatureBuilder;
+        use crate::core::learning::trajectory::RecoverySequence;
+        use crate::core::learning::strategy::StrategyKind;
+
+        let state = StateSignatureBuilder::new("fp_al24b")
+            .last_error_class(Some("NetworkError".to_string())).build();
+        let clean = StateSignatureBuilder::new("fp_al24b").build();
+
+        let mut idx = RecoveryIndex::new();
+        idx.update_from_recoveries(&[RecoverySequence {
+            trigger_error: "NetworkError".to_string(),
+            strategy: StrategyKind::IncrementalPatch,
+            tool: "TOOL_TERMINAL".to_string(),
+            initial_state: state.clone(),
+            resolved_state: clean,
+        }]);
+
+        // min_attempts=1: should find the pattern
+        assert!(idx.best_recovery_for("NetworkError", None, 1).is_some());
+        // min_attempts=5: only 1 observation, must return None
+        assert!(idx.best_recovery_for("NetworkError", None, 5).is_none());
+    }
 }

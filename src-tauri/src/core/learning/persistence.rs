@@ -144,6 +144,19 @@ impl LearningPersistence {
             .unwrap_or_default()
     }
 
+    /// Persist the RecoveryIndex as a derived cache (AL-v2.4).
+    pub async fn save_recovery_index(
+        &self,
+        index: &crate::core::learning::recovery_index::RecoveryIndex,
+    ) -> Result<(), String> {
+        self.atomic_json_write(&self.dir.join("recovery_index.json"), index).await
+    }
+
+    #[allow(dead_code)]
+    pub fn load_recovery_index(&self) -> crate::core::learning::recovery_index::RecoveryIndex {
+        self.load_json(&self.dir.join("recovery_index.json"))
+            .unwrap_or_default()
+    }
 
     async fn atomic_json_write<T: serde::Serialize>(
         &self, path: &Path, value: &T,

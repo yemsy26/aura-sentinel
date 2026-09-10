@@ -162,7 +162,24 @@ impl LearningEngine {
                 if let Err(e) = self.persistence.save_state_strategy_index(&state_idx).await {
                     eprintln!("[LearningEngine] PERSIST_STATE_STATS_WARN: {}", e);
                 }
+
+                // 5. Update RecoveryIndex from trajectory recoveries (AL-v2.4)
+                use crate::core::learning::recovery_index::RecoveryIndex;
+                let mut rec_idx = RecoveryIndex::new();
+                for ex in &all_exps {
+                    if let Some(ref t) = ex.trajectory {
+                        let recoveries = t.extract_recoveries();
+                        rec_idx.update_from_recoveries(&recoveries);
+                    }
+                }
+                // Include current trajectory
+                let current_recoveries = traj.extract_recoveries();
+                rec_idx.update_from_recoveries(&current_recoveries);
+                if let Err(e) = self.persistence.save_recovery_index(&rec_idx).await {
+                    eprintln!("[LearningEngine] PERSIST_RECOVERY_IDX_WARN: {}", e);
+                }
             }
+
         }
 
         Ok(())

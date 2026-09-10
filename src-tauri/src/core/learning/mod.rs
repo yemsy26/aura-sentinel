@@ -23,6 +23,7 @@ pub mod engine;
 pub mod signature;
 pub mod trajectory;
 pub mod state_stats;
+pub mod recovery_index;
 
 #[cfg(test)]
 mod tests;
@@ -50,3 +51,5 @@ pub use signature::{StateSignature, StateSignatureBuilder, VerificationLevel};
 pub use trajectory::{Trajectory, TrajectoryStep, RecoverySequence};
 #[allow(unused_imports)]
 pub use state_stats::{StateStrategyIndex, StateStrategyRecord, hash_state};
+#[allow(unused_imports)]
+pub use recovery_index::{RecoveryIndex, RecoveryPattern, RecoveryRecommendation};
