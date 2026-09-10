@@ -7,6 +7,7 @@ use crate::core::learning::stats::{ModelStats, StrategyStats};
 use crate::core::learning::strategy::StrategyKind;
 use crate::core::learning::signature::StateSignature;
 use crate::core::learning::state_stats::StateStrategyIndex;
+use crate::core::learning::budget_stats::BudgetAwareIndex;
 
 /// Why this recommendation was produced.
 #[allow(dead_code)]
@@ -33,6 +34,8 @@ pub struct Recommendation {
     pub fallback_strategy: Option<StrategyKind>,
     /// AL-v2.3 — true if StateSignature data influenced strategy selection
     pub state_informed: bool,
+    /// AL-v2.5 — estimated steps this strategy will consume (p75 historical)
+    pub estimated_cost_steps: Option<u32>,
 }
 
 /// AdaptiveRouter — the ONLY interface between Learning and the LLM selection layer.
@@ -45,6 +48,8 @@ pub struct AdaptiveRouter {
     store: SharedExperienceStore,
     /// AL-v2.3 — StateSignature-indexed strategy performance cache
     state_index: StateStrategyIndex,
+    /// AL-v2.5 — Budget-indexed strategy cost/success profiles
+    budget_index: BudgetAwareIndex,
     /// Deterministic exploration seed from hash(mission_id)
     exploration_seed: u64,
 }
@@ -61,6 +66,7 @@ impl AdaptiveRouter {
         Self {
             model_stats, strategy_stats, store,
             state_index: StateStrategyIndex::new(),
+            budget_index: BudgetAwareIndex::new(),
             exploration_seed: hasher.finish(),
         }
     }
@@ -69,6 +75,13 @@ impl AdaptiveRouter {
     #[allow(dead_code)]
     pub fn with_state_index(mut self, index: StateStrategyIndex) -> Self {
         self.state_index = index;
+        self
+    }
+
+    /// AL-v2.5 — construct with a pre-loaded BudgetAwareIndex.
+    #[allow(dead_code)]
+    pub fn with_budget_index(mut self, index: BudgetAwareIndex) -> Self {
+        self.budget_index = index;
         self
     }
 
@@ -81,6 +94,37 @@ impl AdaptiveRouter {
         available_models: &[String],
     ) -> Recommendation {
         self.recommend_with_state(fp, None, available_models).await
+    }
+
+    /// AL-v2.5 — Full context recommendation: state + budget awareness.
+    /// This is the primary entry point when caller has both StateSignature and remaining_budget.
+    pub async fn recommend_with_context(
+        &self,
+        fp: &TaskFingerprint,
+        state: Option<&StateSignature>,
+        remaining_budget: Option<u32>,
+        available_models: &[String],
+    ) -> Recommendation {
+        // First produce the base recommendation (state-aware)
+        let mut rec = self.recommend_with_state(fp, state, available_models).await;
+
+        // AL-v2.5: if budget is provided and we have historical cost data, override strategy
+        if let Some(budget) = remaining_budget {
+            if let Some(choice) = self.budget_index.best_strategy_for_budget(
+                fp.language.as_deref(),
+                budget,
+                2, // min_attempts
+            ) {
+                // Only override when budget is tight (ratio < 1.5)
+                // or when budget strategy significantly differs from recommendation
+                if choice.budget_ratio < 1.5 || choice.strategy != rec.strategy {
+                    rec.strategy = choice.strategy;
+                    rec.estimated_cost_steps = Some(choice.expected_cost_steps);
+                }
+            }
+        }
+
+        rec
     }
 
     /// AL-v2.3 — recommend with optional StateSignature context.
@@ -114,6 +158,7 @@ impl AdaptiveRouter {
                         fallback_model: None,
                         fallback_strategy: None,
                         state_informed: true,
+                        estimated_cost_steps: None,
                     };
                 }
             }
@@ -136,6 +181,7 @@ impl AdaptiveRouter {
                 fallback_model: available_models.first().cloned(),
                 fallback_strategy: None,
                 state_informed: false,
+                estimated_cost_steps: None,
             };
         }
 
@@ -191,6 +237,7 @@ impl AdaptiveRouter {
                 .find(|m| **m != best_model).cloned(),
             fallback_strategy: Some(StrategyKind::default_for(fp)),
             state_informed,
+            estimated_cost_steps: None,
         }
     }
 
@@ -205,6 +252,7 @@ impl AdaptiveRouter {
             fallback_model: None,
             fallback_strategy: None,
             state_informed: false,
+            estimated_cost_steps: None,
         }
     }
 

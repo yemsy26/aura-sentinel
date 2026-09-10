@@ -180,6 +180,16 @@ impl LearningEngine {
                 }
             }
 
+            // 6. Rebuild BudgetAwareIndex from all experiences (AL-v2.5)
+            // Does NOT require trajectory — uses OutcomeMetrics.steps from every experience.
+            {
+                use crate::core::learning::budget_stats::BudgetAwareIndex;
+                let budget_idx = BudgetAwareIndex::rebuild_from_experiences(&all_exps);
+                if let Err(e) = self.persistence.save_budget_index(&budget_idx).await {
+                    eprintln!("[LearningEngine] PERSIST_BUDGET_IDX_WARN: {}", e);
+                }
+            }
+
         }
 
         Ok(())

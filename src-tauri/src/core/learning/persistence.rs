@@ -158,6 +158,20 @@ impl LearningPersistence {
             .unwrap_or_default()
     }
 
+    /// Persist the BudgetAwareIndex as a derived cache (AL-v2.5).
+    pub async fn save_budget_index(
+        &self,
+        index: &crate::core::learning::budget_stats::BudgetAwareIndex,
+    ) -> Result<(), String> {
+        self.atomic_json_write(&self.dir.join("budget_index.json"), index).await
+    }
+
+    #[allow(dead_code)]
+    pub fn load_budget_index(&self) -> crate::core::learning::budget_stats::BudgetAwareIndex {
+        self.load_json(&self.dir.join("budget_index.json"))
+            .unwrap_or_default()
+    }
+
     async fn atomic_json_write<T: serde::Serialize>(
         &self, path: &Path, value: &T,
     ) -> Result<(), String> {

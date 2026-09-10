@@ -24,6 +24,7 @@ pub mod signature;
 pub mod trajectory;
 pub mod state_stats;
 pub mod recovery_index;
+pub mod budget_stats;
 
 #[cfg(test)]
 mod tests;
@@ -53,3 +54,5 @@ pub use trajectory::{Trajectory, TrajectoryStep, RecoverySequence};
 pub use state_stats::{StateStrategyIndex, StateStrategyRecord, hash_state};
 #[allow(unused_imports)]
 pub use recovery_index::{RecoveryIndex, RecoveryPattern, RecoveryRecommendation};
+#[allow(unused_imports)]
+pub use budget_stats::{BudgetAwareIndex, BudgetProfile, BudgetStrategyChoice};

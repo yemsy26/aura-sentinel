@@ -904,3 +904,143 @@ mod tests {
         assert!(idx.best_recovery_for("NetworkError", None, 5).is_none());
     }
 }
+
+// ── AL-v2.5 integration tests live outside the inner module ──────────────────
+// because they test the public API crossing module boundaries
+
+#[cfg(test)]
+mod al_v2_5_tests {
+    use crate::core::learning::budget_stats::{BudgetAwareIndex, BudgetProfile};
+    use crate::core::learning::experience::{Experience, ExperienceStoreV2, SCHEMA_VERSION};
+    use crate::core::learning::fingerprint::TaskFingerprint;
+    use crate::core::learning::outcome::{LearningOutcome, LearningResult, OutcomeMetrics};
+    use crate::core::learning::router::AdaptiveRouter;
+    use crate::core::learning::strategy::StrategyKind;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    fn make_exp_for_budget(
+        strategy: StrategyKind,
+        lang: &str,
+        steps: u32,
+        success: bool,
+    ) -> Experience {
+        Experience {
+            schema_version: SCHEMA_VERSION,
+            id: format!("be_{steps}"),
+            attempt_id: "att_b".to_string(),
+            mission_id: "mb".to_string(),
+            timestamp: 0,
+            fingerprint: TaskFingerprint {
+                language: Some(lang.to_string()),
+                framework: None,
+                complexity: 0.5,
+                ambiguity: 0.2,
+                scope_bucket: 1,
+                requires_code: true,
+                requires_terminal: false,
+                requires_tests: false,
+                requires_network: false,
+                verification_level: 1,
+            },
+            model: "model-b".to_string(),
+            strategy,
+            result: if success {
+                LearningResult::success(OutcomeMetrics { steps, ..Default::default() })
+            } else {
+                LearningResult::failed(OutcomeMetrics { steps, ..Default::default() }, vec![])
+            },
+            confidence: 0.7,
+            lesson: None,
+            trajectory: None,
+        }
+    }
+
+    #[test]
+    fn test_al_v2_5_budget_index_prefers_cheap_strategy_when_budget_tight() {
+        let mut idx = BudgetAwareIndex::new();
+
+        // DirectImplementation: cheap (20 steps), high success
+        for _ in 0..5 {
+            idx.update_from_experience(&make_exp_for_budget(
+                StrategyKind::DirectImplementation, "rust", 20, true));
+        }
+        // InspectThenImplement: expensive (80 steps), slightly higher success
+        for _ in 0..5 {
+            idx.update_from_experience(&make_exp_for_budget(
+                StrategyKind::InspectThenImplement, "rust", 80, true));
+        }
+
+        // With tight budget (15 steps, below even the cheap strategy's p75):
+        let choice = idx.best_strategy_for_budget(Some("rust"), 15, 2).unwrap();
+        assert_eq!(choice.strategy, StrategyKind::DirectImplementation,
+            "Tight budget must prefer cheaper strategy");
+        assert!(choice.budget_ratio < 1.0, "budget_ratio must be < 1.0 for tight budget");
+
+        // With ample budget (300 steps): success rate wins
+        let choice_ample = idx.best_strategy_for_budget(Some("rust"), 300, 2).unwrap();
+        // Both have same success rate (all successful), so this just checks it returns something
+        assert!(choice_ample.budget_ratio >= 2.0,
+            "budget_ratio must be >= 2.0 for ample budget");
+    }
+
+    #[tokio::test]
+    async fn test_al_v2_5_router_recommend_with_context_uses_budget() {
+        let store = Arc::new(RwLock::new(ExperienceStoreV2::new(100)));
+
+        // Build a BudgetAwareIndex with clear cost data
+        let mut budget_idx = BudgetAwareIndex::new();
+        for _ in 0..4 {
+            budget_idx.update_from_experience(&make_exp_for_budget(
+                StrategyKind::MinimalChange, "rust", 10, true));
+            budget_idx.update_from_experience(&make_exp_for_budget(
+                StrategyKind::DiagnoseThenRepair, "rust", 80, true));
+        }
+
+        let router = AdaptiveRouter::new(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            store,
+            "budget_test_mission",
+        ).with_budget_index(budget_idx);
+
+        let fp = TaskFingerprint {
+            language: Some("rust".to_string()),
+            framework: None, complexity: 0.5, ambiguity: 0.2,
+            scope_bucket: 1, requires_code: true,
+            requires_terminal: false, requires_tests: false,
+            requires_network: false, verification_level: 1,
+        };
+
+        let models = vec!["model-x".to_string()];
+
+        // Tight budget (5 steps) — must prefer MinimalChange (cheapest)
+        let rec_tight = router.recommend_with_context(&fp, None, Some(5), &models).await;
+        assert_eq!(rec_tight.strategy, StrategyKind::MinimalChange,
+            "Tight budget must select MinimalChange (cheapest historical cost)");
+        assert!(rec_tight.estimated_cost_steps.is_some(),
+            "estimated_cost_steps must be set when budget override is applied");
+
+        // No budget constraint — normal recommendation
+        let rec_free = router.recommend_with_context(&fp, None, None, &models).await;
+        assert!(rec_free.estimated_cost_steps.is_none(),
+            "No budget constraint — estimated_cost_steps must be None");
+    }
+
+    #[test]
+    fn test_al_v2_5_budget_index_rebuild_from_experiences() {
+        let exps = vec![
+            make_exp_for_budget(StrategyKind::CompileFirst, "python", 30, true),
+            make_exp_for_budget(StrategyKind::CompileFirst, "python", 35, true),
+            make_exp_for_budget(StrategyKind::CompileFirst, "python", 40, false),
+        ];
+
+        let idx = BudgetAwareIndex::rebuild_from_experiences(&exps);
+        assert!(idx.total_profiles() >= 2, // python-specific + any-language
+            "Rebuild must create at least language-specific and any-language profiles");
+
+        let choice = idx.best_strategy_for_budget(Some("python"), 100, 2).unwrap();
+        assert_eq!(choice.strategy, StrategyKind::CompileFirst,
+            "Only CompileFirst has data, must be selected");
+    }
+}
