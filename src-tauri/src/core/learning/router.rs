@@ -98,6 +98,7 @@ impl AdaptiveRouter {
 
     /// AL-v2.5 — Full context recommendation: state + budget awareness.
     /// This is the primary entry point when caller has both StateSignature and remaining_budget.
+    #[allow(dead_code)]
     pub async fn recommend_with_context(
         &self,
         fp: &TaskFingerprint,
