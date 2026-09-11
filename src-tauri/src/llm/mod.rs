@@ -223,30 +223,7 @@ async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) ->
         }}",
         task, file_contents
     );
-
-
-    let programmer_schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "pensamiento": { "type": "string", "maxLength": 300, "description": "Razona brevemente (máx 300 chars) sobre la lógica antes de escribir el código." },
-            "explicacion_tecnica": { "type": "string" },
-            "cambios": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "archivo": { "type": "string" },
-                        "buscar": { "type": "string" },
-                        "reemplazar": { "type": "string" }
-                    },
-                    "required": ["archivo", "buscar", "reemplazar"]
-                }
-            }
-        },
-        "required": ["pensamiento", "explicacion_tecnica", "cambios"]
-    });
-
-    call_ollama_with_schema(model, &system_prompt, programmer_schema).await
+    call_ollama(model, &system_prompt).await
 }
 
 async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
