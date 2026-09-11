@@ -811,3 +811,4 @@ mod tests {
     }
 }
 
+pub mod workspace_resolver;

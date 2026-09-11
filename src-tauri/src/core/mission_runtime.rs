@@ -215,16 +215,27 @@ impl MissionRuntime {
             step: self.cognitive_state.mission.current_step,
             state_hash,
             files_changed: obs.files_affected.len() as u32,
-            criteria_satisfied: self.contract.acceptance_criteria
-                .iter()
-                .filter(|c| c.status == crate::core::mission_contract::CriterionStatus::Satisfied)
-                .count() as u32,
+            criteria_satisfied: self.verified_criteria_count(),
             evidence_count: self.evidence_graph.entries.len() as u32,
             last_tool_used: obs.tool_name.clone(),
             last_command: obs.command.clone().unwrap_or_default(),
             last_error_hash: err_hash,
         };
         self.stall_detector.record_signature(sig);
+    }
+
+    /// Evaluates how many criteria are actually verified dynamically by CompletionGate.
+    pub fn verified_criteria_count(&self) -> u32 {
+        let ws = std::path::Path::new(&self.workspace_path);
+        let decision = CompletionGate::evaluate(&self.contract, &self.cognitive_state, &self.evidence_graph, self.current_world_hash(), ws);
+        
+        let total = self.contract.acceptance_criteria.iter().filter(|c| c.required).count() as u32;
+        let missing = match decision {
+            CompletionDecision::Complete => 0,
+            CompletionDecision::Incomplete(m) | CompletionDecision::Blocked(m) => m.len() as u32,
+        };
+        
+        total.saturating_sub(missing)
     }
 
     // ─── Stall Detection ───────────────────────────────────────────────────────

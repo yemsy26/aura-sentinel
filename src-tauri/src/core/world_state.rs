@@ -59,9 +59,14 @@ impl WorldState {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        if ws.exists() && ws.is_dir() {
-            Self::scan_dir_recursive(ws, ws, &mut files)?;
+        if !ws.exists() {
+            return Err(format!("WORKSPACE_NOT_FOUND: {}", workspace_path));
         }
+        if !ws.is_dir() {
+            return Err(format!("WORKSPACE_NOT_DIRECTORY: {}", workspace_path));
+        }
+
+        Self::scan_dir_recursive(ws, ws, &mut files)?;
 
         let environment = Self::detect_environment();
         let git = Self::detect_git(workspace_path);

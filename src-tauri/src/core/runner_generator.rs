@@ -149,6 +149,10 @@ warn() {
 
     // Main execution
     script.push_str(&format!("log \"Iniciando {}...\"\n\n", config.runner_type.base_name()));
+    
+    // Change to project root
+    let root_str = config.project_root.to_string_lossy().replace('\\', "/");
+    script.push_str(&format!("cd \"{}\" || {{ error \"No se pudo acceder a {}\"; exit 1; }}\n", root_str, root_str));
 
     // Comando principal según tipo
     match config.runner_type {
@@ -288,6 +292,13 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
 
     // Main
     script.push_str(&format!("echo %LOG_PREFIX% Iniciando {}...\n\n", config.runner_type.base_name()));
+    
+    // Change to project root
+    let root_str = config.project_root.to_string_lossy().replace('/', "\\");
+    script.push_str(&format!("cd /d \"{}\" || (\n", root_str));
+    script.push_str(&format!("    echo %LOG_PREFIX% ERROR: No se pudo acceder a {}\n", root_str));
+    script.push_str("    exit /b 1\n");
+    script.push_str(")\n\n");
 
     match config.runner_type {
         RunnerType::Test => {

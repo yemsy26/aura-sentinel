@@ -87,15 +87,8 @@ fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Optio
 
 /// Detecta si el workspace contiene archivos HTML (entorno web/frontend)
 fn has_html_files(workspace_path: &str) -> bool {
-    if let Ok(entries) = std::fs::read_dir(workspace_path) {
-        for entry in entries.flatten() {
-            if let Some(ext) = entry.path().extension() {
-                let ext_str = ext.to_string_lossy().to_lowercase();
-                if ext_str == "html" || ext_str == "htm" {
-                    return true;
-                }
-            }
-        }
+    if let Ok(world) = crate::core::world_state::WorldState::capture(workspace_path) {
+        return world.files.keys().any(|f| f.to_lowercase().ends_with(".html") || f.to_lowercase().ends_with(".htm"));
     }
     false
 }
@@ -242,74 +235,7 @@ fn classify_mission(msg: &str) -> MissionType {
 /// Does not allow loose extension matching or inline script shortcuts.
 fn is_phase_file_satisfied(workspace_path: &str, file_name: &str) -> bool {
     let ws = std::path::Path::new(workspace_path);
-    let target_clean = file_name.trim();
-    if target_clean.is_empty() {
-        return false;
-    }
-
-    // 1. Direct path check and standard subdirectories
-    let candidates = [
-        ws.join(target_clean),
-        ws.join("src").join(target_clean),
-        ws.join("public").join(target_clean),
-        ws.join("app").join(target_clean),
-        ws.join("lib").join(target_clean),
-    ];
-
-    for path in &candidates {
-        if path.is_file() {
-            if let Ok(meta) = path.metadata() {
-                if meta.len() > 0 {
-                    return true;
-                }
-            }
-        }
-    }
-
-    // 2. Strict 1-to-1 canonical alias for exact matching stylesheets only
-    let strict_alias = match target_clean {
-        "styles.css" => Some("style.css"),
-        "style.css" => Some("styles.css"),
-        _ => None,
-    };
-
-    if let Some(alias) = strict_alias {
-        let alias_candidates = [
-            ws.join(alias),
-            ws.join("src").join(alias),
-            ws.join("public").join(alias),
-        ];
-        for path in &alias_candidates {
-            if path.is_file() {
-                if let Ok(meta) = path.metadata() {
-                    if meta.len() > 0 {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. Case-insensitive exact filename check (e.g. index.html vs Index.html)
-    let target_lower = target_clean.to_lowercase();
-    if let Ok(entries) = std::fs::read_dir(ws) {
-        for entry in entries.flatten() {
-            let entry_path = entry.path();
-            if entry_path.is_file() {
-                if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
-                    if name.to_lowercase() == target_lower {
-                        if let Ok(meta) = entry_path.metadata() {
-                            if meta.len() > 0 {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    false
+    crate::core::workspace_resolver::WorkspaceResolver::file_exists(ws, file_name).unwrap_or(false)
 }
 
 /// Helper to auto-extract commands from the agent's thought when comando is empty.
@@ -371,50 +297,30 @@ async fn generate_project_runners(workspace_path: &str, prompt: &str) -> Vec<std
     let project_root = Path::new(workspace_path);
     let _all_generated: Vec<std::path::PathBuf> = Vec::new();
     
-    // Detectar lenguaje por archivos existentes
-    let language = detect_project_language(workspace_path);
-    if language == "unknown" {
-        // Intentar inferir del prompt
-        let prompt_lower = prompt.to_lowercase();
-        if prompt_lower.contains("rust") || prompt_lower.contains("cargo") {
-            return generate_for_language("rust", project_root).await;
-        } else if prompt_lower.contains("python") || prompt_lower.contains("django") || prompt_lower.contains("flask") || prompt_lower.contains("fastapi") {
-            return generate_for_language("python", project_root).await;
-        } else if prompt_lower.contains("javascript") || prompt_lower.contains("node") || prompt_lower.contains("react") || prompt_lower.contains("vue") || prompt_lower.contains("npm") {
-            return generate_for_language("javascript", project_root).await;
-        } else if prompt_lower.contains("typescript") || prompt_lower.contains("tsx") || prompt_lower.contains("ts ") {
-            return generate_for_language("typescript", project_root).await;
-        } else if prompt_lower.contains("go ") || prompt_lower.contains("golang") {
-            return generate_for_language("go", project_root).await;
-        } else if prompt_lower.contains("java") || prompt_lower.contains("spring") || prompt_lower.contains("maven") || prompt_lower.contains("gradle") {
-            return generate_for_language("java", project_root).await;
-        } else if prompt_lower.contains("kotlin") || prompt_lower.contains("android") {
-            return generate_for_language("kotlin", project_root).await;
-        } else if prompt_lower.contains("php") || prompt_lower.contains("laravel") {
-            return generate_for_language("php", project_root).await;
-        } else if prompt_lower.contains("dart") || prompt_lower.contains("flutter") {
-            return generate_for_language("dart", project_root).await;
-        } else if prompt_lower.contains("swift") || prompt_lower.contains("ios") {
-            return generate_for_language("swift", project_root).await;
-        } else if prompt_lower.contains("c#") || prompt_lower.contains("csharp") || prompt_lower.contains(".net") {
-            return generate_for_language("csharp", project_root).await;
-        } else if prompt_lower.contains("ruby") || prompt_lower.contains("rails") {
-            return generate_for_language("ruby", project_root).await;
-        } else if prompt_lower.contains("swift") || prompt_lower.contains("ios") {
-            return generate_for_language("swift", project_root).await;
-        } else if prompt_lower.contains("dart") || prompt_lower.contains("flutter") {
-            return generate_for_language("dart", project_root).await;
-        } else if prompt_lower.contains("c#") || prompt_lower.contains("csharp") || prompt_lower.contains(".net") {
-            return generate_for_language("csharp", project_root).await;
-        } else if prompt_lower.contains("ruby") || prompt_lower.contains("rails") {
-            return generate_for_language("ruby", project_root).await;
-        } else if prompt_lower.contains("solidity") || prompt_lower.contains("foundry") || prompt_lower.contains("hardhat") {
-            return generate_for_language("solidity", project_root).await;
+    let projects = detect_projects(workspace_path);
+    let mut all_runners = Vec::new();
+
+    for proj in projects {
+        let language = proj.language;
+        let root = proj.root;
+
+        let mut lang = language.clone();
+        if lang == "unknown" {
+            let prompt_lower = prompt.to_lowercase();
+            if prompt_lower.contains("rust") || prompt_lower.contains("cargo") { lang = "rust".to_string(); }
+            else if prompt_lower.contains("python") || prompt_lower.contains("django") || prompt_lower.contains("flask") || prompt_lower.contains("fastapi") { lang = "python".to_string(); }
+            else if prompt_lower.contains("javascript") || prompt_lower.contains("node") || prompt_lower.contains("react") || prompt_lower.contains("vue") || prompt_lower.contains("npm") { lang = "javascript".to_string(); }
+            else if prompt_lower.contains("typescript") || prompt_lower.contains("tsx") || prompt_lower.contains("ts ") { lang = "typescript".to_string(); }
+            else if prompt_lower.contains("go ") || prompt_lower.contains("golang") { lang = "go".to_string(); }
+            else if prompt_lower.contains("java") || prompt_lower.contains("spring") || prompt_lower.contains("maven") || prompt_lower.contains("gradle") { lang = "java".to_string(); }
         }
-        return Vec::new();
+
+        if lang != "unknown" {
+            let mut runners = generate_for_language(&lang, &root).await;
+            all_runners.append(&mut runners);
+        }
     }
-    
-    generate_for_language(&language, project_root).await
+    all_runners
 }
 
 async fn generate_for_language(language: &str, project_root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -507,35 +413,59 @@ async fn generate_for_language(language: &str, project_root: &std::path::Path) -
     }
 }
 
-// Helper para detectar lenguaje del proyecto
-fn detect_project_language(workspace_path: &str) -> String {
+#[derive(Debug)]
+pub struct ProjectDescriptor {
+    pub root: std::path::PathBuf,
+    pub language: String,
+}
+
+pub fn detect_projects(workspace_path: &str) -> Vec<ProjectDescriptor> {
     use std::path::Path;
-    let path = Path::new(workspace_path);
+    let ws = Path::new(workspace_path);
+    let mut projects = Vec::new();
+
+    let mut dirs_to_check = vec![ws.to_path_buf()];
     
-    if path.join("Cargo.toml").exists() { return "rust".to_string(); }
-    if path.join("package.json").exists() {
-        if path.join("tsconfig.json").exists() {
-            return "typescript".to_string();
+    if let Ok(entries) = std::fs::read_dir(ws) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                if name != "node_modules" && name != "target" && name != ".git" && name != ".venv" {
+                    dirs_to_check.push(path);
+                }
+            }
         }
-        return "javascript".to_string();
     }
-    if path.join("requirements.txt").exists() || path.join("pyproject.toml").exists() || path.join("main.py").exists() {
-        return "python".to_string();
+
+    for path in dirs_to_check {
+        let mut lang = "unknown".to_string();
+        if path.join("Cargo.toml").exists() { lang = "rust".to_string(); }
+        else if path.join("package.json").exists() {
+            if path.join("tsconfig.json").exists() { lang = "typescript".to_string(); }
+            else { lang = "javascript".to_string(); }
+        }
+        else if path.join("requirements.txt").exists() || path.join("pyproject.toml").exists() || path.join("main.py").exists() { lang = "python".to_string(); }
+        else if path.join("go.mod").exists() { lang = "go".to_string(); }
+        else if path.join("pom.xml").exists() { lang = "java".to_string(); }
+        else if path.join("build.gradle").exists() || path.join("build.gradle.kts").exists() { lang = "kotlin".to_string(); }
+        else if path.join("composer.json").exists() { lang = "php".to_string(); }
+        else if path.join("pubspec.yaml").exists() { lang = "dart".to_string(); }
+        else if path.join("Package.swift").exists() { lang = "swift".to_string(); }
+        else if std::fs::read_dir(&path).map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().extension().map(|ext| ext == "csproj").unwrap_or(false))).unwrap_or(false) { lang = "csharp".to_string(); }
+        else if path.join("Gemfile").exists() { lang = "ruby".to_string(); }
+        else if path.join("foundry.toml").exists() || path.join("hardhat.config.js").exists() || path.join("hardhat.config.ts").exists() { lang = "solidity".to_string(); }
+
+        if lang != "unknown" {
+            projects.push(ProjectDescriptor { root: path, language: lang });
+        }
     }
-    if path.join("go.mod").exists() { return "go".to_string(); }
-    if path.join("pom.xml").exists() { return "java".to_string(); }
-    if path.join("build.gradle").exists() || path.join("build.gradle.kts").exists() { return "kotlin".to_string(); }
-    if path.join("composer.json").exists() { return "php".to_string(); }
-    if path.join("pubspec.yaml").exists() { return "dart".to_string(); }
-    if path.join("Package.swift").exists() { return "swift".to_string(); }
-    if std::fs::read_dir(workspace_path).map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().extension().map(|ext| ext == "csproj").unwrap_or(false))).unwrap_or(false) {
-        return "csharp".to_string();
+    
+    if projects.is_empty() {
+        projects.push(ProjectDescriptor { root: ws.to_path_buf(), language: "unknown".to_string() });
     }
-    if path.join("Gemfile").exists() { return "ruby".to_string(); }
-    if path.join("foundry.toml").exists() || path.join("hardhat.config.js").exists() || path.join("hardhat.config.ts").exists() {
-        return "solidity".to_string();
-    }
-    "unknown".to_string()
+    
+    projects
 }
 
 pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "qwen2.5-coder:7b";
