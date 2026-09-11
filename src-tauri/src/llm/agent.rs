@@ -3798,24 +3798,6 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                         current_role = AgentRole::Executor;                        continue;
                     }
 
-                    journal.fases[journal.fase_actual].estado = "COMPLETADA".to_string();
-                }
-
-                // If workspace files exist and syntax validation passes, ensure contract criteria and evidence are satisfied
-                if validate_workspace(&workspace_path).await.is_ok() {
-                    let hash = runtime.current_world_hash();
-                    if !runtime.evidence_graph.has_valid_evidence_for_state("cargo test passes", 0.5, hash) 
-                        && !runtime.evidence_graph.has_valid_evidence_for_state("syntax validation passes", 0.5, hash) {
-                        let _ = runtime.evidence_graph.record_with_hash(
-                            crate::core::evidence::EvidenceKind::StaticAnalysis,
-                            "TOOL_FINISH",
-                            "Validación estática y sintáctica del workspace aprobada",
-                            "VALIDATED",
-                            1.0,
-                            runtime.current_step(),
-                            Some(hash)
-                        );
-                    }
                 }
 
                 // ↀ CompletionGate delegado a MissionRuntime (fuente única de verdad) ↀ

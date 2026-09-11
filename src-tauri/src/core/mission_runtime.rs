@@ -335,7 +335,8 @@ impl MissionRuntime {
             &self.contract, 
             &self.cognitive_state, 
             &self.evidence_graph,
-            self.current_world_hash()
+            self.current_world_hash(),
+            std::path::Path::new(&self.workspace_path),
         )
     }
 
@@ -714,43 +715,66 @@ mod tests {
         assert_eq!(obs.unwrap().payload, "registry_dispatched");
     }
 
-    #[test]
-    fn test_integration_word_stats_mission_flow() {
-        let mut rt = MissionRuntime::new(".", "Crea CLI word-stats", 50);
+    #[tokio::test]
+    async fn test_integration_word_stats_mission_flow() {
+        let temp_dir = std::env::temp_dir().join(format!("aura_ws_test_{}", uuid::Uuid::new_v4()));
+        let src_dir = temp_dir.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let mut rt = MissionRuntime::new(temp_dir.to_str().unwrap(), "Crea CLI word-stats", 50);
         
         rt.contract.add_criterion("AC-BUILD", "cargo build exitoso", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
         rt.contract.add_criterion("AC-TEST", "cargo test con 3 tests", crate::core::mission_contract::VerificationMethod::TestPassed, true);
         rt.contract.add_criterion("AC-JSON", "Genera word_stats.json válido", crate::core::mission_contract::VerificationMethod::FileExistence("word_stats.json".to_string()), true);
 
-        // 1. Initial State -> Missing files, LLM attempts FINISH
+        // 1. Initial State -> Missing files and evidence -> Incomplete
         assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
 
-        // 2. LLM creates Cargo.toml and src/main.rs (simulated hash change)
-        let hash_after_code = 12345;
+        // 2. LLM creates Cargo.toml and src/main.rs physically
+        std::fs::write(temp_dir.join("Cargo.toml"), "[package]\nname=\"word-stats\"\nversion=\"0.1.0\"\n").unwrap();
+        std::fs::write(src_dir.join("main.rs"), "fn main() { println!(\"hello\"); }").unwrap();
+
+        rt.observe_world().unwrap();
+        let hash_step1 = rt.current_world_hash();
         
-        // 3. LLM executes cargo build successfully
+        // 3. LLM executes cargo build and cargo test successfully
         let _ = rt.evidence_graph.record_with_hash(
-            crate::core::evidence::EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, rt.current_step(), Some(hash_after_code)
+            crate::core::evidence::EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, rt.current_step(), Some(hash_step1)
+        ).unwrap();
+        let _ = rt.evidence_graph.record_with_hash(
+            crate::core::evidence::EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, rt.current_step(), Some(hash_step1)
         ).unwrap();
 
-        // Still incomplete
+        // Still incomplete because word_stats.json does NOT physically exist on disk yet!
         assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
 
-        // 4. LLM executes cargo test successfully
+        // 4. LLM runs binary, physically creating word_stats.json on disk
+        std::fs::write(temp_dir.join("word_stats.json"), r#"{"total_words": 10}"#).unwrap();
+
+        rt.observe_world().unwrap();
+        let hash_step2 = rt.current_world_hash();
+        // Record test/build evidence for the new state hash
         let _ = rt.evidence_graph.record_with_hash(
-            crate::core::evidence::EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, rt.current_step(), Some(hash_after_code)
+            crate::core::evidence::EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, rt.current_step(), Some(hash_step2)
+        ).unwrap();
+        let _ = rt.evidence_graph.record_with_hash(
+            crate::core::evidence::EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, rt.current_step(), Some(hash_step2)
         ).unwrap();
 
-        // 5. LLM runs the tool, generating word_stats.json
-        let _ = rt.evidence_graph.record_with_hash(
-            crate::core::evidence::EvidenceKind::FileCreated, "TOOL_TERMINAL", "file word_stats.json exists", "0", 1.0, rt.current_step(), Some(hash_after_code)
-        ).unwrap();
+        // 5. Everything matches state and physical disk -> Complete!
+        assert_eq!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Complete);
 
-        // 6. Complete
-        let mut contract_valid = false;
-        if let crate::core::completion_gate::CompletionDecision::Complete = crate::core::completion_gate::CompletionGate::evaluate(&rt.contract, &rt.cognitive_state, &rt.evidence_graph, hash_after_code) {
-            contract_valid = true;
-        }
-        assert!(contract_valid);
+        // 6. NEGATIVE TEST 1: LLM modifies main.rs AFTER passing tests (invalidating state_hash)
+        std::fs::write(src_dir.join("main.rs"), "fn main() { println!(\"broken code extra long\"); }").unwrap();
+        rt.observe_world().unwrap();
+        // World state hash changes! CompletionGate MUST reject!
+        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+
+        // 7. NEGATIVE TEST 2: File deleted physically
+        std::fs::remove_file(temp_dir.join("word_stats.json")).unwrap();
+        rt.observe_world().unwrap();
+        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
