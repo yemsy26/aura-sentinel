@@ -44,12 +44,27 @@ impl CompletionGate {
 
             let is_satisfied = match &ac.verification {
                 crate::core::mission_contract::VerificationMethod::TestPassed => {
-                    evidence.has_valid_evidence_for_state("cargo test passes", 0.5, current_world_hash)
-                    || evidence.has_valid_evidence_for_state("tests pass", 0.5, current_world_hash)
+                    evidence.has_valid_structured_evidence_for_state(
+                        crate::core::evidence::EvidenceKind::Test,
+                        "cargo test passes",
+                        0.5,
+                        current_world_hash
+                    )
+                    || evidence.has_valid_structured_evidence_for_state(
+                        crate::core::evidence::EvidenceKind::Test,
+                        "tests pass",
+                        0.5,
+                        current_world_hash
+                    )
                 },
                 crate::core::mission_contract::VerificationMethod::CommandExitZero(cmd) => {
-                    let claim = format!("{} passes", cmd);
-                    evidence.has_valid_evidence_for_state(&claim, 0.5, current_world_hash)
+                    let claim = format!("{} passes", cmd.trim());
+                    evidence.has_valid_structured_evidence_for_state(
+                        crate::core::evidence::EvidenceKind::CommandExitCode,
+                        &claim,
+                        0.5,
+                        current_world_hash
+                    )
                 },
                 crate::core::mission_contract::VerificationMethod::FileExistence(file) => {
                     // P0: Physical disk check required! Historical evidence alone is not enough if file was deleted.
@@ -266,5 +281,35 @@ mod tests {
         evidence.record_with_hash(EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, 3, Some(current_hash)).unwrap();
         let dec3 = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, dummy_path);
         assert_eq!(dec3, CompletionDecision::Complete);
+    }
+
+    #[test]
+    fn test_unstructured_textual_claim_rejected_by_gate() {
+        let mut contract = MissionContract::new("Build and test");
+        contract.add_criterion(
+            "AC-BUILD",
+            "cargo build passes",
+            crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()),
+            true
+        );
+        contract.add_criterion(
+            "AC-TEST",
+            "cargo test passes",
+            crate::core::mission_contract::VerificationMethod::TestPassed,
+            true
+        );
+
+        let mut evidence = EvidenceGraph::new();
+        let state = CognitiveState::new("m1", "Build & Test");
+        let hash = 888;
+        let dummy_path = Path::new(".");
+
+        // Fraudulent / textual evidence using StaticAnalysis instead of CommandExitCode/Test
+        evidence.record_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo build passes", "0", 1.0, 1, Some(hash)).unwrap();
+        evidence.record_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo test passes", "0", 1.0, 2, Some(hash)).unwrap();
+
+        // CompletionGate MUST REJECT because the kind is StaticAnalysis, NOT CommandExitCode or Test!
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
+        assert!(matches!(dec, CompletionDecision::Incomplete(_)));
     }
 }

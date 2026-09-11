@@ -79,12 +79,31 @@ impl EvidenceGraph {
             if e.claim != claim || e.reliability < min_reliability {
                 return false;
             }
-            // If evidence doesn't have a hash, it's considered permanently valid (e.g. system state).
-            // But if it's tied to a workspace state, it MUST match the current state.
-            if let Some(hash) = e.state_hash {
-                hash == current_state_hash
+            if Self::kind_requires_workspace_hash(&e.kind) {
+                e.state_hash == Some(current_state_hash)
             } else {
-                true
+                e.state_hash.map_or(true, |hash| hash == current_state_hash)
+            }
+        })
+    }
+
+    /// Strict exact-match evidence lookup filtering by EvidenceKind, minimum reliability, AND workspace state_hash verification.
+    /// This guarantees that technical evidence (CommandExitCode, Test) came from real execution and matches current code.
+    pub fn has_valid_structured_evidence_for_state(
+        &self,
+        kind: EvidenceKind,
+        claim: &str,
+        min_reliability: f32,
+        current_state_hash: u64
+    ) -> bool {
+        self.entries.iter().any(|e| {
+            if e.kind != kind || e.claim != claim || e.reliability < min_reliability {
+                return false;
+            }
+            if Self::kind_requires_workspace_hash(&kind) {
+                e.state_hash == Some(current_state_hash)
+            } else {
+                e.state_hash.map_or(true, |hash| hash == current_state_hash)
             }
         })
     }
