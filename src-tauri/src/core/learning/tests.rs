@@ -912,10 +912,10 @@ mod tests {
 
 #[cfg(test)]
 mod al_v2_5_tests {
-    use crate::core::learning::budget_stats::{BudgetAwareIndex, BudgetProfile};
+    use crate::core::learning::budget_stats::BudgetAwareIndex;
     use crate::core::learning::experience::{Experience, ExperienceStoreV2, SCHEMA_VERSION};
     use crate::core::learning::fingerprint::TaskFingerprint;
-    use crate::core::learning::outcome::{LearningOutcome, LearningResult, OutcomeMetrics};
+    use crate::core::learning::outcome::{LearningResult, OutcomeMetrics};
     use crate::core::learning::router::AdaptiveRouter;
     use crate::core::learning::strategy::StrategyKind;
     use std::sync::Arc;

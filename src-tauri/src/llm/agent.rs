@@ -2184,8 +2184,8 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                         || stdout_lower.contains("100%")
                                         || stdout_lower.contains("fully verified")
                                         || stdout_lower.contains("verification passed")
-                                        || (stdout_lower.contains("[pass]") && !stdout_lower.contains("[fail]"));
-                                    let test_passed = (out.contains("0 failed") || out.contains("tests passed") || out.contains("100%")) && !out.contains("FAILED");
+                                        || (stdout_lower.contains("[pass]") && !stdout_lower.contains("[fail]"))
+                                        || ((out.contains("0 failed") || out.contains("tests passed") || out.contains("100%")) && !out.contains("FAILED"));
 
                                     if is_test_cmd && test_passed {
                                         let _ = runtime.evidence_graph.record_with_hash(

@@ -78,6 +78,7 @@ pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
     }
 }
 
+#[allow(dead_code)]
 pub async fn call_ollama_with_schema(model: &str, prompt: &str, schema: serde_json::Value) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
