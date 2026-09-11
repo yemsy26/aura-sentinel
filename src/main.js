@@ -509,6 +509,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ─── WORKSPACE MANAGEMENT ───────────────────────────────────────────────
     async function setWorkspace(selectedPath) {
         if (!selectedPath || selectedPath === "Ninguno") return;
+
+        // Extract string if Tauri dialog returns an array or object
+        if (Array.isArray(selectedPath)) {
+            selectedPath = selectedPath[0];
+        } else if (typeof selectedPath === 'object' && selectedPath !== null) {
+            if (selectedPath.path) selectedPath = selectedPath.path;
+            else if (selectedPath.name) selectedPath = selectedPath.name;
+        }
+
+        if (typeof selectedPath !== 'string' || !selectedPath.trim()) return;
+        selectedPath = selectedPath.trim();
+
         currentWorkspace = selectedPath;
         localStorage.setItem('aura_last_workspace', currentWorkspace);
 
@@ -539,6 +551,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             logSystemThought(`[ERROR WORKSPACE] ${error}`, '#f85149');
         }
     });
+
+    // Restaurar el espacio de trabajo previamente guardado al iniciar la aplicación
+    const savedWs = localStorage.getItem('aura_last_workspace');
+    if (savedWs && savedWs !== "Ninguno") {
+        setWorkspace(savedWs).catch(() => {});
+    }
 
     function renderTree(rootNodes, container) {
         container.innerHTML = '';

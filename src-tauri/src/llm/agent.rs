@@ -1994,14 +1994,21 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                         // ── Pre-check: verify the script file exists before running it ─────────
                         let cmd_lower_check = comando.to_lowercase();
                         let script_file = if cmd_lower_check.starts_with("node ") {
-                            Some(comando.trim_start_matches("node ").trim().split_whitespace().next().unwrap_or(""))
+                            cmd_lower_check.trim_start_matches("node ")
+                                .split_whitespace()
+                                .find(|arg| !arg.starts_with('-'))
                         } else if cmd_lower_check.starts_with("python ") || cmd_lower_check.starts_with("python3 ") {
-                            Some(comando.splitn(2, ' ').nth(1).unwrap_or("").trim().split_whitespace().next().unwrap_or(""))
+                            let rest = if cmd_lower_check.starts_with("python3 ") {
+                                cmd_lower_check.trim_start_matches("python3 ")
+                            } else {
+                                cmd_lower_check.trim_start_matches("python ")
+                            };
+                            rest.split_whitespace().find(|arg| !arg.starts_with('-'))
                         } else {
                             None
                         };
                         if let Some(script) = script_file {
-                            if !script.is_empty() && !script.starts_with('-') {
+                            if !script.is_empty() {
                                 let script_path = std::path::Path::new(&workspace_path).join(script);
                                 if !script_path.exists() {
                                     let warn_msg = format!(
@@ -2011,6 +2018,10 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                     );
                                     current_context.push_str(&format!("{}\n\n", warn_msg));
                                     emit_event(&app_handle, runtime.current_step(), &format!("[PRE-CHECK] Archivo no encontrado: {}", script), "ERROR");
+                                    forced_next_tool = Some((
+                                        "TOOL_PROGRAMMER".to_string(),
+                                        format!("El archivo '{}' no existe en el workspace. Debes crear el archivo usando TOOL_PROGRAMMER antes de ejecutarlo.", script)
+                                    ));
                                     continue;
                                 }
                             }
@@ -2031,6 +2042,10 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                 let warn_msg = "[SISTEMA]: PROJECT STRUCTURE INVALID: No se encontró `Cargo.toml`. Debes inicializar el proyecto Rust (ej. `cargo init` o crear el archivo) antes de poder usar comandos de cargo.";
                                 current_context.push_str(&format!("Resultado TOOL_TERMINAL Error: {}\n\n", warn_msg));
                                 emit_event(&app_handle, runtime.current_step(), "[PRE-CHECK] Cargo.toml faltante", "ERROR");
+                                forced_next_tool = Some((
+                                    "TOOL_PROGRAMMER".to_string(),
+                                    "No existe Cargo.toml. Crea Cargo.toml o inicializa el proyecto antes de usar cargo.".to_string()
+                                ));
                                 continue;
                             }
                         }
