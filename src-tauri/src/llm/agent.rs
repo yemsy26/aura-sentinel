@@ -635,10 +635,18 @@ pub async fn run_agent_loop(
         }
         scan_workspace_files(std::path::Path::new(&workspace_path), &mut existing_files, 0);
         if !existing_files.is_empty() {
+            let relative_existing: Vec<String> = existing_files.iter()
+                .map(|f| {
+                    f.strip_prefix(&workspace_path)
+                        .unwrap_or(f)
+                        .trim_start_matches(['/', '\\'])
+                        .to_string()
+                })
+                .collect();
             current_context.push_str(&format!(
                 "[ESTADO ACTUAL DEL WORKSPACE] Los siguientes archivos YA EXISTEN en el proyecto. \
                 Antes de crear nada, verifica si estos archivos ya cumplen el objetivo:\n{}\n\n",
-                existing_files.join("\n")
+                relative_existing.join("\n")
             ));
         }
 
@@ -741,8 +749,7 @@ pub async fn run_agent_loop(
     let mut last_progress_step: u32 = 1;
 
     // ── FASE B: Cached Workspace Tree (RAM invalidation on file modification) ──
-    let mut cached_workspace_context: Option<(String, bool)> = None;
-
+    let mut _no_verify_consecutive: u32 = 0;
     // ── Mission Type Classifier ─────────────────────────────────────────────
     let mission_type = classify_mission(&original_prompt_parsed);
     let mission_label = match &mission_type {
@@ -1286,44 +1293,41 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
             extra_prompt = format!("\n\nREGLA ESTRICTA E INQUEBRANTABLE PARA ESTE TURNO:\nDEBES Y TIENES QUE ELEGIR '{}' COMO TU HERRAMIENTA. NO ELIJAS OTRA O EL SISTEMA FALLARÁ. Ignora cualquier otra regla y genera un JSON válido para la herramienta {}.", forced, forced);
         }
 
-        let (live_workspace_context, workspace_is_empty) = match &cached_workspace_context {
-            Some((cached, is_empty)) => (cached.clone(), *is_empty),
-            None => {
-                let mut live_files = Vec::new();
-                fn scan_live_files(dir: &std::path::Path, files: &mut Vec<String>, depth: usize) {
-                    if depth > 5 { return; }
-                    if let Ok(entries) = std::fs::read_dir(dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                            if name.starts_with('.') || name == "node_modules" || name == "__pycache__" || name == "target" { continue; }
-                            if path.is_dir() {
-                                scan_live_files(&path, files, depth + 1);
-                            } else {
-                                files.push(path.to_string_lossy().to_string());
-                            }
+        // ── LIVE WORKSPACE SCAN (Always 100% fresh on every step) ──
+        let (live_workspace_context, workspace_is_empty) = {
+            let mut live_files = Vec::new();
+            fn scan_live_files(dir: &std::path::Path, files: &mut Vec<String>, depth: usize) {
+                if depth > 5 { return; }
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        if name.starts_with('.') || name == "node_modules" || name == "__pycache__" || name == "target" { continue; }
+                        if path.is_dir() {
+                            scan_live_files(&path, files, depth + 1);
+                        } else {
+                            files.push(path.to_string_lossy().to_string());
                         }
                     }
                 }
-                scan_live_files(std::path::Path::new(&workspace_path), &mut live_files, 0);
-                let is_empty = live_files.is_empty();
-                let ctx = if is_empty {
-                    "El proyecto está completamente vacío. Aún no has creado ningún archivo físico.".to_string()
-                } else {
-                    let repo_map = crate::core::map::generate_repo_map(std::path::Path::new(&workspace_path));
-                    let relative_files: Vec<String> = live_files.iter()
-                        .map(|f| {
-                            f.strip_prefix(&workspace_path)
-                                .unwrap_or(f)
-                                .trim_start_matches(['/', '\\'])
-                                .to_string()
-                        })
-                        .collect();
-                    format!("{}\n\nARCHIVOS (rutas relativas):\n{}", repo_map, relative_files.join("\n"))
-                };
-                cached_workspace_context = Some((ctx.clone(), is_empty));
-                (ctx, is_empty)
             }
+            scan_live_files(std::path::Path::new(&workspace_path), &mut live_files, 0);
+            let is_empty = live_files.is_empty();
+            let ctx = if is_empty {
+                "El proyecto está completamente vacío. Aún no has creado ningún archivo físico.".to_string()
+            } else {
+                let repo_map = crate::core::map::generate_repo_map(std::path::Path::new(&workspace_path));
+                let relative_files: Vec<String> = live_files.iter()
+                    .map(|f| {
+                        f.strip_prefix(&workspace_path)
+                            .unwrap_or(f)
+                            .trim_start_matches(['/', '\\'])
+                            .to_string()
+                    })
+                    .collect();
+                format!("{}\n\nARCHIVOS EXISTENTES EN EL WORKSPACE (rutas relativas):\n{}", repo_map, relative_files.join("\n"))
+            };
+            (ctx, is_empty)
         };
 
         // --- EVITAR DESBORDAMIENTO DE CONTEXTO (Garantizando Objetivo Inmutable) ---
@@ -3053,8 +3057,7 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                                                 }));
                                             }
 
-                                            // FASE B: Invalidar caché del árbol en RAM para que el siguiente paso re-escanee
-                                            cached_workspace_context = None;
+
 
                                             // ── CAPA 2: ANTI-STUB ENFORCER ────────────────────────────────────
                                             // Inspect every file for stub patterns BEFORE running validation.
