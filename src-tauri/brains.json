@@ -13,8 +13,8 @@
     "cpp": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
     "csharp": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"]
   },
-  "debugger": ["qwen2.5-coder:14b", "qwen2.5-coder:7b"],
-  "quality_assessor": ["qwen2.5-coder:14b", "qwen2.5-coder:7b"],
+  "debugger": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+  "quality_assessor": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
   "vision": ["moondream", "llama3.2-vision"],
   "embeddings": ["nomic-embed-text"]
 }
