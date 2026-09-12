@@ -68,11 +68,15 @@ impl CompletionGate {
                 },
                 crate::core::mission_contract::VerificationMethod::FileExistence(file) => {
                     // P0: Physical disk check required! Historical evidence alone is not enough if file was deleted.
-                    crate::core::workspace_resolver::WorkspaceResolver::file_exists(workspace_path, file).unwrap_or(false)
+                    crate::core::workspace_resolver::WorkspaceResolver::new(workspace_path)
+                        .and_then(|r| r.file_exists(file))
+                        .unwrap_or(false)
                 },
                 crate::core::mission_contract::VerificationMethod::ContentMatches { file, regex } => {
                     // P0: Read real file content from disk and match regex!
-                    let target_path = crate::core::workspace_resolver::WorkspaceResolver::resolve_exact(workspace_path, file).ok();
+                    let target_path = crate::core::workspace_resolver::WorkspaceResolver::new(workspace_path)
+                        .and_then(|r| r.resolve_exact(file))
+                        .ok();
                     if let Some(p) = target_path.filter(|p| p.is_file()) {
                         if let Ok(content) = std::fs::read_to_string(&p) {
                             if let Ok(re) = regex::Regex::new(regex) {

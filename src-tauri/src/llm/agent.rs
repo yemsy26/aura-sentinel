@@ -235,7 +235,9 @@ fn classify_mission(msg: &str) -> MissionType {
 /// Does not allow loose extension matching or inline script shortcuts.
 fn is_phase_file_satisfied(workspace_path: &str, file_name: &str) -> bool {
     let ws = std::path::Path::new(workspace_path);
-    crate::core::workspace_resolver::WorkspaceResolver::file_exists(ws, file_name).unwrap_or(false)
+    crate::core::workspace_resolver::WorkspaceResolver::new(ws)
+        .and_then(|r| r.file_exists(file_name))
+        .unwrap_or(false)
 }
 
 /// Helper to auto-extract commands from the agent's thought when comando is empty.

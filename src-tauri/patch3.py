@@ -1,30 +1,35 @@
-import sys
+import sys, re
 
-with open('src/llm/agent.rs', 'r', encoding='utf-8', errors='ignore') as f:
-    lines = f.readlines()
+with open(r'C:\Users\yemsy\.gemini\antigravity\scratch\aura sentinel\src-tauri\src\llm\agent.rs', 'r', encoding='utf-8') as f:
+    text = f.read()
 
-new_lines = []
-in_target = False
-found_bg = False
-for i, line in enumerate(lines):
-    if '"TOOL_BACKGROUND_START" => {' in line:
-        found_bg = True
-        
-    if found_bg and '} else if comandos_ejecutados_historico.contains(&comando) {' in line:
-        in_target = True
-        new_lines.append(line)
-        new_lines.append('                    let res_msg = "[SISTEMA INTERNO]: Advertencia: Este servidor o proceso YA ESTÁ EN EJECUCIÓN en segundo plano. NO necesitas volver a iniciarlo. Usa TOOL_VISION_EVALUATOR o TOOL_FINISH.";\n')
-        new_lines.append('                    current_context.push_str(&format!("{}\\n\\n", res_msg));\n')
-        new_lines.append('                    emit_event(&app_handle, step_count, "Servidor ya en ejecución (bucle evitado).", "WARNING");\n')
-        continue
-        
-    if in_target:
-        if '} else {' in line:
-            in_target = False
-            new_lines.append(line)
-        continue
-        
-    new_lines.append(line)
+# For checking
+pattern_check = r'comandos_ejecutados_historico\.contains\(&comando\)'
+replacement_check = r'comandos_ejecutados_historico.contains(&format!("{}|{}", comando.trim().to_lowercase(), runtime.current_world_hash()))'
 
-with open('src/llm/agent.rs', 'w', encoding='utf-8') as f:
-    f.writelines(new_lines)
+if pattern_check not in text and not re.search(pattern_check, text):
+    print("pattern_check NOT FOUND")
+text = re.sub(pattern_check, replacement_check, text)
+
+# For inserting
+pattern_insert = r'comandos_ejecutados_historico\.insert\(comando\.clone\(\)\);'
+replacement_insert = r'comandos_ejecutados_historico.insert(format!("{}|{}", comando.trim().to_lowercase(), runtime.current_world_hash()));'
+if pattern_insert not in text and not re.search(pattern_insert, text):
+    print("pattern_insert NOT FOUND")
+text = re.sub(pattern_insert, replacement_insert, text)
+
+# For checking bg task empty
+pattern_bg_empty_check = r'comandos_ejecutados_historico\.contains\("__EMPTY_BG_CMD__"\)'
+replacement_bg_empty_check = r'comandos_ejecutados_historico.contains(&format!("__EMPTY_BG_CMD__|{}", runtime.current_world_hash()))'
+text = re.sub(pattern_bg_empty_check, replacement_bg_empty_check, text)
+
+# For inserting bg empty
+pattern_bg_empty_insert = r'comandos_ejecutados_historico\.insert\("__EMPTY_BG_CMD__"\.to_string\(\)\);'
+replacement_bg_empty_insert = r'comandos_ejecutados_historico.insert(format!("__EMPTY_BG_CMD__|{}", runtime.current_world_hash()));'
+text = re.sub(pattern_bg_empty_insert, replacement_bg_empty_insert, text)
+
+
+with open(r'C:\Users\yemsy\.gemini\antigravity\scratch\aura sentinel\src-tauri\src\llm\agent.rs', 'w', encoding='utf-8') as f:
+    f.write(text)
+
+print("SUCCESS")

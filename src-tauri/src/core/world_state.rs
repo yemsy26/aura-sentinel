@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 pub struct FileSnapshot {
     pub relative_path: String,
     pub size_bytes: u64,
-    pub content_hash: String,
     pub modified_secs: u64,
+    pub metadata_fingerprint: String,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -51,14 +52,14 @@ impl WorldStateDiff {
 
 impl WorldState {
     pub fn capture(workspace_path: &str) -> Result<Self, String> {
-        Self::capture_internal(workspace_path, true) // Default to fast mode for performance
+        Self::capture_incremental(workspace_path, None)
     }
     
     pub fn capture_full(workspace_path: &str) -> Result<Self, String> {
-        Self::capture_internal(workspace_path, false)
+        Self::capture_incremental(workspace_path, None)
     }
 
-    fn capture_internal(workspace_path: &str, fast_mode: bool) -> Result<Self, String> {
+    pub fn capture_incremental(workspace_path: &str, previous: Option<&WorldState>) -> Result<Self, String> {
         let ws = Path::new(workspace_path);
         let mut files = HashMap::new();
 
@@ -74,18 +75,18 @@ impl WorldState {
             return Err(format!("WORKSPACE_NOT_DIRECTORY: {}", workspace_path));
         }
 
-        Self::scan_dir_recursive(ws, ws, &mut files, fast_mode)?;
+        Self::scan_dir_recursive(ws, ws, &mut files, previous)?;
 
-        let environment = if fast_mode { EnvSnapshot::default() } else { Self::detect_environment() };
-        let git = if fast_mode { None } else { Self::detect_git(workspace_path) };
+        let environment = previous.map(|p| p.environment.clone()).unwrap_or_else(|| Self::detect_environment());
+        let git = previous.map(|p| p.git.clone()).unwrap_or_else(|| Self::detect_git(workspace_path));
 
         Ok(Self { timestamp_secs: now, workspace_root: workspace_path.to_string(), files, environment, git })
     }
 
-    fn scan_dir_recursive(root: &Path, current: &Path, out: &mut HashMap<String, FileSnapshot>, fast_mode: bool) -> Result<(), String> {
+    fn scan_dir_recursive(root: &Path, current: &Path, out: &mut HashMap<String, FileSnapshot>, previous: Option<&WorldState>) -> Result<(), String> {
         let entries = match std::fs::read_dir(current) {
             Ok(e) => e,
-            Err(_) => return Ok(()),
+            Err(e) => return Err(format!("WORKSPACE_SCAN_FAILED: {}: {}", current.display(), e)),
         };
 
         for entry in entries.flatten() {
@@ -96,7 +97,7 @@ impl WorldState {
                 if name == "node_modules" || name == ".git" || name == "target" || name == "__pycache__" || name == ".venv" || name == ".aura" {
                     continue;
                 }
-                Self::scan_dir_recursive(root, &path, out, fast_mode)?;
+                Self::scan_dir_recursive(root, &path, out, previous)?;
             } else if path.is_file() {
                 if name == ".aura_session.json" || name == ".aura_session.json.tmp" || name == ".aura_graph.json" || name == ".fenix_index.json" || name.starts_with(".aura") {
                     continue;
@@ -110,16 +111,26 @@ impl WorldState {
                             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                             .map(|d| d.as_secs())
                             .unwrap_or(0);
-                        let hash = if fast_mode {
-                            format!("{}_{}", size, mtime)
+                        let fingerprint = format!("{}_{}", size, mtime);
+                        let hash = if let Some(prev) = previous {
+                            if let Some(prev_file) = prev.files.get(&rel_str) {
+                                if prev_file.metadata_fingerprint == fingerprint {
+                                    prev_file.content_hash.clone()
+                                } else {
+                                    compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
+                                }
+                            } else {
+                                compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
+                            }
                         } else {
                             compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
                         };
                         out.insert(rel_str.clone(), FileSnapshot {
                             relative_path: rel_str,
                             size_bytes: size,
-                            content_hash: hash,
                             modified_secs: mtime,
+                            metadata_fingerprint: fingerprint,
+                            content_hash: hash,
                         });
                     }
                 }
@@ -186,11 +197,11 @@ mod tests {
         let mut prev_files = HashMap::new();
         prev_files.insert("unchanged.txt".to_string(), FileSnapshot {
             relative_path: "unchanged.txt".to_string(), size_bytes: 10,
-            content_hash: "aaa".to_string(), modified_secs: 100,
+            modified_secs: 100, metadata_fingerprint: "10_100".to_string(), content_hash: "aaa".to_string(),
         });
         prev_files.insert("deleted.txt".to_string(), FileSnapshot {
             relative_path: "deleted.txt".to_string(), size_bytes: 20,
-            content_hash: "bbb".to_string(), modified_secs: 100,
+            modified_secs: 100, metadata_fingerprint: "20_100".to_string(), content_hash: "bbb".to_string(),
         });
 
         let prev = WorldState {
@@ -201,11 +212,11 @@ mod tests {
         let mut curr_files = HashMap::new();
         curr_files.insert("unchanged.txt".to_string(), FileSnapshot {
             relative_path: "unchanged.txt".to_string(), size_bytes: 10,
-            content_hash: "aaa".to_string(), modified_secs: 100,
+            modified_secs: 100, metadata_fingerprint: "10_100".to_string(), content_hash: "aaa".to_string(),
         });
         curr_files.insert("added.txt".to_string(), FileSnapshot {
             relative_path: "added.txt".to_string(), size_bytes: 30,
-            content_hash: "ccc".to_string(), modified_secs: 200,
+            modified_secs: 200, metadata_fingerprint: "30_200".to_string(), content_hash: "ccc".to_string(),
         });
 
         let curr = WorldState {

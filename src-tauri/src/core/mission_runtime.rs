@@ -101,7 +101,7 @@ impl MissionRuntime {
     /// write directly to cognitive_state fields.
     pub fn restore_step(&mut self, step: u32) {
         self.cognitive_state.mission.current_step = step;
-        // budget consumed is not restored (continuation gets a fresh 50-step budget)
+        // P0 Fix: Budget consumed MUST be restored to maintain coherent step limits\n        self.budget.used_steps = step;
     }
 
     /// Checks runtime coherence. Returns a list of violation strings.
@@ -142,7 +142,7 @@ impl MissionRuntime {
     /// "no world change" (hash equal) from "observation failed" (None hash).
     /// NEVER silences the error — eprintln is eliminated.
     pub fn observe_world(&mut self) -> Result<(), String> {
-        match WorldState::capture(&self.workspace_path) {
+        match WorldState::capture_incremental(&self.workspace_path, self.world.as_ref()) {
             Ok(ws) => {
                 self.cognitive_state.set_world(ws.clone());
                 self.world = Some(ws);
@@ -877,25 +877,72 @@ mod tests {
         )
     }
 
-    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
-        let pending_metas: Vec<String> = journal.micro_metas.iter()
+    pub fn get_state_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> MissionStateAnchor {
+        let files_pending: Vec<String> = journal.micro_metas.iter()
             .filter(|m| m.estado != "VERIFICADA")
             .map(|m| m.descripcion.clone())
             .collect();
+            
         let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
             journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
         } else {
             "Ninguna".to_string()
         };
 
+        MissionStateAnchor {
+            mission_id: self.mission_id.clone(),
+            objective: self.contract.objective.clone(),
+            workspace_root: self.workspace_path.clone(),
+            project_root: self.workspace_path.clone(),
+            role: current_role.to_string(),
+            phase: format!("{:?}", journal.ultimo_estado),
+            current_step: self.current_step(),
+            files_created: vec![],
+            files_modified: vec![],
+            files_pending,
+            criteria_satisfied: vec![],
+            criteria_pending: vec![current_meta.clone()],
+            last_world_revision: self.current_world_hash(),
+            last_tool: self.cognitive_state.agent.last_action.clone(),
+            last_command: None,
+            last_error: if last_error.is_empty() { None } else { Some(last_error.to_string()) },
+            next_required_action: Some(current_meta),
+        }
+    }
+    
+    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
+        let anchor = self.get_state_anchor(journal, current_role, last_error);
         format!(
-            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
-            self.workspace_path,
-            journal.ultimo_estado,
-            current_role,
-            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
-            current_meta,
-            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
+            "[MISSION_ANCHOR]\nWorkspace: {}\nProyecto: {}\nFase: {}\nRol: {}\nPaso: {}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
+            anchor.workspace_root,
+            anchor.project_root,
+            anchor.phase,
+            anchor.role,
+            anchor.current_step,
+            if anchor.files_pending.is_empty() { "Ninguno".to_string() } else { anchor.files_pending.join(", ") },
+            anchor.next_required_action.unwrap_or_default(),
+            anchor.last_error.unwrap_or_else(|| "Ninguno".to_string())
         )
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MissionStateAnchor {
+    pub mission_id: String,
+    pub objective: String,
+    pub workspace_root: String,
+    pub project_root: String,
+    pub role: String,
+    pub phase: String,
+    pub current_step: u32,
+    pub files_created: Vec<String>,
+    pub files_modified: Vec<String>,
+    pub files_pending: Vec<String>,
+    pub criteria_satisfied: Vec<String>,
+    pub criteria_pending: Vec<String>,
+    pub last_world_revision: String,
+    pub last_tool: Option<String>,
+    pub last_command: Option<String>,
+    pub last_error: Option<String>,
+    pub next_required_action: Option<String>,
 }
