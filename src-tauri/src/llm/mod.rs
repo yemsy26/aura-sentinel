@@ -38,12 +38,10 @@ fn get_safe_num_ctx() -> u32 {
     sys.refresh_all();
     let total_mem = sys.total_memory() as f64;
     let used_mem = sys.used_memory() as f64;
-    if total_mem > 0.0 {
-        if (used_mem / total_mem) > 0.85 {
-            return 8192; // OOM Safe Mode
-        }
+    if total_mem > 0.0 && (used_mem / total_mem) > 0.80 {
+        return 4096; // Safe Mode under heavy system memory load
     }
-    16384
+    8192 // Standard safe context for 8GB consumer GPUs (prevents CUDA OOM crashes)
 }
 
 pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
@@ -90,7 +88,7 @@ pub async fn call_ollama_with_schema(model: &str, prompt: &str, schema: serde_js
         prompt,
         stream: false,
         format: schema,
-        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 8192, "repeat_penalty": 1.05, "temperature": 0.2 }),
+        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.05, "temperature": 0.2 }),
     };
 
     let res = client.post(url)
