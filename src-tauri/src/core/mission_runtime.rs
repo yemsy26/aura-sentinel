@@ -681,6 +681,42 @@ mod tests {
         assert!(obs.payload.contains("STALE_ACTION"));
     }
 
+    #[tokio::test]
+    async fn test_final_integration_19_step_simulation() {
+        let mut rt = MissionRuntime::new(".", "Build Dashboard", 25);
+        rt.tool_registry.register("TOOL_THINK", std::sync::Arc::new(|_cmd| {
+            Box::pin(async move {
+                Ok(crate::core::tool_registry::ExecutionResult {
+                    stdout: "Pensando...".to_string(), stderr: "".to_string(), exit_code: 0, files_affected: vec![],
+                    command: None, cwd: None, stdout_hash: "".to_string(), stderr_hash: "".to_string(),
+                })
+            })
+        }));
+        
+        let mut loop_detected = false;
+        
+        for _ in 1..=19 {
+            let proposal = crate::core::policy::ActionProposal {
+                tool: "TOOL_THINK".to_string(),
+                arguments: serde_json::json!({ "pensamiento": "Analizando" }),
+                expected_effect: "None".to_string(),
+                risk: crate::core::policy::RiskLevel::Safe,
+                world_hash: Some(rt.current_world_hash()),
+            };
+            
+            let res = rt.execute_action(&proposal).await;
+            if let Err(err) = res {
+                if err.contains("RECOVERY_BARRIER") {
+                    loop_detected = true;
+                    break;
+                }
+            }
+            rt.record_step(); // advance step to simulate loop
+        }
+        
+        assert!(loop_detected, "Recovery Barrier should have triggered within 19 steps");
+    }
+
     // ── H-11: Architecture invariant tests ──────────────────────────────────
 
     /// H-11-A: restore_step() is the ONLY way to set step from outside.
