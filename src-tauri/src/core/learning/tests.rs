@@ -418,7 +418,7 @@ mod tests {
         // Mark manual criteria as satisfied if any exist (not needed here since AC-1 is automated)
         // Provide exact evidence required by CommandExitZero("cargo test")
         use crate::core::evidence::EvidenceKind;
-        let _ = runtime.evidence_graph.record_with_hash(
+        let _ = runtime.evidence_graph.record_generic_with_hash(
             EvidenceKind::CommandExitCode,
             "TOOL_TERMINAL",
             "cargo test passes", // This is the exact claim expected by CompletionGate for CommandExitZero("cargo test")

@@ -58,12 +58,21 @@ impl CompletionGate {
                     )
                 },
                 crate::core::mission_contract::VerificationMethod::CommandExitZero(cmd) => {
-                    let claim = format!("{} passes", cmd.trim());
-                    evidence.has_valid_structured_evidence_for_state(
-                        crate::core::evidence::EvidenceKind::CommandExitCode,
-                        &claim,
+                    use crate::core::evidence::StructuredFact;
+                    evidence.has_valid_structured_evidence(
                         0.5,
-                        current_world_hash
+                        current_world_hash,
+                        |fact| {
+                            match fact {
+                                StructuredFact::CommandResult { command, exit_code, .. } => {
+                                    *exit_code == 0 && command.contains(cmd.trim())
+                                },
+                                StructuredFact::Generic { claim, .. } => {
+                                    claim == &format!("{} passes", cmd.trim()) || claim == &format!("{} exitoso", cmd.trim()) || claim == &format!("{} exitoso en paso ", cmd.trim()) || claim.starts_with(&format!("{} exitoso en paso", cmd.trim()))
+                                },
+                                _ => false
+                            }
+                        }
                     )
                 },
                 crate::core::mission_contract::VerificationMethod::FileExistence(file) => {
@@ -144,17 +153,17 @@ mod tests {
         assert!(matches!(dec, CompletionDecision::Incomplete(_)));
 
         // Evidence with insufficient reliability -> still Incomplete
-        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.6, 1, Some(hash)).unwrap();
+        evidence.record_generic_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.6, 1, Some(hash)).unwrap();
         let dec2 = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert!(matches!(dec2, CompletionDecision::Incomplete(_)));
 
         // Evidence with sufficient reliability but WRONG hash -> Incomplete
-        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 2, Some(99999)).unwrap();
+        evidence.record_generic_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 2, Some(99999)).unwrap();
         let dec3 = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert!(matches!(dec3, CompletionDecision::Incomplete(_)));
 
         // Evidence with sufficient reliability AND CORRECT hash -> Complete
-        evidence.record_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 3, Some(hash)).unwrap();
+        evidence.record_generic_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 3, Some(hash)).unwrap();
         let dec4 = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert_eq!(dec4, CompletionDecision::Complete);
     }
@@ -274,18 +283,18 @@ mod tests {
         let dummy_path = Path::new(".");
 
         // Test 6 & 7: CommandExitZero with old hash -> Incomplete
-        evidence.record_with_hash(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, 1, Some(old_hash)).unwrap();
+        evidence.record_generic_with_hash(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, 1, Some(old_hash)).unwrap();
         let dec1 = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, dummy_path);
         assert!(matches!(dec1, CompletionDecision::Incomplete(_)));
 
         // Record cargo build with current hash
-        evidence.record_with_hash(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, 2, Some(current_hash)).unwrap();
+        evidence.record_generic_with_hash(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, 2, Some(current_hash)).unwrap();
         // Still missing test passed
         let dec2 = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, dummy_path);
         assert!(matches!(dec2, CompletionDecision::Incomplete(_)));
 
         // Test 8: TestPassed with current hash -> Complete
-        evidence.record_with_hash(EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, 3, Some(current_hash)).unwrap();
+        evidence.record_generic_with_hash(EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, 3, Some(current_hash)).unwrap();
         let dec3 = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, dummy_path);
         assert_eq!(dec3, CompletionDecision::Complete);
     }
@@ -312,8 +321,8 @@ mod tests {
         let dummy_path = Path::new(".");
 
         // Fraudulent / textual evidence using StaticAnalysis instead of CommandExitCode/Test
-        evidence.record_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo build passes", "0", 1.0, 1, Some(hash)).unwrap();
-        evidence.record_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo test passes", "0", 1.0, 2, Some(hash)).unwrap();
+        evidence.record_generic_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo build passes", "0", 1.0, 1, Some(hash)).unwrap();
+        evidence.record_generic_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo test passes", "0", 1.0, 2, Some(hash)).unwrap();
 
         // CompletionGate MUST REJECT because the kind is StaticAnalysis, NOT CommandExitCode or Test!
         let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);

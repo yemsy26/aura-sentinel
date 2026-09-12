@@ -16,13 +16,35 @@ pub enum EvidenceKind {
     UserConfirmation,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StructuredFact {
+    CommandResult {
+        command: String,
+        cwd: String,
+        exit_code: i32,
+        stdout_hash: String,
+        stderr_hash: String,
+    },
+    TestResult {
+        command: String,
+        cwd: String,
+        exit_code: i32,
+        passed: u32,
+        failed: u32,
+        ignored: u32,
+    },
+    Generic {
+        claim: String,
+        value: String,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     pub id: String,
     pub kind: EvidenceKind,
     pub source: String,
-    pub claim: String,
-    pub value: String,
+    pub fact: StructuredFact,
     pub timestamp: String,
     pub reliability: f32,
     pub mission_step: u32,
@@ -51,12 +73,33 @@ impl EvidenceGraph {
         &mut self, kind: EvidenceKind, source: &str, claim: &str,
         value: &str, reliability: f32, step: u32,
     ) -> Result<String, String> {
-        self.record_with_hash(kind, source, claim, value, reliability, step, None)
+        self.record_generic_with_hash(kind, source, claim, value, reliability, step, None)
     }
 
     pub fn record_with_hash(
         &mut self, kind: EvidenceKind, source: &str, claim: &str,
         value: &str, reliability: f32, step: u32, state_hash: Option<u64>
+    ) -> Result<String, String> {
+        self.record_generic_with_hash(kind, source, claim, value, reliability, step, state_hash)
+    }
+
+    pub fn record_generic_with_hash(
+        &mut self, kind: EvidenceKind, source: &str, claim: &str,
+        value: &str, reliability: f32, step: u32, state_hash: Option<u64>
+    ) -> Result<String, String> {
+        self.record_structured(
+            kind,
+            source,
+            StructuredFact::Generic { claim: claim.to_string(), value: value.to_string() },
+            reliability,
+            step,
+            state_hash
+        )
+    }
+
+    pub fn record_structured(
+        &mut self, kind: EvidenceKind, source: &str, fact: StructuredFact,
+        reliability: f32, step: u32, state_hash: Option<u64>
     ) -> Result<String, String> {
         if Self::kind_requires_workspace_hash(&kind) && state_hash.is_none() {
             return Err(format!("Security Violation: EvidenceKind {:?} requires a state_hash but None was provided.", kind));
@@ -65,30 +108,40 @@ impl EvidenceGraph {
         let id = format!("ev_{:x}", self.entries.len() + 1);
         self.entries.push(Evidence {
             id: id.clone(), kind, source: source.to_string(),
-            claim: claim.to_string(), value: value.to_string(),
+            fact,
             timestamp: chrono::Utc::now().to_rfc3339(), reliability, mission_step: step,
             state_hash,
         });
         Ok(id)
     }
 
-    /// Strict exact-match evidence lookup with minimum reliability threshold AND workspace state hash verification.
-    /// This prevents using old evidence (e.g., tests passing) after the workspace has been modified.
-    pub fn has_valid_evidence_for_state(&self, claim: &str, min_reliability: f32, current_state_hash: u64) -> bool {
+    pub fn has_valid_structured_evidence<F>(&self, min_reliability: f32, current_state_hash: u64, predicate: F) -> bool
+    where
+        F: Fn(&StructuredFact) -> bool,
+    {
         self.entries.iter().any(|e| {
-            if e.claim != claim || e.reliability < min_reliability {
-                return false;
-            }
+            if e.reliability < min_reliability { return false; }
             if Self::kind_requires_workspace_hash(&e.kind) {
-                e.state_hash == Some(current_state_hash)
+                if e.state_hash != Some(current_state_hash) { return false; }
             } else {
-                e.state_hash.map_or(true, |hash| hash == current_state_hash)
+                if let Some(hash) = e.state_hash {
+                    if hash != current_state_hash { return false; }
+                }
+            }
+            predicate(&e.fact)
+        })
+    }
+
+    pub fn has_valid_evidence_for_state(&self, claim: &str, min_reliability: f32, current_state_hash: u64) -> bool {
+        self.has_valid_structured_evidence(min_reliability, current_state_hash, |fact| {
+            if let StructuredFact::Generic { claim: c, .. } = fact {
+                c == claim
+            } else {
+                false
             }
         })
     }
 
-    /// Strict exact-match evidence lookup filtering by EvidenceKind, minimum reliability, AND workspace state_hash verification.
-    /// This guarantees that technical evidence (CommandExitCode, Test) came from real execution and matches current code.
     pub fn has_valid_structured_evidence_for_state(
         &self,
         kind: EvidenceKind,
@@ -97,37 +150,41 @@ impl EvidenceGraph {
         current_state_hash: u64
     ) -> bool {
         self.entries.iter().any(|e| {
-            if e.kind != kind || e.claim != claim || e.reliability < min_reliability {
-                return false;
-            }
-            if Self::kind_requires_workspace_hash(&kind) {
-                e.state_hash == Some(current_state_hash)
+            if e.kind != kind || e.reliability < min_reliability { return false; }
+            if Self::kind_requires_workspace_hash(&e.kind) {
+                if e.state_hash != Some(current_state_hash) { return false; }
             } else {
-                e.state_hash.map_or(true, |hash| hash == current_state_hash)
+                if let Some(hash) = e.state_hash {
+                    if hash != current_state_hash { return false; }
+                }
+            }
+            if let StructuredFact::Generic { claim: c, .. } = &e.fact {
+                c == claim
+            } else {
+                false
             }
         })
     }
 
-    /// Strict exact-match evidence lookup with minimum reliability threshold.
     pub fn has_valid_evidence_for(&self, claim: &str, min_reliability: f32) -> bool {
         self.entries.iter().any(|e| {
-            e.claim == claim && e.reliability >= min_reliability
+            if e.reliability < min_reliability { return false; }
+            if let StructuredFact::Generic { claim: c, .. } = &e.fact {
+                c == claim
+            } else {
+                false
+            }
         })
     }
 
-    /// Backward-compatible loose check (min_reliability = 0.0, exact match).
     pub fn has_evidence_for(&self, claim: &str) -> bool {
         self.has_valid_evidence_for(claim, 0.0)
     }
 
-    pub fn latest_tests_passed(&self) -> bool {
-        self.entries.iter().rev()
-            .find(|e| e.kind == EvidenceKind::Test)
-            .map(|e| e.value == "PASSED" || e.value == "0")
-            .unwrap_or(false)
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

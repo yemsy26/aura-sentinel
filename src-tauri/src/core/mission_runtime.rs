@@ -185,19 +185,24 @@ impl MissionRuntime {
             // Record implicit evidence for successful terminal / validator tool calls
             let tool_upper = obs.tool_name.to_uppercase();
             if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
-                use crate::core::evidence::EvidenceKind;
-                let claim = format!(
-                    "{} exitoso en paso {}",
-                    obs.tool_name, self.cognitive_state.mission.current_step
-                );
-                let _ = self.evidence_graph.record_with_hash(
+                use crate::core::evidence::{EvidenceKind, StructuredFact};
+                
+                // P0: Replace blind implicit claim with structured execution facts
+                let fact = StructuredFact::CommandResult {
+                    command: obs.command.clone().unwrap_or_else(|| "unknown".to_string()),
+                    cwd: self.workspace_path.clone(),
+                    exit_code: obs.exit_code.unwrap_or(0),
+                    stdout_hash: "unknown".to_string(),
+                    stderr_hash: "".to_string(),
+                };
+                
+                let _ = self.evidence_graph.record_structured(
                     EvidenceKind::CommandExitCode,
                     &obs.tool_name,
-                    &claim,
-                    &obs.payload,
+                    fact,
                     0.85,
                     self.cognitive_state.mission.current_step,
-                    obs.state_hash_after
+                    obs.state_hash_after, // P0: Bind to exact world state
                 );
             }
         }

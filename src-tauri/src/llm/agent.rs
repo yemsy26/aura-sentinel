@@ -1956,7 +1956,7 @@ Meta actual: {}
 
                                 // P0: Record structured execution evidence bound to state_hash
                                 let trimmed_cmd = comando.trim();
-                                let _ = runtime.evidence_graph.record_with_hash(
+                                let _ = runtime.evidence_graph.record_generic_with_hash(
                                     crate::core::evidence::EvidenceKind::CommandExitCode,
                                     "TOOL_TERMINAL",
                                     &format!("{} passes", trimmed_cmd),
@@ -1973,7 +1973,7 @@ Meta actual: {}
                                     } else {
                                         "tests pass"
                                     };
-                                    let _ = runtime.evidence_graph.record_with_hash(
+                                    let _ = runtime.evidence_graph.record_generic_with_hash(
                                         crate::core::evidence::EvidenceKind::Test,
                                         "TOOL_TERMINAL",
                                         test_claim,
@@ -2040,7 +2040,7 @@ Meta actual: {}
                                     }
                                 }
                                 if !found_outputs.is_empty() {
-                                    let _ = runtime.evidence_graph.record_with_hash(
+                                    let _ = runtime.evidence_graph.record_generic_with_hash(
                                         crate::core::evidence::EvidenceKind::RuntimeCheck,
                                         "TOOL_TERMINAL",
                                         "Script generó archivos de salida verificados",
@@ -2067,7 +2067,7 @@ Meta actual: {}
                                         || ((out.contains("0 failed") || out.contains("tests passed") || out.contains("100%")) && !out.contains("FAILED"));
 
                                     if is_test_cmd && test_passed {
-                                        let _ = runtime.evidence_graph.record_with_hash(
+                                        let _ = runtime.evidence_graph.record_generic_with_hash(
                                             crate::core::evidence::EvidenceKind::Test,
                                             "TOOL_TERMINAL",
                                             "Script de verificación pasó al 100%",
