@@ -2902,12 +2902,17 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     let mut context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
                 // If there's a recent Critic thought in the context, we should append it to the programmer's instructions
-                let recent_critic_thought = if current_context.contains("Critico -> Ejecutor") || current_context.contains("--- PASO") {
+                // Extract recent errors or critic feedback to ensure the programmer doesn't start blind
+                let recent_critic_thought = if current_context.contains("Critico -> Ejecutor") || current_context.contains("--- PASO") || current_context.contains("ERROR FATAL") || current_context.contains("Error detectado:") {
+                    // Get the last 1500 chars of context to capture the recent failure
+                    let ctx_len = current_context.len();
+                    let tail_len = if ctx_len > 1500 { 1500 } else { ctx_len };
+                    let tail_context = &current_context[ctx_len - tail_len..];
                     format!("
 
-[FEEDBACK DEL CRITICO O PASO RECIENTE]:
+[CONTEXTO RECIENTE DE ERROR O FEEDBACK]:
 {}
-(Asegurate de corregir los errores mencionados y cumplir con este feedback en tu codigo).", pensamiento)
+(LEE CUIDADOSAMENTE ESTE CONTEXTO. Si hay un error de compilación o de sintaxis, DEBES corregirlo. Si se te pide crear un archivo faltante, CREALO).", tail_context)
                 } else {
                     String::new()
                 };
@@ -2927,6 +2932,7 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
 
                 let mut exito_bucle_programador = false;
                 let mut max_intentos = 3;
+                let mut last_programmer_error = String::new();
                 
                 while max_intentos > 0 && !exito_bucle_programador {
                     if crate::llm::is_agent_cancelled() {
@@ -2985,7 +2991,10 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
 
                                             if !stub_rejections.is_empty() {
                                                 // Stubs found — reject the write and force a rewrite
-                                                let combined = stub_rejections.join("\n\n");
+                                                let combined = stub_rejections.join("
+
+");
+                                                last_programmer_error = format!("[ERROR DE REVISIÓN ANTI-STUB]: {}", combined);
                                                 emit_event(&app_handle, runtime.current_step(), &format!("[ANTI-STUB] ❌ {} archivo(s) rechazados por código incompleto. Exigiendo reescritura...", stub_rejections.len()), "FATAL");
                                                 // Rollback the written files
                                                 let _ = crate::core::restore_git_backup(&workspace_path).await;
@@ -3077,6 +3086,7 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
                                                         }
                                                     },
                                                     Err(e) => {
+                                                        last_programmer_error = e.clone();
                                                         emit_event(&app_handle, runtime.current_step(), &format!("Error detectado: {}", e), "ERROR");
                                                         
                                                         // Auto-inject any broken workspace files into archivos_vec
@@ -3125,7 +3135,7 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
                                                 for fname in &failed_files {
                                                     let count = patch_fail_counts.entry(fname.clone()).or_insert(0);
                                                     *count += 1;
-                                                    if *count >= 3 {
+                                                    if *count >= 1 {
                                                         overwrite_files.push(fname.clone());
                                                     }
                                                 }
@@ -3143,7 +3153,7 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
                                                     );
                                                     current_context.push_str(&overwrite_msg);
                                                     emit_event(&app_handle, runtime.current_step(),
-                                                        &format!("[PATCH-ESCALATION] {} archivo(s) requieren overwrite completo tras 3 fallos", overwrite_files.len()),
+                                                        &format!("[PATCH-ESCALATION] {} archivo(s) requieren overwrite completo tras fallar el parche", overwrite_files.len()),
                                                         "WARNING");
                                                     // Reset counters for these files so next cycle is fresh
                                                     for fname in &overwrite_files {
@@ -3182,7 +3192,11 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
                 
                 if !exito_bucle_programador {
                     emit_event(&app_handle, runtime.current_step(), "El programador no pudo resolver la tarea tras varios intentos. Replanificando...", "WARNING");
-                    current_context.push_str("Programador: Fracasó tras múltiples intentos. [SISTEMA]: NO uses TOOL_FINISH para cerrar la fase. Si el archivo es demasiado complejo, debes dividirlo en subarchivos o implementar funciones más simples en pasos sucesivos.\n\n");
+                    current_context.push_str(&format!("Programador: Fracasó tras múltiples intentos debido al siguiente error FATAL que no pudo resolver internamente:
+{}
+[SISTEMA]: NO uses TOOL_FINISH para cerrar la fase. El código actual ESTÁ ROTO. Debes usar TOOL_PROGRAMMER de nuevo y ASEGURARTE de corregir este error de sintaxis/compilación exacto. Si el archivo es demasiado complejo, debes dividirlo en subarchivos o implementar funciones más simples en pasos sucesivos.
+
+", last_programmer_error));
                     current_role = AgentRole::Planner;
                 } else if exito_bucle_programador {
                     // TOOL_PROGRAMMER succeeded — reset the NoTests loop counter
