@@ -64,7 +64,7 @@ fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Optio
                 if !code.is_empty() {
                     for file in requested_files {
                         let f_ext = file.split('.').last().unwrap_or("").to_lowercase();
-                        if f_ext == *ext_match || requested_files.len() == 1 {
+                        if f_ext == *ext_match {
                             return Some(ProgrammerOutput {
                                 pensamiento: Some("Código recuperado automáticamente desde bloque Markdown".to_string()),
                                 explicacion_tecnica: format!("Extracción resiliente de bloque ```{}```", tag),
@@ -635,7 +635,7 @@ pub async fn run_agent_loop(
     // Tracks consecutive steps that are ONLY THINK or PROGRAMMER with no
     // TERMINAL, TESTER, or FINISH in between. If this reaches >= 8 steps,
     // we force TOOL_TERMINAL to break the loop.
-    let mut think_programmer_alternation_count = 0u32;
+// let mut think_programmer_alternation_count = 0u32; removed for Commit 9
     let mut auditor_consecutive = 0u32;
     let mut mapper_consecutive = 0u32;
     let mut critic_fsm_lock_consecutive = 0u32;
@@ -730,17 +730,15 @@ pub async fn run_agent_loop(
         current_context.push_str(&proactive_lessons);
     }
     
-    if is_continuation_command && !journal.objetivo.is_empty() {
+        if is_continuation_command && !journal.objetivo.is_empty() {
         // Retain original mission objective and existing phases!
+        journal = crate::core::session_journal::resume_existing_mission(&workspace_path);
         user_message = journal.objetivo.clone();
         original_prompt_parsed = journal.objetivo.clone();
         journal.interrupted = true; // Signals restoration block below
     } else {
-        // Any new user prompt (not an explicit continuation) resets the phase plan for the new objective
-        journal.plan_generado = false;
-        journal.fases.clear();
-        journal.fase_actual = 0;
-        journal.objetivo = user_message.clone();
+        // Any new user prompt (not an explicit continuation) starts a completely clean session
+        journal = crate::core::session_journal::start_new_mission(&workspace_path, &user_message);
     }
 
     // Ensure internal files in workspace are hidden on Windows
@@ -1240,42 +1238,26 @@ Meta actual: {}
             extra_prompt = format!("\n\nREGLA ESTRICTA E INQUEBRANTABLE PARA ESTE TURNO:\nDEBES Y TIENES QUE ELEGIR '{}' COMO TU HERRAMIENTA. NO ELIJAS OTRA O EL SISTEMA FALLARÁ. Ignora cualquier otra regla y genera un JSON válido para la herramienta {}.", forced, forced);
         }
 
-        // ── LIVE WORKSPACE SCAN (Always 100% fresh on every step) ──
+        // 🛡️ LIVE WORKSPACE SCAN (Delegated to WorldState) 🛡️
+        // Fix P0-2: Remove local recursive scan, use the single source of truth from runtime
         let (live_workspace_context, workspace_is_empty) = {
-            let mut live_files = Vec::new();
-            fn scan_live_files(dir: &std::path::Path, files: &mut Vec<String>, depth: usize) {
-                if depth > 5 { return; }
-                if let Ok(entries) = std::fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        if name.starts_with('.') || name == "node_modules" || name == "__pycache__" || name == "target" { continue; }
-                        if path.is_dir() {
-                            scan_live_files(&path, files, depth + 1);
-                        } else {
-                            files.push(path.to_string_lossy().to_string());
-                        }
-                    }
-                }
-            }
-            scan_live_files(std::path::Path::new(&workspace_path), &mut live_files, 0);
-            let is_empty = live_files.is_empty();
+            let is_empty = runtime.world.as_ref().map_or(true, |w| w.files.is_empty());
             let ctx = if is_empty {
                 "El proyecto está completamente vacío. Aún no has creado ningún archivo físico.".to_string()
             } else {
                 let repo_map = crate::core::map::generate_repo_map(std::path::Path::new(&workspace_path));
-                let relative_files: Vec<String> = live_files.iter()
-                    .map(|f| {
-                        f.strip_prefix(&workspace_path)
-                            .unwrap_or(f)
-                            .trim_start_matches(['/', '\\'])
-                            .to_string()
-                    })
-                    .collect();
+                let mut relative_files = Vec::new();
+                if let Some(world) = runtime.world.as_ref() {
+                    for path in world.files.keys() {
+                        relative_files.push(path.clone());
+                    }
+                }
+                relative_files.sort();
                 format!("{}\n\nARCHIVOS EXISTENTES EN EL WORKSPACE (rutas relativas):\n{}", repo_map, relative_files.join("\n"))
             };
             (ctx, is_empty)
         };
+
 
         // --- EVITAR DESBORDAMIENTO DE CONTEXTO (Garantizando Objetivo Inmutable) ---
         if context_monitor.should_compact(current_context.len()) {
@@ -1608,35 +1590,23 @@ Meta actual: {}
                             risk: crate::core::policy::PolicyEngine::classify_terminal_command(&forced_cmd_to_run),
                         };
 
-                        if let Err(auth_err) = runtime.authorize_action(&intercept_proposal) {
-                            current_context.push_str(&format!(
-                                "[INTERCEPTOR AUTO-EXEC BLOQUEADO]: {}\n\n",
-                                auth_err
-                            ));
-                            emit_event(&app_handle, runtime.current_step(),
-                                &format!("[INTERCEPTOR AUTO-EXEC BLOQUEADO] {}", auth_err),
-                                "ERROR");
-                        } else {
-                            // Execute authorized action
-                            match execute_terminal_command(&workspace_path, &forced_cmd_to_run).await {
-                                Ok(output) => {
-                                    let out_len = output.len();
-                                    let digest = if out_len > 3000 { &output[..3000] } else { &output[..] };
-                                    let auto_msg = format!(
-                                        "[INTERCEPTOR AUTO-EXEC] Ejecuté '{}' bajo autorización de runtime.\nResultado:\n{}\n\n",
-                                        forced_cmd_to_run, digest
-                                    );
-                                    current_context.push_str(&auto_msg);
-                                    emit_event(&app_handle, runtime.current_step(),
-                                        &format!("[INTERCEPTOR AUTO-EXEC] Ejecución directa completada: {} chars", out_len),
-                                        "SUCCESS");
-                                }
-                                Err(e) => {
-                                    current_context.push_str(&format!(
-                                        "[INTERCEPTOR AUTO-EXEC] Intenté ejecutar '{}' pero falló: {}\n\n",
-                                        forced_cmd_to_run, e
-                                    ));
-                                }
+                        match runtime.execute_action(&intercept_proposal).await {
+                            Ok(obs) => {
+                                let out_len = obs.payload.len();
+                                let digest = if out_len > 3000 { &obs.payload[..3000] } else { &obs.payload[..] };
+                                let auto_msg = format!(
+                                    "[INTERCEPTOR AUTO-EXEC] Ejecutó '{}' bajo autorización de runtime.\nResultado:\n{}\n\n",
+                                    forced_cmd_to_run, digest
+                                );
+                                current_context.push_str(&auto_msg);
+                                emit_event(&app_handle, runtime.current_step(), &format!("[INTERCEPTOR EXECUTED] {}", forced_cmd_to_run), "SUCCESS");
+                            }
+                            Err(e) => {
+                                current_context.push_str(&format!(
+                                    "[INTERCEPTOR AUTO-EXEC BLOQUEADO/FALLIDO]: {}\n\n",
+                                    e
+                                ));
+                                emit_event(&app_handle, runtime.current_step(), &format!("[INTERCEPTOR ERROR] {}", e), "ERROR");
                             }
                         }
                     } else {
@@ -1789,30 +1759,8 @@ Meta actual: {}
         if tool != "TOOL_LEARN" { learn_consecutive = 0; }
         if tool != "TOOL_ASK_USER" { ask_user_consecutive = 0; }
         // THINK↔PROGRAMMER alternation counter: only resets when NEITHER THINK nor PROGRAMMER
-        if tool == "TOOL_THINK" || tool == "TOOL_PROGRAMMER" {
-            think_programmer_alternation_count += 1;
-        } else {
-            think_programmer_alternation_count = 0;
-        }
-        // If alternation hits ≥ 8 steps without any TERMINAL/TESTER/FINISH, force TOOL_TERMINAL
-        if think_programmer_alternation_count >= 8 {
-            let loop_msg = format!(
-                "[SISTEMA INTERNO]: ⚠️ LOOP DETECTADO: {} pasos alternando THINK↔PROGRAMMER sin ejecutar nada en terminal. \
-                El modelo debe VERIFICAR su trabajo con comandos reales. FORZANDO TOOL_TERMINAL.",
-                think_programmer_alternation_count
-            );
-            eprintln!("{}", loop_msg);
-            emit_event(&app_handle, runtime.current_step(), &loop_msg, "WARNING");
-            current_context.push_str(&format!("{}\n\n", loop_msg));
-            // Force terminal to run the verification/test script
-            if forced_next_tool.is_none() {
-                forced_next_tool = Some((
-                    "TOOL_TERMINAL".to_string(),
-                    "Ejecuta el script de verificación del proyecto o abre el archivo principal para comprobar que existe y tiene contenido.".to_string(),
-                ));
-            }
-            think_programmer_alternation_count = 0; // reset after intervention
-        }
+        // 🛡️ Commit 9: Alternation lock delegated to RecoveryEngine 🛡️
+// } removed for Commit 9
 
         // ── Arquitectura Cognitiva v4: Autorización por PolicyEngine ──
         let action_proposal = crate::core::policy::ActionProposal {
@@ -1826,11 +1774,7 @@ Meta actual: {}
             },
         };
 
-        if let Err(auth_err) = runtime.authorize_action(&action_proposal) {
-            emit_event(&app_handle, runtime.current_step(), &format!("[ACTION REJECTED] {}", auth_err), "ERROR");
-            current_context.push_str(&format!("{}\n[ACCIÓN RECHAZADA]: Corrige los parámetros o la herramienta elegida.\n\n", auth_err));
-            continue;
-        }
+        // authorize_action removed (handled by execute_action)        }
 
         match tool.as_str() {
             "TOOL_TERMINAL" => {
@@ -1867,7 +1811,7 @@ Meta actual: {}
                         emit_event(&app_handle, runtime.current_step(), &format!("Comando vacío ({}/3)", empty_count + 1), "ERROR");
                     }
                     programmer_cooldown_hits = 0;
-                } else if !is_forced_and_obeyed && comandos_ejecutados_historico.contains(&comando) {
+                } else if !is_forced_and_obeyed && comandos_ejecutados_historico.contains(&format!("{}|{}", comando.trim().to_lowercase(), runtime.current_world_hash())) {
                     let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
                     emit_event(&app_handle, runtime.current_step(), "Comando repetido interceptado", "WARNING");
                     if current_role == AgentRole::Critic {
@@ -1902,7 +1846,7 @@ Meta actual: {}
                         programmer_cooldown_hits = 0; forced_next_tool = Some(("TOOL_BACKGROUND_START".to_string(), comando.clone()));
                     } else {
                         programmer_cooldown_hits = 0;
-                        comandos_ejecutados_historico.insert(comando.clone());
+                        comandos_ejecutados_historico.insert(format!("{}|{}", comando.trim().to_lowercase(), runtime.current_world_hash()));
 
                         // ── Pre-check: verify the script file exists before running it ─────────
                         let cmd_lower_check = comando.to_lowercase();
@@ -2470,23 +2414,23 @@ Meta actual: {}
             },
             "TOOL_BACKGROUND_START" => {
                 if comando.trim().is_empty() {
-                    if comandos_ejecutados_historico.contains("__EMPTY_BG_CMD__") {
+                    if comandos_ejecutados_historico.contains(&format!("__EMPTY_BG_CMD__|{}", runtime.current_world_hash())) {
                         let res_msg = "[SISTEMA INTERNO]: Advertencia: Estás en un bucle infinito de comandos vacíos. Abortando.";
                         emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
                         let final_res = FinalResponse { status: "ERROR".to_string(), respuesta_conversacional: "Error interno del planificador asíncrono.".to_string() };
                         crate::llm::router::record_model_result(&orchestrator_model, &crate::llm::router::TaskType::Orchestrator, final_res.status == "FINISH", runtime.current_step());
                         return Ok(serde_json::to_string(&final_res).unwrap());
                     }
-                    comandos_ejecutados_historico.insert("__EMPTY_BG_CMD__".to_string());
+                    comandos_ejecutados_historico.insert(format!("__EMPTY_BG_CMD__|{}", runtime.current_world_hash()));
                     let err_msg = "Error Crítico: El campo 'comando' está vacío. Debes especificar qué comando ejecutar en la terminal.";
                     current_context.push_str(&format!("{}\n\n", err_msg));
                     emit_event(&app_handle, runtime.current_step(), err_msg, "ERROR");
-                } else if !is_forced_and_obeyed && comandos_ejecutados_historico.contains(&comando) {
+                } else if !is_forced_and_obeyed && comandos_ejecutados_historico.contains(&format!("{}|{}", comando.trim().to_lowercase(), runtime.current_world_hash())) {
                     let res_msg = "[SISTEMA INTERNO]: Advertencia: Este servidor o proceso YA ESTÁ EN EJECUCIÓN en segundo plano. NO necesitas volver a iniciarlo. Usa TOOL_VISION_EVALUATOR o TOOL_FINISH.";
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(&app_handle, runtime.current_step(), "Servidor ya en ejecución (bucle evitado).", "WARNING");
                 } else {
-                    comandos_ejecutados_historico.insert(comando.clone());
+                    comandos_ejecutados_historico.insert(format!("{}|{}", comando.trim().to_lowercase(), runtime.current_world_hash()));
                     emit_event(&app_handle, runtime.current_step(), &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando), "ACTION");
                     match start_background_task(&workspace_path, &task_id, &comando).await {
                         Ok(out) => {
@@ -3942,7 +3886,7 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
                             "ERROR");
                     } else {
                         emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
-                        comandos_ejecutados_historico.insert(comando.clone());
+                        comandos_ejecutados_historico.insert(format!("{}|{}", comando.trim().to_lowercase(), runtime.current_world_hash()));
                         // P0 fix: route through Runtime Gateway, not direct execution
                         let unified_auto_res = match runtime.execute_action(&auto_proposal).await {
                             Ok(obs) if obs.status == crate::core::observation::ObservationStatus::Error => Err(obs.payload),

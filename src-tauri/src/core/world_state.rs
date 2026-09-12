@@ -93,11 +93,14 @@ impl WorldState {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             if path.is_dir() {
-                if name == "node_modules" || name == ".git" || name == "target" || name == "__pycache__" || name == ".venv" {
+                if name == "node_modules" || name == ".git" || name == "target" || name == "__pycache__" || name == ".venv" || name == ".aura" {
                     continue;
                 }
                 Self::scan_dir_recursive(root, &path, out, fast_mode)?;
             } else if path.is_file() {
+                if name == ".aura_session.json" || name == ".aura_session.json.tmp" || name == ".aura_graph.json" || name == ".fenix_index.json" || name.starts_with(".aura") {
+                    continue;
+                }
                 if let Ok(rel) = path.strip_prefix(root) {
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
                     if let Ok(meta) = path.metadata() {

@@ -788,4 +788,114 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
+        let pending_metas: Vec<String> = journal.micro_metas.iter()
+            .filter(|m| m.estado != "VERIFICADA")
+            .map(|m| m.descripcion.clone())
+            .collect();
+        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
+            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
+        } else {
+            "Ninguna".to_string()
+        };
+
+        format!(
+            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
+            self.workspace_path,
+            journal.ultimo_estado,
+            current_role,
+            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
+            current_meta,
+            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
+        )
+    }
+
+    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
+        let pending_metas: Vec<String> = journal.micro_metas.iter()
+            .filter(|m| m.estado != "VERIFICADA")
+            .map(|m| m.descripcion.clone())
+            .collect();
+        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
+            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
+        } else {
+            "Ninguna".to_string()
+        };
+
+        format!(
+            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
+            self.workspace_path,
+            journal.ultimo_estado,
+            current_role,
+            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
+            current_meta,
+            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
+        )
+    }
+
+    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
+        let pending_metas: Vec<String> = journal.micro_metas.iter()
+            .filter(|m| m.estado != "VERIFICADA")
+            .map(|m| m.descripcion.clone())
+            .collect();
+        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
+            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
+        } else {
+            "Ninguna".to_string()
+        };
+
+        format!(
+            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
+            self.workspace_path,
+            journal.ultimo_estado,
+            current_role,
+            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
+            current_meta,
+            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
+        )
+    }
+
+    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
+        let pending_metas: Vec<String> = journal.micro_metas.iter()
+            .filter(|m| m.estado != "VERIFICADA")
+            .map(|m| m.descripcion.clone())
+            .collect();
+        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
+            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
+        } else {
+            "Ninguna".to_string()
+        };
+
+        format!(
+            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
+            self.workspace_path,
+            journal.ultimo_estado,
+            current_role,
+            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
+            current_meta,
+            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
+        )
+    }
+
+    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
+        let pending_metas: Vec<String> = journal.micro_metas.iter()
+            .filter(|m| m.estado != "VERIFICADA")
+            .map(|m| m.descripcion.clone())
+            .collect();
+        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
+            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
+        } else {
+            "Ninguna".to_string()
+        };
+
+        format!(
+            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
+            self.workspace_path,
+            journal.ultimo_estado,
+            current_role,
+            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
+            current_meta,
+            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
+        )
+    }
 }
