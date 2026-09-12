@@ -44,21 +44,25 @@ impl CompletionGate {
 
             let is_satisfied = match &ac.verification {
                 crate::core::mission_contract::VerificationMethod::TestPassed => {
-                    evidence.has_valid_structured_evidence_for_state(
-                        crate::core::evidence::EvidenceKind::Test,
-                        "cargo test passes",
+                    use crate::core::evidence::StructuredFact;
+                    // P0 FIX: Strict structural enforcement for TestPassed. No string claim bypass.
+                    evidence.has_valid_structured_evidence(
                         0.5,
-                        current_world_hash
-                    )
-                    || evidence.has_valid_structured_evidence_for_state(
-                        crate::core::evidence::EvidenceKind::Test,
-                        "tests pass",
-                        0.5,
-                        current_world_hash
+                        current_world_hash,
+                        |fact| {
+                            match fact {
+                                StructuredFact::TestResult { exit_code, .. } => *exit_code == 0,
+                                StructuredFact::CommandResult { command, exit_code, .. } => {
+                                    *exit_code == 0 && (command.contains("test") || command.contains("cargo test"))
+                                },
+                                _ => false,
+                            }
+                        }
                     )
                 },
                 crate::core::mission_contract::VerificationMethod::CommandExitZero(cmd) => {
                     use crate::core::evidence::StructuredFact;
+                    // P0 FIX: Strict structural enforcement. No generic string claim fallbacks allowed.
                     evidence.has_valid_structured_evidence(
                         0.5,
                         current_world_hash,
@@ -66,9 +70,6 @@ impl CompletionGate {
                             match fact {
                                 StructuredFact::CommandResult { command, exit_code, .. } => {
                                     *exit_code == 0 && command.contains(cmd.trim())
-                                },
-                                StructuredFact::Generic { claim, .. } => {
-                                    claim == &format!("{} passes", cmd.trim()) || claim == &format!("{} exitoso", cmd.trim()) || claim == &format!("{} exitoso en paso ", cmd.trim()) || claim.starts_with(&format!("{} exitoso en paso", cmd.trim()))
                                 },
                                 _ => false
                             }
@@ -132,7 +133,7 @@ impl CompletionGate {
 mod tests {
     use super::*;
     use crate::core::mission_contract::{MissionContract, EvidenceRequirement};
-    use crate::core::evidence::{EvidenceGraph, EvidenceKind};
+    use crate::core::evidence::{EvidenceGraph, EvidenceKind, StructuredFact};
     use std::path::Path;
 
     #[test]
@@ -283,18 +284,36 @@ mod tests {
         let dummy_path = Path::new(".");
 
         // Test 6 & 7: CommandExitZero with old hash -> Incomplete
-        evidence.record_generic_with_hash(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, 1, Some(old_hash)).unwrap();
+        evidence.record_structured(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo build".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 0,
+            stdout_hash: "h".to_string(),
+            stderr_hash: "".to_string(),
+        }, 1.0, 1, Some(old_hash)).unwrap();
         let dec1 = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, dummy_path);
         assert!(matches!(dec1, CompletionDecision::Incomplete(_)));
 
         // Record cargo build with current hash
-        evidence.record_generic_with_hash(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, 2, Some(current_hash)).unwrap();
+        evidence.record_structured(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo build".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 0,
+            stdout_hash: "h".to_string(),
+            stderr_hash: "".to_string(),
+        }, 1.0, 2, Some(current_hash)).unwrap();
         // Still missing test passed
         let dec2 = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, dummy_path);
         assert!(matches!(dec2, CompletionDecision::Incomplete(_)));
 
         // Test 8: TestPassed with current hash -> Complete
-        evidence.record_generic_with_hash(EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, 3, Some(current_hash)).unwrap();
+        evidence.record_structured(EvidenceKind::Test, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo test".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 0,
+            stdout_hash: "h".to_string(),
+            stderr_hash: "".to_string(),
+        }, 1.0, 3, Some(current_hash)).unwrap();
         let dec3 = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, dummy_path);
         assert_eq!(dec3, CompletionDecision::Complete);
     }

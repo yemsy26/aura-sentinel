@@ -188,10 +188,11 @@ impl MissionRuntime {
                 use crate::core::evidence::{EvidenceKind, StructuredFact};
                 
                 // P0: Replace blind implicit claim with structured execution facts
+                // P0 FIX: Do not fabricate a successful 0 exit code if the execution result lacks one.
                 let fact = StructuredFact::CommandResult {
                     command: obs.command.clone().unwrap_or_else(|| "unknown".to_string()),
                     cwd: self.workspace_path.clone(),
-                    exit_code: obs.exit_code.unwrap_or(0),
+                    exit_code: obs.exit_code.unwrap_or(-1), 
                     stdout_hash: "unknown".to_string(),
                     stderr_hash: "".to_string(),
                 };
@@ -331,11 +332,25 @@ impl MissionRuntime {
         };
         self.record_tool_call();
 
-        // 5. Build Observation from dispatch result
+        // 5. Build Observation from dispatch result with real execution metadata
         let mut obs = match exec_result {
-            Ok(ref output) => Observation::success(&proposal.tool, output, vec![]),
-            Err(ref err)   => Observation::error(&proposal.tool, err, None, true, None),
+            Ok(ref output) => {
+                let mut o = Observation::success(&proposal.tool, output, vec![]);
+                o.exit_code = Some(0);
+                o
+            },
+            Err(ref err)   => {
+                let mut o = Observation::error(&proposal.tool, err, None, true, None);
+                o.exit_code = Some(1);
+                o
+            },
         };
+        if proposal.tool == "TOOL_TERMINAL" {
+            obs.command = proposal.arguments.get("comando")
+                .or_else(|| proposal.arguments.get("command"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
         obs.state_hash_before = Some(hash_before);
         obs.state_hash_after  = hash_after;
 
@@ -390,7 +405,55 @@ impl MissionRuntime {
             _ => None, // Success / BlockedByPolicy / Timeout / SchemaViolation handled by agent
         }
     }
+    pub fn get_state_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> MissionStateAnchor {
+        let files_pending: Vec<String> = journal.micro_metas.iter()
+            .filter(|m| m.estado != "VERIFICADA")
+            .map(|m| m.descripcion.clone())
+            .collect();
+            
+        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
+            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
+        } else {
+            "Ninguna".to_string()
+        };
+
+        MissionStateAnchor {
+            mission_id: self.mission_id.clone(),
+            objective: self.contract.objective.clone(),
+            workspace_root: self.workspace_path.clone(),
+            project_root: self.workspace_path.clone(),
+            role: current_role.to_string(),
+            phase: format!("{:?}", journal.ultimo_estado),
+            current_step: self.current_step(),
+            files_created: vec![],
+            files_modified: vec![],
+            files_pending,
+            criteria_satisfied: vec![],
+            criteria_pending: vec![current_meta.clone()],
+            last_world_revision: self.current_world_hash().to_string(),
+            last_tool: None,
+            last_command: None,
+            last_error: if last_error.is_empty() { None } else { Some(last_error.to_string()) },
+            next_required_action: Some(current_meta),
+        }
+    }
+    
+    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
+        let anchor = self.get_state_anchor(journal, current_role, last_error);
+        format!(
+            "[MISSION_ANCHOR]\nWorkspace: {}\nProyecto: {}\nFase: {}\nRol: {}\nPaso: {}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
+            anchor.workspace_root,
+            anchor.project_root,
+            anchor.phase,
+            anchor.role,
+            anchor.current_step,
+            if anchor.files_pending.is_empty() { "Ninguno".to_string() } else { anchor.files_pending.join(", ") },
+            anchor.next_required_action.unwrap_or_default(),
+            anchor.last_error.unwrap_or_else(|| "Ninguno".to_string())
+        )
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -523,13 +586,18 @@ mod tests {
 
         // Satisfy manual criterion
         rt.evidence_graph.record_with_hash(crate::core::evidence::EvidenceKind::UserConfirmation, "USER", "AC-DELIVERABLES verified manually", "OK", 1.0, 1, None).unwrap();
-        // Provide actual evidence for TestPassed criterion to satisfy CompletionGate dynamically
-        let _ = rt.evidence_graph.record_with_hash(
+        // Provide actual structured evidence for TestPassed criterion to satisfy CompletionGate dynamically
+        let _ = rt.evidence_graph.record_structured(
             crate::core::evidence::EvidenceKind::Test,
-            "cargo test",
-            "cargo test passes",
-            "0",
-            0.9,
+            "TOOL_TERMINAL",
+            crate::core::evidence::StructuredFact::CommandResult {
+                command: "cargo test".to_string(),
+                cwd: ".".to_string(),
+                exit_code: 0,
+                stdout_hash: "mock".to_string(),
+                stderr_hash: "".to_string(),
+            },
+            1.0,
             1,
             Some(rt.current_world_hash())
         );
@@ -757,11 +825,33 @@ mod tests {
         let hash_step1 = rt.current_world_hash();
         
         // 3. LLM executes cargo build and cargo test successfully
-        let _ = rt.evidence_graph.record_with_hash(
-            crate::core::evidence::EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, rt.current_step(), Some(hash_step1)
+        let _ = rt.evidence_graph.record_structured(
+            crate::core::evidence::EvidenceKind::CommandExitCode,
+            "TOOL_TERMINAL",
+            crate::core::evidence::StructuredFact::CommandResult {
+                command: "cargo build".to_string(),
+                cwd: temp_dir.to_str().unwrap().to_string(),
+                exit_code: 0,
+                stdout_hash: "mock".to_string(),
+                stderr_hash: "".to_string(),
+            },
+            1.0,
+            rt.current_step(),
+            Some(hash_step1),
         ).unwrap();
-        let _ = rt.evidence_graph.record_with_hash(
-            crate::core::evidence::EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, rt.current_step(), Some(hash_step1)
+        let _ = rt.evidence_graph.record_structured(
+            crate::core::evidence::EvidenceKind::Test,
+            "TOOL_TERMINAL",
+            crate::core::evidence::StructuredFact::CommandResult {
+                command: "cargo test".to_string(),
+                cwd: temp_dir.to_str().unwrap().to_string(),
+                exit_code: 0,
+                stdout_hash: "mock".to_string(),
+                stderr_hash: "".to_string(),
+            },
+            1.0,
+            rt.current_step(),
+            Some(hash_step1),
         ).unwrap();
 
         // Still incomplete because word_stats.json does NOT physically exist on disk yet!
@@ -773,11 +863,33 @@ mod tests {
         rt.observe_world().unwrap();
         let hash_step2 = rt.current_world_hash();
         // Record test/build evidence for the new state hash
-        let _ = rt.evidence_graph.record_with_hash(
-            crate::core::evidence::EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, rt.current_step(), Some(hash_step2)
+        let _ = rt.evidence_graph.record_structured(
+            crate::core::evidence::EvidenceKind::CommandExitCode,
+            "TOOL_TERMINAL",
+            crate::core::evidence::StructuredFact::CommandResult {
+                command: "cargo build".to_string(),
+                cwd: temp_dir.to_str().unwrap().to_string(),
+                exit_code: 0,
+                stdout_hash: "mock".to_string(),
+                stderr_hash: "".to_string(),
+            },
+            1.0,
+            rt.current_step(),
+            Some(hash_step2),
         ).unwrap();
-        let _ = rt.evidence_graph.record_with_hash(
-            crate::core::evidence::EvidenceKind::Test, "TOOL_TERMINAL", "cargo test passes", "0", 1.0, rt.current_step(), Some(hash_step2)
+        let _ = rt.evidence_graph.record_structured(
+            crate::core::evidence::EvidenceKind::Test,
+            "TOOL_TERMINAL",
+            crate::core::evidence::StructuredFact::CommandResult {
+                command: "cargo test".to_string(),
+                cwd: temp_dir.to_str().unwrap().to_string(),
+                exit_code: 0,
+                stdout_hash: "mock".to_string(),
+                stderr_hash: "".to_string(),
+            },
+            1.0,
+            rt.current_step(),
+            Some(hash_step2),
         ).unwrap();
 
         // 5. Everything matches state and physical disk -> Complete!
@@ -795,142 +907,6 @@ mod tests {
         assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
-    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
-        let pending_metas: Vec<String> = journal.micro_metas.iter()
-            .filter(|m| m.estado != "VERIFICADA")
-            .map(|m| m.descripcion.clone())
-            .collect();
-        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
-            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
-        } else {
-            "Ninguna".to_string()
-        };
-
-        format!(
-            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
-            self.workspace_path,
-            journal.ultimo_estado,
-            current_role,
-            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
-            current_meta,
-            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
-        )
-    }
-
-    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
-        let pending_metas: Vec<String> = journal.micro_metas.iter()
-            .filter(|m| m.estado != "VERIFICADA")
-            .map(|m| m.descripcion.clone())
-            .collect();
-        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
-            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
-        } else {
-            "Ninguna".to_string()
-        };
-
-        format!(
-            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
-            self.workspace_path,
-            journal.ultimo_estado,
-            current_role,
-            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
-            current_meta,
-            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
-        )
-    }
-
-    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
-        let pending_metas: Vec<String> = journal.micro_metas.iter()
-            .filter(|m| m.estado != "VERIFICADA")
-            .map(|m| m.descripcion.clone())
-            .collect();
-        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
-            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
-        } else {
-            "Ninguna".to_string()
-        };
-
-        format!(
-            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
-            self.workspace_path,
-            journal.ultimo_estado,
-            current_role,
-            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
-            current_meta,
-            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
-        )
-    }
-
-    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
-        let pending_metas: Vec<String> = journal.micro_metas.iter()
-            .filter(|m| m.estado != "VERIFICADA")
-            .map(|m| m.descripcion.clone())
-            .collect();
-        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
-            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
-        } else {
-            "Ninguna".to_string()
-        };
-
-        format!(
-            "[MISSION_ANCHOR]\nWorkspace: {}\nFase: {:?}\nRol: {:?}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
-            self.workspace_path,
-            journal.ultimo_estado,
-            current_role,
-            if pending_metas.is_empty() { "Ninguno".to_string() } else { pending_metas.join(", ") },
-            current_meta,
-            if last_error.is_empty() { "Ninguno".to_string() } else { last_error.to_string() }
-        )
-    }
-
-    pub fn get_state_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> MissionStateAnchor {
-        let files_pending: Vec<String> = journal.micro_metas.iter()
-            .filter(|m| m.estado != "VERIFICADA")
-            .map(|m| m.descripcion.clone())
-            .collect();
-            
-        let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
-            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
-        } else {
-            "Ninguna".to_string()
-        };
-
-        MissionStateAnchor {
-            mission_id: self.mission_id.clone(),
-            objective: self.contract.objective.clone(),
-            workspace_root: self.workspace_path.clone(),
-            project_root: self.workspace_path.clone(),
-            role: current_role.to_string(),
-            phase: format!("{:?}", journal.ultimo_estado),
-            current_step: self.current_step(),
-            files_created: vec![],
-            files_modified: vec![],
-            files_pending,
-            criteria_satisfied: vec![],
-            criteria_pending: vec![current_meta.clone()],
-            last_world_revision: self.current_world_hash().to_string(),
-            last_tool: self.cognitive_state.agent.last_action.clone(),
-            last_command: None,
-            last_error: if last_error.is_empty() { None } else { Some(last_error.to_string()) },
-            next_required_action: Some(current_meta),
-        }
-    }
-    
-    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
-        let anchor = self.get_state_anchor(journal, current_role, last_error);
-        format!(
-            "[MISSION_ANCHOR]\nWorkspace: {}\nProyecto: {}\nFase: {}\nRol: {}\nPaso: {}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
-            anchor.workspace_root,
-            anchor.project_root,
-            anchor.phase,
-            anchor.role,
-            anchor.current_step,
-            if anchor.files_pending.is_empty() { "Ninguno".to_string() } else { anchor.files_pending.join(", ") },
-            anchor.next_required_action.unwrap_or_default(),
-            anchor.last_error.unwrap_or_else(|| "Ninguno".to_string())
-        )
     }
 }
 

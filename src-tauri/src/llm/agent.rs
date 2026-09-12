@@ -1945,45 +1945,7 @@ Meta actual: {}
                             let digested_out = digest_terminal_output(&out, 2500);
                             let res_msg = format!("Éxito: {}", digested_out);
                             // ── MissionRuntime: record successful observation with real world data ──
-                            {
-                                let mut obs = crate::core::observation::Observation::success(
-                                    "TOOL_TERMINAL", &digested_out, vec![],
-                                );
-                                obs.command = Some(comando.clone());
-                                obs.state_hash_before = Some(world_hash_before);
-                                obs.state_hash_after = Some(world_hash_after);
-                                runtime.record_observation(&obs);
-
-                                // P0: Record structured execution evidence bound to state_hash
-                                let trimmed_cmd = comando.trim();
-                                let _ = runtime.evidence_graph.record_generic_with_hash(
-                                    crate::core::evidence::EvidenceKind::CommandExitCode,
-                                    "TOOL_TERMINAL",
-                                    &format!("{} passes", trimmed_cmd),
-                                    "0",
-                                    1.0,
-                                    runtime.current_step(),
-                                    Some(world_hash_after)
-                                );
-
-                                let cmd_lower = trimmed_cmd.to_lowercase();
-                                if cmd_lower.contains("test") {
-                                    let test_claim = if cmd_lower.contains("cargo test") {
-                                        "cargo test passes"
-                                    } else {
-                                        "tests pass"
-                                    };
-                                    let _ = runtime.evidence_graph.record_generic_with_hash(
-                                        crate::core::evidence::EvidenceKind::Test,
-                                        "TOOL_TERMINAL",
-                                        test_claim,
-                                        "0",
-                                        1.0,
-                                        runtime.current_step(),
-                                        Some(world_hash_after)
-                                    );
-                                }
-                            }
+                            
                             // ── Silent-success auto-verifier ─────────────────────────────────────
                             // When a script runs successfully but prints nothing to stdout,
                             // the LLM cannot confirm the task is done and loops. Fix: scan the
