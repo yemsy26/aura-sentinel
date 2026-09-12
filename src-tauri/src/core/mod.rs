@@ -39,12 +39,13 @@ pub mod mission_runtime;     // Orquestador desacoplado de ejecución de misione
 pub mod envelope;            // Typed Tool Envelope para retornos de herramientas
 pub mod step_budget;         // Presupuesto de pasos con distribución 40/30/20/10
 pub mod schema_validator;    // Validación de esquemas de llamadas de herramientas
-pub mod content_hash;            // Función unificada de hashing de contenido (DefaultHasher)
+pub mod content_hash;            // Función unificada de hashing de contenido SHA-256 (identidad determinista)
 pub mod validation;          // Módulos desacoplados de validación sintáctica y de compilación
 pub mod world_state;         // Snapshot determinista del estado del workspace y diffs
 pub mod observation;         // Envelope estructurado de observaciones y ejecución de herramientas
 pub mod recovery;            // Motor determinista de recuperación de fallos y alternativas
 pub mod tool_registry;       // FINAL-2: Autoridad de nombres de herramientas permitidas (ToolRegistry)
+pub mod programmer_executor; // Ejecutor autónomo de programación y verificación Anti-Stub
 pub mod learning;            // AL-v1: Adaptive Learning — Experience, Stats, Router (recommend only)
 
 

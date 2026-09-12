@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use crate::memory::Cambio;
 
 
 pub mod agent;
@@ -23,11 +22,11 @@ struct OllamaResponse {
 
 
 
-#[derive(Deserialize, Serialize)]
-struct ProgrammerOutput {
-    pensamiento: Option<String>,
-    explicacion_tecnica: String,
-    cambios: Vec<Cambio>,
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub(crate) struct ProgrammerOutput {
+    pub pensamiento: Option<String>,
+    pub explicacion_tecnica: String,
+    pub cambios: Vec<crate::memory::Cambio>,
 }
 
 
@@ -183,7 +182,7 @@ pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
     }
 }
 
-async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) -> Result<String, String> {
+pub(crate) async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) -> Result<String, String> {
     let system_prompt = format!(
         "Eres Aura-Sentinel, el Ingeniero Ejecutor. Tu tarea es ESCRIBIR o MODIFICAR el código real basado en la instrucción.\n\
         Instrucción: {}\n\n\

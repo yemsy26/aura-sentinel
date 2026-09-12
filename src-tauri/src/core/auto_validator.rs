@@ -48,7 +48,7 @@ impl AutoValidator {
 
     /// Valida archivos HTML
     async fn validate_html(&self, result: &mut ValidationResult) {
-        let html_files = self.find_files("*.html").await;
+        let html_files = self.find_files("*.html", &mut result.issues).await;
         
         for html_file in html_files {
             if let Ok(content) = fs::read_to_string(&html_file).await {
@@ -100,7 +100,7 @@ impl AutoValidator {
 
     /// Valida archivos JS/TS
     async fn validate_js(&self, result: &mut ValidationResult) {
-        let js_files = self.find_files("*.js").await;
+        let js_files = self.find_files("*.js", &mut result.issues).await;
         
         for js_file in js_files {
             if let Ok(content) = fs::read_to_string(&js_file).await {
@@ -155,7 +155,7 @@ impl AutoValidator {
     /// Valida assets referenciados en HTML/CSS
     async fn validate_assets(&self, result: &mut ValidationResult) {
         // Verificar carpeta assets/ solo si existen referencias reales a assets o es un proyecto de juego
-        let has_game = self.find_files("*.js").await.iter().any(|f| {
+        let has_game = self.find_files("*.js", &mut result.issues).await.iter().any(|f| {
             if let Ok(content) = std::fs::read_to_string(f) {
                 content.contains("Phaser") || content.contains("canvas") || content.contains("this.load.")
             } else {
@@ -210,31 +210,48 @@ impl AutoValidator {
 
 
     /// Busca archivos por patrón
-    async fn find_files(&self, pattern: &str) -> Vec<std::path::PathBuf> {
+    async fn find_files(&self, pattern: &str, issues: &mut Vec<ValidationIssue>) -> Vec<std::path::PathBuf> {
         let mut results = Vec::new();
-        self.find_files_recursive(Path::new(&self.workspace_path), pattern, &mut results, 0).await;
+        self.find_files_recursive(Path::new(&self.workspace_path), pattern, &mut results, issues, 0).await;
         results
     }
 
-    fn find_files_recursive<'a>(&'a self, dir: &'a Path, pattern: &'a str, results: &'a mut Vec<std::path::PathBuf>, depth: u32) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    fn find_files_recursive<'a>(
+        &'a self,
+        dir: &'a Path,
+        pattern: &'a str,
+        results: &'a mut Vec<std::path::PathBuf>,
+        issues: &'a mut Vec<ValidationIssue>,
+        depth: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             if depth > 5 { return; }
-            if let Ok(entries) = fs::read_dir(dir).await {
-                let mut entries = entries;
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let path = entry.path();
-                    let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    let name_str = name.as_ref();
-                    
-                    // Saltar directorios ignorados
-                    if path.is_dir() {
-                        if matches!(name_str, "node_modules" | ".git" | "target" | "dist" | "build" | ".next" | ".nuxt") {
-                            continue;
+            match fs::read_dir(dir).await {
+                Ok(mut entries) => {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let path = entry.path();
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        let name_str = name.as_ref();
+                        
+                        // Saltar directorios ignorados
+                        if path.is_dir() {
+                            if matches!(name_str, "node_modules" | ".git" | "target" | "dist" | "build" | ".next" | ".nuxt") {
+                                continue;
+                            }
+                            self.find_files_recursive(&path, pattern, results, issues, depth + 1).await;
+                        } else if self.match_pattern(name_str, pattern) {
+                            results.push(path);
                         }
-                        self.find_files_recursive(&path, pattern, results, depth + 1).await;
-                    } else if self.match_pattern(name_str, pattern) {
-                        results.push(path);
                     }
+                }
+                Err(e) => {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        file: dir.to_string_lossy().to_string(),
+                        line: None,
+                        message: format!("[WORKSPACE_READ_ERROR] Error leyendo directorio {}: {}", dir.display(), e),
+                        suggested_fix: Some("Verificar permisos y accesibilidad del directorio".to_string()),
+                    });
                 }
             }
         })

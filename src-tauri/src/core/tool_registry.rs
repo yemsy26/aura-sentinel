@@ -90,6 +90,11 @@ pub static KNOWN_TOOLS: &[&str] = &[
     "TOOL_ASSET_MANAGER",
     "TOOL_WEB_SCRAPER",
     "TOOL_LEARN",
+    "TOOL_CREATE_RUNNER",
+    "TOOL_SCHEDULER",
+    "TOOL_SEARCH",
+    "TOOL_LOGIC_SOLVER",
+    "TOOL_ARCHITECT",
 ];
 
 /// ToolRegistry owns the dispatch table: tool_name → ExecutorFn.

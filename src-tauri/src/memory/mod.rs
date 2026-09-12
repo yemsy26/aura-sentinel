@@ -138,7 +138,7 @@ pub async fn read_files_safely(workspace_path: &str, files: Vec<String>) -> Stri
     combined_content
 }
 
-fn sanitize_file_content_by_extension(filename: &str, content: &str) -> String {
+pub fn sanitize_file_content_by_extension(filename: &str, content: &str) -> String {
     if filename.ends_with(".py") {
         let mut lines: Vec<&str> = content.lines().collect();
         while let Some(last) = lines.last() {
@@ -196,6 +196,92 @@ fn sanitize_file_content_by_extension(filename: &str, content: &str) -> String {
     }
 }
 
+pub fn sanitize_generated_code(filename: &str, content: impl AsRef<str>) -> String {
+    sanitize_file_content_by_extension(filename, content.as_ref())
+}
+
+pub fn apply_patch_to_string(
+    contenido_original: &str,
+    file_exists: bool,
+    buscar: &str,
+    reemplazar: &str,
+    archivo: &str,
+) -> (String, bool, Option<String>) {
+    let mut nuevo_contenido = contenido_original.to_string();
+    let mut match_encontrado_seguro = false;
+    let mut log_msg = None;
+
+    if !file_exists || contenido_original.trim().is_empty() || buscar.trim().is_empty() {
+        nuevo_contenido = reemplazar.to_string();
+        match_encontrado_seguro = true;
+    } else {
+        let count = contenido_original.matches(buscar).count();
+        if count == 1 {
+            nuevo_contenido = contenido_original.replace(buscar, reemplazar);
+            match_encontrado_seguro = true;
+        }
+    }
+
+    if file_exists && !match_encontrado_seguro {
+        let buscar_lines: Vec<&str> = buscar.lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+            
+        let orig_lines: Vec<(usize, &str)> = contenido_original.lines()
+            .enumerate()
+            .map(|(idx, l)| (idx, l.trim()))
+            .filter(|(_, l)| !l.is_empty())
+            .collect();
+
+        let mut matched = false;
+        
+        if !buscar_lines.is_empty() {
+            let window_size = buscar_lines.len();
+            let mut match_indices = Vec::new();
+
+            if orig_lines.len() >= window_size {
+                for i in 0..=(orig_lines.len() - window_size) {
+                    let mut is_match = true;
+                    for j in 0..window_size {
+                        if orig_lines[i + j].1 != buscar_lines[j] {
+                            is_match = false;
+                            break;
+                        }
+                    }
+                    if is_match {
+                        match_indices.push(i);
+                    }
+                }
+                
+                if match_indices.len() == 1 || (match_indices.len() > 1 && window_size >= 3) {
+                    let best_match_idx = match_indices[0];
+                    let start_idx = orig_lines[best_match_idx].0;
+                    let end_idx = orig_lines[best_match_idx + window_size - 1].0;
+                    
+                    let raw_orig_lines: Vec<&str> = contenido_original.lines().collect();
+                    
+                    let mut pre_block = raw_orig_lines[0..start_idx].join("\n");
+                    if !pre_block.is_empty() { pre_block.push('\n'); }
+                    
+                    let mut post_block = raw_orig_lines[end_idx + 1..].join("\n");
+                    if !post_block.is_empty() { post_block.insert(0, '\n'); }
+                    
+                    nuevo_contenido = format!("{}{}{}", pre_block, reemplazar, post_block);
+                    matched = true;
+                    log_msg = Some(format!("[FUZZY MATCH] Parche semántico aplicado en {}. (Ventana: {}, Coincidencias: {})", archivo, window_size, match_indices.len()));
+                } else if match_indices.len() > 1 {
+                    log_msg = Some(format!("[FUZZY MATCH RECHAZADO] Hay múltiples ({}) coincidencias ambiguas para un bloque muy pequeño ({} líneas) en {}.", match_indices.len(), window_size, archivo));
+                }
+            }
+        }
+        match_encontrado_seguro = matched;
+    }
+
+    (nuevo_contenido, match_encontrado_seguro, log_msg)
+}
+
+#[allow(dead_code)]
 pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> Result<String, String> {
     let mut exitosos = 0;
     let mut exitosos_nombres = Vec::new();
@@ -399,6 +485,7 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
     Ok(full_msg)
 }
 
+#[allow(dead_code)]
 pub async fn update_last_memory_status(workspace_path: &str, status: &str) -> Result<(), String> {
     let memory_file = Path::new(workspace_path).join(".fenix_memory.json");
     

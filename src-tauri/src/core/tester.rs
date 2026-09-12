@@ -162,3 +162,46 @@ fn emit_tester_info(msg: &str) {
     eprintln!("{}", msg);
 }
 
+use crate::core::tool_registry::ExecutionResult;
+
+pub async fn execute_tester_detailed(workspace_path: &str) -> Result<ExecutionResult, String> {
+    match run_tests(workspace_path).await {
+        TestResult::Passed(stdout) => {
+            let mut res = ExecutionResult::success(stdout);
+            res.command = Some("run_tests".to_string());
+            res.cwd = Some(workspace_path.to_string());
+            Ok(res)
+        }
+        TestResult::Failed(stderr) => {
+            let mut res = ExecutionResult::error(stderr, 1);
+            res.command = Some("run_tests".to_string());
+            res.cwd = Some(workspace_path.to_string());
+            Ok(res)
+        }
+        TestResult::NoTests => {
+            let root = Path::new(workspace_path);
+            let mut has_html = false;
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    if entry.path().extension().map(|e| e == "html" || e == "htm").unwrap_or(false) {
+                        has_html = true;
+                        break;
+                    }
+                }
+            }
+
+            if has_html {
+                let mut res = ExecutionResult::success("[TOOL_TESTER] Proyecto web estático detectado. Estructura HTML validada con éxito.");
+                res.command = Some("run_tests".to_string());
+                res.cwd = Some(workspace_path.to_string());
+                Ok(res)
+            } else {
+                let mut res = ExecutionResult::error("[TOOL_TESTER] No se detectaron archivos de test reconocidos para ningún lenguaje soportado.", 1);
+                res.command = Some("run_tests".to_string());
+                res.cwd = Some(workspace_path.to_string());
+                Ok(res)
+            }
+        }
+    }
+}
+

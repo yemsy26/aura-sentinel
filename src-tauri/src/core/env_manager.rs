@@ -286,3 +286,25 @@ fn read_env_var_from_registry(scope: &str) -> String {
         })
         .unwrap_or_default()
 }
+
+use crate::core::tool_registry::ExecutionResult;
+
+pub async fn execute_env_manager_detailed(package: &str) -> Result<ExecutionResult, String> {
+    let pkg = package.trim();
+    if pkg.is_empty() {
+        return Ok(ExecutionResult::error("TOOL_ENV_MANAGER requiere un nombre de paquete.", 1));
+    }
+    match install_dependency(pkg).await {
+        Ok(msg) => {
+            let mut res = ExecutionResult::success(msg);
+            res.command = Some(format!("scoop install {}", pkg));
+            Ok(res)
+        }
+        Err(e) => {
+            let mut res = ExecutionResult::error(e, 1);
+            res.command = Some(format!("scoop install {}", pkg));
+            Ok(res)
+        }
+    }
+}
+

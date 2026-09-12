@@ -142,14 +142,105 @@ impl WorkspaceResolver {
 mod tests {
     use super::*;
 
+    fn create_test_workspace() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("aura_ws_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("Failed to create test workspace");
+        dir
+    }
+
     #[test]
     fn test_normalize_windows_path() {
-        // Create a real temp dir for canonicalization testing
-        let temp_dir = std::env::temp_dir();
-        let resolver = WorkspaceResolver::new(&temp_dir).unwrap();
+        let ws = create_test_workspace();
+        let resolver = WorkspaceResolver::new(&ws).unwrap();
         assert_eq!(
             resolver.normalize_workspace_relative_path("src\\main.rs").unwrap(),
             "src/main.rs"
         );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn test_reject_parent_traversal() {
+        let ws = create_test_workspace();
+        let resolver = WorkspaceResolver::new(&ws).unwrap();
+        
+        let result = resolver.normalize_workspace_relative_path("../outside.txt");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("PATH_OUTSIDE_WORKSPACE"));
+
+        let deep_traversal = resolver.normalize_workspace_relative_path("sub/../../outside.txt");
+        assert!(deep_traversal.is_err());
+        assert!(deep_traversal.unwrap_err().contains("PATH_OUTSIDE_WORKSPACE"));
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn test_reject_absolute_outside_workspace() {
+        let ws = create_test_workspace();
+        let resolver = WorkspaceResolver::new(&ws).unwrap();
+
+        // Target an outside directory
+        let outside = std::env::temp_dir().join("outside_aura_sentinel_file.txt");
+        let result = resolver.normalize_workspace_relative_path(&outside.to_string_lossy());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("PATH_OUTSIDE_WORKSPACE"));
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn test_accept_absolute_inside_workspace() {
+        let ws = create_test_workspace();
+        let resolver = WorkspaceResolver::new(&ws).unwrap();
+
+        let inside_file = ws.join("src").join("lib.rs");
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::write(&inside_file, "// inside").unwrap();
+
+        let norm = resolver.normalize_workspace_relative_path(&inside_file.to_string_lossy()).unwrap();
+        assert_eq!(norm, "src/lib.rs");
+
+        let resolved = resolver.resolve_existing(&inside_file.to_string_lossy()).unwrap();
+        assert!(resolved.exists());
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn test_resolve_create_and_existing() {
+        let ws = create_test_workspace();
+        let resolver = WorkspaceResolver::new(&ws).unwrap();
+
+        // Non-existent file cannot be resolved as existing
+        let err = resolver.resolve_existing("new_file.txt");
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("PATH_NOT_FOUND"));
+
+        // But can be resolved for create
+        let create_path = resolver.resolve_for_create("new_file.txt").unwrap();
+        std::fs::write(&create_path, "hello world").unwrap();
+
+        // Now it exists and resolves
+        let exist_path = resolver.resolve_existing("new_file.txt").unwrap();
+        assert_eq!(create_path, exist_path);
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn test_nested_creation_path() {
+        let ws = create_test_workspace();
+        let resolver = WorkspaceResolver::new(&ws).unwrap();
+
+        let nested = resolver.resolve_for_create("nested/deep/directory/test.rs").unwrap();
+        assert!(nested.to_string_lossy().contains("test.rs"));
+
+        // Creating parent dirs and file works within sandbox
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, "// ok").unwrap();
+        assert!(resolver.resolve_existing("nested/deep/directory/test.rs").is_ok());
+
+        let _ = std::fs::remove_dir_all(&ws);
     }
 }

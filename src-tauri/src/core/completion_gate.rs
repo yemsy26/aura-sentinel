@@ -549,5 +549,77 @@ mod tests {
         let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new("."));
         assert!(matches!(dec, CompletionDecision::Incomplete(_)), "Missing cwd must fail criteria requiring workspace containment");
     }
+
+    #[test]
+    fn test_audit_scenario_cargo_toml_missing_incomplete_then_fixed_complete() {
+        let temp_dir = std::env::temp_dir().join(format!("aura_e2e_{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(temp_dir.join("src"));
+
+        // Step 1: src/main.rs exists, but Cargo.toml is missing
+        let main_rs = temp_dir.join("src").join("main.rs");
+        std::fs::write(&main_rs, "fn main() { println!(\"hello\"); }").unwrap();
+
+        let mut contract = MissionContract::new("Rust project completion");
+        contract.add_criterion(
+            "AC-CARGO-TOML",
+            "Cargo.toml must exist",
+            crate::core::mission_contract::VerificationMethod::FileExistence("Cargo.toml".to_string()),
+            true,
+        );
+        contract.add_criterion(
+            "AC-MAIN-RS",
+            "src/main.rs must exist",
+            crate::core::mission_contract::VerificationMethod::FileExistence("src/main.rs".to_string()),
+            true,
+        );
+        contract.add_criterion(
+            "AC-BUILD",
+            "cargo build passes",
+            crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()),
+            true,
+        );
+
+        let mut evidence = EvidenceGraph::new();
+        let state = CognitiveState::new("m_rust", "Rust build test");
+        let hash_1 = 1111;
+
+        // Gate evaluation while Cargo.toml is missing and build hasn't succeeded
+        let dec_1 = CompletionGate::evaluate(&contract, &state, &evidence, hash_1, &temp_dir);
+        assert!(matches!(dec_1, CompletionDecision::Incomplete(_)));
+        if let CompletionDecision::Incomplete(reasons) = dec_1 {
+            assert!(reasons.iter().any(|r| r.contains("Cargo.toml")), "Must report missing Cargo.toml");
+        }
+
+        // Step 2: Now write Cargo.toml
+        let cargo_toml = temp_dir.join("Cargo.toml");
+        std::fs::write(&cargo_toml, "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+
+        // Even with Cargo.toml physically present, without valid build evidence for current world hash -> Incomplete
+        let dec_2 = CompletionGate::evaluate(&contract, &state, &evidence, hash_1, &temp_dir);
+        assert!(matches!(dec_2, CompletionDecision::Incomplete(_)));
+
+        // Step 3: Record valid build evidence with exit_code: 0, current world hash, and matching cwd
+        let hash_2 = 2222;
+        evidence.record_structured(
+            EvidenceKind::CommandExitCode,
+            "TOOL_TERMINAL",
+            StructuredFact::CommandResult {
+                command: "cargo build".to_string(),
+                cwd: temp_dir.to_string_lossy().to_string(),
+                exit_code: 0,
+                stdout_hash: "build_ok".to_string(),
+                stderr_hash: "".to_string(),
+            },
+            1.0,
+            1,
+            Some(hash_2),
+        ).unwrap();
+
+        // Now with Cargo.toml present, src/main.rs present, and valid build evidence -> Complete
+        let dec_3 = CompletionGate::evaluate(&contract, &state, &evidence, hash_2, &temp_dir);
+        assert_eq!(dec_3, CompletionDecision::Complete);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }
 
