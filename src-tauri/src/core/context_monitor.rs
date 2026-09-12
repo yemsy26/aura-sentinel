@@ -60,32 +60,38 @@ impl ContextMonitor {
 
         // Anchor 1: Task Charter header
         let charter_block = if !self.task_charter.is_empty() {
-            format!("[🎯 OBJETIVO INMUTABLE DE LA MISIÓN]\n{}\n\n", self.task_charter)
+            format!("[🎯 OBJETIVO INMUTABLE DE LA MISIÓN]
+{}
+
+", self.task_charter)
         } else {
             String::new()
         };
 
-        // Budget allocation: 20% head (initial requirements/plan), 65% tail (latest actions & errors)
-        let head_budget = (self.max_chars as f32 * 0.20) as usize;
-        let tail_budget = (self.max_chars as f32 * 0.65) as usize;
+        // Budget allocation: 85% tail (latest actions & errors). We DROP the head because 
+        // small LLMs (like 7B) suffer from Echolalia when they see their very first actions (e.g. "workspace is empty") permanently pinned to the top.
+        let tail_budget = (self.max_chars as f32 * 0.85) as usize;
 
-        let head: String = context.chars().take(head_budget).collect();
         let tail: String = context.chars().rev().take(tail_budget).collect::<Vec<_>>().into_iter().rev().collect();
 
         // Clean turn boundary search in tail
         let clean_tail = if let Some(pos) = tail.find("[PASO") {
             &tail[pos..]
-        } else if let Some(pos) = tail.find("\n[") {
+        } else if let Some(pos) = tail.find("
+[") {
             &tail[pos + 1..]
         } else {
             &tail
         };
 
         format!(
-            "{}{}\n\n[... ⚡ HISTORIAL INTERMEDIO COMPACTADO DETERMINISTA ({} caracteres preservados) ...]\n\n{}",
+            "{}
+
+[... ✂️ HISTORIAL ANTIGUO ELIMINADO PARA PREVENIR ECHOLALIA ({} caracteres eliminados) ...]
+
+{}",
             charter_block,
-            head.trim_end(),
-            head.len() + clean_tail.len(),
+            context.len().saturating_sub(tail_budget),
             clean_tail.trim_start()
         )
     }

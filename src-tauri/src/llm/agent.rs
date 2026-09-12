@@ -1654,64 +1654,14 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                 emit_event(&app_handle, runtime.current_step(), &format!("[FSM LOCK] Ejecutor intentó usar {}", tool), "WARNING");                continue;
             }
         } else if !is_forced_and_obeyed && current_role == AgentRole::Critic {
-            if ["TOOL_PROGRAMMER", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
-                critic_fsm_lock_consecutive += 1;
-                let error_msg = format!("[ACCESO DENEGADO]: Eres el Crítico. No tienes permiso para usar {}. No puedes escribir código físico. Si el código falla, usa TOOL_TERMINAL, y si hay errores, el sistema te regresará al Ejecutor. NO uses TOOL_PROGRAMMER.", tool);
-                current_context.push_str(&format!("{}\n\n", error_msg));
-                emit_event(&app_handle, runtime.current_step(), &format!("[FSM LOCK] Crítico intentó usar {}", tool), "WARNING");
-
-                // ── Anti-bucle del Crítico: si lleva demasiados FSM LOCKs
-                // seguidos, significa que el modelo está atascado intentando
-                // escribir archivos que faltan. Forzamos retorno al Ejecutor
-                // con un mensaje de feedback específico.
-                if critic_fsm_lock_consecutive >= 3 {
-                    // SPRINT 1 FIX: Validación Dinámica FSM.
-                    // archivos_vec is declared later in the loop; here we do a live scan
-                    // of the workspace to find what's actually on disk, and use current_context
-                    // to detect what the LLM intended to produce.
-                    let mut ws_files: Vec<String> = Vec::new();
-                    fn scan_ws(dir: &std::path::Path, out: &mut Vec<String>, depth: u8) {
-                        if depth > 3 { return; }
-                        if let Ok(rd) = std::fs::read_dir(dir) {
-                            for entry in rd.flatten() {
-                                let p = entry.path();
-                                if p.is_dir() {
-                                    let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-                                    if !name.starts_with('.') && name != "node_modules" && name != "target" {
-                                        scan_ws(&p, out, depth + 1);
-                                    }
-                                } else {
-                                    out.push(p.file_name().unwrap_or_default().to_string_lossy().to_string());
-                                }
-                            }
-                        }
-                    }
-                    scan_ws(std::path::Path::new(&workspace_path), &mut ws_files, 0);
-
-                    let feedback = if ws_files.is_empty() {
-                        "[REPORTE DEL CRITICO]: Bucle detectado y el workspace esta completamente VACIO. \
-                        El Ejecutor no ha creado ningun archivo fisico todavia. Usa TOOL_PROGRAMMER para empezar.".to_string()
-                    } else {
-                        format!(
-                            "[REPORTE DEL CRITICO]: Bucle detectado. Archivos actualmente en disco: {:?}. \
-                            Si faltan archivos, crealos con TOOL_PROGRAMMER. Si todos existen, verifica con TOOL_TERMINAL.",
-                            ws_files
-                        )
-                    };
-                    critic_feedback = Some(feedback.clone());
-                    current_role = AgentRole::Executor;
-                    critic_fsm_lock_consecutive = 0;
-                    think_consecutive = 0;
-                    mapper_consecutive = 0;
-                    comandos_ejecutados_historico.clear(); // allow fresh terminal commands
-                    emit_event(&app_handle, runtime.current_step(), 
-                        "[FSM] CRITICO -> EJECUTOR: Bucle detectado, validacion dinamica aplicada.", 
-                        "WARNING");
-                    current_context.push_str(&format!("{}\n\n", feedback));
-                }                continue;
-            }
-            // Reset lock counter when Critic does something valid
-            critic_fsm_lock_consecutive = 0;
+              if ["TOOL_PROGRAMMER", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
+                  // FIX: If the Critic wants to fix code, we gracefully auto-transition to Executor
+                  // instead of throwing an angry [ACCESO DENEGADO] and forcing a loop.
+                  current_role = AgentRole::Executor;
+                  emit_event(&app_handle, runtime.current_step(), &format!("[FSM] Critico -> Ejecutor: Transicion automatica para usar {}.", tool), "INFO");
+                  // Let it fall through and execute normally as an Executor!
+              }
+              critic_fsm_lock_consecutive = 0;
         }
         
         let url = raw_value.get("url_a_investigar").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1884,7 +1834,7 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                         emit_event(&app_handle, runtime.current_step(), &format!("Comando vacío ({}/3)", empty_count + 1), "ERROR");
                     }
                     programmer_cooldown_hits = 0;
-                } else if comandos_ejecutados_historico.contains(&comando) {
+                } else if !is_forced_and_obeyed && comandos_ejecutados_historico.contains(&comando) {
                     let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
                     emit_event(&app_handle, runtime.current_step(), "Comando repetido interceptado", "WARNING");
                     if current_role == AgentRole::Critic {
@@ -1984,7 +1934,12 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                         // ── Route through Runtime Gateway (P0 fix) ───────────────────────────
                         // execute_action() = authorize_action (already passed) + ToolRegistry.dispatch()
                         // The TOOL_TERMINAL executor is registered above and calls execute_terminal_command().
-                        match runtime.execute_action(&action_proposal).await {
+                        let unified_res = match runtime.execute_action(&action_proposal).await {
+                            Ok(obs) if obs.status == crate::core::observation::ObservationStatus::Error => Err(obs.payload),
+                            Ok(obs) => Ok(obs),
+                            Err(e) => Err(e),
+                        };
+                        match unified_res {
                         Ok(observation) => {
                             // execute_action() already records world snapshots before/after internally
                             let out = observation.payload.clone();
@@ -2493,7 +2448,7 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     let err_msg = "Error Crítico: El campo 'comando' está vacío. Debes especificar qué comando ejecutar en la terminal.";
                     current_context.push_str(&format!("{}\n\n", err_msg));
                     emit_event(&app_handle, runtime.current_step(), err_msg, "ERROR");
-                } else if comandos_ejecutados_historico.contains(&comando) {
+                } else if !is_forced_and_obeyed && comandos_ejecutados_historico.contains(&comando) {
                     let res_msg = "[SISTEMA INTERNO]: Advertencia: Este servidor o proceso YA ESTÁ EN EJECUCIÓN en segundo plano. NO necesitas volver a iniciarlo. Usa TOOL_VISION_EVALUATOR o TOOL_FINISH.";
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(&app_handle, runtime.current_step(), "Servidor ya en ejecución (bucle evitado).", "WARNING");
@@ -2946,7 +2901,19 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                     let mut safe_files = memory::read_files_safely(&workspace_path, archivos_vec.clone()).await;
                     let mut context_for_qwen = format!("Historial Bucle:\n{}\nArchivos:\n{}", current_context, safe_files);
                 
-                let mut qwen_prompt = format!("Instrucción principal: {}{}\nDEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message, compile_alert_note);
+                // If there's a recent Critic thought in the context, we should append it to the programmer's instructions
+                let recent_critic_thought = if current_context.contains("Critico -> Ejecutor") || current_context.contains("--- PASO") {
+                    format!("
+
+[FEEDBACK DEL CRITICO O PASO RECIENTE]:
+{}
+(Asegurate de corregir los errores mencionados y cumplir con este feedback en tu codigo).", pensamiento)
+                } else {
+                    String::new()
+                };
+
+                let mut qwen_prompt = format!("Instrucción principal: {}{}{}
+DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y REALES. PROHIBIDO usar 'pass', 'TODO', funciones vacías, NotImplementedError o cualquier placeholder. Cada función debe tener lógica funcional real.", user_message, compile_alert_note, recent_critic_thought);
 
                 let target_model = resolve_model_or_fallback(
                     if !programmer_model.is_empty() && !programmer_model.to_lowercase().contains("embed") {
@@ -3931,7 +3898,12 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
                         emit_event(&app_handle, runtime.current_step(), &format!("Ejecutando en terminal: {}", comando), "ACTION");
                         comandos_ejecutados_historico.insert(comando.clone());
                         // P0 fix: route through Runtime Gateway, not direct execution
-                        match runtime.execute_action(&auto_proposal).await {
+                        let unified_auto_res = match runtime.execute_action(&auto_proposal).await {
+                            Ok(obs) if obs.status == crate::core::observation::ObservationStatus::Error => Err(obs.payload),
+                            Ok(obs) => Ok(obs),
+                            Err(e) => Err(e),
+                        };
+                        match unified_auto_res {
                             Ok(obs) => {
                                 current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto): {}\n\n", obs.payload));
                                 emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal OK: {}", &obs.payload[..obs.payload.len().min(120)]), "SUCCESS");
