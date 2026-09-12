@@ -101,8 +101,13 @@ impl EvidenceGraph {
         &mut self, kind: EvidenceKind, source: &str, fact: StructuredFact,
         reliability: f32, step: u32, state_hash: Option<u64>
     ) -> Result<String, String> {
-        if Self::kind_requires_workspace_hash(&kind) && state_hash.is_none() {
-            return Err(format!("Security Violation: EvidenceKind {:?} requires a state_hash but None was provided.", kind));
+        if Self::kind_requires_workspace_hash(&kind) {
+            if state_hash.is_none() {
+                return Err(format!("Security Violation: EvidenceKind {:?} requires a state_hash but None was provided.", kind));
+            }
+            if matches!(fact, StructuredFact::Generic { .. }) {
+                return Err(format!("Security Violation: Technical EvidenceKind {:?} cannot use StructuredFact::Generic.", kind));
+            }
         }
 
         let id = format!("ev_{:x}", self.entries.len() + 1);
@@ -134,10 +139,14 @@ impl EvidenceGraph {
 
     pub fn has_valid_evidence_for_state(&self, claim: &str, min_reliability: f32, current_state_hash: u64) -> bool {
         self.has_valid_structured_evidence(min_reliability, current_state_hash, |fact| {
-            if let StructuredFact::Generic { claim: c, .. } = fact {
-                c == claim
-            } else {
-                false
+            match fact {
+                StructuredFact::Generic { claim: c, .. } => c == claim,
+                StructuredFact::TestResult { command, exit_code, .. } => {
+                    *exit_code == 0 && (command == claim || claim.contains(command) || (command.contains("test") && claim.contains("test")))
+                },
+                StructuredFact::CommandResult { command, exit_code, .. } => {
+                    *exit_code == 0 && (command == claim || claim.contains(command))
+                },
             }
         })
     }
@@ -158,10 +167,14 @@ impl EvidenceGraph {
                     if hash != current_state_hash { return false; }
                 }
             }
-            if let StructuredFact::Generic { claim: c, .. } = &e.fact {
-                c == claim
-            } else {
-                false
+            match &e.fact {
+                StructuredFact::Generic { claim: c, .. } => c == claim,
+                StructuredFact::TestResult { command, exit_code, .. } => {
+                    *exit_code == 0 && (command == claim || claim.contains(command) || (command.contains("test") && claim.contains("test")))
+                },
+                StructuredFact::CommandResult { command, exit_code, .. } => {
+                    *exit_code == 0 && (command == claim || claim.contains(command))
+                },
             }
         })
     }
@@ -192,7 +205,7 @@ mod tests {
     #[test]
     fn test_exact_match_required() {
         let mut g = EvidenceGraph::new();
-        g.record_with_hash(EvidenceKind::Compilation, "cargo", "cargo check passes", "0", 0.9, 1, Some(123)).unwrap();
+        g.record(EvidenceKind::UserConfirmation, "user", "cargo check passes", "0", 0.9, 1).unwrap();
 
         // Exact match succeeds
         assert!(g.has_valid_evidence_for("cargo check passes", 0.5));
@@ -201,5 +214,11 @@ mod tests {
         assert!(!g.has_valid_evidence_for("cargo check passes and tests", 0.5));
         // Reliability threshold enforced
         assert!(!g.has_valid_evidence_for("cargo check passes", 0.95));
+    }
+
+    #[test]
+    fn test_technical_kind_rejects_generic_claim() {
+        let mut g = EvidenceGraph::new();
+        assert!(g.record_with_hash(EvidenceKind::Compilation, "cargo", "cargo check passes", "0", 0.9, 1, Some(123)).is_err());
     }
 }

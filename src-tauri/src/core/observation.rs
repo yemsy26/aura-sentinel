@@ -30,6 +30,12 @@ pub struct Observation {
     pub retryable: bool,
     pub requires_human: bool,
     pub suggested_fix: Option<String>,
+    #[serde(default)]
+    pub stdout_hash: Option<String>,
+    #[serde(default)]
+    pub stderr_hash: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 impl Observation {
@@ -46,6 +52,9 @@ impl Observation {
             retryable: false,
             requires_human: false,
             suggested_fix: None,
+            stdout_hash: None,
+            stderr_hash: None,
+            cwd: None,
         }
     }
 
@@ -64,6 +73,9 @@ impl Observation {
             retryable: false,
             requires_human: false,
             suggested_fix: None,
+            stdout_hash: None,
+            stderr_hash: None,
+            cwd: None,
         }
     }
 
@@ -86,6 +98,9 @@ impl Observation {
             retryable,
             requires_human: !retryable,
             suggested_fix,
+            stdout_hash: None,
+            stderr_hash: None,
+            cwd: None,
         }
     }
 
@@ -102,6 +117,9 @@ impl Observation {
             retryable: false,
             requires_human: true,
             suggested_fix: Some("Solicitar aprobación explícita del usuario o redefinir la acción dentro de la política de seguridad.".to_string()),
+            stdout_hash: None,
+            stderr_hash: None,
+            cwd: None,
         }
     }
 
@@ -118,6 +136,9 @@ impl Observation {
             retryable: true,
             requires_human: false,
             suggested_fix: Some("Asegúrate de enviar los argumentos requeridos en JSON estricto con los tipos correctos.".to_string()),
+            stdout_hash: None,
+            stderr_hash: None,
+            cwd: None,
         }
     }
 

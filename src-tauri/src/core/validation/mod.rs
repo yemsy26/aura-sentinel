@@ -20,9 +20,9 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
     // 4. TypeScript validation
     typescript::validate_typescript(workspace_path).await?;
 
-    // 5. AutoValidator: verify local script and asset integrity
+    // 5. AutoValidator: verify local script and asset integrity (pure read-only)
     let auto_val = AutoValidator::new(workspace_path);
-    let auto_res = auto_val.validate_and_fix().await;
+    let auto_res = auto_val.validate().await;
     let errors: Vec<_> = auto_res.issues.iter().filter(|i| i.severity == Severity::Error).collect();
     if !errors.is_empty() {
         let mut err_msg = String::from("[ASSET_OR_SCRIPT_MISSING] Se detectaron referencias a archivos faltantes en el workspace:\n");

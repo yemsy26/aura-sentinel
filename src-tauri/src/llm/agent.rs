@@ -2,7 +2,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use crate::memory;
 use crate::core::{
-    execute_terminal_command, start_background_task, read_task_logs, kill_task,
+    start_background_task, read_task_logs, kill_task,
     validate_workspace, format_system_error,
     runner_generator::generate_standard_runners,
     command_trail::StepResult, // CommandTrail used inline via full path in the trail block
@@ -296,7 +296,7 @@ fn formato_contrato(cmd: &str) -> String {
 async fn generate_project_runners(workspace_path: &str, prompt: &str) -> Vec<std::path::PathBuf> {
     use std::path::Path;
     
-    let project_root = Path::new(workspace_path);
+    let _project_root = Path::new(workspace_path);
     let _all_generated: Vec<std::path::PathBuf> = Vec::new();
     
     let projects = detect_projects(workspace_path);
@@ -640,7 +640,6 @@ pub async fn run_agent_loop(
 // let mut think_programmer_alternation_count = 0u32; removed for Commit 9
     let mut auditor_consecutive = 0u32;
     let mut mapper_consecutive = 0u32;
-    let mut critic_fsm_lock_consecutive = 0u32;
     let mut workspace_manager_error_consecutive = 0u32;
     let mut learn_consecutive = 0u32;
     let mut unknown_tool_consecutive = 0u32;
@@ -782,9 +781,128 @@ pub async fn run_agent_loop(
             let _ = runtime.tool_registry.register("TOOL_TERMINAL", Arc::new(move |args| {
                 let workspace = ws.clone();
                 Box::pin(async move {
-                    let cmd = args["comando"].as_str().unwrap_or("").to_string();
-                    execute_terminal_command(&workspace, &cmd).await
-                        .map_err(|e| e.to_string())
+                    let cmd = args["comando"].as_str()
+                        .or_else(|| args["command"].as_str())
+                        .unwrap_or("").to_string();
+                    crate::core::execute_terminal_command_detailed(&workspace, &cmd).await
+                })
+            }));
+        }
+
+        // TOOL_WORKSPACE_MANAGER: secure deletion through WorkspaceResolver
+        {
+            let ws = workspace_path.clone();
+            let _ = runtime.tool_registry.register("TOOL_WORKSPACE_MANAGER", Arc::new(move |args| {
+                let workspace = ws.clone();
+                Box::pin(async move {
+                    use crate::core::workspace_resolver::WorkspaceResolver;
+                    let files: Vec<String> = if let Some(arr) = args.get("archivos").and_then(|v| v.as_array()) {
+                        arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()
+                    } else if let Some(arr) = args.get("files").and_then(|v| v.as_array()) {
+                        arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()
+                    } else if let Some(s) = args.get("archivo").and_then(|v| v.as_str()) {
+                        vec![s.to_string()]
+                    } else {
+                        vec![]
+                    };
+
+                    if files.is_empty() {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "TOOL_WORKSPACE_MANAGER requiere una lista de archivos a eliminar en 'archivos'.",
+                            1
+                        ));
+                    }
+
+                    let mut borrados = Vec::new();
+                    let mut errores = Vec::new();
+
+                    for f in &files {
+                        match WorkspaceResolver::resolve_existing_path(&workspace, f) {
+                            Ok(target_path) => {
+                                if target_path.is_dir() {
+                                    match std::fs::remove_dir_all(&target_path) {
+                                        Ok(_) => borrados.push(f.clone()),
+                                        Err(e) => errores.push(format!("No se pudo borrar {}: {}", f, e)),
+                                    }
+                                } else {
+                                    match std::fs::remove_file(&target_path) {
+                                        Ok(_) => borrados.push(f.clone()),
+                                        Err(e) => errores.push(format!("No se pudo borrar {}: {}", f, e)),
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                errores.push(format!("Ruta rechazada por seguridad '{}': {}", f, e));
+                            }
+                        }
+                    }
+
+                    let mut out = String::new();
+                    if !borrados.is_empty() {
+                        out.push_str(&format!("Archivos/carpetas eliminados: {:?}\n", borrados));
+                    }
+                    let err_str = errores.join("\n");
+                    let exit_code = if errores.is_empty() { 0 } else { 1 };
+
+                    let mut res = if exit_code == 0 {
+                        crate::core::tool_registry::ExecutionResult::success(out)
+                    } else {
+                        let mut r = crate::core::tool_registry::ExecutionResult::error(err_str, exit_code);
+                        r.stdout = out;
+                        r
+                    };
+                    res.files_affected = borrados;
+                    res.cwd = Some(workspace);
+                    Ok(res)
+                })
+            }));
+        }
+
+        // TOOL_READ_FILE: secure read through WorkspaceResolver
+        {
+            let ws = workspace_path.clone();
+            let _ = runtime.tool_registry.register("TOOL_READ_FILE", Arc::new(move |args| {
+                let workspace = ws.clone();
+                Box::pin(async move {
+                    use crate::core::workspace_resolver::WorkspaceResolver;
+                    let file_arg = args.get("archivo")
+                        .or_else(|| args.get("file"))
+                        .or_else(|| args.get("comando"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
+
+                    if file_arg.is_empty() {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "TOOL_READ_FILE requiere el nombre o ruta del archivo en 'archivo'.",
+                            1
+                        ));
+                    }
+
+                    let target = match WorkspaceResolver::resolve_existing_path(&workspace, file_arg) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return Ok(crate::core::tool_registry::ExecutionResult::error(
+                                format!("Seguridad: Archivo fuera del workspace o inválido: {}", e),
+                                1
+                            ));
+                        }
+                    };
+
+                    match tokio::fs::read_to_string(&target).await {
+                        Ok(contents) => {
+                            let mut res = crate::core::tool_registry::ExecutionResult::success(contents);
+                            res.command = Some(file_arg.to_string());
+                            res.cwd = Some(workspace);
+                            Ok(res)
+                        },
+                        Err(e) => {
+                            Ok(crate::core::tool_registry::ExecutionResult::error(
+                                format!("Error leyendo {}: {}", file_arg, e),
+                                1
+                            ))
+                        }
+                    }
                 })
             }));
         }
@@ -794,7 +912,10 @@ pub async fn run_agent_loop(
         {
             let _ = runtime.tool_registry.register("TOOL_PROGRAMMER", Arc::new(|_args| {
                 Box::pin(async {
-                    Err("TOOL_PROGRAMMER: dispatched via match arm (extraction pending)".to_string())
+                    Ok(crate::core::tool_registry::ExecutionResult::error(
+                        "TOOL_PROGRAMMER: dispatched via match arm (extraction pending)",
+                        1
+                    ))
                 })
             }));
         }
@@ -803,7 +924,10 @@ pub async fn run_agent_loop(
         {
             let _ = runtime.tool_registry.register("TOOL_TESTER", Arc::new(|_args| {
                 Box::pin(async {
-                    Err("TOOL_TESTER: dispatched via match arm (extraction pending)".to_string())
+                    Ok(crate::core::tool_registry::ExecutionResult::error(
+                        "TOOL_TESTER: dispatched via match arm (extraction pending)",
+                        1
+                    ))
                 })
             }));
         }
@@ -811,7 +935,9 @@ pub async fn run_agent_loop(
         // TOOL_FINISH: CompletionGate is the authority (match arm validates and signals)
         {
             let _ = runtime.tool_registry.register("TOOL_FINISH", Arc::new(|_args| {
-                Box::pin(async { Ok("FINISH_SIGNALED".to_string()) })
+                Box::pin(async {
+                    Ok(crate::core::tool_registry::ExecutionResult::success("FINISH_SIGNALED"))
+                })
             }));
         }
 
@@ -819,17 +945,19 @@ pub async fn run_agent_loop(
         // Match arm handles actual execution for each.
         for tool in &[
             "TOOL_ENV_MANAGER", "TOOL_MAPPER", "TOOL_AST_INJECT",
-            "TOOL_CONTAINER", "TOOL_WORKSPACE_MANAGER",
+            "TOOL_CONTAINER",
             "TOOL_BACKGROUND_START", "TOOL_BACKGROUND_QUERY",
             "TOOL_BROWSE", "TOOL_GIT", "TOOL_THINK",
             "TOOL_AUDITOR", "TOOL_VISION_EVALUATOR", "TOOL_ASK_USER",
-            "TOOL_READ_FILE", "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL",
+            "TOOL_BACKGROUND_READ", "TOOL_BACKGROUND_KILL",
             "TOOL_ASSET_MANAGER", "TOOL_WEB_SCRAPER", "TOOL_LEARN",
         ] {
             let tool_name = tool.to_string();
             let _ = runtime.tool_registry.register(tool, Arc::new(move |_args| {
                 let name = tool_name.clone();
-                Box::pin(async move { Ok(format!("{}_REGISTERED", name)) })
+                Box::pin(async move {
+                    Ok(crate::core::tool_registry::ExecutionResult::success(format!("{}_REGISTERED", name)))
+                })
             }));
         }
     }
@@ -1666,7 +1794,6 @@ Meta actual: {}
                   emit_event(&app_handle, runtime.current_step(), &format!("[FSM] Critico -> Ejecutor: Transicion automatica para usar {}.", tool), "INFO");
                   // Let it fall through and execute normally as an Executor!
               }
-              critic_fsm_lock_consecutive = 0;
         }
         
         let url = raw_value.get("url_a_investigar").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1745,7 +1872,10 @@ Meta actual: {}
             &archivos_vec,
             &workspace_path,
         );
-        if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) { emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL"); }
+        if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) {
+            emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL");
+            break;
+        }
         
         // Registrar herramienta en el historial del Monitor de Cordura
         tool_history.push(tool.clone());
@@ -1922,9 +2052,8 @@ Meta actual: {}
                         Ok(observation) => {
                             // execute_action() already records world snapshots before/after internally
                             let out = observation.payload.clone();
-                            let world_hash_before = observation.state_hash_before.unwrap_or(0);
+                            let _world_hash_before = observation.state_hash_before.unwrap_or(0);
                             let world_hash_after = observation.state_hash_after.unwrap_or(0);
-                            runtime.record_tool_call();
 
                             // ── Package-install amnesia fix ──────────────────────────────────────
                             // If the command was a package install (pip install X, npm install X),
@@ -2002,11 +2131,17 @@ Meta actual: {}
                                     }
                                 }
                                 if !found_outputs.is_empty() {
-                                    let _ = runtime.evidence_graph.record_generic_with_hash(
+                                    let runtime_fact = crate::core::evidence::StructuredFact::CommandResult {
+                                        command: comando.clone(),
+                                        cwd: workspace_path.clone(),
+                                        exit_code: 0,
+                                        stdout_hash: crate::core::content_hash::hash_bytes(out.as_bytes()),
+                                        stderr_hash: String::new(),
+                                    };
+                                    let _ = runtime.evidence_graph.record_structured(
                                         crate::core::evidence::EvidenceKind::RuntimeCheck,
                                         "TOOL_TERMINAL",
-                                        "Script generó archivos de salida verificados",
-                                        &format!("{} archivos encontrados", found_outputs.len()),
+                                        runtime_fact,
                                         0.95,
                                         runtime.current_step(),
                                         Some(world_hash_after)
@@ -2029,11 +2164,18 @@ Meta actual: {}
                                         || ((out.contains("0 failed") || out.contains("tests passed") || out.contains("100%")) && !out.contains("FAILED"));
 
                                     if is_test_cmd && test_passed {
-                                        let _ = runtime.evidence_graph.record_generic_with_hash(
+                                        let test_fact = crate::core::evidence::StructuredFact::TestResult {
+                                            command: comando.clone(),
+                                            cwd: workspace_path.clone(),
+                                            exit_code: 0,
+                                            passed: 1,
+                                            failed: 0,
+                                            ignored: 0,
+                                        };
+                                        let _ = runtime.evidence_graph.record_structured(
                                             crate::core::evidence::EvidenceKind::Test,
                                             "TOOL_TERMINAL",
-                                            "Script de verificación pasó al 100%",
-                                            "PASSED",
+                                            test_fact,
                                             0.99,
                                             runtime.current_step(),
                                             Some(world_hash_after)
@@ -2663,35 +2805,48 @@ Meta actual: {}
                     emit_event(&app_handle, runtime.current_step(), err_msg, "ERROR");
                 } else {
                     workspace_manager_error_consecutive = 0;
-                    let mut borrados = Vec::new();
-                    let mut errores = Vec::new();
-                    for f in &archivos_vec {
-                        let target_path = std::path::Path::new(&workspace_path).join(f);
-                        if target_path.exists() {
-                            if target_path.is_dir() {
-                                match std::fs::remove_dir_all(&target_path) {
-                                    Ok(_) => borrados.push(f.clone()),
-                                    Err(e) => errores.push(format!("No se pudo borrar {}: {}", f, e)),
-                                }
+                    match runtime.execute_action(&action_proposal).await {
+                        Ok(obs) => {
+                            if obs.status == crate::core::observation::ObservationStatus::Success {
+                                current_context.push_str(&format!("Éxito: {}\n\n", obs.payload));
+                                emit_event(&app_handle, runtime.current_step(), &format!("Limpieza finalizada. {} afectados.", obs.files_affected.len()), "SUCCESS");
                             } else {
-                                match std::fs::remove_file(&target_path) {
-                                    Ok(_) => borrados.push(f.clone()),
-                                    Err(e) => errores.push(format!("No se pudo borrar {}: {}", f, e)),
-                                }
+                                current_context.push_str(&format!("Errores durante la limpieza: {}\n\n", obs.payload));
+                                emit_event(&app_handle, runtime.current_step(), &format!("Error en limpieza: {}", obs.payload), "ERROR");
                             }
-                        } else {
-                            errores.push(format!("El archivo {} no existe.", f));
+                        },
+                        Err(e) => {
+                            current_context.push_str(&format!("Error de ejecución: {}\n\n", e));
+                            emit_event(&app_handle, runtime.current_step(), &format!("Error WorkspaceManager: {}", e), "ERROR");
                         }
                     }
-                    let mut res_msg = String::new();
-                    if !borrados.is_empty() {
-                        res_msg.push_str(&format!("Éxito: Se borraron permanentemente los siguientes archivos/carpetas: {:?}\n", borrados));
+                }
+            },
+            "TOOL_READ_FILE" => {
+                emit_event(&app_handle, runtime.current_step(), "[TOOL_READ_FILE] Leyendo archivo...", "ACTION");
+                match runtime.execute_action(&action_proposal).await {
+                    Ok(obs) => {
+                        if obs.status == crate::core::observation::ObservationStatus::Success {
+                            let contents = &obs.payload;
+                            let c_len = contents.len();
+                            let display = if c_len > 8000 { &contents[..8000] } else { &contents[..] };
+                            let read_msg = format!(
+                                "[TOOL_READ_FILE] Contenido:\n```\n{}\n```\n\n\
+                                 Ahora tienes el contenido real del archivo. Usa TOOL_PROGRAMMER con el \
+                                 campo 'buscar' copiado EXACTAMENTE del texto anterior.\n\n",
+                                display
+                            );
+                            current_context.push_str(&read_msg);
+                            emit_event(&app_handle, runtime.current_step(), &format!("Archivo leído: {} chars", c_len), "SUCCESS");
+                        } else {
+                            current_context.push_str(&format!("[TOOL_READ_FILE] Error: {}\n\n", obs.payload));
+                            emit_event(&app_handle, runtime.current_step(), &format!("TOOL_READ_FILE Error: {}", obs.payload), "ERROR");
+                        }
+                    },
+                    Err(e) => {
+                        current_context.push_str(&format!("[TOOL_READ_FILE] Error de ejecución: {}\n\n", e));
+                        emit_event(&app_handle, runtime.current_step(), &format!("TOOL_READ_FILE Error: {}", e), "ERROR");
                     }
-                    if !errores.is_empty() {
-                        res_msg.push_str(&format!("Errores durante la limpieza: {:?}\n", errores));
-                    }
-                    current_context.push_str(&format!("{}\n\n", res_msg));
-                    emit_event(&app_handle, runtime.current_step(), &format!("Limpieza finalizada. {} borrados.", borrados.len()), "SUCCESS");
                 }
             },
             "TOOL_THINK" => {
@@ -3866,45 +4021,6 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
                                 current_context.push_str(&format!("Resultado TOOL_TERMINAL (auto) Error: {}\n\n", e));
                                 emit_event(&app_handle, runtime.current_step(), &format!("Auto-terminal Error: {}", e), "ERROR");
                             }
-                        }
-                    }
-                } else if tool == "TOOL_READ_FILE" {
-                    // FIX-B4: TOOL_READ_FILE is referenced in PATCH_FAIL advice but was never implemented.
-                    // Auto-handle it: read the file indicated in `comando` and inject content into context.
-                    // `archivos_a_editar` is only in scope inside TOOL_PROGRAMMER, so we rely on `comando` here.
-                    let file_to_read = if !comando.trim().is_empty() {
-                        let p = std::path::Path::new(comando.trim());
-                        if p.is_absolute() {
-                            p.to_path_buf()
-                        } else {
-                            std::path::Path::new(&workspace_path).join(comando.trim())
-                        }
-                    } else {
-                        // No filename given — fallback: list workspace root
-                        std::path::Path::new(&workspace_path).to_path_buf()
-                    };
-
-                    emit_event(&app_handle, runtime.current_step(), &format!("[TOOL_READ_FILE] Leyendo: {}", file_to_read.display()), "ACTION");
-                    match tokio::fs::read_to_string(&file_to_read).await {
-                        Ok(contents) => {
-                            let c_len = contents.len();
-                            let display = if c_len > 8000 { &contents[..8000] } else { &contents[..] };
-                            let read_msg = format!(
-                                "[TOOL_READ_FILE] Contenido de '{}':\n```\n{}\n```\n\n\
-                                 Ahora tienes el contenido real del archivo. Usa TOOL_PROGRAMMER con el \
-                                 campo 'buscar' copiado EXACTAMENTE del texto anterior.\n\n",
-                                file_to_read.display(), display
-                            );
-                            current_context.push_str(&read_msg);
-                            emit_event(&app_handle, runtime.current_step(), &format!("Archivo leído: {} chars", c_len), "SUCCESS");
-                        }
-                        Err(e) => {
-                            current_context.push_str(&format!(
-                                "[TOOL_READ_FILE] Error leyendo '{}': {}. \
-                                 Puede que el archivo no exista todavía — usa TOOL_PROGRAMMER con buscar: \"\" para crearlo.\n\n",
-                                file_to_read.display(), e
-                            ));
-                            emit_event(&app_handle, runtime.current_step(), &format!("TOOL_READ_FILE Error: {}", e), "ERROR");
                         }
                     }
                 } else {

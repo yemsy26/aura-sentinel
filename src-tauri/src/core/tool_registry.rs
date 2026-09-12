@@ -10,8 +10,52 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// The concrete return type of any tool execution.
-pub type ToolResult = Result<String, String>;
+/// The concrete return type of any tool execution with real process metadata.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ExecutionResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub stdout_hash: String,
+    pub stderr_hash: String,
+    pub files_affected: Vec<String>,
+}
+
+impl ExecutionResult {
+    pub fn success(stdout: impl Into<String>) -> Self {
+        let out = stdout.into();
+        let h = crate::core::content_hash::hash_bytes(out.as_bytes());
+        Self {
+            stdout: out,
+            stderr: String::new(),
+            exit_code: 0,
+            command: None,
+            cwd: None,
+            stdout_hash: h,
+            stderr_hash: String::new(),
+            files_affected: Vec::new(),
+        }
+    }
+
+    pub fn error(stderr: impl Into<String>, exit_code: i32) -> Self {
+        let err = stderr.into();
+        let h = crate::core::content_hash::hash_bytes(err.as_bytes());
+        Self {
+            stdout: String::new(),
+            stderr: err,
+            exit_code: if exit_code == 0 { 1 } else { exit_code },
+            command: None,
+            cwd: None,
+            stdout_hash: String::new(),
+            stderr_hash: h,
+            files_affected: Vec::new(),
+        }
+    }
+}
+
+pub type ToolResult = Result<ExecutionResult, String>;
 
 /// A boxed async future that produces a ToolResult.
 pub type BoxFuture = Pin<Box<dyn Future<Output = ToolResult> + Send>>;
@@ -138,7 +182,7 @@ mod tests {
     fn test_register_known_tool_succeeds() {
         let mut registry = ToolRegistry::new();
         let result = registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok("ok".to_string()) })
+            Box::pin(async { Ok(ExecutionResult::success("ok")) })
         }));
         assert!(result.is_ok());
     }
@@ -147,7 +191,7 @@ mod tests {
     fn test_register_unknown_tool_fails() {
         let mut registry = ToolRegistry::new();
         let result = registry.register("TOOL_INVENTED", Arc::new(|_args| {
-            Box::pin(async { Ok("ok".to_string()) })
+            Box::pin(async { Ok(ExecutionResult::success("ok")) })
         }));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("TOOL_UNKNOWN"));
@@ -157,10 +201,11 @@ mod tests {
     async fn test_dispatch_registered_tool() {
         let mut registry = ToolRegistry::new();
         registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok("dispatched".to_string()) })
+            Box::pin(async { Ok(ExecutionResult::success("dispatched")) })
         })).unwrap();
         let result = registry.dispatch("TOOL_TERMINAL", serde_json::Value::Null).await;
-        assert_eq!(result, Ok("dispatched".to_string()));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().stdout, "dispatched");
     }
 
     #[tokio::test]

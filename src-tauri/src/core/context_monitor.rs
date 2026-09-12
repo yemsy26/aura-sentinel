@@ -1,4 +1,4 @@
-﻿/// Context window monitor and intelligent compaction for Aura Sentinel.
+/// Context window monitor and intelligent compaction for Aura Sentinel.
 /// Implements Devin 2.0 / OSS 2025-2026 Tiered Context Management:
 ///  - Healthy (< 70% of budget)
 ///  - ApproachingLimit (70-80%): proactive alert
@@ -53,6 +53,7 @@ impl ContextMonitor {
     }
 
     /// Compacting logic that strictly preserves the Immutable Task Charter
+    /// and guarantees the output never exceeds `max_chars`.
     pub fn compact_context(&self, context: &str, mission_state: &str) -> String {
         if context.len() <= self.max_chars {
             return context.to_string();
@@ -60,46 +61,65 @@ impl ContextMonitor {
 
         // Anchor 1: Task Charter header
         let charter_block = if !self.task_charter.is_empty() {
-            format!("[🎯 OBJETIVO INMUTABLE DE LA MISIÓN]
-{}
-
-", self.task_charter)
+            format!("[🎯 OBJETIVO INMUTABLE DE LA MISIÓN]\n{}\n\n", self.task_charter)
         } else {
             String::new()
         };
 
-        // Budget allocation: 85% tail (latest actions & errors). We DROP the head because 
-        // small LLMs (like 7B) suffer from Echolalia when they see their very first actions (e.g. "workspace is empty") permanently pinned to the top.
-        let mission_state_block = format!("
-[ESTADO OPERACIONAL DE LA MISIÓN]
-{}
+        // Anchor 2: Mission operational state
+        let mission_state_block = format!("\n[ESTADO OPERACIONAL DE LA MISIÓN]\n{}\n\n", mission_state);
 
-", mission_state);
-        
-        let tail_budget = (self.max_chars as f32 * 0.85) as usize;
+        let notice_marker = "\n[... ✂️ HISTORIAL ANTIGUO ELIMINADO PARA PREVENIR ECHOLALIA ...]\n\n";
+
+        let fixed_overhead = charter_block.len() + mission_state_block.len() + notice_marker.len();
+        let tail_budget = self.max_chars.saturating_sub(fixed_overhead);
 
         let tail: String = context.chars().rev().take(tail_budget).collect::<Vec<_>>().into_iter().rev().collect();
 
         // Clean turn boundary search in tail
         let clean_tail = if let Some(pos) = tail.find("[PASO") {
             &tail[pos..]
-        } else if let Some(pos) = tail.find("
-[") {
+        } else if let Some(pos) = tail.find("\n[") {
             &tail[pos + 1..]
         } else {
             &tail
         };
 
-        format!(
-            "{}{}
-
-[... ✂️ HISTORIAL ANTIGUO ELIMINADO PARA PREVENIR ECHOLALIA ({} caracteres eliminados) ...]
-
-{}",
+        let mut result = format!(
+            "{}{}{}{}",
             charter_block,
             mission_state_block,
-            context.len().saturating_sub(tail_budget),
+            notice_marker,
             clean_tail.trim_start()
-        )
+        );
+
+        if result.len() > self.max_chars {
+            result.truncate(self.max_chars);
+        }
+
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_context_monitor_guarantees_max_chars_bound() {
+        let monitor = ContextMonitor::new(500, "Construir API REST en Rust");
+        let huge_context = "x".repeat(5000);
+        let mission_state = "Paso 1 completado, Paso 2 en curso";
+
+        let compacted = monitor.compact_context(&huge_context, mission_state);
+        assert!(compacted.len() <= 500, "Compacted length {} exceeds max_chars 500", compacted.len());
+        assert!(compacted.contains("Construir API REST en Rust"), "Immutable task charter must be preserved");
+    }
+
+    #[test]
+    fn test_context_monitor_no_compact_when_within_budget() {
+        let monitor = ContextMonitor::new(1000, "Mi objetivo");
+        let short_context = "Contexto corto";
+        assert_eq!(monitor.compact_context(short_context, "Estado"), short_context);
     }
 }

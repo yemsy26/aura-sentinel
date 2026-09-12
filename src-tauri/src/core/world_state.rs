@@ -89,7 +89,8 @@ impl WorldState {
             Err(e) => return Err(format!("WORKSPACE_SCAN_FAILED: {}: {}", current.display(), e)),
         };
 
-        for entry in entries.flatten() {
+        for entry_res in entries {
+            let entry = entry_res.map_err(|e| format!("WORKSPACE_SCAN_FAILED: {}: {}", current.display(), e))?;
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
@@ -104,35 +105,35 @@ impl WorldState {
                 }
                 if let Ok(rel) = path.strip_prefix(root) {
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    if let Ok(meta) = path.metadata() {
-                        let size = meta.len();
-                        let mtime = meta.modified()
-                            .ok()
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0);
-                        let fingerprint = format!("{}_{}", size, mtime);
-                        let hash = if let Some(prev) = previous {
-                            if let Some(prev_file) = prev.files.get(&rel_str) {
-                                if prev_file.metadata_fingerprint == fingerprint {
-                                    prev_file.content_hash.clone()
-                                } else {
-                                    compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
-                                }
+                    let meta = path.metadata().map_err(|e| format!("WORKSPACE_SCAN_FAILED: {}: {}", path.display(), e))?;
+                    let size = meta.len();
+                    let mtime_nanos = meta.modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0);
+                    let mtime_secs = (mtime_nanos / 1_000_000_000) as u64;
+                    let fingerprint = format!("{}_{}", size, mtime_nanos);
+                    let hash = if let Some(prev) = previous {
+                        if let Some(prev_file) = prev.files.get(&rel_str) {
+                            if prev_file.metadata_fingerprint == fingerprint {
+                                prev_file.content_hash.clone()
                             } else {
                                 compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
                             }
                         } else {
                             compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
-                        };
-                        out.insert(rel_str.clone(), FileSnapshot {
-                            relative_path: rel_str,
-                            size_bytes: size,
-                            modified_secs: mtime,
-                            metadata_fingerprint: fingerprint,
-                            content_hash: hash,
-                        });
-                    }
+                        }
+                    } else {
+                        compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
+                    };
+                    out.insert(rel_str.clone(), FileSnapshot {
+                        relative_path: rel_str,
+                        size_bytes: size,
+                        modified_secs: mtime_secs,
+                        metadata_fingerprint: fingerprint,
+                        content_hash: hash,
+                    });
                 }
             }
         }

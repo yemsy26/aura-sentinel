@@ -11,6 +11,21 @@ pub enum CompletionDecision {
     Blocked(Vec<String>),
 }
 
+fn normalize_command_str(cmd: &str) -> String {
+    cmd.trim()
+        .replace('\\', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn paths_match(p1: &str, p2: &str) -> bool {
+    let n1 = p1.trim().replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let n2 = p2.trim().replace('\\', "/").trim_end_matches('/').to_lowercase();
+    n1 == n2 || n1 == "." || n2 == "."
+}
+
 pub struct CompletionGate;
 
 impl CompletionGate {
@@ -45,15 +60,20 @@ impl CompletionGate {
             let is_satisfied = match &ac.verification {
                 crate::core::mission_contract::VerificationMethod::TestPassed => {
                     use crate::core::evidence::StructuredFact;
-                    // P0 FIX: Strict structural enforcement for TestPassed. No string claim bypass.
+                    let ws_str = workspace_path.to_string_lossy().to_string();
                     evidence.has_valid_structured_evidence(
                         0.5,
                         current_world_hash,
                         |fact| {
                             match fact {
-                                StructuredFact::TestResult { exit_code, .. } => *exit_code == 0,
-                                StructuredFact::CommandResult { command, exit_code, .. } => {
-                                    *exit_code == 0 && (command.contains("test") || command.contains("cargo test"))
+                                StructuredFact::TestResult { exit_code, cwd, .. } => {
+                                    *exit_code == 0 && paths_match(cwd, &ws_str)
+                                },
+                                StructuredFact::CommandResult { command, cwd, exit_code, .. } => {
+                                    let norm = normalize_command_str(command);
+                                    *exit_code == 0
+                                        && (norm == "cargo test" || norm.starts_with("cargo test ") || norm == "npm test" || norm.starts_with("pytest") || norm.starts_with("python -m unittest") || norm.starts_with("python -m pytest"))
+                                        && paths_match(cwd, &ws_str)
                                 },
                                 _ => false,
                             }
@@ -62,14 +82,17 @@ impl CompletionGate {
                 },
                 crate::core::mission_contract::VerificationMethod::CommandExitZero(cmd) => {
                     use crate::core::evidence::StructuredFact;
-                    // P0 FIX: Strict structural enforcement. No generic string claim fallbacks allowed.
+                    let expected_cmd = normalize_command_str(cmd);
+                    let ws_str = workspace_path.to_string_lossy().to_string();
                     evidence.has_valid_structured_evidence(
                         0.5,
                         current_world_hash,
                         |fact| {
                             match fact {
-                                StructuredFact::CommandResult { command, exit_code, .. } => {
-                                    *exit_code == 0 && command.contains(cmd.trim())
+                                StructuredFact::CommandResult { command, cwd, exit_code, .. } => {
+                                    *exit_code == 0
+                                        && normalize_command_str(command) == expected_cmd
+                                        && paths_match(cwd, &ws_str)
                                 },
                                 _ => false
                             }
@@ -153,18 +176,27 @@ mod tests {
         let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert!(matches!(dec, CompletionDecision::Incomplete(_)));
 
+        let test_fact = crate::core::evidence::StructuredFact::TestResult {
+            command: "cargo test".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 0,
+            passed: 1,
+            failed: 0,
+            ignored: 0,
+        };
+
         // Evidence with insufficient reliability -> still Incomplete
-        evidence.record_generic_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.6, 1, Some(hash)).unwrap();
+        evidence.record_structured(EvidenceKind::Test, "cargo", test_fact.clone(), 0.6, 1, Some(hash)).unwrap();
         let dec2 = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert!(matches!(dec2, CompletionDecision::Incomplete(_)));
 
         // Evidence with sufficient reliability but WRONG hash -> Incomplete
-        evidence.record_generic_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 2, Some(99999)).unwrap();
+        evidence.record_structured(EvidenceKind::Test, "cargo", test_fact.clone(), 0.9, 2, Some(99999)).unwrap();
         let dec3 = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert!(matches!(dec3, CompletionDecision::Incomplete(_)));
 
         // Evidence with sufficient reliability AND CORRECT hash -> Complete
-        evidence.record_generic_with_hash(EvidenceKind::Test, "cargo", "cargo test passes", "0", 0.9, 3, Some(hash)).unwrap();
+        evidence.record_structured(EvidenceKind::Test, "cargo", test_fact, 0.9, 3, Some(hash)).unwrap();
         let dec4 = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert_eq!(dec4, CompletionDecision::Complete);
     }
@@ -339,11 +371,11 @@ mod tests {
         let hash = 888;
         let dummy_path = Path::new(".");
 
-        // Fraudulent / textual evidence using StaticAnalysis instead of CommandExitCode/Test
-        evidence.record_generic_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo build passes", "0", 1.0, 1, Some(hash)).unwrap();
-        evidence.record_generic_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo test passes", "0", 1.0, 2, Some(hash)).unwrap();
+        // Fraudulent / textual evidence using Generic for technical kinds is strictly rejected at registration
+        assert!(evidence.record_generic_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo build passes", "0", 1.0, 1, Some(hash)).is_err());
+        assert!(evidence.record_generic_with_hash(EvidenceKind::StaticAnalysis, "TOOL_LLM", "cargo test passes", "0", 1.0, 2, Some(hash)).is_err());
 
-        // CompletionGate MUST REJECT because the kind is StaticAnalysis, NOT CommandExitCode or Test!
+        // CompletionGate MUST REJECT completion
         let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert!(matches!(dec, CompletionDecision::Incomplete(_)));
     }

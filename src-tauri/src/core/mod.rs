@@ -425,8 +425,8 @@ pub fn hide_workspace_internal_files(workspace_path: &str) {
     }
 }
 
-/// Executes a synchronous terminal command inside the active workspace.
-pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Result<String, String> {
+/// Executes a synchronous terminal command inside the active workspace, returning full process metadata.
+pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &str) -> Result<crate::core::tool_registry::ExecutionResult, String> {
     // ── Windows Command Normalizer ────────────────────────────────────────────
     // Translates Unix-style commands and fixes common Windows path issues so
     // the LLM doesn't have to know the exact Windows syntax every time.
@@ -742,11 +742,29 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(if output.status.success() { 0 } else { 1 });
+    let stdout_hash = crate::core::content_hash::hash_bytes(stdout.as_bytes());
+    let stderr_hash = crate::core::content_hash::hash_bytes(stderr.as_bytes());
 
-    if output.status.success() {
-        Ok(stdout)
+    Ok(crate::core::tool_registry::ExecutionResult {
+        stdout,
+        stderr,
+        exit_code,
+        command: Some(command.to_string()),
+        cwd: Some(workspace_path.to_string()),
+        stdout_hash,
+        stderr_hash,
+        files_affected: Vec::new(),
+    })
+}
+
+/// Executes a synchronous terminal command inside the active workspace, returning a simple Result<String, String>.
+pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Result<String, String> {
+    let res = execute_terminal_command_detailed(workspace_path, command).await?;
+    if res.exit_code == 0 {
+        Ok(res.stdout)
     } else {
-        Err(format!("{} {}", stdout, stderr))
+        Err(format!("{} {}", res.stdout, res.stderr).trim().to_string())
     }
 }
 

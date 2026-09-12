@@ -17,8 +17,8 @@ impl AutoValidator {
         }
     }
 
-    /// Ejecuta todas las validaciones y auto-fixes
-    pub async fn validate_and_fix(&self) -> ValidationResult {
+    /// Ejecuta todas las validaciones de manera pura (read-only)
+    pub async fn validate(&self) -> ValidationResult {
         let mut result = ValidationResult {
             passed: true,
             issues: Vec::new(),
@@ -37,11 +37,13 @@ impl AutoValidator {
         // 4. Validar runners
         self.validate_runners(&mut result).await;
 
-        // 5. Aplicar auto-fixes
-        self.apply_auto_fixes(&mut result).await;
-
         result.passed = result.issues.iter().all(|i| i.severity != Severity::Error);
         result
+    }
+
+    /// Alias para compatibilidad hacia atrás: validación pura de sólo lectura
+    pub async fn validate_and_fix(&self) -> ValidationResult {
+        self.validate().await
     }
 
     /// Valida archivos HTML
@@ -205,115 +207,7 @@ impl AutoValidator {
     }
 
     /// Aplica auto-fixes
-    async fn apply_auto_fixes(&self, result: &mut ValidationResult) {
-        for issue in &result.issues {
-            if let Some(fix) = &issue.suggested_fix {
-                // Auto-fix: generar assets programáticos si faltan.
-                // Guard: only attempt this for Phaser/game projects that actually have src/main.js.
-                // Without the guard, every non-Phaser workspace emits a spurious
-                // "[AUTO-FIX] Error generando assets: main.js no encontrado" warning.
-                if fix.contains("gráficos programáticos") || fix.contains("assets programáticos") {
-                    let main_js_path = Path::new(&self.workspace_path).join("src/main.js");
-                    if main_js_path.exists() {
-                        if let Err(e) = self.generate_programmatic_assets().await {
-                            eprintln!("[AUTO-FIX] Error generando assets: {}", e);
-                        } else {
-                            result.auto_fixed.push("Generados assets programáticos en main.js".to_string());
-                        }
-                    } else {
-                        // Not a Phaser/game project — skip silently (debug level only)
-                        log::debug!("[AUTO-FIX] Omitiendo generación de assets: src/main.js no existe en este workspace.");
-                    }
-                }
-                
-                // Note: Runner generation cannot be performed purely synchronously here;
-                // it remains a suggested_fix for the agent to execute via TOOL_CREATE_RUNNER.
-            }
-        }
-    }
 
-
-    /// Genera assets programáticos en main.js
-    async fn generate_programmatic_assets(&self) -> Result<(), String> {
-        let main_js_path = Path::new(&self.workspace_path).join("src/main.js");
-        if !main_js_path.exists() {
-            return Err("main.js no encontrado".to_string());
-        }
-        
-        let content = fs::read_to_string(&main_js_path).await.map_err(|e| e.to_string())?;
-        
-        if !content.contains("Phaser") && !content.contains("phaser") {
-            return Ok(()); // Solo aplica para proyectos que usen Phaser
-        }
-
-        if content.contains("createAssets") || content.contains("generateTexture") {
-            return Ok(()); // Ya tiene generación programática
-        }
-
-        // Buscar BootScene o Scene principal
-        let mut modified = content;
-        
-        if modified.contains("class BootScene") || modified.contains("class GameScene") {
-            // Buscar preload() en BootScene
-            if let Some(idx) = modified.find("preload()") {
-                let insert_pos = idx + "preload()".len();
-                let injection = r#"
-        // Auto-generación de assets programáticos
-        this.createAssets();
-    }
-    
-    createAssets() {
-        // Nave jugador
-        const playerGraphics = this.make.graphics({ x: 0, y: 0, add: false });
-        playerGraphics.fillStyle(0x00ffff, 1);
-        playerGraphics.fillTriangle(16, 0, 0, 32, 32, 32);
-        playerGraphics.generateTexture('player', 32, 32);
-        playerGraphics.destroy();
-        
-        // Nave transformada
-        const gunshipGraphics = this.make.graphics({ x: 0, y: 0, add: false });
-        gunshipGraphics.fillStyle(0xff00ff, 1);
-        gunshipGraphics.fillTriangle(20, 0, 0, 40, 40, 40);
-        gunshipGraphics.generateTexture('gunship', 40, 40);
-        gunshipGraphics.destroy();
-        
-        // Balas
-        const bulletGraphics = this.make.graphics({ x: 0, y: 0, add: false });
-        bulletGraphics.fillStyle(0xffff00, 1);
-        bulletGraphics.fillRect(0, 0, 4, 12);
-        bulletGraphics.generateTexture('bullet', 4, 12);
-        bulletGraphics.destroy();
-        
-        // Enemigos
-        const enemyGraphics = this.make.graphics({ x: 0, y: 0, add: false });
-        enemyGraphics.fillStyle(0xff3333, 1);
-        enemyGraphics.fillTriangle(16, 0, 0, 32, 32, 32);
-        enemyGraphics.generateTexture('enemy', 32, 32);
-        enemyGraphics.destroy();
-        
-        // Power-ups
-        const puGraphics = this.make.graphics({ x: 0, y: 0, add: false });
-        puGraphics.fillStyle(0xffff00, 1);
-        puGraphics.fillCircle(16, 16, 16);
-        puGraphics.generateTexture('powerup_transform', 32, 32);
-        puGraphics.destroy();
-        
-        // Partículas
-        const particle = this.make.graphics({ x: 0, y: 0, add: false });
-        particle.fillStyle(0xff8800, 1);
-        particle.fillCircle(4, 4, 4);
-        particle.generateTexture('particle', 8, 8);
-        particle.destroy();
-    "#;
-                
-                modified = format!("{}{}\n{}", &modified[..insert_pos], injection, &modified[insert_pos..]);
-                fs::write(&Path::new(&self.workspace_path).join("src/main.js"), modified).await.map_err(|e| e.to_string())?;
-                return Ok(());
-            }
-        }
-        
-        Err("No se encontró lugar para inyectar generación de assets".to_string())
-    }
 
     /// Busca archivos por patrón
     async fn find_files(&self, pattern: &str) -> Vec<std::path::PathBuf> {

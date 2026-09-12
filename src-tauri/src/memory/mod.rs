@@ -206,63 +206,13 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
     let mut patch_not_found_files: Vec<String> = Vec::new();
     
     for cambio in cambios {
-        let path_obj = Path::new(&cambio.archivo);
-        let full_path = if path_obj.is_absolute() {
-            path_obj.to_path_buf()
-        } else {
-            Path::new(workspace_path).join(path_obj)
+        let full_path = match crate::core::workspace_resolver::WorkspaceResolver::resolve_create_path(workspace_path, &cambio.archivo) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(format!("[SECURITY_VIOLATION] Ruta rechazada para '{}': {}", cambio.archivo, e));
+            }
         };
 
-        if !crate::core::security::is_path_allowed(Path::new(workspace_path), &full_path) {
-            // ── Path healing: instead of hard-failing, extract the filename and
-            // write to the current workspace. This fixes LLM contamination from
-            // previous sessions (e.g. "proxy-stack-windows\index.html").
-            let filename = full_path.file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| cambio.archivo.clone());
-            let healed_path = Path::new(workspace_path).join(&filename);
-            // Re-run the loop iteration with the healed path by reconstructing cambio
-            // We log the healing so it's visible in debug output.
-            eprintln!("[PATH_HEAL] Redirecting '{}' -> '{}'", cambio.archivo, healed_path.display());
-            // Swap the path and continue with healed_path below
-            let full_path = healed_path;
-            let path_obj = full_path.as_path();
-            // now drop through — the code below will use full_path correctly
-            let _ = path_obj; // suppress unused warning
-            // We need to redo the security check with the healed path — it must now pass.
-            // If it still fails (shouldn't happen), skip with a warning.
-            if !crate::core::security::is_path_allowed(Path::new(workspace_path), &full_path) {
-                eprintln!("[SECURITY_VIOLATION] Even healed path is outside workspace: {}", full_path.display());
-                continue;
-            }
-            // Continue with healed full_path
-            let mut contenido_original = String::new();
-            let file_exists = full_path.exists();
-            if file_exists {
-                match fs::read_to_string(&full_path).await {
-                    Ok(c) => contenido_original = c,
-                    Err(e) => { eprintln!("Aura-Sentinel: Error leyendo {}: {}", full_path.display(), e); continue; }
-                }
-            } else {
-                if let Some(parent) = full_path.parent() {
-                    if let Err(e) = fs::create_dir_all(parent).await {
-                        eprintln!("Aura-Sentinel: Error creando directorio {:?}: {}", parent, e); continue;
-                    }
-                }
-            }
-            // Apply the search/replace (or write fresh content if buscar is empty)
-            let nuevo_contenido = if cambio.buscar.is_empty() {
-                cambio.reemplazar.clone()
-            } else {
-                contenido_original.replacen(&cambio.buscar, &cambio.reemplazar, 1)
-            };
-            let sanitized_contenido = sanitize_file_content_by_extension(&filename, &nuevo_contenido);
-            match fs::write(&full_path, &sanitized_contenido).await {
-                Ok(_) => { exitosos += 1; exitosos_nombres.push(filename); }
-                Err(e) => eprintln!("Error escribiendo {}: {}", full_path.display(), e),
-            }
-            continue;
-        }
         
         let mut contenido_original = String::new();
         let file_exists = full_path.exists();
@@ -626,7 +576,12 @@ pub async fn read_file_content(path: String) -> Result<String, String> {
     if !file_path.exists() {
         return Err("El archivo no existe.".to_string());
     }
-    match fs::read(&file_path).await {
+    let canonical = file_path.canonicalize().map_err(|e| format!("Error resolviendo ruta: {}", e))?;
+    let canon_str = canonical.to_string_lossy().to_lowercase();
+    if canon_str.contains("\\windows\\") || canon_str.contains("/windows/") || canon_str.contains("\\system32") || canon_str.contains("/etc/") {
+        return Err("[SECURITY_VIOLATION] Acceso a ruta del sistema prohibido.".to_string());
+    }
+    match fs::read(&canonical).await {
         Ok(bytes) => {
             // Evitar intentar mostrar archivos binarios pesados o compilados
             let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
@@ -642,6 +597,15 @@ pub async fn read_file_content(path: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn save_file_content(path: String, content: String) -> Result<(), String> {
     let file_path = Path::new(&path);
+    if let Some(parent) = file_path.parent() {
+        if parent.exists() {
+            let canon_parent = parent.canonicalize().map_err(|e| format!("Error en directorio destino: {}", e))?;
+            let canon_str = canon_parent.to_string_lossy().to_lowercase();
+            if canon_str.contains("\\windows\\") || canon_str.contains("/windows/") || canon_str.contains("\\system32") || canon_str.contains("/etc/") {
+                return Err("[SECURITY_VIOLATION] Escritura en ruta del sistema prohibida.".to_string());
+            }
+        }
+    }
     match fs::write(&file_path, content).await {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Error al guardar archivo: {}", e)),

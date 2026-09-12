@@ -188,13 +188,13 @@ impl MissionRuntime {
                 use crate::core::evidence::{EvidenceKind, StructuredFact};
                 
                 // P0: Replace blind implicit claim with structured execution facts
-                // P0 FIX: Do not fabricate a successful 0 exit code if the execution result lacks one.
+                // Bind real process metadata
                 let fact = StructuredFact::CommandResult {
                     command: obs.command.clone().unwrap_or_else(|| "unknown".to_string()),
-                    cwd: self.workspace_path.clone(),
-                    exit_code: obs.exit_code.unwrap_or(-1), 
-                    stdout_hash: "unknown".to_string(),
-                    stderr_hash: "".to_string(),
+                    cwd: obs.cwd.clone().unwrap_or_else(|| self.workspace_path.clone()),
+                    exit_code: obs.exit_code.unwrap_or(0), 
+                    stdout_hash: obs.stdout_hash.clone().unwrap_or_else(|| "unknown".to_string()),
+                    stderr_hash: obs.stderr_hash.clone().unwrap_or_default(),
                 };
                 
                 let _ = self.evidence_graph.record_structured(
@@ -334,22 +334,45 @@ impl MissionRuntime {
 
         // 5. Build Observation from dispatch result with real execution metadata
         let mut obs = match exec_result {
-            Ok(ref output) => {
-                let mut o = Observation::success(&proposal.tool, output, vec![]);
-                o.exit_code = Some(0);
-                o
+            Ok(ref res) => {
+                if res.exit_code == 0 {
+                    let mut o = Observation::success(&proposal.tool, &res.stdout, res.files_affected.clone());
+                    o.exit_code = Some(0);
+                    o.command = res.command.clone();
+                    o.cwd = res.cwd.clone();
+                    o.stdout_hash = Some(res.stdout_hash.clone());
+                    o.stderr_hash = Some(res.stderr_hash.clone());
+                    o
+                } else {
+                    let err_payload = if !res.stderr.is_empty() {
+                        res.stderr.clone()
+                    } else if !res.stdout.is_empty() {
+                        res.stdout.clone()
+                    } else {
+                        format!("Process exited with code {}", res.exit_code)
+                    };
+                    let mut o = Observation::error(&proposal.tool, err_payload, Some(res.exit_code), true, None);
+                    o.command = res.command.clone();
+                    o.cwd = res.cwd.clone();
+                    o.stdout_hash = Some(res.stdout_hash.clone());
+                    o.stderr_hash = Some(res.stderr_hash.clone());
+                    o.files_affected = res.files_affected.clone();
+                    o
+                }
             },
             Err(ref err)   => {
-                let mut o = Observation::error(&proposal.tool, err, None, true, None);
-                o.exit_code = Some(1);
+                let o = Observation::error(&proposal.tool, err, Some(1), true, None);
                 o
             },
         };
-        if proposal.tool == "TOOL_TERMINAL" {
+        if obs.command.is_none() && proposal.tool == "TOOL_TERMINAL" {
             obs.command = proposal.arguments.get("comando")
                 .or_else(|| proposal.arguments.get("command"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+        }
+        if obs.cwd.is_none() {
+            obs.cwd = Some(self.workspace_path.clone());
         }
         obs.state_hash_before = Some(hash_before);
         obs.state_hash_after  = hash_after;
@@ -507,7 +530,7 @@ mod tests {
         assert!(rt.is_budget_exhausted());
         // Must register executor so check 0b passes and budget check is reached
         rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok("ok".to_string()) })
+            Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("ok")) })
         })).unwrap();
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
@@ -627,7 +650,7 @@ mod tests {
         let mut rt = MissionRuntime::new(".", "Test execution gateway", 10);
         // Register a simulated executor BEFORE execute_action
         rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok("simulated terminal output".to_string()) })
+            Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("simulated terminal output")) })
         })).unwrap();
 
         let proposal = crate::core::policy::ActionProposal {
@@ -653,7 +676,7 @@ mod tests {
         let mut rt = MissionRuntime::new(".", "Test deny on exhausted", 2);
         rt.record_step(); rt.record_step();
         rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok("should not run".to_string()) })
+            Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("should not run")) })
         })).unwrap();
 
         let proposal = crate::core::policy::ActionProposal {
@@ -686,7 +709,7 @@ mod tests {
             let flag = executed_clone.clone();
             Box::pin(async move {
                 flag.store(true, Ordering::SeqCst);
-                Ok("should not run".to_string())
+                Ok(crate::core::tool_registry::ExecutionResult::success("should not run"))
             })
         })).unwrap();
 
@@ -745,7 +768,7 @@ mod tests {
             let flag = executed_clone.clone();
             Box::pin(async move {
                 flag.store(true, Ordering::SeqCst);
-                Ok("should not run".to_string())
+                Ok(crate::core::tool_registry::ExecutionResult::success("should not run"))
             })
         })).unwrap();
 
@@ -788,7 +811,7 @@ mod tests {
         use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test registry dispatch", 10);
         rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok("registry_dispatched".to_string()) })
+            Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("registry_dispatched")) })
         })).unwrap();
 
         let proposal = crate::core::policy::ActionProposal {

@@ -20,6 +20,16 @@ impl WorkspaceResolver {
         Ok(Self { canonical_root })
     }
 
+    pub fn resolve_existing_path(workspace: impl AsRef<Path>, requested: &str) -> Result<PathBuf, String> {
+        let resolver = Self::new(workspace.as_ref())?;
+        resolver.resolve_existing(requested)
+    }
+
+    pub fn resolve_create_path(workspace: impl AsRef<Path>, requested: &str) -> Result<PathBuf, String> {
+        let resolver = Self::new(workspace.as_ref())?;
+        resolver.resolve_for_create(requested)
+    }
+
     /// Normalizes a requested path string relative to the workspace, ensuring consistent forward slashes
     /// and preventing path traversal outside the workspace.
     pub fn normalize_workspace_relative_path(

@@ -1,28 +1,23 @@
 #![allow(dead_code)]
 use std::path::Path;
+use sha2::{Sha256, Digest};
 
-/// Computes a deterministic content hash for a file using std DefaultHasher.
+/// Computes a deterministic content hash for a file using SHA-256.
 /// Returns a hex string identical format used across WorldState, StateDelta, and Evidence.
 pub fn compute_content_hash(path: &Path) -> Option<String> {
-    use std::hash::{Hash, Hasher};
-    use std::collections::hash_map::DefaultHasher;
     match std::fs::read(path) {
-        Ok(bytes) => {
-            let mut hasher = DefaultHasher::new();
-            bytes.hash(&mut hasher);
-            Some(format!("{:016x}", hasher.finish()))
-        }
+        Ok(bytes) => Some(hash_bytes(&bytes)),
         Err(_) => None,
     }
 }
 
-/// Computes content hash from raw bytes (for in-memory use).
+/// Computes content hash from raw bytes (for in-memory use) using SHA-256.
 pub fn hash_bytes(bytes: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    use std::collections::hash_map::DefaultHasher;
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let result = hasher.finalize();
+    let num = u64::from_be_bytes(result[0..8].try_into().unwrap());
+    format!("{:016x}", num)
 }
 
 #[cfg(test)]

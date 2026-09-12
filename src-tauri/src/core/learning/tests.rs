@@ -397,7 +397,7 @@ mod tests {
         runtime.tool_registry.register("TOOL_TERMINAL", Arc::new(|args| {
             let cmd = args.get("comando").and_then(|v| v.as_str()).unwrap_or("").to_string();
             Box::pin(async move {
-                Ok(format!("Command '{}' executed with exit code 0", cmd))
+                Ok(crate::core::tool_registry::ExecutionResult::success(format!("Command '{}' executed with exit code 0", cmd)))
             })
         })).unwrap();
 
