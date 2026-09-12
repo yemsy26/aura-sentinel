@@ -228,19 +228,34 @@ impl AutoValidator {
             if depth > 5 { return; }
             match fs::read_dir(dir).await {
                 Ok(mut entries) => {
-                    while let Ok(Some(entry)) = entries.next_entry().await {
-                        let path = entry.path();
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        let name_str = name.as_ref();
-                        
-                        // Saltar directorios ignorados
-                        if path.is_dir() {
-                            if matches!(name_str, "node_modules" | ".git" | "target" | "dist" | "build" | ".next" | ".nuxt") {
-                                continue;
+                    loop {
+                        match entries.next_entry().await {
+                            Ok(Some(entry)) => {
+                                let path = entry.path();
+                                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                                let name_str = name.as_ref();
+                                
+                                // Saltar directorios ignorados
+                                if path.is_dir() {
+                                    if matches!(name_str, "node_modules" | ".git" | "target" | "dist" | "build" | ".next" | ".nuxt") {
+                                        continue;
+                                    }
+                                    self.find_files_recursive(&path, pattern, results, issues, depth + 1).await;
+                                } else if self.match_pattern(name_str, pattern) {
+                                    results.push(path);
+                                }
                             }
-                            self.find_files_recursive(&path, pattern, results, issues, depth + 1).await;
-                        } else if self.match_pattern(name_str, pattern) {
-                            results.push(path);
+                            Ok(None) => break,
+                            Err(e) => {
+                                issues.push(ValidationIssue {
+                                    severity: Severity::Error,
+                                    file: dir.to_string_lossy().to_string(),
+                                    line: None,
+                                    message: format!("[WORKSPACE_READ_ERROR] Error leyendo entrada de directorio {}: {}", dir.display(), e),
+                                    suggested_fix: Some("Verificar permisos y accesibilidad del directorio".to_string()),
+                                });
+                                break;
+                            }
                         }
                     }
                 }

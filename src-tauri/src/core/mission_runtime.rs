@@ -935,6 +935,73 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[tokio::test]
+    async fn test_e2e_agent_runtime_registry_observation_evidence_gate_chain() {
+        use std::sync::Arc;
+        let temp_dir = std::env::temp_dir().join(format!("aura_chain_e2e_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let mut rt = MissionRuntime::new(temp_dir.to_str().unwrap(), "Complete full-chain test", 20);
+
+        // 1. Contract requires test passed
+        rt.contract.add_criterion(
+            "AC-TEST-1",
+            "Cargo test suite passes",
+            crate::core::mission_contract::VerificationMethod::TestPassed,
+            true,
+        );
+
+        // Before any tool execution -> CompletionGate must report Incomplete
+        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+
+        // 2. Register real executor in ToolRegistry for TOOL_TERMINAL
+        let ws_clone = temp_dir.to_string_lossy().to_string();
+        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(move |args| {
+            let ws = ws_clone.clone();
+            Box::pin(async move {
+                let cmd = args.get("comando").and_then(|v| v.as_str()).unwrap_or("");
+                if cmd == "cargo test" {
+                    let mut res = crate::core::tool_registry::ExecutionResult::success("test result: ok. 1 passed; 0 failed");
+                    res.command = Some("cargo test".to_string());
+                    res.cwd = Some(ws);
+                    res.exit_code = 0;
+                    Ok(res)
+                } else {
+                    let mut res = crate::core::tool_registry::ExecutionResult::error("unknown command", 1);
+                    res.command = Some(cmd.to_string());
+                    res.cwd = Some(ws);
+                    res.exit_code = 1;
+                    Ok(res)
+                }
+            })
+        })).unwrap();
+
+        // 3. Agent constructs ActionProposal
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".to_string(),
+            arguments: serde_json::json!({ "comando": "cargo test" }),
+            expected_effect: "Run test suite to produce required evidence".to_string(),
+            risk: crate::core::policy::RiskLevel::Safe,
+        };
+
+        // 4. Dispatch through Runtime: ActionProposal -> Policy -> ToolRegistry -> Executor -> Observation -> Evidence
+        let obs = rt.execute_action(&proposal).await.expect("Runtime execution must succeed");
+
+        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Success);
+        assert_eq!(obs.exit_code, Some(0));
+        assert_eq!(obs.tool_name, "TOOL_TERMINAL");
+
+        // 5. CompletionGate evaluated against accumulated evidence
+        let completion = rt.can_complete();
+        assert_eq!(
+            completion,
+            crate::core::completion_gate::CompletionDecision::Complete,
+            "CompletionGate MUST verify completion when real executor succeeds through Runtime"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -1156,12 +1156,19 @@ pub async fn run_agent_loop(
             }));
         }
 
-        // TOOL_VISION_EVALUATOR: visual evaluation check
+        // TOOL_VISION_EVALUATOR: visual evaluation check via core::vision
         {
             let _ = runtime.tool_registry.register("TOOL_VISION_EVALUATOR", Arc::new(move |args| {
                 Box::pin(async move {
-                    let target = args.get("archivo").or_else(|| args.get("file")).and_then(|v| v.as_str()).unwrap_or("index.html");
-                    Ok(crate::core::tool_registry::ExecutionResult::success(format!("Visual evaluation ready for {}", target)))
+                    let prompt = args.get("prompt")
+                        .or_else(|| args.get("comando"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Evalua la calidad visual de esta pantalla.");
+                    let url = args.get("url").and_then(|v| v.as_str());
+                    match crate::core::vision::evaluate_vision(prompt, false, url).await {
+                        Ok(res) => Ok(crate::core::tool_registry::ExecutionResult::success(res)),
+                        Err(e) => Ok(crate::core::tool_registry::ExecutionResult::error(format!("Error visual: {}", e), 1)),
+                    }
                 })
             }));
         }
@@ -3406,43 +3413,49 @@ Meta actual: {}
                 }
             },
             "TOOL_VISION_EVALUATOR" => {
-                emit_event(&app_handle, runtime.current_step(), "[VISION] Capturando pantalla y evaluando calidad visual...", "ACTION");
-                // Sprint 3: Connect evaluate_vision from core::vision
+                emit_event(&app_handle, runtime.current_step(), "[VISION] Evaluando calidad visual...", "ACTION");
                 let vision_prompt = if !comando.trim().is_empty() {
                     comando.clone()
                 } else {
                     format!("Evalua la calidad visual de esta pantalla. Describe: 1) Si la UI se ve correcta, 2) Errores visibles, 3) Elementos faltantes. Objetivo original: {}", user_message)
                 };
 
-                // Auto-open URL if found in comando or user_message
                 let text_to_search = format!("{} {}", comando, user_message);
                 let text_lower = text_to_search.to_lowercase();
-                if let Some(idx) = text_lower.find("http://").or_else(|| text_lower.find("https://")) {
+                let url = if let Some(idx) = text_lower.find("http://").or_else(|| text_lower.find("https://")) {
                     let end_idx = text_to_search[idx..].find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`').unwrap_or(text_to_search.len() - idx);
-                    let url = &text_to_search[idx..idx + end_idx];
-                    emit_event(&app_handle, runtime.current_step(), &format!("[VISION] Abriendo navegador en {}", url), "ACTION");
-                    
-                    #[cfg(target_os = "windows")]
-                    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
-                    #[cfg(not(target_os = "windows"))]
-                    let _ = std::process::Command::new("open").arg(url).spawn();
-                    
-                    // Wait for browser to open and render
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                }
+                    Some(text_to_search[idx..idx + end_idx].to_string())
+                } else {
+                    None
+                };
 
-                match crate::core::vision::evaluate_vision(&vision_prompt, false, None).await {
-                    Ok(vision_result) => {
-                        current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LA VALIDACIÓN VISUAL HA SIDO COMPLETADA. SI EL MANDATO DEL USUARIO FUE CUMPLIDO, EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS HERRAMIENTAS DE VALIDACIÓN.\n\n", vision_result));
-                        emit_event(&app_handle, runtime.current_step(), &format!("[VISION] Evaluacion completada: {}", &vision_result.chars().take(120).collect::<String>()), "SUCCESS");
-                    },
+                let action_proposal = crate::core::policy::ActionProposal {
+                    tool: "TOOL_VISION_EVALUATOR".to_string(),
+                    arguments: serde_json::json!({
+                        "prompt": vision_prompt,
+                        "url": url,
+                    }),
+                    expected_effect: "Visual UI evaluation".to_string(),
+                    risk: crate::core::policy::RiskLevel::Safe,
+                };
+
+                match runtime.execute_action(&action_proposal).await {
+                    Ok(obs) => {
+                        if obs.status == crate::core::observation::ObservationStatus::Success {
+                            current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LA VALIDACIÓN VISUAL HA SIDO COMPLETADA. SI EL MANDATO DEL USUARIO FUE CUMPLIDO, EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS HERRAMIENTAS DE VALIDACIÓN.\n\n", obs.payload));
+                            emit_event(&app_handle, runtime.current_step(), &format!("[VISION] Evaluacion completada: {}", &obs.payload.chars().take(120).collect::<String>()), "SUCCESS");
+                        } else {
+                            let msg = format!("[VISION] Error en evaluación visual: {}", obs.payload);
+                            current_context.push_str(&format!("{}\n\n", &msg));
+                            emit_event(&app_handle, runtime.current_step(), &msg, "ERROR");
+                        }
+                    }
                     Err(e) => {
-                        let msg = format!("[VISION] Error al capturar pantalla: {}. Verifica que haya una ventana abierta.", e);
+                        let msg = format!("[VISION] Error de ejecución: {}", e);
                         current_context.push_str(&format!("{}\n\n", &msg));
                         emit_event(&app_handle, runtime.current_step(), &msg, "ERROR");
                     }
                 }
-                // Mark as executed for mandatory checklist (whether it succeeded or not)
                 mandatory_tools_executed.insert("TOOL_VISION_EVALUATOR".to_string());
             },
             "TOOL_TESTER" => {
