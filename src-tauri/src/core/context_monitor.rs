@@ -122,4 +122,14 @@ mod tests {
         let short_context = "Contexto corto";
         assert_eq!(monitor.compact_context(short_context, "Estado"), short_context);
     }
+
+    #[test]
+    fn test_context_monitor_preserves_mission_state() {
+        let monitor = ContextMonitor::new(800, "Construir Cyber Sentinel");
+        let huge_context = "Pasos anteriores... ".repeat(100);
+        let mission_state = "Archivos físicos confirmados en disco: cyber_sentinel.html, style.css";
+
+        let compacted = monitor.compact_context(&huge_context, mission_state);
+        assert!(compacted.contains("cyber_sentinel.html, style.css"), "MissionState with physical files must be preserved");
+    }
 }

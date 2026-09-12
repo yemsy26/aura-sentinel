@@ -25,29 +25,23 @@ pub fn generate_repo_map(workspace: &Path) -> String {
 
     for result in builder.build() {
         if let Ok(entry) = result {
-            let path = entry.path();
-            if path == workspace {
+            let depth = entry.depth();
+            if depth == 0 {
                 continue; // Saltar la raíz
             }
-            
-            // Calcular ruta relativa
-            if let Ok(rel_path) = path.strip_prefix(workspace) {
-                let depth = rel_path.components().count();
-                if depth == 0 { continue; }
-                
-                let is_dir = path.is_dir();
-                let name = entry.file_name().to_string_lossy();
-                
-                let mut prefix = String::new();
-                for _ in 1..depth {
-                    prefix.push_str("│   ");
-                }
-                
-                if is_dir {
-                    map_output.push_str(&format!("{}├── {}/\n", prefix, name));
-                } else {
-                    map_output.push_str(&format!("{}├── {}\n", prefix, name));
-                }
+
+            let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+            let name = entry.file_name().to_string_lossy();
+
+            let mut prefix = String::new();
+            for _ in 1..depth {
+                prefix.push_str("│   ");
+            }
+
+            if is_dir {
+                map_output.push_str(&format!("{}├── {}/\n", prefix, name));
+            } else {
+                map_output.push_str(&format!("{}├── {}\n", prefix, name));
             }
         }
     }
@@ -57,4 +51,25 @@ pub fn generate_repo_map(workspace: &Path) -> String {
     }
 
     map_output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_repo_map_finds_files() {
+        let temp_dir = std::env::temp_dir().join("aura_test_repo_map");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("cyber_sentinel.html"), "<html></html>").unwrap();
+        std::fs::write(temp_dir.join("style.css"), "body{}").unwrap();
+
+        let map = generate_repo_map(&temp_dir);
+        assert!(map.contains("cyber_sentinel.html"));
+        assert!(map.contains("style.css"));
+        assert!(!map.contains("(directorio vacío)"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }

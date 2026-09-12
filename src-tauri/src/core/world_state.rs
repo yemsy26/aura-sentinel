@@ -75,7 +75,7 @@ impl WorldState {
             return Err(format!("WORKSPACE_NOT_DIRECTORY: {}", workspace_path));
         }
 
-        Self::scan_dir_recursive(ws, ws, &mut files, previous)?;
+        Self::scan_dir_recursive(ws, "", &mut files, previous)?;
 
         let environment = previous.map(|p| p.environment.clone()).unwrap_or_else(|| Self::detect_environment());
         let git = previous.map(|p| p.git.clone()).unwrap_or_else(|| Self::detect_git(workspace_path));
@@ -83,7 +83,7 @@ impl WorldState {
         Ok(Self { timestamp_secs: now, workspace_root: workspace_path.to_string(), files, environment, git })
     }
 
-    fn scan_dir_recursive(root: &Path, current: &Path, out: &mut HashMap<String, FileSnapshot>, previous: Option<&WorldState>) -> Result<(), String> {
+    fn scan_dir_recursive(current: &Path, rel_prefix: &str, out: &mut HashMap<String, FileSnapshot>, previous: Option<&WorldState>) -> Result<(), String> {
         let entries = match std::fs::read_dir(current) {
             Ok(e) => e,
             Err(e) => return Err(format!("WORKSPACE_SCAN_FAILED: {}: {}", current.display(), e)),
@@ -94,47 +94,50 @@ impl WorldState {
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
+            let rel_str = if rel_prefix.is_empty() {
+                name.to_string()
+            } else {
+                format!("{}/{}", rel_prefix, name)
+            };
+
             if path.is_dir() {
                 if name == "node_modules" || name == ".git" || name == "target" || name == "__pycache__" || name == ".venv" || name == ".aura" {
                     continue;
                 }
-                Self::scan_dir_recursive(root, &path, out, previous)?;
+                Self::scan_dir_recursive(&path, &rel_str, out, previous)?;
             } else if path.is_file() {
                 if name == ".aura_session.json" || name == ".aura_session.json.tmp" || name == ".aura_graph.json" || name == ".fenix_index.json" || name.starts_with(".aura") {
                     continue;
                 }
-                if let Ok(rel) = path.strip_prefix(root) {
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    let meta = path.metadata().map_err(|e| format!("WORKSPACE_SCAN_FAILED: {}: {}", path.display(), e))?;
-                    let size = meta.len();
-                    let mtime_nanos = meta.modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0);
-                    let mtime_secs = (mtime_nanos / 1_000_000_000) as u64;
-                    let fingerprint = format!("{}_{}", size, mtime_nanos);
-                    let hash = if let Some(prev) = previous {
-                        if let Some(prev_file) = prev.files.get(&rel_str) {
-                            if prev_file.metadata_fingerprint == fingerprint {
-                                prev_file.content_hash.clone()
-                            } else {
-                                compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
-                            }
+                let meta = path.metadata().map_err(|e| format!("WORKSPACE_SCAN_FAILED: {}: {}", path.display(), e))?;
+                let size = meta.len();
+                let mtime_nanos = meta.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let mtime_secs = (mtime_nanos / 1_000_000_000) as u64;
+                let fingerprint = format!("{}_{}", size, mtime_nanos);
+                let hash = if let Some(prev) = previous {
+                    if let Some(prev_file) = prev.files.get(&rel_str) {
+                        if prev_file.metadata_fingerprint == fingerprint {
+                            prev_file.content_hash.clone()
                         } else {
                             compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
                         }
                     } else {
                         compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
-                    };
-                    out.insert(rel_str.clone(), FileSnapshot {
-                        relative_path: rel_str,
-                        size_bytes: size,
-                        modified_secs: mtime_secs,
-                        metadata_fingerprint: fingerprint,
-                        content_hash: hash,
-                    });
-                }
+                    }
+                } else {
+                    compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
+                };
+                out.insert(rel_str.clone(), FileSnapshot {
+                    relative_path: rel_str,
+                    size_bytes: size,
+                    modified_secs: mtime_secs,
+                    metadata_fingerprint: fingerprint,
+                    content_hash: hash,
+                });
             }
         }
         Ok(())
@@ -229,5 +232,23 @@ mod tests {
         assert_eq!(diff.added_files, vec!["added.txt"]);
         assert_eq!(diff.deleted_files, vec!["deleted.txt"]);
         assert!(diff.has_changes());
+    }
+
+    #[test]
+    fn test_scan_dir_windows_resilience() {
+        let temp_dir = std::env::temp_dir().join("aura_test_ws_resilience");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(temp_dir.join("subdir")).unwrap();
+        std::fs::write(temp_dir.join("cyber_sentinel.html"), "<html></html>").unwrap();
+        std::fs::write(temp_dir.join("style.css"), "body{}").unwrap();
+        std::fs::write(temp_dir.join("subdir").join("helper.js"), "console.log(1);").unwrap();
+
+        let state = WorldState::capture(temp_dir.to_str().unwrap()).expect("capture should succeed");
+        assert_eq!(state.files.len(), 3);
+        assert!(state.files.contains_key("cyber_sentinel.html"));
+        assert!(state.files.contains_key("style.css"));
+        assert!(state.files.contains_key("subdir/helper.js"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

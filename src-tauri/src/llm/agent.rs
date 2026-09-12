@@ -1113,9 +1113,9 @@ pub async fn run_agent_loop(
         // ── PESP: Inject micro-meta progress status into context ─────────────
         // Tells the LLM exactly where it is in the global project plan every turn.
 
-        // ── PESP v2: Inject phase progress status into context ─────────────
-        // Tells the LLM exactly where it is in the global project plan every turn.
-        if !journal.fases.is_empty() {
+        // ── PESP: Global Project Plan Banner (Dynamic Turn Context) ─────────
+        // Injected into the prompt for the current turn WITHOUT polluting current_context.
+        let pesp_banner = if !journal.fases.is_empty() {
             let total = journal.fases.len();
             let progress: String = journal.fases.iter().enumerate().map(|(i, f)| {
                 let icon = match f.estado.as_str() {
@@ -1129,13 +1129,11 @@ pub async fn run_agent_loop(
             let current_f = journal.fases.get(journal.fase_actual)
                 .map(|f| format!("(Fase {}/{}) {}\n    Criterio de Éxito: {}", f.numero, total, f.descripcion, f.criterio_de_exito))
                 .unwrap_or_else(|| "(todas completadas)".to_string());
-            let pesp_status = format!(
+            format!(
                 "[ESTADO DE FASES DEL PROYECTO — PESP PROTOCOL]\n{}\n\n📍 FASE ACTUAL EN EJECUCIÓN:\n{}\n\n",
                 progress,
                 current_f
-            );
-            let existing = current_context.clone();
-            current_context = format!("{}\n{}", pesp_status, existing);
+            )
         } else if !journal.micro_metas.is_empty() {
             let total = journal.micro_metas.len();
             let progress: String = journal.micro_metas.iter().enumerate().map(|(i, mm)| {
@@ -1150,35 +1148,37 @@ pub async fn run_agent_loop(
             let current_mm = journal.micro_metas.get(journal.micro_meta_actual)
                 .map(|mm| mm.descripcion.clone())
                 .unwrap_or_else(|| "(todas completadas)".to_string());
-            let pesp_status = format!(
+            format!(
                 "[ESTADO DE MICRO-METAS DEL PROYECTO — PESP PROTOCOL]\n{}\nMICRO-META ACTUAL: [{}/{}] {}\n\n",
                 progress,
                 journal.micro_meta_actual + 1,
                 total,
                 current_mm
-            );
-            // Prepend to context so it's always at the top
-            let existing = current_context.clone();
-            current_context = format!("{}{}", pesp_status, existing);
-        }
+            )
+        } else {
+            String::new()
+        };
+
         // ── Context Window Tiered Monitor & Intelligent Compaction (Devin 2.0 / OSS 2025 Pattern) ──
         let (fill_pct, ctx_status) = context_monitor.status(current_context.len());
         if context_monitor.should_compact(current_context.len()) {
             emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct * 100.0), "INFO");
-            let pending_metas: Vec<String> = journal.micro_metas.iter().filter(|m| m.estado != "VERIFICADA").map(|m| m.descripcion.clone()).collect();
-            let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() { journal.micro_metas[journal.micro_meta_actual].descripcion.clone() } else { "Ninguna".to_string() };
+            let confirmed_files = runtime.world.as_ref().map(|w| {
+                let mut keys: Vec<String> = w.files.keys().cloned().collect();
+                keys.sort();
+                if keys.is_empty() { "Ninguno".to_string() } else { keys.join(", ") }
+            }).unwrap_or_else(|| "Ninguno".to_string());
+            let current_fase_desc = journal.fases.get(journal.fase_actual)
+                .map(|f| format!("Fase {}/{}: {}", f.numero, journal.fases.len(), f.descripcion))
+                .unwrap_or_else(|| "General".to_string());
+            let pending_fases: Vec<String> = journal.fases.iter().filter(|f| f.estado != "COMPLETADA").map(|f| f.descripcion.clone()).collect();
             let mission_state = format!(
-                "Workspace: {}
-Fase: {:?}
-Rol: {:?}
-Archivos pendientes: {}
-Meta actual: {}
-Último error crítico: {}",
+                "Workspace: {}\nFase actual: {}\nFases pendientes: {}\nRol activo: {:?}\nArchivos físicos confirmados en disco: {}\nÚltimo error: {}",
                 workspace_path,
-                journal.ultimo_estado,
+                current_fase_desc,
+                pending_fases.join("; "),
                 current_role,
-                pending_metas.join(", "),
-                current_meta,
+                confirmed_files,
                 last_programmer_error
             );
             current_context = context_monitor.compact_context(&current_context, &mission_state);
@@ -1215,32 +1215,17 @@ Meta actual: {}
                     }
                 }
                 relative_files.sort();
-                format!("{}\n\nARCHIVOS EXISTENTES EN EL WORKSPACE (rutas relativas):\n{}", repo_map, relative_files.join("\n"))
+                format!(
+                    "{}\n\n[ARCHIVOS FÍSICOS CONFIRMADOS EN EL WORKSPACE (Total: {})]:\n{}\n\
+                    ⚠️ REGLA DE REALIDAD INMUTABLE: Los archivos anteriores YA EXISTEN físicamente en el disco. \
+                    El workspace NO está vacío. NO afirmes que el workspace está vacío ni vuelvas a crear estos mismos archivos.",
+                    repo_map,
+                    relative_files.len(),
+                    relative_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                )
             };
             (ctx, is_empty)
         };
-
-
-        // --- EVITAR DESBORDAMIENTO DE CONTEXTO (Garantizando Objetivo Inmutable) ---
-        if context_monitor.should_compact(current_context.len()) {
-            let pending_metas: Vec<String> = journal.micro_metas.iter().filter(|m| m.estado != "VERIFICADA").map(|m| m.descripcion.clone()).collect();
-            let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() { journal.micro_metas[journal.micro_meta_actual].descripcion.clone() } else { "Ninguna".to_string() };
-            let mission_state = format!(
-                "Workspace: {}
-Fase: {:?}
-Rol: {:?}
-Archivos pendientes: {}
-Meta actual: {}
-Último error crítico: {}",
-                workspace_path,
-                journal.ultimo_estado,
-                current_role,
-                pending_metas.join(", "),
-                current_meta,
-                last_programmer_error
-            );
-            current_context = context_monitor.compact_context(&current_context, &mission_state);
-        }
 
         // ── Critic → Executor feedback block ──────────────────────────────────
         let critic_feedback_block = if let Some(ref fb) = critic_feedback {
@@ -1273,9 +1258,8 @@ Meta actual: {}
 
         let json_schema = format!("Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON (sin markdown, sin texto extra):\n\
             {{\n\
-              \"checklist_mental\": \"<tareas cumplidas vs faltantes>\",\n\
               \"herramienta\": \"<NOMBRE_HERRAMIENTA>\",\n\
-              \"pensamiento\": \"Razonamiento lógico de tu decisión\",\n\
+              \"pensamiento\": \"Razonamiento lógico y fáctico de tu decisión\",\n\
               \"comando\": \"<COMANDO_REAL o null>\",\n\
               \"task_id\": null,\n\
               \"url_a_investigar\": null,\n\
@@ -1286,14 +1270,14 @@ Meta actual: {}
             REGLAS CRITICAS DEL JSON:
             1. 'comando' = UN SOLO comando de shell real. NUNCA prosa/descripción. Ejemplos: 'dir', 'start index.html', 'node app.js'.
             2. 'archivos_a_editar' = Si eliges TOOL_PROGRAMMER, DEBES incluir al menos un nombre de archivo relativo a crear o editar. NUNCA lo dejes vacío [].
-            3. Si el workspace está vacío o no hay archivos creados, tu tarea NO está cumplida: usa TOOL_PROGRAMMER con el nombre de los archivos a crear.
+            3. Si el workspace no tiene archivos creados, usa TOOL_PROGRAMMER para crearlos. Si los archivos base ya existen, usa TOOL_TERMINAL para ejecutarlos o probarlos, o TOOL_PROGRAMMER para scripts de test (ej. verify_*.py). PROHIBIDO volver a crear archivos ya existentes.
             4. El workspace actual es: {ws}. NUNCA uses rutas absolutas de proyectos anteriores ni de otros directorios.",
             ws = workspace_path);
 
         let agent_prompt = match current_role {
             // Planner - Enrutamiento Semántico Avanzado (Zero-Hint Routing)
             AgentRole::Planner => format!(
-                "[PLANIFICADOR / ZERO-HINT ROUTER]\nObjetivo del Usuario: {}\nWorkspace Actual: {}\n{}\nHistorial de Conversación:\n{}\n\n\
+                "{}[PLANIFICADOR / ZERO-HINT ROUTER]\nObjetivo del Usuario: {}\nWorkspace Actual: {}\n{}\nHistorial de Conversación:\n{}\n\n\
                 ERES EL ENRUTADOR PRINCIPAL. Tu misión es analizar la intención del usuario de forma 100% implícita y autónoma, SIN depender de que el usuario mencione herramientas por su nombre.\n\
                 HERRAMIENTAS PERMITIDAS (SELECCIONA POR SEMÁNTICA):\n\
                 - TOOL_LOGIC_SOLVER: Dispara esta herramienta AUTOMÁTICAMENTE si el usuario pide analizar esquemas criptográficos, problemas de satisfacibilidad, paridad matemática, restricciones lógicas, álgebra booleana, grafos densos o cuellos de botella de reglas. (¡El motor SpectraSAT lo resolverá en RAM!).\n\
@@ -1307,19 +1291,19 @@ Meta actual: {}
                 \nPROHIBIDO: TOOL_WORKSPACE_MANAGER, TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER (Estas son exclusivas del Ejecutor).\n\
                 REGLA DE ZERO-HINT: Nunca le pidas al usuario que especifique la herramienta. Deduce la necesidad matemática o de código y actúa en consecuencia.\n\
                 {}{}{}",
-                user_message, live_workspace_context, extra_prompt, current_context,
+                pesp_banner, user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, analysis_fast_path, json_schema
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). Si el workspace está vacío o la tarea no está terminada, TU PRIMERA ACCION OBLIGATORIA ES TOOL_PROGRAMMER con el nombre de los archivos a crear en 'archivos_a_editar' (NUNCA [] vacío). Genera código modular, atómico y preferiblemente archivo por archivo para evitar respuestas gigantes. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER (eres el ejecutor: escribe código e implementa directamente).\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semántica (regex o checks independientes de atributos) sin asumir orden rígido en HTML. 2) Comprueba booleanos o 'PASS' correctamente y retorna sys.exit(0) si pasan. 3) Si un test falla, eres 100% autónomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python NUNCA uses llaves '}}' para cerrar bloques y escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
-                user_message, live_workspace_context, extra_prompt, current_context,
+                "{}[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). Si ningún archivo existe aún en el workspace, usa TOOL_PROGRAMMER con el nombre de los archivos a crear en 'archivos_a_editar' (NUNCA [] vacío). Si los archivos base ya existen físicamente, NO los recrees: usa TOOL_TERMINAL para ejecutarlos o probarlos, o TOOL_PROGRAMMER para crear scripts de prueba (ej. verify_*.py). Genera código modular, atómico y preferiblemente archivo por archivo para evitar respuestas gigantes. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER (eres el ejecutor: escribe código e implementa directamente).\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semántica (regex o checks independientes de atributos) sin asumir orden rígido en HTML. 2) Comprueba booleanos o 'PASS' correctamente y retorna sys.exit(0) si pasan. 3) Si un test falla, eres 100% autónomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python NUNCA uses llaves '}}' para cerrar bloques y escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
+                pesp_banner, user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
             // Critic - compressed to <200 tokens
             AgentRole::Critic => format!(
-                "[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos con precisión. Solo TOOL_FINISH si todo pasa al 100%%. PROHIBIDO usar TOOL_ASK_USER para fallos de tests o código (transfiere a TOOL_PROGRAMMER para corregir el código o el test).\n[REGLA FRONTEND]: Si el proyecto contiene archivos HTML (ej. index.html, cyber_sentinel.html, etc.), es frontend. NO uses `node script.js` sobre archivos HTML. Si existe un script de prueba de verificación (ej. verify_*.py o test_*.py), ejecútalo con TOOL_TERMINAL; si pasa al 100%% o no hay tests pendientes, usa TOOL_FINISH.\n\n{}{}",
-                user_message, live_workspace_context, extra_prompt, current_context,
+                "{}[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos con precisión. Solo TOOL_FINISH si todo pasa al 100%%. PROHIBIDO usar TOOL_ASK_USER para fallos de tests o código (transfiere a TOOL_PROGRAMMER para corregir el código o el test).\n[REGLA FRONTEND]: Si el proyecto contiene archivos HTML (ej. index.html, cyber_sentinel.html, etc.), es frontend. NO uses `node script.js` sobre archivos HTML. Si existe un script de prueba de verificación (ej. verify_*.py o test_*.py), ejecútalo con TOOL_TERMINAL; si pasa al 100%% o no hay tests pendientes, usa TOOL_FINISH.\n\n{}{}",
+                pesp_banner, user_message, live_workspace_context, extra_prompt, current_context,
                 contract_block, json_schema
             ),
         };
@@ -1687,13 +1671,13 @@ Meta actual: {}
         }
         
         if !checklist.is_empty() {
-            emit_event(&app_handle, runtime.current_step(), &format!("Checklist Mental: {}", checklist), "PLANNING");
+            emit_event(&app_handle, runtime.current_step(), &format!("Resumen Factual: {}", checklist), "PLANNING");
         }
 
         // FORCED TOOL OVERRIDE REMOVED. Validation happens above.
 
         emit_event(&app_handle, runtime.current_step(), &format!("Decisión: {} - {}", tool, pensamiento), "DECISION");
-        current_context.push_str(&format!("--- PASO {} ---\nChecklist Mental: {}\nDecidiste: {}\nPensamiento: {}\n", runtime.current_step(), checklist, tool, pensamiento));
+        current_context.push_str(&format!("--- PASO {} ---\nAcción: {}\nArchivos objetivo: {:?}\n", runtime.current_step(), tool, archivos_vec));
 
         // ── Journal: update per-step ─────────────────────────────────────
         crate::core::session_journal::update_journal(
@@ -2850,7 +2834,40 @@ Meta actual: {}
                                     ));
                                 }
 
-                                // Advance micro-metas in journal
+                                // Advance fases in journal (PESP v2)
+                                if !journal.fases.is_empty() {
+                                    let total_fases = journal.fases.len();
+                                    let mut should_advance = false;
+                                    if let Some(fase) = journal.fases.get_mut(journal.fase_actual) {
+                                        let all_done = fase.archivos.is_empty() || fase.archivos.iter().all(|f| {
+                                            written_files.iter().any(|w: &String| w.contains(f.as_str()))
+                                        });
+                                        if all_done {
+                                            fase.estado = "COMPLETADA".to_string();
+                                            emit_event(&app_handle, runtime.current_step(), &format!("[PESP] ✅ Fase [{}/{}] COMPLETADA: {}", journal.fase_actual + 1, total_fases, fase.descripcion), "SUCCESS");
+                                            if journal.fase_actual + 1 < total_fases {
+                                                should_advance = true;
+                                            }
+                                        } else {
+                                            fase.estado = "EN_PROGRESO".to_string();
+                                        }
+                                    }
+                                    if should_advance {
+                                        journal.fase_actual += 1;
+                                        let next_desc = journal.fases[journal.fase_actual].descripcion.clone();
+                                        emit_event(&app_handle, runtime.current_step(), &format!("[PESP] 🔄 Avanzando a Fase [{}/{}]: {}", journal.fase_actual + 1, total_fases, next_desc), "INFO");
+                                    }
+                                    if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) {
+                                        emit_event(&app_handle, runtime.current_step(), &format!("[CHECKPOINT FAILED] {}", e), "FATAL");
+                                        let final_res = FinalResponse {
+                                            status: "ERROR".to_string(),
+                                            respuesta_conversacional: format!("[PERSISTENCE_FAILURE] Error crítico al actualizar fases: {}. Misión abortada.", e),
+                                        };
+                                        return Ok(serde_json::to_string(&final_res).unwrap());
+                                    }
+                                }
+
+                                // Advance micro-metas in journal (legacy fallback)
                                 if !journal.micro_metas.is_empty() {
                                     if let Some(mm) = journal.micro_metas.get_mut(journal.micro_meta_actual) {
                                         let all_done = mm.archivos.iter().all(|f| {
@@ -2878,16 +2895,18 @@ Meta actual: {}
                                     }
                                 }
 
-                                // Sprint 2: Micrometa-gated Executor->Critic transition
+                                // Sprint 2: Phase/Micrometa-gated Executor->Critic transition
+                                let all_fases_done = journal.fases.is_empty()
+                                    || journal.fases.iter().all(|f| f.estado == "COMPLETADA");
                                 let all_metas_done = journal.micro_metas.is_empty()
                                     || journal.micro_metas.iter().all(|mm| mm.estado == "VERIFICADA");
-                                if all_metas_done {
+                                if all_fases_done && all_metas_done {
                                     current_role = AgentRole::Critic;
                                     critic_feedback = None;
-                                    emit_event(&app_handle, runtime.current_step(), "[FSM] EJECUTOR -> CRITICO: Todas las micro-metas completadas. Iniciando validacion.", "INFO");
+                                    emit_event(&app_handle, runtime.current_step(), "[FSM] EJECUTOR -> CRITICO: Todas las fases completadas. Iniciando validación final.", "INFO");
                                 }
 
-                                let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos con éxito, Anti-Stub APROBADO.\n⚠️ REGLA DE ESTADO OBLIGATORIA: Ahora DEBES usar 'TOOL_TERMINAL' en tu próximo turno para ejecutar el script o archivo principal y verificar que funciona sin errores. NO repitas TOOL_PROGRAMMER ni uses TOOL_FINISH hasta ver los resultados en la terminal.\n\n", written_files);
+                                let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos con éxito, Anti-Stub APROBADO.\n⚠️ REGLA DE ESTADO OBLIGATORIA: Los archivos ya existen físicamente en disco. NO vuelvas a crear o sobreescribir estos archivos con TOOL_PROGRAMMER salvo que un test falle. Ahora DEBES usar 'TOOL_TERMINAL' para ejecutar o probar el código (o crear un script de test verify_*.py si no existe).\n\n", written_files);
                                 current_context.push_str(&explicit_msg);
                                 last_progress_step = runtime.current_step();
                                 comandos_ejecutados_historico.clear();
@@ -4175,6 +4194,76 @@ mod tests {
         })).await;
         assert!(logic_res.is_ok());
         assert!(logic_res.unwrap().stdout.contains("SAT"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_pesp_fase_advancement_and_ground_truth() {
+        let temp_dir = std::env::temp_dir().join("aura_test_pesp_advancement");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let ws = temp_dir.to_str().unwrap();
+
+        let mut journal = crate::core::session_journal::load_journal(ws);
+        journal.fases = vec![
+            crate::core::session_journal::Fase {
+                numero: 1,
+                descripcion: "Dashboard UI".to_string(),
+                archivos: vec!["cyber_sentinel.html".to_string(), "style.css".to_string(), "script.js".to_string()],
+                criterio_de_exito: "dir".to_string(),
+                estado: "PENDIENTE".to_string(),
+            },
+            crate::core::session_journal::Fase {
+                numero: 2,
+                descripcion: "Verification Script".to_string(),
+                archivos: vec!["verify_dashboard.py".to_string()],
+                criterio_de_exito: "python verify_dashboard.py".to_string(),
+                estado: "PENDIENTE".to_string(),
+            },
+        ];
+        journal.fase_actual = 0;
+
+        // Step 1: Write Phase 1 files
+        std::fs::write(temp_dir.join("cyber_sentinel.html"), "<html></html>").unwrap();
+        std::fs::write(temp_dir.join("style.css"), "body{}").unwrap();
+        std::fs::write(temp_dir.join("script.js"), "console.log(1);").unwrap();
+
+        let written_files = vec!["cyber_sentinel.html".to_string(), "style.css".to_string(), "script.js".to_string()];
+
+        // Simulate PESP advancement logic
+        let total_fases = journal.fases.len();
+        let mut should_advance = false;
+        if let Some(fase) = journal.fases.get_mut(journal.fase_actual) {
+            let all_done = fase.archivos.is_empty() || fase.archivos.iter().all(|f| {
+                written_files.iter().any(|w: &String| w.contains(f.as_str()))
+            });
+            if all_done {
+                fase.estado = "COMPLETADA".to_string();
+                if journal.fase_actual + 1 < total_fases {
+                    should_advance = true;
+                }
+            }
+        }
+        if should_advance {
+            journal.fase_actual += 1;
+        }
+
+        assert_eq!(journal.fases[0].estado, "COMPLETADA");
+        assert_eq!(journal.fase_actual, 1);
+        assert_eq!(journal.fases[1].descripcion, "Verification Script");
+
+        // Verify WorldState sees the files immediately
+        let world = crate::core::world_state::WorldState::capture(ws).expect("WorldState capture must succeed");
+        assert_eq!(world.files.len(), 3);
+        assert!(world.files.contains_key("cyber_sentinel.html"));
+        assert!(world.files.contains_key("style.css"));
+        assert!(world.files.contains_key("script.js"));
+
+        // Verify repo map does not claim empty directory
+        let repo_map = crate::core::map::generate_repo_map(std::path::Path::new(ws));
+        assert!(repo_map.contains("cyber_sentinel.html"));
+        assert!(!repo_map.contains("(directorio vacío)"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
