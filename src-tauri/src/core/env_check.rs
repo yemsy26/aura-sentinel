@@ -27,9 +27,10 @@ fn inject_scoop_path() {
         let scripts = format!("{}\\scoop\\apps\\python\\current\\Scripts", profile);
         let python_dir = format!("{}\\scoop\\apps\\python\\current", profile);
         let node_dir = format!("{}\\scoop\\apps\\nodejs\\current", profile);
+        let ollama_dir = format!("{}\\AppData\\Local\\Programs\\Ollama", profile);
 
         let current = std::env::var("PATH").unwrap_or_default();
-        let extras = [shims.as_str(), scripts.as_str(), python_dir.as_str(), node_dir.as_str()];
+        let extras = [shims.as_str(), scripts.as_str(), python_dir.as_str(), node_dir.as_str(), ollama_dir.as_str()];
         let mut new_path = current.clone();
         for extra in &extras {
             if !current.contains(extra) {
@@ -38,6 +39,81 @@ fn inject_scoop_path() {
         }
         std::env::set_var("PATH", new_path);
     }
+}
+
+/// Asegura de forma no bloqueante y auto-recuperable que el servidor de Ollama esté ejecutándose.
+/// Si está apagado o colapsado, lo levanta en segundo plano como proceso desacoplado de Windows.
+pub async fn ensure_ollama_running() -> Result<(), String> {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(800))
+        .build() {
+            Ok(c) => c,
+            Err(e) => return Err(e.to_string()),
+        };
+
+    // 1. Verificación rápida si ya está escuchando
+    if let Ok(res) = client.get("http://127.0.0.1:11434/api/tags").send().await {
+        if res.status().is_success() {
+            return Ok(());
+        }
+    }
+
+    // 2. Buscar ejecutable de Ollama
+    let mut candidates = vec!["ollama".to_string()];
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        candidates.push(format!(r"{}\Programs\Ollama\ollama.exe", local_app_data));
+    }
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        candidates.push(format!(r"{}\AppData\Local\Programs\Ollama\ollama.exe", user_profile));
+    }
+
+    let mut spawned = false;
+    for cand in candidates {
+        let exists = cand == "ollama" || Path::new(&cand).exists();
+        if exists {
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                // DETACHED_PROCESS (0x00000008) | CREATE_NEW_PROCESS_GROUP (0x00000200) | CREATE_NO_WINDOW (0x08000000)
+                let res = std::process::Command::new(&cand)
+                    .arg("serve")
+                    .creation_flags(0x00000008 | 0x00000200 | 0x08000000)
+                    .spawn();
+                if res.is_ok() {
+                    spawned = true;
+                    break;
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let res = std::process::Command::new(&cand)
+                    .arg("serve")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                if res.is_ok() {
+                    spawned = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !spawned {
+        return Err("No se encontró el ejecutable de Ollama en el sistema".to_string());
+    }
+
+    // 3. Esperar a que el servidor inicialice (hasta 4 segundos)
+    for _ in 0..8 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Ok(res) = client.get("http://127.0.0.1:11434/api/tags").send().await {
+            if res.status().is_success() {
+                return Ok(());
+            }
+        }
+    }
+
+    Err("Ollama se inició pero no respondió en http://127.0.0.1:11434 tras 4 segundos".to_string())
 }
 
 /// Detects which language runtime is needed based on workspace contents.
@@ -158,6 +234,9 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
     // 5. Ollama — REQUIRED (the agent itself depends on this)
     let mut available_models = Vec::new();
     
+    // Auto-recuperación: Si el servicio no responde, intentar levantarlo de forma desacoplada
+    let _ = ensure_ollama_running().await;
+
     let client = reqwest::Client::new();
     match client.get("http://127.0.0.1:11434/api/tags").send().await {
         Ok(res) if res.status().is_success() => {

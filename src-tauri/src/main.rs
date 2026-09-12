@@ -94,7 +94,15 @@ fn cancel_agent_mission() -> bool {
 #[tauri::command]
 async fn get_ollama_models() -> Result<Vec<String>, String> {
     let client = reqwest::Client::new();
-    match client.get("http://localhost:11434/api/tags").send().await {
+    let res = match client.get("http://127.0.0.1:11434/api/tags").send().await {
+        Ok(r) => Ok(r),
+        Err(_) => {
+            let _ = core::env_check::ensure_ollama_running().await;
+            client.get("http://127.0.0.1:11434/api/tags").send().await
+        }
+    };
+
+    match res {
         Ok(res) => {
             if let Ok(json) = res.json::<serde_json::Value>().await {
                 if let Some(models) = json.get("models").and_then(|m| m.as_array()) {

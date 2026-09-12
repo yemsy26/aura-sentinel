@@ -9,17 +9,17 @@ echo Cambiando al directorio del proyecto...
 cd /d "%~dp0"
 
 echo Forzando variables de entorno seguras...
-set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+set "PATH=%USERPROFILE%\.cargo\bin;%LOCALAPPDATA%\Programs\Ollama;%PATH%"
 
 echo.
 echo Comprobando servidor Ollama local...
-curl -s http://localhost:11434/api/tags >nul
+curl -s http://127.0.0.1:11434/api/tags >nul
 if %errorlevel% neq 0 (
-    echo [INFO] Servidor Ollama no detectado. Levantando motor de IA en segundo plano...
-    start "" /B ollama serve >nul 2>&1
+    echo [INFO] Servidor Ollama no detectado. Levantando motor de IA de forma independiente...
+    powershell -NoProfile -Command "Start-Process '%LOCALAPPDATA%\Programs\Ollama\ollama.exe' -ArgumentList 'serve' -WindowStyle Hidden"
     
     echo Esperando a que el motor Ollama inicialice...
-    timeout /t 4 /nobreak >nul
+    timeout /t 3 /nobreak >nul
 )
 
 echo.

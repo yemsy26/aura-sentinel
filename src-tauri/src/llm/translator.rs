@@ -8,7 +8,7 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
     // Resolver modelos disponibles
     let mut available_models = Vec::new();
     if let Ok(res) = reqwest::Client::new()
-        .get("http://localhost:11434/api/tags")
+        .get("http://127.0.0.1:11434/api/tags")
         .send()
         .await
     {

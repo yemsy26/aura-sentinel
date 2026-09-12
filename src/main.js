@@ -714,7 +714,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // Single unified model passed to both roles
             const agentModelSelect = document.getElementById('agent-model-select');
-            const chosenModel = agentModelSelect ? agentModelSelect.value || "llama3.1:8b" : "llama3.1:8b";
+            const chosenModel = agentModelSelect ? agentModelSelect.value || "qwen2.5-coder:7b" : "qwen2.5-coder:7b";
 
             const responseString = await invoke('process_user_prompt', {
                 userMessage: text,

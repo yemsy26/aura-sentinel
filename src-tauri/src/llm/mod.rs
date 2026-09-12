@@ -49,7 +49,7 @@ pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| format!("Error construyendo cliente HTTP: {}", e))?;
-    let url = "http://localhost:11434/api/generate";
+    let url = "http://127.0.0.1:11434/api/generate";
     
     // Forzamos JSON para el Orquestador (necesita respuesta estructurada)
     let payload = OllamaRequest {
@@ -81,7 +81,7 @@ pub async fn call_ollama_with_schema(model: &str, prompt: &str, schema: serde_js
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| format!("Error construyendo cliente HTTP: {}", e))?;
-    let url = "http://localhost:11434/api/generate";
+    let url = "http://127.0.0.1:11434/api/generate";
     
     let payload = OllamaRequest {
         model,
@@ -120,7 +120,7 @@ pub async fn call_ollama_text(model: &str, prompt: &str) -> Result<String, Strin
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| format!("Error construyendo cliente HTTP (texto): {}", e))?;
-    let url = "http://localhost:11434/api/generate";
+    let url = "http://127.0.0.1:11434/api/generate";
 
     let payload = TextRequest { model, prompt, stream: false, options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }) };
 
@@ -158,7 +158,7 @@ pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Error construyendo cliente de embeddings: {}", e))?;
-    let url = "http://localhost:11434/api/embeddings";
+    let url = "http://127.0.0.1:11434/api/embeddings";
     
     let payload = EmbeddingRequest {
         model: DEFAULT_EMBEDDING_MODEL,

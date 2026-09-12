@@ -40,7 +40,7 @@ pub async fn perform_health_check(workspace: &str) -> HealthCheck {
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .unwrap_or_default();
-    let ollama_available = client.get("http://localhost:11434/api/tags")
+    let ollama_available = client.get("http://127.0.0.1:11434/api/tags")
         .send()
         .await
         .map(|r| r.status().is_success())
