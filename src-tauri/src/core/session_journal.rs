@@ -276,7 +276,7 @@ mod tests {
     }
 }
 
-pub fn start_new_mission(workspace_path: &str, objective: &str) -> SessionJournal {
+pub fn start_new_mission(workspace_path: &str, objective: &str) -> Result<SessionJournal, String> {
     let mut journal = SessionJournal::default();
     journal.session_id = new_session_id();
     journal.objetivo = objective.to_string();
@@ -291,12 +291,11 @@ pub fn start_new_mission(workspace_path: &str, objective: &str) -> SessionJourna
     journal.fases.clear();
     journal.micro_metas.clear();
     
-    // Attempt save, ignore error on brand new init
-    let _ = save_journal(workspace_path, &journal);
-    journal
+    save_journal(workspace_path, &journal)?;
+    Ok(journal)
 }
 
-pub fn resume_existing_mission(workspace_path: &str) -> SessionJournal {
+pub fn resume_existing_mission(workspace_path: &str) -> Result<SessionJournal, String> {
     let mut journal = load_journal(workspace_path);
     if !journal.interrupted {
         // If not explicitly interrupted, we are forcing a resume of an old state,
@@ -308,7 +307,7 @@ pub fn resume_existing_mission(workspace_path: &str) -> SessionJournal {
     journal.status = "EN_PROGRESO".to_string();
     journal.interrupted = false; // We are actively resuming now
     journal.ultima_actualizacion = current_timestamp();
-    let _ = save_journal(workspace_path, &journal);
-    journal
+    save_journal(workspace_path, &journal)?;
+    Ok(journal)
 }
 

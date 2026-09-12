@@ -734,13 +734,13 @@ pub async fn run_agent_loop(
     
         if is_continuation_command && !journal.objetivo.is_empty() {
         // Retain original mission objective and existing phases!
-        journal = crate::core::session_journal::resume_existing_mission(&workspace_path);
+        journal = crate::core::session_journal::resume_existing_mission(&workspace_path)?;
         user_message = journal.objetivo.clone();
         original_prompt_parsed = journal.objetivo.clone();
         journal.interrupted = true; // Signals restoration block below
     } else {
         // Any new user prompt (not an explicit continuation) starts a completely clean session
-        journal = crate::core::session_journal::start_new_mission(&workspace_path, &user_message);
+        journal = crate::core::session_journal::start_new_mission(&workspace_path, &user_message)?;
     }
 
     // Ensure internal files in workspace are hidden on Windows

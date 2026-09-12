@@ -67,25 +67,64 @@ impl WorkspaceResolver {
         Ok(normalized_relative)
     }
 
-    /// Resolves a requested file against the exact canonical workspace path.
-    pub fn resolve_exact(&self, requested: &str) -> Result<PathBuf, String> {
+    pub fn resolve_existing(&self, requested: &str) -> Result<PathBuf, String> {
         let normalized = self.normalize_workspace_relative_path(requested)?;
         let target_path = self.canonical_root.join(&normalized);
         
-        // P0 Fix: double check if the final target actually resides in the canonical root (prevent Symlink escapes)
-        if target_path.exists() {
-            let canon_target = target_path.canonicalize().map_err(|e| e.to_string())?;
-            if !canon_target.starts_with(&self.canonical_root) {
-                return Err(format!("PATH_OUTSIDE_WORKSPACE (Symlink Escape): {}", requested));
-            }
+        if !target_path.exists() {
+            return Err(format!("PATH_NOT_FOUND: {}", requested));
+        }
+        
+        let canon_target = target_path.canonicalize().map_err(|e| e.to_string())?;
+        if !canon_target.starts_with(&self.canonical_root) {
+            return Err(format!("PATH_OUTSIDE_WORKSPACE (Symlink Escape): {}", requested));
         }
         
         Ok(target_path)
     }
 
+    pub fn resolve_for_create(&self, requested: &str) -> Result<PathBuf, String> {
+        let normalized = self.normalize_workspace_relative_path(requested)?;
+        let target_path = self.canonical_root.join(&normalized);
+        
+        if target_path.exists() {
+            return self.resolve_existing(requested);
+        }
+        
+        // Ensure the parent directory is within the workspace
+        if let Some(parent) = target_path.parent() {
+            if parent.exists() {
+                let canon_parent = parent.canonicalize().map_err(|e| e.to_string())?;
+                if !canon_parent.starts_with(&self.canonical_root) {
+                    return Err(format!("PARENT_OUTSIDE_WORKSPACE (Symlink Escape): {}", requested));
+                }
+            } else {
+                // If parent doesn't exist, we must traverse up until we find an existing parent
+                let mut current = parent;
+                while let Some(p) = current.parent() {
+                    if p.exists() {
+                        let canon_p = p.canonicalize().map_err(|e| e.to_string())?;
+                        if !canon_p.starts_with(&self.canonical_root) {
+                            return Err(format!("ANCESTOR_OUTSIDE_WORKSPACE (Symlink Escape): {}", requested));
+                        }
+                        break;
+                    }
+                    current = p;
+                }
+            }
+        }
+        
+        Ok(target_path)
+    }
+    
+    // Maintain resolve_exact for legacy usage that doesn't care about existence vs creation
+    pub fn resolve_exact(&self, requested: &str) -> Result<PathBuf, String> {
+        self.resolve_for_create(requested)
+    }
+
     pub fn file_exists(&self, requested: &str) -> Result<bool, String> {
-        let target = self.resolve_exact(requested)?;
-        Ok(target.is_file())
+        let target = self.resolve_existing(requested).ok();
+        Ok(target.map_or(false, |p| p.is_file()))
     }
 }
 

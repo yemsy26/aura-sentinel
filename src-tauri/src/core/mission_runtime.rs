@@ -156,18 +156,21 @@ impl MissionRuntime {
     /// This correctly detects when a file changes content but keeps the same size.
     pub fn current_world_hash(&self) -> u64 {
         self.world.as_ref().map(|w| {
-            use std::hash::{Hash, Hasher};
-            use std::collections::hash_map::DefaultHasher;
-            let mut hasher = DefaultHasher::new();
-            // Sort for determinism, then hash path + content_hash (not size_bytes)
-            let mut entries: Vec<(&String, &crate::core::world_state::FileSnapshot)> =
-                w.files.iter().collect();
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            let mut entries: Vec<(&String, &crate::core::world_state::FileSnapshot)> = w.files.iter().collect();
             entries.sort_by_key(|(p, _)| p.as_str());
-            for (path, snapshot) in entries {
-                path.hash(&mut hasher);
-                snapshot.content_hash.hash(&mut hasher);
+            
+            for (path, snap) in entries {
+                hasher.update(path.as_bytes());
+                hasher.update(b"|");
+                hasher.update(snap.content_hash.as_bytes());
+                hasher.update(b"|");
             }
-            hasher.finish()
+            let result = hasher.finalize();
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&result[0..8]);
+            u64::from_be_bytes(buf)
         }).unwrap_or(0)
     }
 
@@ -902,7 +905,7 @@ mod tests {
             files_pending,
             criteria_satisfied: vec![],
             criteria_pending: vec![current_meta.clone()],
-            last_world_revision: self.current_world_hash(),
+            last_world_revision: self.current_world_hash().to_string(),
             last_tool: self.cognitive_state.agent.last_action.clone(),
             last_command: None,
             last_error: if last_error.is_empty() { None } else { Some(last_error.to_string()) },
