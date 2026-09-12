@@ -621,6 +621,7 @@ pub async fn run_agent_loop(
     let mut tester_attempts = 0;
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
+    let mut last_programmer_error = String::new();
     let mut original_prompt_parsed = if let Some(idx) = user_message.find("\n\nGuía de Traducción Técnica") {
         let text = &user_message[..idx];
         text.replace("Petición Original del Usuario: ", "").trim().to_string()
@@ -1204,7 +1205,23 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
         let (fill_pct, ctx_status) = context_monitor.status(current_context.len());
         if context_monitor.should_compact(current_context.len()) {
             emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct * 100.0), "INFO");
-            current_context = context_monitor.compact_context(&current_context);
+            let pending_metas: Vec<String> = journal.micro_metas.iter().filter(|m| m.estado != "VERIFICADA").map(|m| m.descripcion.clone()).collect();
+            let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() { journal.micro_metas[journal.micro_meta_actual].descripcion.clone() } else { "Ninguna".to_string() };
+            let mission_state = format!(
+                "Workspace: {}
+Fase: {:?}
+Rol: {:?}
+Archivos pendientes: {}
+Meta actual: {}
+Último error crítico: {}",
+                workspace_path,
+                journal.ultimo_estado,
+                current_role,
+                pending_metas.join(", "),
+                current_meta,
+                last_programmer_error
+            );
+            current_context = context_monitor.compact_context(&current_context, &mission_state);
             emit_event(&app_handle, runtime.current_step(), "[MEMORIA] Contexto compactado exitosamente sin pérdida del objetivo.", "SUCCESS");
         } else if ctx_status == crate::core::context_monitor::ContextStatus::ApproachingLimit {
             emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Ventana al {:.0}% de capacidad — operando con normalidad.", fill_pct * 100.0), "INFO");
@@ -1262,7 +1279,23 @@ if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &jou
 
         // --- EVITAR DESBORDAMIENTO DE CONTEXTO (Garantizando Objetivo Inmutable) ---
         if context_monitor.should_compact(current_context.len()) {
-            current_context = context_monitor.compact_context(&current_context);
+            let pending_metas: Vec<String> = journal.micro_metas.iter().filter(|m| m.estado != "VERIFICADA").map(|m| m.descripcion.clone()).collect();
+            let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() { journal.micro_metas[journal.micro_meta_actual].descripcion.clone() } else { "Ninguna".to_string() };
+            let mission_state = format!(
+                "Workspace: {}
+Fase: {:?}
+Rol: {:?}
+Archivos pendientes: {}
+Meta actual: {}
+Último error crítico: {}",
+                workspace_path,
+                journal.ultimo_estado,
+                current_role,
+                pending_metas.join(", "),
+                current_meta,
+                last_programmer_error
+            );
+            current_context = context_monitor.compact_context(&current_context, &mission_state);
         }
 
         // ── Critic → Executor feedback block ──────────────────────────────────
@@ -2932,7 +2965,6 @@ DEBES crear/modificar los archivos solicitados con implementaciones COMPLETAS y 
 
                 let mut exito_bucle_programador = false;
                 let mut max_intentos = 3;
-                let mut last_programmer_error = String::new();
                 
                 while max_intentos > 0 && !exito_bucle_programador {
                     if crate::llm::is_agent_cancelled() {

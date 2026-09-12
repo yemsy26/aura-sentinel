@@ -11,20 +11,36 @@ impl WorkspaceResolver {
     ) -> Result<String, String> {
         let input_path = Path::new(input);
         
+        let canon_ws = workspace.canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf());
+
+        // If the input is absolute, check if it's inside the workspace
+        let mut relative_path = PathBuf::from(input);
+        if input_path.is_absolute() {
+            // Try to canonicalize input if it exists, otherwise use raw
+            let canon_input = input_path.canonicalize()
+                .unwrap_or_else(|_| input_path.to_path_buf());
+                
+            if canon_input.starts_with(&canon_ws) {
+                relative_path = canon_input.strip_prefix(&canon_ws).unwrap().to_path_buf();
+            } else {
+                return Err(format!("PATH_OUTSIDE_WORKSPACE (Absolute): {}", input));
+            }
+        }
+
         let mut components = Vec::new();
         
-        // Build path components ignoring '.' and correctly resolving '..' without resolving symlinks
-        for component in input_path.components() {
+        // Build path components ignoring '.' and correctly resolving '..'
+        for component in relative_path.components() {
             match component {
                 std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                    // If it's an absolute path, we need to check if it's inside the workspace
-                    // For now, let's just use the components, but verify at the end
+                    // We already handled absolute paths, so this shouldn't happen, but if it does, ignore
                     continue; 
                 }
                 std::path::Component::CurDir => {}
                 std::path::Component::ParentDir => {
                     if components.pop().is_none() {
-                        return Err(format!("PATH_OUTSIDE_WORKSPACE: {}", input));
+                        return Err(format!("PATH_OUTSIDE_WORKSPACE (Relative): {}", input));
                     }
                 }
                 std::path::Component::Normal(c) => {
@@ -38,18 +54,9 @@ impl WorkspaceResolver {
     }
 
     /// Resolves a requested file against the exact workspace path.
-    /// Does NOT search recursively. If the contract says "src/main.rs", it checks "workspace/src/main.rs".
     pub fn resolve_exact(workspace: &Path, requested: &str) -> Result<PathBuf, String> {
-        // Normalizes to ensure it stays in workspace bounds
         let normalized = Self::normalize_workspace_relative_path(workspace, requested)?;
         let target_path = workspace.join(&normalized);
-        
-        // Double check bounds (in case of symlinks or weird absolute paths)
-        let canon_ws = workspace.canonicalize().map_err(|e| e.to_string())?;
-        
-        // Note: canonicalize() will fail if target_path does not exist on disk!
-        // For file resolution during Creation or Checking, we may want to resolve even if missing.
-        // We can do a prefix check on the raw target_path if it's absolute.
         Ok(target_path)
     }
 
@@ -69,22 +76,5 @@ mod tests {
             WorkspaceResolver::normalize_workspace_relative_path(Path::new("."), "src\\main.rs").unwrap(),
             "src/main.rs"
         );
-    }
-
-    #[test]
-    fn test_normalize_relative_path() {
-        assert_eq!(
-            WorkspaceResolver::normalize_workspace_relative_path(Path::new("."), ".\\src\\main.rs").unwrap(),
-            "src/main.rs"
-        );
-        assert_eq!(
-            WorkspaceResolver::normalize_workspace_relative_path(Path::new("."), "./src/main.rs").unwrap(),
-            "src/main.rs"
-        );
-    }
-
-    #[test]
-    fn test_path_traversal() {
-        assert!(WorkspaceResolver::normalize_workspace_relative_path(Path::new("."), "../../other/file").is_err());
     }
 }

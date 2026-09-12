@@ -51,6 +51,14 @@ impl WorldStateDiff {
 
 impl WorldState {
     pub fn capture(workspace_path: &str) -> Result<Self, String> {
+        Self::capture_internal(workspace_path, true) // Default to fast mode for performance
+    }
+    
+    pub fn capture_full(workspace_path: &str) -> Result<Self, String> {
+        Self::capture_internal(workspace_path, false)
+    }
+
+    fn capture_internal(workspace_path: &str, fast_mode: bool) -> Result<Self, String> {
         let ws = Path::new(workspace_path);
         let mut files = HashMap::new();
 
@@ -66,15 +74,15 @@ impl WorldState {
             return Err(format!("WORKSPACE_NOT_DIRECTORY: {}", workspace_path));
         }
 
-        Self::scan_dir_recursive(ws, ws, &mut files)?;
+        Self::scan_dir_recursive(ws, ws, &mut files, fast_mode)?;
 
-        let environment = Self::detect_environment();
-        let git = Self::detect_git(workspace_path);
+        let environment = if fast_mode { EnvSnapshot::default() } else { Self::detect_environment() };
+        let git = if fast_mode { None } else { Self::detect_git(workspace_path) };
 
         Ok(Self { timestamp_secs: now, workspace_root: workspace_path.to_string(), files, environment, git })
     }
 
-    fn scan_dir_recursive(root: &Path, current: &Path, out: &mut HashMap<String, FileSnapshot>) -> Result<(), String> {
+    fn scan_dir_recursive(root: &Path, current: &Path, out: &mut HashMap<String, FileSnapshot>, fast_mode: bool) -> Result<(), String> {
         let entries = match std::fs::read_dir(current) {
             Ok(e) => e,
             Err(_) => return Ok(()),
@@ -88,7 +96,7 @@ impl WorldState {
                 if name == "node_modules" || name == ".git" || name == "target" || name == "__pycache__" || name == ".venv" {
                     continue;
                 }
-                Self::scan_dir_recursive(root, &path, out)?;
+                Self::scan_dir_recursive(root, &path, out, fast_mode)?;
             } else if path.is_file() {
                 if let Ok(rel) = path.strip_prefix(root) {
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -99,7 +107,11 @@ impl WorldState {
                             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                             .map(|d| d.as_secs())
                             .unwrap_or(0);
-                        let hash = compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string());
+                        let hash = if fast_mode {
+                            format!("{}_{}", size, mtime)
+                        } else {
+                            compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
+                        };
                         out.insert(rel_str.clone(), FileSnapshot {
                             relative_path: rel_str,
                             size_bytes: size,

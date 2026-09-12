@@ -53,7 +53,7 @@ impl ContextMonitor {
     }
 
     /// Compacting logic that strictly preserves the Immutable Task Charter
-    pub fn compact_context(&self, context: &str) -> String {
+    pub fn compact_context(&self, context: &str, mission_state: &str) -> String {
         if context.len() <= self.max_chars {
             return context.to_string();
         }
@@ -70,6 +70,12 @@ impl ContextMonitor {
 
         // Budget allocation: 85% tail (latest actions & errors). We DROP the head because 
         // small LLMs (like 7B) suffer from Echolalia when they see their very first actions (e.g. "workspace is empty") permanently pinned to the top.
+        let mission_state_block = format!("
+[ESTADO OPERACIONAL DE LA MISIÓN]
+{}
+
+", mission_state);
+        
         let tail_budget = (self.max_chars as f32 * 0.85) as usize;
 
         let tail: String = context.chars().rev().take(tail_budget).collect::<Vec<_>>().into_iter().rev().collect();
@@ -85,12 +91,13 @@ impl ContextMonitor {
         };
 
         format!(
-            "{}
+            "{}{}
 
 [... ✂️ HISTORIAL ANTIGUO ELIMINADO PARA PREVENIR ECHOLALIA ({} caracteres eliminados) ...]
 
 {}",
             charter_block,
+            mission_state_block,
             context.len().saturating_sub(tail_budget),
             clean_tail.trim_start()
         )
