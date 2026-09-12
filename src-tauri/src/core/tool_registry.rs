@@ -143,6 +143,18 @@ impl ToolRegistry {
         self.executors.get(tool)
     }
 
+    /// Returns true if an executor is registered for this tool name.
+    #[allow(dead_code)]
+    pub fn is_registered(&self, tool: &str) -> bool {
+        self.executors.contains_key(tool)
+    }
+
+    /// Returns the number of registered executors.
+    #[allow(dead_code)]
+    pub fn registered_count(&self) -> usize {
+        self.executors.len()
+    }
+
     /// Dispatches the registered executor for the given tool.
     /// Returns TOOL_UNREGISTERED if the tool has no executor (known but not registered).
     pub async fn dispatch(&self, tool: &str, args: serde_json::Value) -> ToolResult {
