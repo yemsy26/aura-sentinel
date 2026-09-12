@@ -1,6 +1,19 @@
 #![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 
+pub fn normalize_command_str(cmd: &str) -> String {
+    cmd.trim()
+        .replace('\\', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn normalize_cmd(cmd: &str) -> String {
+    normalize_command_str(cmd)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EvidenceKind {
     FileHash,
@@ -137,15 +150,61 @@ impl EvidenceGraph {
         })
     }
 
+    pub fn is_technical_kind(kind: &EvidenceKind) -> bool {
+        Self::kind_requires_workspace_hash(kind)
+    }
+
+    pub fn has_valid_technical_evidence<F>(&self, kind: EvidenceKind, min_reliability: f32, current_state_hash: u64, predicate: F) -> bool
+    where
+        F: Fn(&StructuredFact) -> bool,
+    {
+        if !Self::is_technical_kind(&kind) {
+            return false;
+        }
+        self.entries.iter().any(|e| {
+            if e.kind != kind || e.reliability < min_reliability { return false; }
+            if e.state_hash != Some(current_state_hash) { return false; }
+            if matches!(e.fact, StructuredFact::Generic { .. }) { return false; }
+            predicate(&e.fact)
+        })
+    }
+
+    pub fn has_valid_manual_evidence_for_state(&self, claim: &str, min_reliability: f32, current_state_hash: u64) -> bool {
+        let norm_claim = normalize_cmd(claim);
+        self.entries.iter().any(|e| {
+            if e.kind != EvidenceKind::UserConfirmation || e.reliability < min_reliability { return false; }
+            if let Some(hash) = e.state_hash {
+                if hash != current_state_hash { return false; }
+            }
+            if let StructuredFact::Generic { claim: c, .. } = &e.fact {
+                normalize_cmd(c) == norm_claim
+            } else {
+                false
+            }
+        })
+    }
+
     pub fn has_valid_evidence_for_state(&self, claim: &str, min_reliability: f32, current_state_hash: u64) -> bool {
-        self.has_valid_structured_evidence(min_reliability, current_state_hash, |fact| {
-            match fact {
-                StructuredFact::Generic { claim: c, .. } => c == claim,
+        let norm_claim = normalize_cmd(claim);
+        self.entries.iter().any(|e| {
+            if e.reliability < min_reliability { return false; }
+            if Self::kind_requires_workspace_hash(&e.kind) {
+                if e.state_hash != Some(current_state_hash) { return false; }
+            } else {
+                if let Some(hash) = e.state_hash {
+                    if hash != current_state_hash { return false; }
+                }
+            }
+            match &e.fact {
+                StructuredFact::Generic { claim: c, .. } => {
+                    // Technical evidence kinds MUST NEVER match Generic
+                    !Self::kind_requires_workspace_hash(&e.kind) && normalize_cmd(c) == norm_claim
+                },
                 StructuredFact::TestResult { command, exit_code, .. } => {
-                    *exit_code == 0 && (command == claim || claim.contains(command) || (command.contains("test") && claim.contains("test")))
+                    *exit_code == 0 && normalize_cmd(command) == norm_claim
                 },
                 StructuredFact::CommandResult { command, exit_code, .. } => {
-                    *exit_code == 0 && (command == claim || claim.contains(command))
+                    *exit_code == 0 && normalize_cmd(command) == norm_claim
                 },
             }
         })
@@ -158,6 +217,7 @@ impl EvidenceGraph {
         min_reliability: f32,
         current_state_hash: u64
     ) -> bool {
+        let norm_claim = normalize_cmd(claim);
         self.entries.iter().any(|e| {
             if e.kind != kind || e.reliability < min_reliability { return false; }
             if Self::kind_requires_workspace_hash(&e.kind) {
@@ -168,12 +228,14 @@ impl EvidenceGraph {
                 }
             }
             match &e.fact {
-                StructuredFact::Generic { claim: c, .. } => c == claim,
+                StructuredFact::Generic { claim: c, .. } => {
+                    !Self::kind_requires_workspace_hash(&e.kind) && normalize_cmd(c) == norm_claim
+                },
                 StructuredFact::TestResult { command, exit_code, .. } => {
-                    *exit_code == 0 && (command == claim || claim.contains(command) || (command.contains("test") && claim.contains("test")))
+                    *exit_code == 0 && normalize_cmd(command) == norm_claim
                 },
                 StructuredFact::CommandResult { command, exit_code, .. } => {
-                    *exit_code == 0 && (command == claim || claim.contains(command))
+                    *exit_code == 0 && normalize_cmd(command) == norm_claim
                 },
             }
         })

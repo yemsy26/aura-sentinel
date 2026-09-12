@@ -187,24 +187,28 @@ impl MissionRuntime {
             if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
                 use crate::core::evidence::{EvidenceKind, StructuredFact};
                 
-                // P0: Replace blind implicit claim with structured execution facts
-                // Bind real process metadata
-                let fact = StructuredFact::CommandResult {
-                    command: obs.command.clone().unwrap_or_else(|| "unknown".to_string()),
-                    cwd: obs.cwd.clone().unwrap_or_else(|| self.workspace_path.clone()),
-                    exit_code: obs.exit_code.unwrap_or(0), 
-                    stdout_hash: obs.stdout_hash.clone().unwrap_or_else(|| "unknown".to_string()),
-                    stderr_hash: obs.stderr_hash.clone().unwrap_or_default(),
-                };
-                
-                let _ = self.evidence_graph.record_structured(
-                    EvidenceKind::CommandExitCode,
-                    &obs.tool_name,
-                    fact,
-                    0.85,
-                    self.cognitive_state.mission.current_step,
-                    obs.state_hash_after, // P0: Bind to exact world state
-                );
+                // P0: Replace blind implicit claim with structured execution facts.
+                // Bind real process metadata ONLY if exit_code is present.
+                // If exit_code is None (e.g. no process metadata or infrastructure failure),
+                // NEVER fabricate success with unwrap_or(0) — do not record technical command evidence.
+                if let Some(exit_code) = obs.exit_code {
+                    let fact = StructuredFact::CommandResult {
+                        command: obs.command.clone().unwrap_or_else(|| "unknown".to_string()),
+                        cwd: obs.cwd.clone().unwrap_or_else(|| self.workspace_path.clone()),
+                        exit_code, 
+                        stdout_hash: obs.stdout_hash.clone().unwrap_or_else(|| "unknown".to_string()),
+                        stderr_hash: obs.stderr_hash.clone().unwrap_or_default(),
+                    };
+                    
+                    let _ = self.evidence_graph.record_structured(
+                        EvidenceKind::CommandExitCode,
+                        &obs.tool_name,
+                        fact,
+                        0.85,
+                        self.cognitive_state.mission.current_step,
+                        obs.state_hash_after, // P0: Bind to exact world state
+                    );
+                }
             }
         }
 
@@ -361,7 +365,7 @@ impl MissionRuntime {
                 }
             },
             Err(ref err)   => {
-                let o = Observation::error(&proposal.tool, err, Some(1), true, None);
+                let o = Observation::error(&proposal.tool, err, None, true, None);
                 o
             },
         };

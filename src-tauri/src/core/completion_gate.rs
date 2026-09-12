@@ -21,8 +21,13 @@ fn normalize_command_str(cmd: &str) -> String {
 }
 
 fn paths_match(p1: &str, p2: &str) -> bool {
-    let n1 = p1.trim().replace('\\', "/").trim_end_matches('/').to_lowercase();
-    let n2 = p2.trim().replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let s1 = p1.trim();
+    let s2 = p2.trim();
+    if s1.is_empty() || s2.is_empty() {
+        return false;
+    }
+    let n1 = s1.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let n2 = s2.replace('\\', "/").trim_end_matches('/').to_lowercase();
     n1 == n2 || n1 == "." || n2 == "."
 }
 
@@ -163,7 +168,7 @@ mod tests {
     fn test_completion_gate_blocks_on_min_reliability() {
         let mut contract = MissionContract::new("Build app");
         contract.required_evidence.push(EvidenceRequirement {
-            claim: "cargo test passes".to_string(),
+            claim: "cargo test".to_string(),
             min_reliability: 0.8,
         });
 
@@ -379,4 +384,170 @@ mod tests {
         let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, dummy_path);
         assert!(matches!(dec, CompletionDecision::Incomplete(_)));
     }
+
+    // ─── AUDIT CLOSURE TESTS: 8 SCENARIOS ─────────────────────────────────────
+
+    #[test]
+    fn test_audit_scenario_1_exit_code_none_produces_no_command_exit_code_evidence() {
+        use crate::core::mission_runtime::MissionRuntime;
+        use crate::core::observation::Observation;
+
+        let mut runtime = MissionRuntime::new(".", "Test none exit code", 10);
+        let mut obs = Observation::success("TOOL_TERMINAL", "output without exit code", vec![]);
+        obs.exit_code = None; // Explicitly None
+        obs.command = Some("cargo build".to_string());
+        obs.cwd = Some(".".to_string());
+        obs.state_hash_after = Some(100);
+
+        runtime.record_observation(&obs);
+
+        // Verification: No CommandExitCode evidence was recorded!
+        let has_command_evidence = runtime.evidence_graph.entries.iter().any(|e| e.kind == EvidenceKind::CommandExitCode);
+        assert!(!has_command_evidence, "exit_code=None must not produce CommandExitCode evidence");
+
+        // Contract requiring CommandExitZero cannot complete
+        runtime.contract.add_criterion("AC-1", "Build", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        assert!(matches!(runtime.can_complete(), CompletionDecision::Incomplete(_)));
+    }
+
+    #[test]
+    fn test_audit_scenario_2_exit_code_zero_is_valid() {
+        let mut contract = MissionContract::new("Build");
+        contract.add_criterion("AC-1", "Build", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        let state = CognitiveState::new("m1", "Build");
+        let hash = 42;
+        let mut evidence = EvidenceGraph::new();
+
+        evidence.record_structured(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo build".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 0,
+            stdout_hash: "h1".to_string(),
+            stderr_hash: "".to_string(),
+        }, 1.0, 1, Some(hash)).unwrap();
+
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new("."));
+        assert_eq!(dec, CompletionDecision::Complete);
+    }
+
+    #[test]
+    fn test_audit_scenario_3_exit_code_one_is_invalid() {
+        let mut contract = MissionContract::new("Build");
+        contract.add_criterion("AC-1", "Build", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        let state = CognitiveState::new("m1", "Build");
+        let hash = 42;
+        let mut evidence = EvidenceGraph::new();
+
+        evidence.record_structured(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo build".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 1, // Non-zero!
+            stdout_hash: "h1".to_string(),
+            stderr_hash: "error".to_string(),
+        }, 1.0, 1, Some(hash)).unwrap();
+
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new("."));
+        assert!(matches!(dec, CompletionDecision::Incomplete(_)));
+    }
+
+    #[test]
+    fn test_audit_scenario_4_generic_fact_rejected_for_technical_criteria() {
+        let mut contract = MissionContract::new("Build");
+        contract.add_criterion("AC-1", "Build", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        let state = CognitiveState::new("m1", "Build");
+        let hash = 42;
+        let mut evidence = EvidenceGraph::new();
+
+        // 1. Technical kinds reject Generic at recording
+        assert!(evidence.record_generic_with_hash(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", "cargo build passes", "0", 1.0, 1, Some(hash)).is_err());
+
+        // 2. Even if non-technical kind has Generic, CompletionGate rejects it for technical criteria
+        evidence.record_generic_with_hash(EvidenceKind::UserConfirmation, "user", "cargo build passes", "0", 1.0, 1, Some(hash)).unwrap();
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new("."));
+        assert!(matches!(dec, CompletionDecision::Incomplete(_)));
+    }
+
+    #[test]
+    fn test_audit_scenario_5_command_identity_exact_match_rejects_subsets() {
+        let mut contract = MissionContract::new("Build");
+        contract.add_criterion("AC-1", "Build", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        let state = CognitiveState::new("m1", "Build");
+        let hash = 42;
+        let mut evidence = EvidenceGraph::new();
+
+        // Evidence ran "cargo build --release", but criterion requires exact "cargo build"
+        evidence.record_structured(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo build --release".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 0,
+            stdout_hash: "h1".to_string(),
+            stderr_hash: "".to_string(),
+        }, 1.0, 1, Some(hash)).unwrap();
+
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new("."));
+        assert!(matches!(dec, CompletionDecision::Incomplete(_)), "Exact command identity required: 'cargo build --release' must not satisfy 'cargo build'");
+    }
+
+    #[test]
+    fn test_audit_scenario_6_old_world_hash_is_invalid() {
+        let mut contract = MissionContract::new("Build");
+        contract.add_criterion("AC-1", "Build", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        let state = CognitiveState::new("m1", "Build");
+        let old_hash = 100;
+        let current_hash = 200;
+        let mut evidence = EvidenceGraph::new();
+
+        evidence.record_structured(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo build".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 0,
+            stdout_hash: "h1".to_string(),
+            stderr_hash: "".to_string(),
+        }, 1.0, 1, Some(old_hash)).unwrap();
+
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, Path::new("."));
+        assert!(matches!(dec, CompletionDecision::Incomplete(_)), "Old world hash evidence must be invalidated");
+    }
+
+    #[test]
+    fn test_audit_scenario_7_current_world_hash_is_valid() {
+        let mut contract = MissionContract::new("Build");
+        contract.add_criterion("AC-1", "Build", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        let state = CognitiveState::new("m1", "Build");
+        let current_hash = 200;
+        let mut evidence = EvidenceGraph::new();
+
+        evidence.record_structured(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo build".to_string(),
+            cwd: ".".to_string(),
+            exit_code: 0,
+            stdout_hash: "h1".to_string(),
+            stderr_hash: "".to_string(),
+        }, 1.0, 1, Some(current_hash)).unwrap();
+
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, current_hash, Path::new("."));
+        assert_eq!(dec, CompletionDecision::Complete, "Evidence with current world hash must be valid");
+    }
+
+    #[test]
+    fn test_audit_scenario_8_missing_cwd_is_invalid_for_cwd_requiring_criteria() {
+        let mut contract = MissionContract::new("Build");
+        contract.add_criterion("AC-1", "Build", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
+        let state = CognitiveState::new("m1", "Build");
+        let hash = 42;
+        let mut evidence = EvidenceGraph::new();
+
+        // Empty/missing cwd
+        evidence.record_structured(EvidenceKind::CommandExitCode, "TOOL_TERMINAL", StructuredFact::CommandResult {
+            command: "cargo build".to_string(),
+            cwd: "".to_string(), // Missing cwd!
+            exit_code: 0,
+            stdout_hash: "h1".to_string(),
+            stderr_hash: "".to_string(),
+        }, 1.0, 1, Some(hash)).unwrap();
+
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new("."));
+        assert!(matches!(dec, CompletionDecision::Incomplete(_)), "Missing cwd must fail criteria requiring workspace containment");
+    }
 }
+
