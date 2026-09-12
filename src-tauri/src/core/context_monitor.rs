@@ -52,8 +52,34 @@ impl ContextMonitor {
         current_len > self.max_chars
     }
 
-    /// Compacting logic that strictly preserves the Immutable Task Charter
-    /// and guarantees the output never exceeds `max_chars`.
+    pub fn sanitize_tail(tail: &str) -> String {
+        let stale_phrases = [
+            "workspace está vacío",
+            "workspace esta vacio",
+            "workspace no tiene archivos",
+            "no hay archivos en el workspace",
+            "el workspace se encuentra vacío",
+            "el workspace se encuentra vacio",
+            "proyecto está completamente vacío",
+            "proyecto esta completamente vacio",
+        ];
+
+        tail.lines()
+            .map(|line| {
+                let lower = line.to_lowercase();
+                let contains_stale = stale_phrases.iter().any(|phrase| lower.contains(phrase));
+                if contains_stale {
+                    "[OBSOLETO: Afirmación de workspace vacío purgada por Runtime - Ver Mission State Anchor]"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Compacting logic that strictly preserves the Immutable Task Charter,
+    /// the Authoritative Mission State Anchor, and purges stale hallucinated statements from the tail.
     pub fn compact_context(&self, context: &str, mission_state: &str) -> String {
         if context.len() <= self.max_chars {
             return context.to_string();
@@ -66,31 +92,34 @@ impl ContextMonitor {
             String::new()
         };
 
-        // Anchor 2: Mission operational state
-        let mission_state_block = format!("\n[ESTADO OPERACIONAL DE LA MISIÓN]\n{}\n\n", mission_state);
+        // Anchor 2: Mission operational state / Mission State Anchor
+        let mission_state_block = format!("\n[ESTADO AUTORITATIVO DEL RUNTIME — MISSION STATE ANCHOR]\n{}\n\n", mission_state);
 
-        let notice_marker = "\n[... ✂️ HISTORIAL ANTIGUO ELIMINADO PARA PREVENIR ECHOLALIA ...]\n\n";
+        let notice_marker = "\n[... ✂️ HISTORIAL ANTIGUO ELIMINADO Y SANITIZADO PARA PREVENIR ECHOLALIA ...]\n\n";
 
         let fixed_overhead = charter_block.len() + mission_state_block.len() + notice_marker.len();
         let tail_budget = self.max_chars.saturating_sub(fixed_overhead);
 
-        let tail: String = context.chars().rev().take(tail_budget).collect::<Vec<_>>().into_iter().rev().collect();
+        let raw_tail: String = context.chars().rev().take(tail_budget).collect::<Vec<_>>().into_iter().rev().collect();
 
         // Clean turn boundary search in tail
-        let clean_tail = if let Some(pos) = tail.find("[PASO") {
-            &tail[pos..]
-        } else if let Some(pos) = tail.find("\n[") {
-            &tail[pos + 1..]
+        let clean_tail = if let Some(pos) = raw_tail.find("[PASO") {
+            &raw_tail[pos..]
+        } else if let Some(pos) = raw_tail.find("\n[") {
+            &raw_tail[pos + 1..]
         } else {
-            &tail
+            &raw_tail
         };
+
+        // Sanitize tail to purge stale hallucinations ("workspace está vacío")
+        let sanitized_tail = Self::sanitize_tail(clean_tail.trim_start());
 
         let mut result = format!(
             "{}{}{}{}",
             charter_block,
             mission_state_block,
             notice_marker,
-            clean_tail.trim_start()
+            sanitized_tail
         );
 
         if result.len() > self.max_chars {
@@ -131,5 +160,20 @@ mod tests {
 
         let compacted = monitor.compact_context(&huge_context, mission_state);
         assert!(compacted.contains("cyber_sentinel.html, style.css"), "MissionState with physical files must be preserved");
+    }
+
+    #[test]
+    fn test_compaction_with_state_anchor_purges_stale_echos() {
+        let monitor = ContextMonitor::new(600, "Construir Cyber Sentinel");
+        let huge_context = format!(
+            "{}\n[PASO 1]: El workspace está vacío, por lo que necesito crear los archivos necesarios.\n[PASO 2]: Ejecutando...",
+            "Contexto largo para forzar compactacion. ".repeat(40)
+        );
+        let anchor_block = "cyber_sentinel.html, style.css existen en disco.";
+
+        let compacted = monitor.compact_context(&huge_context, anchor_block);
+        assert!(compacted.contains("cyber_sentinel.html, style.css existen en disco."));
+        assert!(!compacted.contains("El workspace está vacío"));
+        assert!(compacted.contains("Afirmación de workspace vacío purgada"));
     }
 }

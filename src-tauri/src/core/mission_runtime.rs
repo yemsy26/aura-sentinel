@@ -23,6 +23,8 @@ pub struct MissionRuntime {
     pub budget: StepBudget,
     pub recovery: RecoveryEngine,
     pub world: Option<WorldState>,
+    pub world_version: u64,
+    pub state_anchor: MissionStateAnchor,
     /// FINAL-6: Owns the executor dispatch table. Register all tools before the mission loop.
     pub tool_registry: ToolRegistry,
 }
@@ -36,6 +38,33 @@ impl MissionRuntime {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         );
+        let anchor = MissionStateAnchor {
+            mission_id: mission_id.clone(),
+            workspace_root: workspace_path.to_string(),
+            world_hash: 0,
+            world_version: 0,
+            current_phase: "Planning".to_string(),
+            current_step: 0,
+            active_plan_step: None,
+            required_files: Vec::new(),
+            existing_files: Vec::new(),
+            criteria_satisfied: 0,
+            criteria_remaining: 0,
+            last_tool: None,
+            last_command: None,
+            last_observation: None,
+            last_verified_effect: None,
+            objective: objective.to_string(),
+            project_root: workspace_path.to_string(),
+            role: "Planner".to_string(),
+            files_created: Vec::new(),
+            files_modified: Vec::new(),
+            files_pending: Vec::new(),
+            criteria_pending: Vec::new(),
+            last_world_revision: "0".to_string(),
+            last_error: None,
+            next_required_action: None,
+        };
         MissionRuntime {
             contract: MissionContract::new(objective),
             cognitive_state: CognitiveState::new(&mission_id, objective),
@@ -44,6 +73,8 @@ impl MissionRuntime {
             budget: StepBudget::new(max_steps),
             recovery: RecoveryEngine::new(),
             world: None,
+            world_version: 0,
+            state_anchor: anchor,
             workspace_path: workspace_path.to_string(),
             mission_id,
             tool_registry: ToolRegistry::new(),
@@ -146,6 +177,7 @@ impl MissionRuntime {
             Ok(ws) => {
                 self.cognitive_state.set_world(ws.clone());
                 self.world = Some(ws);
+                self.update_anchor(None);
                 Ok(())
             }
             Err(e) => Err(format!("[OBSERVE_WORLD FAILED] {}", e)),
@@ -172,6 +204,71 @@ impl MissionRuntime {
             buf.copy_from_slice(&result[0..8]);
             u64::from_be_bytes(buf)
         }).unwrap_or(0)
+    }
+
+    /// Authoritative State Synchronization: updates self.state_anchor directly from physical reality.
+    pub fn update_anchor(&mut self, last_obs: Option<&Observation>) {
+        self.world_version += 1;
+        let world_hash = self.current_world_hash();
+        
+        let mut existing_files: Vec<String> = match &self.world {
+            Some(w) => w.files.keys().cloned().collect(),
+            None => Vec::new(),
+        };
+        existing_files.sort();
+
+        let mut required_files: Vec<String> = Vec::new();
+        for crit in &self.contract.acceptance_criteria {
+            match &crit.verification {
+                crate::core::mission_contract::VerificationMethod::FileExistence(f) => {
+                    if !required_files.contains(f) {
+                        required_files.push(f.clone());
+                    }
+                }
+                crate::core::mission_contract::VerificationMethod::ContentMatches { file, .. } => {
+                    if !required_files.contains(file) {
+                        required_files.push(file.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        required_files.sort();
+
+        let criteria_satisfied = self.verified_criteria_count();
+        let total_required = self.contract.acceptance_criteria.iter().filter(|c| c.required).count() as u32;
+        let criteria_remaining = total_required.saturating_sub(criteria_satisfied);
+
+        let current_phase = format!("{:?}", self.cognitive_state.mission.status);
+
+        if let Some(obs) = last_obs {
+            self.state_anchor.last_tool = Some(obs.tool_name.clone());
+            self.state_anchor.last_command = obs.command.clone();
+            self.state_anchor.last_observation = Some(if obs.payload.len() > 300 {
+                format!("{}... [truncated]", &obs.payload[..300])
+            } else {
+                obs.payload.clone()
+            });
+            self.state_anchor.last_verified_effect = if !obs.files_affected.is_empty() {
+                Some(format!("Archivos afectados: {}", obs.files_affected.join(", ")))
+            } else if obs.exit_code == Some(0) {
+                Some("Comando finalizado con éxito (exit code 0)".to_string())
+            } else {
+                Some(format!("Estado: {:?}", obs.status))
+            };
+        }
+
+        self.state_anchor.mission_id = self.mission_id.clone();
+        self.state_anchor.workspace_root = self.workspace_path.clone();
+        self.state_anchor.project_root = self.workspace_path.clone();
+        self.state_anchor.world_hash = world_hash;
+        self.state_anchor.world_version = self.world_version;
+        self.state_anchor.current_phase = current_phase;
+        self.state_anchor.current_step = self.current_step();
+        self.state_anchor.required_files = required_files;
+        self.state_anchor.existing_files = existing_files;
+        self.state_anchor.criteria_satisfied = criteria_satisfied;
+        self.state_anchor.criteria_remaining = criteria_remaining;
     }
 
     // ─── Observation Recording ─────────────────────────────────────────────────
@@ -384,6 +481,9 @@ impl MissionRuntime {
         // 6. Record through full circuit (StallDetector, EvidenceGraph)
         self.record_observation(&obs);
 
+        // 7. Update authoritative state anchor with observation and post-action world state
+        self.update_anchor(Some(&obs));
+
         Ok(obs)
     }
 
@@ -433,51 +533,25 @@ impl MissionRuntime {
         }
     }
     pub fn get_state_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> MissionStateAnchor {
-        let files_pending: Vec<String> = journal.micro_metas.iter()
-            .filter(|m| m.estado != "VERIFICADA")
-            .map(|m| m.descripcion.clone())
-            .collect();
-            
         let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
-            journal.micro_metas[journal.micro_meta_actual].descripcion.clone()
+            Some(journal.micro_metas[journal.micro_meta_actual].descripcion.clone())
         } else {
-            "Ninguna".to_string()
+            None
         };
 
-        MissionStateAnchor {
-            mission_id: self.mission_id.clone(),
-            objective: self.contract.objective.clone(),
-            workspace_root: self.workspace_path.clone(),
-            project_root: self.workspace_path.clone(),
-            role: current_role.to_string(),
-            phase: format!("{:?}", journal.ultimo_estado),
-            current_step: self.current_step(),
-            files_created: vec![],
-            files_modified: vec![],
-            files_pending,
-            criteria_satisfied: vec![],
-            criteria_pending: vec![current_meta.clone()],
-            last_world_revision: self.current_world_hash().to_string(),
-            last_tool: None,
-            last_command: None,
-            last_error: if last_error.is_empty() { None } else { Some(last_error.to_string()) },
-            next_required_action: Some(current_meta),
+        let mut anchor = self.state_anchor.clone();
+        anchor.role = current_role.to_string();
+        anchor.active_plan_step = current_meta.clone();
+        anchor.next_required_action = current_meta;
+        if !last_error.is_empty() {
+            anchor.last_error = Some(last_error.to_string());
         }
+        anchor
     }
     
     pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
         let anchor = self.get_state_anchor(journal, current_role, last_error);
-        format!(
-            "[MISSION_ANCHOR]\nWorkspace: {}\nProyecto: {}\nFase: {}\nRol: {}\nPaso: {}\nArchivos pendientes: {}\nMeta actual: {}\nÚltimo error crítico: {}\n[/MISSION_ANCHOR]",
-            anchor.workspace_root,
-            anchor.project_root,
-            anchor.phase,
-            anchor.role,
-            anchor.current_step,
-            if anchor.files_pending.is_empty() { "Ninguno".to_string() } else { anchor.files_pending.join(", ") },
-            anchor.next_required_action.unwrap_or_default(),
-            anchor.last_error.unwrap_or_else(|| "Ninguno".to_string())
-        )
+        anchor.format_prompt_block()
     }
 }
 
@@ -1002,25 +1076,152 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_mission_state_anchor_tracks_physical_world_accurately() {
+        let temp_dir = std::env::temp_dir().join(format!("aura_test_anchor_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let mut rt = MissionRuntime::new(temp_dir.to_str().unwrap(), "Crear cyber_sentinel frontend", 20);
+
+        // 1. Initial state: workspace is physically empty
+        let _ = rt.observe_world();
+        assert!(rt.state_anchor.existing_files.is_empty());
+        let initial_prompt_block = rt.state_anchor.format_prompt_block();
+        assert!(initial_prompt_block.contains("El workspace está actualmente vacío"));
+
+        // 2. Physical files created
+        std::fs::write(temp_dir.join("cyber_sentinel.html"), "<!DOCTYPE html><html></html>").unwrap();
+        std::fs::write(temp_dir.join("style.css"), "body { margin: 0; }").unwrap();
+
+        // 3. World observed: anchor immediately syncs with reality
+        rt.observe_world().expect("observe_world must succeed");
+        assert_eq!(rt.state_anchor.existing_files.len(), 2);
+        assert!(rt.state_anchor.existing_files.contains(&"cyber_sentinel.html".to_string()));
+        assert!(rt.state_anchor.existing_files.contains(&"style.css".to_string()));
+
+        let prompt_block = rt.state_anchor.format_prompt_block();
+        assert!(prompt_block.contains("cyber_sentinel.html"));
+        assert!(prompt_block.contains("style.css"));
+        assert!(prompt_block.contains("El workspace NO está vacío"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MissionStateAnchor {
     pub mission_id: String,
-    pub objective: String,
     pub workspace_root: String,
-    pub project_root: String,
-    pub role: String,
-    pub phase: String,
+    pub world_hash: u64,
+    pub world_version: u64,
+    pub current_phase: String,
     pub current_step: u32,
-    pub files_created: Vec<String>,
-    pub files_modified: Vec<String>,
-    pub files_pending: Vec<String>,
-    pub criteria_satisfied: Vec<String>,
-    pub criteria_pending: Vec<String>,
-    pub last_world_revision: String,
+    pub active_plan_step: Option<String>,
+    pub required_files: Vec<String>,
+    pub existing_files: Vec<String>,
+    pub criteria_satisfied: u32,
+    pub criteria_remaining: u32,
     pub last_tool: Option<String>,
     pub last_command: Option<String>,
+    pub last_observation: Option<String>,
+    pub last_verified_effect: Option<String>,
+    #[serde(default)]
+    pub objective: String,
+    #[serde(default)]
+    pub project_root: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub files_created: Vec<String>,
+    #[serde(default)]
+    pub files_modified: Vec<String>,
+    #[serde(default)]
+    pub files_pending: Vec<String>,
+    #[serde(default)]
+    pub criteria_pending: Vec<String>,
+    #[serde(default)]
+    pub last_world_revision: String,
+    #[serde(default)]
     pub last_error: Option<String>,
+    #[serde(default)]
     pub next_required_action: Option<String>,
+}
+
+impl MissionStateAnchor {
+    pub fn format_prompt_block(&self) -> String {
+        let files_list = if self.existing_files.is_empty() {
+            "  (ninguno detectado aún en el workspace)".to_string()
+        } else {
+            self.existing_files
+                .iter()
+                .map(|f| format!("  - {}", f))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let req_files = if self.required_files.is_empty() {
+            "  (no especificados explícitamente en el contrato)".to_string()
+        } else {
+            self.required_files
+                .iter()
+                .map(|f| format!("  - {}", f))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let active_step = self.active_plan_step.as_deref().unwrap_or("Ninguno");
+        let last_tool = self.last_tool.as_deref().unwrap_or("Ninguna");
+        let last_cmd = self.last_command.as_deref().unwrap_or("Ninguno");
+        let last_obs = self.last_observation.as_deref().unwrap_or("Ninguna");
+        let last_effect = self.last_verified_effect.as_deref().unwrap_or("Ninguno");
+
+        let workspace_status_rule = if self.existing_files.is_empty() {
+            "REGLA CRÍTICA DE REALIDAD: El workspace está actualmente vacío en disco. Procede a crear los archivos requeridos."
+        } else {
+            "REGLA CRÍTICA DE REALIDAD: Los archivos físicos listados arriba EXISTEN REALMENTE EN DISCO. El workspace NO está vacío. NUNCA asumas que el workspace está vacío ni vuelvas a crearlos si ya existen sin cambios necesarios."
+        };
+
+        format!(
+r#"================================================================================
+ESTADO AUTORITATIVO DEL RUNTIME (MISSION STATE ANCHOR - REALIDAD FÍSICA INMUTABLE)
+================================================================================
+Misión ID: {mission_id} | Versión Mundo: v{world_ver} | Hash Mundo: {world_hash:016x}
+Workspace Root: {ws}
+Fase Actual: {phase} | Paso: {step}
+Paso Activo del Plan: {active_step}
+
+ARCHIVOS EXISTENTES EN DISCO (VERIFICADOS FÍSICAMENTE):
+{files_list}
+
+ARCHIVOS REQUERIDOS POR EL PLAN / CONTRATO:
+{req_files}
+
+CRITERIOS: Satisfechos: {sat} | Restantes: {rem}
+ÚLTIMA ACCIÓN EJECUTADA:
+  Herramienta: {last_tool}
+  Comando: {last_cmd}
+  Efecto Verificado: {last_effect}
+  Observación: {last_obs}
+
+{workspace_status_rule}
+================================================================================"#,
+            mission_id = self.mission_id,
+            world_ver = self.world_version,
+            world_hash = self.world_hash,
+            ws = self.workspace_root,
+            phase = self.current_phase,
+            step = self.current_step,
+            active_step = active_step,
+            files_list = files_list,
+            req_files = req_files,
+            sat = self.criteria_satisfied,
+            rem = self.criteria_remaining,
+            last_tool = last_tool,
+            last_cmd = last_cmd,
+            last_effect = last_effect,
+            last_obs = last_obs,
+            workspace_status_rule = workspace_status_rule,
+        )
+    }
 }

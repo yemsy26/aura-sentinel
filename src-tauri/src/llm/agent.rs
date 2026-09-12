@@ -241,53 +241,6 @@ fn is_phase_file_satisfied(workspace_path: &str, file_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Helper to auto-extract commands from the agent's thought when comando is empty.
-fn extract_command_from_thought(pensamiento: &str, workspace_path: &str) -> Option<String> {
-    for quote in ['`', '"', '\''] {
-        let parts: Vec<&str> = pensamiento.split(quote).collect();
-        if parts.len() >= 3 {
-            for chunk in parts.chunks(2).skip(1) {
-                if let Some(&cand) = chunk.first() {
-                    let cand_trim = cand.trim();
-                    if cand_trim.starts_with("python ")
-                        || cand_trim.starts_with("node ")
-                        || cand_trim == "dir"
-                        || cand_trim == "ls"
-                        || cand_trim.starts_with("npm ")
-                        || cand_trim.starts_with("cargo ")
-                    {
-                        return Some(cand_trim.to_string());
-                    }
-                    if cand_trim.ends_with(".py") && std::path::Path::new(workspace_path).join(cand_trim).exists() {
-                        return Some(format!("python {}", cand_trim));
-                    }
-                    if cand_trim.ends_with(".js") && std::path::Path::new(workspace_path).join(cand_trim).exists() {
-                        return Some(format!("node {}", cand_trim));
-                    }
-                }
-            }
-        }
-    }
-
-    let lower = pensamiento.to_lowercase();
-    for word in lower.split_whitespace() {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '-');
-        if clean.ends_with(".py") {
-            let script_path = std::path::Path::new(workspace_path).join(clean);
-            if script_path.exists() {
-                return Some(format!("python {}", clean));
-            }
-        } else if clean.ends_with(".js") {
-            let script_path = std::path::Path::new(workspace_path).join(clean);
-            if script_path.exists() {
-                return Some(format!("node {}", clean));
-            }
-        }
-    }
-
-    None
-}
-
 /// Formats the acceptance contract from the Planner's TOOL_THINK 'comando' field.
 fn formato_contrato(cmd: &str) -> String {
     format!("CRITERIOS DE EXITO DEFINIDOS POR EL PLANIFICADOR:\n{}", cmd)
@@ -615,7 +568,6 @@ pub async fn run_agent_loop(
     let mut tester_attempts = 0;
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
-    let mut last_programmer_error = String::new();
     let mut original_prompt_parsed = if let Some(idx) = user_message.find("\n\nGuía de Traducción Técnica") {
         let text = &user_message[..idx];
         text.replace("Petición Original del Usuario: ", "").trim().to_string()
@@ -1159,34 +1111,19 @@ pub async fn run_agent_loop(
             String::new()
         };
 
+        // ── Observe physical world at turn start to guarantee absolute reality anchor ──
+        let _ = runtime.observe_world();
+
         // ── Context Window Tiered Monitor & Intelligent Compaction (Devin 2.0 / OSS 2025 Pattern) ──
         let (fill_pct, ctx_status) = context_monitor.status(current_context.len());
         if context_monitor.should_compact(current_context.len()) {
             emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct * 100.0), "INFO");
-            let confirmed_files = runtime.world.as_ref().map(|w| {
-                let mut keys: Vec<String> = w.files.keys().cloned().collect();
-                keys.sort();
-                if keys.is_empty() { "Ninguno".to_string() } else { keys.join(", ") }
-            }).unwrap_or_else(|| "Ninguno".to_string());
-            let current_fase_desc = journal.fases.get(journal.fase_actual)
-                .map(|f| format!("Fase {}/{}: {}", f.numero, journal.fases.len(), f.descripcion))
-                .unwrap_or_else(|| "General".to_string());
-            let pending_fases: Vec<String> = journal.fases.iter().filter(|f| f.estado != "COMPLETADA").map(|f| f.descripcion.clone()).collect();
-            let mission_state = format!(
-                "Workspace: {}\nFase actual: {}\nFases pendientes: {}\nRol activo: {:?}\nArchivos físicos confirmados en disco: {}\nÚltimo error: {}",
-                workspace_path,
-                current_fase_desc,
-                pending_fases.join("; "),
-                current_role,
-                confirmed_files,
-                last_programmer_error
-            );
-            current_context = context_monitor.compact_context(&current_context, &mission_state);
+            let anchor_block = runtime.state_anchor.format_prompt_block();
+            current_context = context_monitor.compact_context(&current_context, &anchor_block);
             emit_event(&app_handle, runtime.current_step(), "[MEMORIA] Contexto compactado exitosamente sin pérdida del objetivo.", "SUCCESS");
         } else if ctx_status == crate::core::context_monitor::ContextStatus::ApproachingLimit {
             emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Ventana al {:.0}% de capacidad — operando con normalidad.", fill_pct * 100.0), "INFO");
         }
-
 
         let mut forced_override: Option<(String, String)> = None;
         if let Some((forced, override_msg)) = forced_next_tool.take() {
@@ -1200,29 +1137,20 @@ pub async fn run_agent_loop(
             extra_prompt = format!("\n\nREGLA ESTRICTA E INQUEBRANTABLE PARA ESTE TURNO:\nDEBES Y TIENES QUE ELEGIR '{}' COMO TU HERRAMIENTA. NO ELIJAS OTRA O EL SISTEMA FALLARÁ. Ignora cualquier otra regla y genera un JSON válido para la herramienta {}.", forced, forced);
         }
 
-        // 🛡️ LIVE WORKSPACE SCAN (Delegated to WorldState) 🛡️
-        // Fix P0-2: Remove local recursive scan, use the single source of truth from runtime
+        // 🛡️ LIVE WORKSPACE SCAN (Delegated to WorldState & MissionStateAnchor) 🛡️
+        // Fix P0: WorldState -> MissionStateAnchor -> Prompt -> LLM single source of truth
         let (live_workspace_context, workspace_is_empty) = {
-            let is_empty = runtime.world.as_ref().map_or(true, |w| w.files.is_empty());
-            let ctx = if is_empty {
-                "El proyecto está completamente vacío. Aún no has creado ningún archivo físico.".to_string()
+            let is_empty = runtime.state_anchor.existing_files.is_empty();
+            let repo_map = if is_empty {
+                String::new()
             } else {
-                let repo_map = crate::core::map::generate_repo_map(std::path::Path::new(&workspace_path));
-                let mut relative_files = Vec::new();
-                if let Some(world) = runtime.world.as_ref() {
-                    for path in world.files.keys() {
-                        relative_files.push(path.clone());
-                    }
-                }
-                relative_files.sort();
-                format!(
-                    "{}\n\n[ARCHIVOS FÍSICOS CONFIRMADOS EN EL WORKSPACE (Total: {})]:\n{}\n\
-                    ⚠️ REGLA DE REALIDAD INMUTABLE: Los archivos anteriores YA EXISTEN físicamente en el disco. \
-                    El workspace NO está vacío. NO afirmes que el workspace está vacío ni vuelvas a crear estos mismos archivos.",
-                    repo_map,
-                    relative_files.len(),
-                    relative_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
-                )
+                crate::core::map::generate_repo_map(std::path::Path::new(&workspace_path))
+            };
+            let anchor_block = runtime.state_anchor.format_prompt_block();
+            let ctx = if repo_map.is_empty() {
+                anchor_block
+            } else {
+                format!("{}\n\n{}", repo_map, anchor_block)
             };
             (ctx, is_empty)
         };
@@ -1444,33 +1372,50 @@ pub async fn run_agent_loop(
             tool = "TOOL_FINISH".to_string();
         }
 
-        // Auto-extract command if tool is TOOL_TERMINAL and comando is empty
+        // Strict Schema Requirement: TOOL_TERMINAL requires non-empty 'comando'
         if tool == "TOOL_TERMINAL" && comando.trim().is_empty() {
-            if let Some(auto_cmd) = extract_command_from_thought(&pensamiento, &workspace_path) {
-                emit_event(&app_handle, runtime.current_step(), &format!("[AUTO-EXTRACT] Comando recuperado del pensamiento: {}", auto_cmd), "INFO");
-                comando = auto_cmd;
-            }
+            emit_event(&app_handle, runtime.current_step(), "[SCHEMA ERROR] TOOL_TERMINAL requiere un campo 'comando' no vacío.", "WARNING");
+            current_context.push_str("[VALIDACIÓN DE ESQUEMA FALLIDA]: TOOL_TERMINAL requiere un campo 'comando' explícito y no vacío en el JSON. Prohibido omitir el comando.\n\n");
+            continue;
         }
 
         // ── MissionRuntime: step tracking + stall detection (single source of truth) ──
         runtime.record_step();
         if let Some(stall) = runtime.should_stall_recover(4) {
-            let stall_msg = format!("[STALL DETECTOR] {:?} detectado. Forzando verificación real del filesystem.", stall);
+            let stall_msg = format!("[STALL DETECTOR] {:?} detectado. Forzando transición de estrategia.", stall);
             emit_event(&app_handle, runtime.current_step(), &stall_msg, "WARNING");
-            // RepeatedTool stall: force a dir command to anchor LLM to filesystem reality
-            if matches!(stall, crate::core::stall_detector::StallType::RepeatedTool)
-                && forced_next_tool.is_none()
-            {
-                forced_next_tool = Some((
-                    "TOOL_TERMINAL".to_string(),
-                    format!(
-                        "[STALL RECOVERY] Verificando estado real del workspace. {}",
-                        "Ejecuta 'dir' y ajusta tu plan según los archivos que realmente existen."
-                    ),
-                ));
-                current_context.push_str(
-                    "[CORRECCIÓN FORZADA]: Estás en un bucle. Verifica los archivos existentes con 'dir' antes de continuar.\n\n"
-                );
+            if forced_next_tool.is_none() {
+                // Determine strategy transition based on physical reality from state_anchor
+                let has_existing_files = !runtime.state_anchor.existing_files.is_empty();
+                let has_test_file = runtime.state_anchor.existing_files.iter().any(|f| f.starts_with("verify_") || f.starts_with("test_"));
+                
+                if !has_existing_files {
+                    forced_next_tool = Some((
+                        "TOOL_PROGRAMMER".to_string(),
+                        "Estancamiento detectado: El workspace no tiene archivos. Debes crear los archivos principales usando TOOL_PROGRAMMER.".to_string(),
+                    ));
+                    current_context.push_str("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: El workspace aún no tiene archivos. Procede de inmediato a crearlos con TOOL_PROGRAMMER.\n\n");
+                } else if !has_test_file {
+                    forced_next_tool = Some((
+                        "TOOL_PROGRAMMER".to_string(),
+                        "Estancamiento detectado: Los archivos base ya existen. Crea un script de verificación 'verify_solution.py' con TOOL_PROGRAMMER para validar la solución.".to_string(),
+                    ));
+                    current_context.push_str("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: Los archivos base ya existen en disco. Crea un script de verificación (ej. verify_*.py) usando TOOL_PROGRAMMER.\n\n");
+                } else {
+                    let test_file = runtime.state_anchor.existing_files.iter().find(|f| f.starts_with("verify_") || f.starts_with("test_")).unwrap();
+                    let test_cmd = if test_file.ends_with(".py") {
+                        format!("python {}", test_file)
+                    } else if test_file.ends_with(".js") {
+                        format!("node {}", test_file)
+                    } else {
+                        format!("python {}", test_file)
+                    };
+                    forced_next_tool = Some((
+                        "TOOL_TERMINAL".to_string(),
+                        format!("Estancamiento detectado: Ejecuta el script de pruebas '{}' usando TOOL_TERMINAL con comando='{}'.", test_file, test_cmd),
+                    ));
+                    current_context.push_str(&format!("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: Ejecuta el test existente '{}' para verificar la solución.\n\n", test_cmd));
+                }
             }
         }
 
@@ -1779,9 +1724,20 @@ pub async fn run_agent_loop(
                             || cmd_lower.trim() == "ls -la"
                             || cmd_lower.trim() == "dir /b";
                         if is_info_cmd {
-                            let msg = "[SISTEMA INTERNO]: El Ejecutor está repitiendo un comando informacional (dir/ls). Esto indica estancamiento (STALL). Reevalúa qué acción falta para completar los criterios.";
-                            emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Ejecutor en loop informacional -> Forzando Replan", "WARNING");
-                            forced_next_tool = Some(("TOOL_THINK".to_string(), "Estancamiento en comandos de información. Revisa el plan original y continúa trabajando.".to_string()));
+                            let msg = "[SISTEMA INTERNO]: El Ejecutor está repitiendo un comando informacional (dir/ls). Esto indica estancamiento (STALL). PROHIBIDO repetir dir/ls sin cambios. Procede a escribir o probar código.";
+                            emit_event(&app_handle, runtime.current_step(), "[SISTEMA] Ejecutor en loop informacional -> Forzando Acción Operativa", "WARNING");
+                            let has_files = !runtime.state_anchor.existing_files.is_empty();
+                            if !has_files {
+                                forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "El workspace está vacío. Crea los archivos requeridos usando TOOL_PROGRAMMER.".to_string()));
+                            } else {
+                                let has_test = runtime.state_anchor.existing_files.iter().any(|f| f.starts_with("verify_") || f.starts_with("test_"));
+                                if !has_test {
+                                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Crea un script de verificación (verify_*.py) usando TOOL_PROGRAMMER.".to_string()));
+                                } else {
+                                    let test_f = runtime.state_anchor.existing_files.iter().find(|f| f.starts_with("verify_") || f.starts_with("test_")).unwrap();
+                                    forced_next_tool = Some(("TOOL_TERMINAL".to_string(), format!("python {}", test_f)));
+                                }
+                            }
                             current_context.push_str(&format!("{}\n\n", msg));
                         } else {
                             current_context.push_str(&format!("{}\n\n", res_msg));
@@ -1799,6 +1755,18 @@ pub async fn run_agent_loop(
                     } else {
                         programmer_cooldown_hits = 0;
                         comandos_ejecutados_historico.insert(format!("{}|{}", comando.trim().to_lowercase(), runtime.current_world_hash()));
+
+                        // ── Pre-check: validate interpreter target extensions (P1) ────────────
+                        if let Err(target_err) = crate::core::schema_validator::validate_interpreter_target(&comando) {
+                            let warn_msg = format!("[SISTEMA]: {}", target_err);
+                            current_context.push_str(&format!("Resultado TOOL_TERMINAL Error: {}\n\n", warn_msg));
+                            emit_event(&app_handle, runtime.current_step(), &format!("[PRE-CHECK] {}", target_err), "ERROR");
+                            forced_next_tool = Some((
+                                "TOOL_PROGRAMMER".to_string(),
+                                format!("Error de destino de intérprete: {}. Corrige la estrategia o crea un script adecuado.", target_err),
+                            ));
+                            continue;
+                        }
 
                         // ── Pre-check: verify the script file exists before running it ─────────
                         let cmd_lower_check = comando.to_lowercase();
@@ -2009,7 +1977,29 @@ pub async fn run_agent_loop(
                                             res_msg
                                         ));
                                     } else {
-                                        current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando en terminal se ejecutó con éxito. Analiza este resultado. Si esto completa el objetivo final del usuario, tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_FINISH'. Si aún faltan pasos, continúa. NO uses TOOL_TESTER a menos que el usuario haya pedido pruebas automatizadas.]\n\n", res_msg));
+                                        let is_dir_cmd = {
+                                            let cl = comando.trim().to_lowercase();
+                                            cl == "dir" || cl == "ls" || cl == "dir /b" || cl == "ls -la" || cl == "ls -l"
+                                        };
+                                        if is_dir_cmd && _world_hash_before == world_hash_after {
+                                            let no_new_info_msg = "[NO_NEW_INFORMATION]: El directorio ya fue listado y no presenta cambios físicos respecto a la inspección previa. PROHIBIDO volver a ejecutar 'dir' o 'ls'. Si los archivos requeridos ya existen, procede a verificar la solución; si faltan, créalos con TOOL_PROGRAMMER.";
+                                            current_context.push_str(&format!("Resultado: {}\n\n{}\n\n", res_msg, no_new_info_msg));
+                                            emit_event(&app_handle, runtime.current_step(), "[SISTEMA] dir repetido sin cambios -> Forzando avance", "WARNING");
+                                            let has_files = !runtime.state_anchor.existing_files.is_empty();
+                                            if !has_files {
+                                                forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "El workspace está vacío. Crea los archivos requeridos usando TOOL_PROGRAMMER.".to_string()));
+                                            } else {
+                                                let has_test = runtime.state_anchor.existing_files.iter().any(|f| f.starts_with("verify_") || f.starts_with("test_"));
+                                                if !has_test {
+                                                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Crea un script de verificación (verify_*.py) usando TOOL_PROGRAMMER.".to_string()));
+                                                } else {
+                                                    let test_f = runtime.state_anchor.existing_files.iter().find(|f| f.starts_with("verify_") || f.starts_with("test_")).unwrap();
+                                                    forced_next_tool = Some(("TOOL_TERMINAL".to_string(), format!("python {}", test_f)));
+                                                }
+                                            }
+                                        } else {
+                                            current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando en terminal se ejecutó con éxito. Analiza este resultado. Si esto completa el objetivo final del usuario, tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_FINISH'. Si aún faltan pasos, continúa. NO uses TOOL_TESTER a menos que el usuario haya pedido pruebas automatizadas.]\n\n", res_msg));
+                                        }
                                     }
                                     emit_event(&app_handle, runtime.current_step(), &res_msg, "SUCCESS");
                                 }
@@ -2666,10 +2656,15 @@ pub async fn run_agent_loop(
             },
             "TOOL_THINK" => {
                     think_consecutive += 1;
-                    if think_consecutive > 3 {
-                        emit_event(&app_handle, runtime.current_step(), "[COOLDOWN] Bucle TOOL_THINK interceptado. Usa otra herramienta.", "WARNING");
-                        current_context.push_str(&format!("PASO {}:\nTOOL_THINK bloqueado: bucle detectado. DEBES usar TOOL_PROGRAMMER, TOOL_TERMINAL o TOOL_FINISH.\n\n", runtime.current_step()));
-                        forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Forzado para romper bucle de reflexion. Escribe codigo real.".to_string()));
+                    if think_consecutive > 1 {
+                        emit_event(&app_handle, runtime.current_step(), "[COOLDOWN] Bucle TOOL_THINK interceptado. Forzando herramienta operativa.", "WARNING");
+                        current_context.push_str(&format!("PASO {}:\nTOOL_THINK bloqueado: no se permite reflexión consecutiva sin acción. DEBES usar TOOL_PROGRAMMER o TOOL_TERMINAL.\n\n", runtime.current_step()));
+                        let has_files = !runtime.state_anchor.existing_files.is_empty();
+                        if !has_files {
+                            forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Forzado para romper bucle de reflexión. Escribe los archivos requeridos con TOOL_PROGRAMMER.".to_string()));
+                        } else {
+                            forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Crea un script de verificación (verify_*.py) con TOOL_PROGRAMMER.".to_string()));
+                        }
                     } else {
                         emit_event(&app_handle, runtime.current_step(), "Pensando y planificando...", "ACTION");
                         current_context.push_str(&format!("Reflexion Interna del Agente: {}\n\n", &comando));
@@ -2692,6 +2687,10 @@ pub async fn run_agent_loop(
                                 current_role = AgentRole::Executor;
                                 critic_feedback = None;
                                 emit_event(&app_handle, runtime.current_step(), "[FSM] PLANIFICADOR -> EJECUTOR: Plan aprobado. Iniciando escritura de codigo.", "INFO");
+                                forced_next_tool = Some((
+                                    "TOOL_PROGRAMMER".to_string(),
+                                    "Plan completado. Inicia la creación o modificación de los archivos con TOOL_PROGRAMMER.".to_string(),
+                                ));
                             }
                         }
                     }
@@ -2913,7 +2912,7 @@ pub async fn run_agent_loop(
                                 _no_tests_consecutive = 0;
                                 emit_event(&app_handle, runtime.current_step(), &format!("Programación exitosa: {} archivos afectados", written_files.len()), "SUCCESS");
                             } else {
-                                last_programmer_error = obs.payload.clone();
+                                runtime.state_anchor.last_error = Some(obs.payload.clone());
                                 emit_event(&app_handle, runtime.current_step(), &format!("Error detectado en programación: {}", obs.payload), "ERROR");
                                 current_context.push_str(&format!("Programador: Fracasó con error:\n{}\n[SISTEMA]: Corrige este error en el próximo paso con TOOL_PROGRAMMER.\n\n", obs.payload));
                                 current_role = AgentRole::Planner;
