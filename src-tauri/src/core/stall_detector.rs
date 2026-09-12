@@ -20,6 +20,7 @@ pub struct ProgressSignature {
     pub evidence_count: u32,
     pub last_tool_used: String,
     pub last_command: String,
+    pub last_files: String,
     pub last_error_hash: u64,
 }
 
@@ -43,6 +44,10 @@ impl StallDetector {
             self.signatures.remove(0);
         }
         self.signatures.push(sig);
+    }
+
+    pub fn last_signature(&self) -> Option<&ProgressSignature> {
+        self.signatures.last()
     }
 
     /// Detect the most serious stall in the last window_size steps.
@@ -100,7 +105,7 @@ mod tests {
     fn sig(step: u32, tool: &str, cmd: &str, err: u64, files: u32, crit: u32, ev: u32) -> ProgressSignature {
         ProgressSignature {
             step, state_hash: 0, files_changed: files, criteria_satisfied: crit, evidence_count: ev,
-            last_tool_used: tool.to_string(), last_command: cmd.to_string(), last_error_hash: err,
+            last_tool_used: tool.to_string(), last_command: cmd.to_string(), last_files: "".to_string(), last_error_hash: err,
         }
     }
 

@@ -303,7 +303,7 @@ pub fn reset_agent_cancel() {
 }
 
 #[tauri::command]
-pub async fn process_user_prompt(mut user_message: String, workspace_path: String, orchestrator_model: String, programmer_model: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+pub async fn process_user_prompt(mut user_message: String, mut workspace_path: String, orchestrator_model: String, programmer_model: String, app_handle: tauri::AppHandle) -> Result<String, String> {
     let _guard = match AgentLockGuard::try_lock() {
         Some(g) => {
             reset_agent_cancel();
@@ -326,6 +326,15 @@ pub async fn process_user_prompt(mut user_message: String, workspace_path: Strin
     }
 
     let mut enriched_message = String::new();
+    let lower_user_msg = user_message.to_lowercase();
+    let is_explicit_continuation = lower_user_msg.contains("continua") || lower_user_msg.contains("sigue") || lower_user_msg.contains("procede") || lower_user_msg.contains("resume");
+    
+    if is_explicit_continuation {
+        if let Some(resume) = crate::core::mission_persist::find_pending_mission() {
+            workspace_path = resume.workspace_path;
+        }
+    }
+
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
 
     // ── Zero-latency meta-command intercept ──────────────────────────────────

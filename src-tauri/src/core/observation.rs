@@ -36,6 +36,8 @@ pub struct Observation {
     pub stderr_hash: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    #[serde(default)]
+    pub physical_files_changed: Option<u32>,
 }
 
 impl Observation {
@@ -55,6 +57,7 @@ impl Observation {
             stdout_hash: None,
             stderr_hash: None,
             cwd: None,
+            physical_files_changed: None,
         }
     }
 
@@ -76,6 +79,7 @@ impl Observation {
             stdout_hash: None,
             stderr_hash: None,
             cwd: None,
+            physical_files_changed: None,
         }
     }
 
@@ -101,6 +105,7 @@ impl Observation {
             stdout_hash: None,
             stderr_hash: None,
             cwd: None,
+            physical_files_changed: None,
         }
     }
 
@@ -120,6 +125,7 @@ impl Observation {
             stdout_hash: None,
             stderr_hash: None,
             cwd: None,
+            physical_files_changed: None,
         }
     }
 
@@ -139,6 +145,7 @@ impl Observation {
             stdout_hash: None,
             stderr_hash: None,
             cwd: None,
+            physical_files_changed: None,
         }
     }
 

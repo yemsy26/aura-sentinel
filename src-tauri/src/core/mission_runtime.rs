@@ -208,8 +208,10 @@ impl MissionRuntime {
 
     /// Authoritative State Synchronization: updates self.state_anchor directly from physical reality.
     pub fn update_anchor(&mut self, last_obs: Option<&Observation>) {
-        self.world_version += 1;
         let world_hash = self.current_world_hash();
+        if world_hash != self.state_anchor.world_hash {
+            self.world_version += 1;
+        }
         
         let mut existing_files: Vec<String> = match &self.world {
             Some(w) => w.files.keys().cloned().collect(),
@@ -324,11 +326,12 @@ impl MissionRuntime {
         let sig = ProgressSignature {
             step: self.cognitive_state.mission.current_step,
             state_hash,
-            files_changed: obs.files_affected.len() as u32,
+            files_changed: obs.physical_files_changed.unwrap_or(obs.files_affected.len() as u32),
             criteria_satisfied: self.verified_criteria_count(),
             evidence_count: self.evidence_graph.entries.len() as u32,
             last_tool_used: obs.tool_name.clone(),
             last_command: obs.command.clone().unwrap_or_default(),
+            last_files: obs.files_affected.join(","),
             last_error_hash: err_hash,
         };
         self.stall_detector.record_signature(sig);
@@ -366,6 +369,25 @@ impl MissionRuntime {
     pub fn authorize_action(&self, proposal: &ActionProposal) -> Result<(), String> {
         // 0a. ToolRegistry — is this a known tool name?
         ToolRegistry::validate_name(&proposal.tool)?;
+
+        // P0-4: Recovery Barrier
+        if let Some(stall) = self.should_stall_recover(3) {
+            // If the model is stalled, check if the current proposal is IDENTICAL to the last action.
+            if let Some(last_sig) = self.stall_detector.last_signature() {
+                let cmd = proposal.arguments.get("comando")
+                    .or_else(|| proposal.arguments.get("command"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let files = proposal.arguments.get("archivos_a_editar")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(","))
+                    .unwrap_or_default();
+                
+                if proposal.tool == last_sig.last_tool_used && cmd == last_sig.last_command && files == last_sig.last_files {
+                    return Err(format!("RECOVERY_BARRIER: Acción repetida bloqueada por estancamiento ({:?}). Debes cambiar tu estrategia o comando/archivo.", stall));
+                }
+            }
+        }
 
         // 0b. ToolRegistry — does this tool have a registered executor?
         //     TOOL_UNREGISTERED is a hard error: system misconfiguration, not a tool failure.
@@ -414,6 +436,27 @@ impl MissionRuntime {
         // 1. Full authorization gate: name → schema → budget → policy
         self.authorize_action(proposal)?;
 
+        // P0-3: Action Identity + Stale Proposal Rejection
+        if let Some(expected_hash) = proposal.world_hash {
+            if expected_hash != self.current_world_hash() {
+                // Reject stale action by returning an Error Observation
+                let mut obs = Observation::error(
+                    &proposal.tool,
+                    "STALE_ACTION: El entorno ha cambiado desde que tomaste la decisión. Re-evalúa el estado actual.",
+                    None,
+                    true,
+                    None
+                );
+                obs.state_hash_before = Some(self.current_world_hash());
+                obs.state_hash_after = obs.state_hash_before;
+                
+                // Record the observation so it goes to StallDetector
+                self.record_observation(&obs);
+                self.update_anchor(Some(&obs));
+                return Ok(obs);
+            }
+        }
+
         // 2. World snapshot BEFORE — abort if we cannot establish baseline
         if let Err(observe_err) = self.observe_world() {
             return Err(format!("OBSERVE_BEFORE_FAILED: {}", observe_err));
@@ -426,6 +469,7 @@ impl MissionRuntime {
             proposal.arguments.clone(),
         ).await;
 
+        let old_world = self.world.clone();
         // 4. World snapshot AFTER — None = observation failed (not "no change")
         let hash_after = match self.observe_world() {
             Ok(()) => Some(self.current_world_hash()),
@@ -477,6 +521,14 @@ impl MissionRuntime {
         }
         obs.state_hash_before = Some(hash_before);
         obs.state_hash_after  = hash_after;
+
+        let diff_count = if let (Some(w1), Some(w2)) = (&old_world, &self.world) {
+            let diff = w1.diff(w2);
+            (diff.added_files.len() + diff.modified_files.len() + diff.deleted_files.len()) as u32
+        } else {
+            0
+        };
+        obs.physical_files_changed = Some(diff_count);
 
         // 6. Record through full circuit (StallDetector, EvidenceGraph)
         self.record_observation(&obs);
@@ -585,6 +637,50 @@ mod tests {
         assert_eq!(rt.budget_remaining(), 0);
     }
 
+    // ── P0-1 and P0-3 Tests ──────────────────────────────────────────────
+    #[test]
+    fn test_p0_2_authoritative_planner_state() {
+        let mut rt = MissionRuntime::new(".", "Test P0-2", 10);
+        rt.state_anchor.world_hash = 999;
+        rt.state_anchor.world_version = 5;
+        let prompt_block = rt.state_anchor.format_prompt_block();
+        println!("PROMPT BLOCK: {}", prompt_block);
+        assert!(prompt_block.contains("00000000000003e7"));
+        assert!(prompt_block.contains("5"));
+    }
+
+    #[test]
+    fn test_p0_1_workspace_freeze() {
+        let rt = MissionRuntime::new("original/workspace", "Test", 10);
+        // The workspace should remain "original/workspace" regardless of external changes
+        assert_eq!(rt.workspace_path, "original/workspace");
+    }
+
+    #[tokio::test]
+    async fn test_p0_3_action_identity_and_stale_rejection() {
+        let mut rt = MissionRuntime::new(".", "Test", 10);
+        rt.tool_registry.register("TOOL_TERMINAL", std::sync::Arc::new(|_cmd| {
+            Box::pin(async move {
+                Ok(crate::core::tool_registry::ExecutionResult {
+                    stdout: "".to_string(), stderr: "".to_string(), exit_code: 0, files_affected: vec![],
+                    command: None, cwd: None, stdout_hash: "".to_string(), stderr_hash: "".to_string(),
+                })
+            })
+        }));
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".to_string(),
+            arguments: serde_json::json!({ "comando": "echo 1" }),
+            expected_effect: "None".to_string(),
+            risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: Some(12345), // Fake hash, mismatched with rt.current_world_hash()
+        };
+        let res = rt.execute_action(&proposal).await;
+        assert!(res.is_ok());
+        let obs = res.unwrap();
+        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error);
+        assert!(obs.payload.contains("STALE_ACTION"));
+    }
+
     // ── H-11: Architecture invariant tests ──────────────────────────────────
 
     /// H-11-A: restore_step() is the ONLY way to set step from outside.
@@ -615,6 +711,7 @@ mod tests {
             arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
         let result = rt.authorize_action(&proposal);
         assert!(result.is_err(), "authorize_action must deny when budget is exhausted");
@@ -736,6 +833,7 @@ mod tests {
             arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: "simulate output".into(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
 
         let obs = rt.execute_action(&proposal).await;
@@ -762,6 +860,7 @@ mod tests {
             arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
         let result = rt.execute_action(&proposal).await;
         assert!(result.is_err());
@@ -796,6 +895,7 @@ mod tests {
             arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
 
         let result = rt.execute_action(&proposal).await;
@@ -821,6 +921,7 @@ mod tests {
             arguments: serde_json::json!({"comando": "rustc nonexistent.rs"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
 
         let obs = rt.execute_action(&proposal).await
@@ -855,6 +956,7 @@ mod tests {
             arguments: serde_json::json!({"comando": ""}), // empty → SCHEMA_INVALID
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
 
         let result = rt.execute_action(&proposal).await;
@@ -876,6 +978,7 @@ mod tests {
             arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
         let result = rt.execute_action(&proposal).await;
         assert!(result.is_err());
@@ -897,6 +1000,7 @@ mod tests {
             arguments: serde_json::json!({"comando": "dir"}),
             expected_effect: String::new(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
         let obs = rt.execute_action(&proposal).await;
         assert!(obs.is_ok());
@@ -1057,6 +1161,7 @@ mod tests {
             arguments: serde_json::json!({ "comando": "cargo test" }),
             expected_effect: "Run test suite to produce required evidence".to_string(),
             risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
         };
 
         // 4. Dispatch through Runtime: ActionProposal -> Policy -> ToolRegistry -> Executor -> Observation -> Evidence

@@ -22,6 +22,7 @@ pub struct ActionProposal {
     pub arguments: serde_json::Value,
     pub expected_effect: String,
     pub risk: RiskLevel,
+    pub world_hash: Option<u64>,
 }
 
 pub struct PolicyEngine;

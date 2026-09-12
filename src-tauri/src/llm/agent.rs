@@ -243,7 +243,15 @@ fn is_phase_file_satisfied(workspace_path: &str, file_name: &str) -> bool {
 
 /// Formats the acceptance contract from the Planner's TOOL_THINK 'comando' field.
 fn formato_contrato(cmd: &str) -> String {
-    format!("CRITERIOS DE EXITO DEFINIDOS POR EL PLANIFICADOR:\n{}", cmd)
+    let mut out = format!("CRITERIOS DE EXITO DEFINIDOS POR EL PLANIFICADOR:\n{}", cmd);
+    let cmd_lower = cmd.to_lowercase();
+    if cmd_lower.contains("dashboard") || cmd_lower.contains("panel") {
+        out.push_str("\n\nCRITERIOS AUTOMÁTICOS PARA DASHBOARDS (P1-3):");
+        out.push_str("\n- [ ] Layout de cuadrícula/flexbox responsivo.");
+        out.push_str("\n- [ ] Contenedores para gráficos interactivos/datos.");
+        out.push_str("\n- [ ] Separación clara de UI y lógica de actualización.");
+    }
+    out
 }
 
 /// Auto-genera runners (test, build, dev, lint) para el proyecto detectando el lenguaje
@@ -1141,19 +1149,10 @@ pub async fn run_agent_loop(
         // Fix P0: WorldState -> MissionStateAnchor -> Prompt -> LLM single source of truth
         let (live_workspace_context, workspace_is_empty) = {
             let is_empty = runtime.state_anchor.existing_files.is_empty();
-            let repo_map = if is_empty {
-                String::new()
-            } else {
-                crate::core::map::generate_repo_map(std::path::Path::new(&workspace_path))
-            };
             let anchor_block = runtime.state_anchor.format_prompt_block();
-            let ctx = if repo_map.is_empty() {
-                anchor_block
-            } else {
-                format!("{}\n\n{}", repo_map, anchor_block)
-            };
-            (ctx, is_empty)
+            (anchor_block, is_empty)
         };
+
 
         // ── Critic → Executor feedback block ──────────────────────────────────
         let critic_feedback_block = if let Some(ref fb) = critic_feedback {
@@ -1479,6 +1478,7 @@ pub async fn run_agent_loop(
                             arguments: serde_json::json!({ "comando": forced_cmd_to_run.clone() }),
                             expected_effect: "Interceptor auto-exec after persistent loop".to_string(),
                             risk: crate::core::policy::PolicyEngine::classify_terminal_command(&forced_cmd_to_run),
+            world_hash: Some(runtime.current_world_hash()),
                         };
 
                         match runtime.execute_action(&intercept_proposal).await {
@@ -1669,6 +1669,7 @@ pub async fn run_agent_loop(
             } else {
                 crate::core::policy::RiskLevel::Safe
             },
+            world_hash: Some(runtime.current_world_hash()),
         };
 
         // authorize_action removed (handled by execute_action)        }
@@ -2046,6 +2047,7 @@ pub async fn run_agent_loop(
                                     arguments: serde_json::json!({ "package": binary }),
                                     expected_effect: format!("Auto-recovery install of missing binary {}", binary),
                                     risk: crate::core::policy::RiskLevel::Moderate,
+            world_hash: Some(runtime.current_world_hash()),
                                 };
 
                                 match runtime.execute_action(&env_proposal).await {
@@ -2657,13 +2659,15 @@ pub async fn run_agent_loop(
             "TOOL_THINK" => {
                     think_consecutive += 1;
                     if think_consecutive > 1 {
-                        emit_event(&app_handle, runtime.current_step(), "[COOLDOWN] Bucle TOOL_THINK interceptado. Forzando herramienta operativa.", "WARNING");
-                        current_context.push_str(&format!("PASO {}:\nTOOL_THINK bloqueado: no se permite reflexión consecutiva sin acción. DEBES usar TOOL_PROGRAMMER o TOOL_TERMINAL.\n\n", runtime.current_step()));
+                        emit_event(&app_handle, runtime.current_step(), "[COOLDOWN] Bucle TOOL_THINK interceptado. NON_PROGRESS_THINK -> Forzando replan.", "WARNING");
+                        current_context.push_str(&format!("PASO {}:\nNON_PROGRESS_THINK: No se permite reflexión consecutiva sin acción. El entorno no ha cambiado. DEBES ejecutar una acción física (TOOL_PROGRAMMER o TOOL_TERMINAL) o replantear completamente tu estrategia.\n\n", runtime.current_step()));
+                        
                         let has_files = !runtime.state_anchor.existing_files.is_empty();
                         if !has_files {
-                            forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Forzado para romper bucle de reflexión. Escribe los archivos requeridos con TOOL_PROGRAMMER.".to_string()));
+                            forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Workspace vacío. Escribe los archivos iniciales requeridos.".to_string()));
                         } else {
-                            forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Crea un script de verificación (verify_*.py) con TOOL_PROGRAMMER.".to_string()));
+                            // If files exist, force terminal to test/verify instead of getting stuck thinking
+                            forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "dir".to_string()));
                         }
                     } else {
                         emit_event(&app_handle, runtime.current_step(), "Pensando y planificando...", "ACTION");
@@ -2676,13 +2680,24 @@ pub async fn run_agent_loop(
                             } else {
                                 if !comando.trim().is_empty() {
                                     acceptance_contract = Some(formato_contrato(&comando));
-                                    runtime.contract.add_criterion(
-                                        &format!("AC-{:03}", runtime.contract.acceptance_criteria.len() + 1),
-                                        &comando.chars().take(120).collect::<String>(),
-                                        crate::core::mission_contract::VerificationMethod::ManualReview,
-                                        false,
-                                    );
-                                    emit_event(&app_handle, runtime.current_step(), &format!("[CONTRATO] Criterios definidos: {}", comando.chars().take(80).collect::<String>()), "INFO");
+                                    
+                                    let mut criteria = vec![comando.chars().take(120).collect::<String>()];
+                                    let cmd_lower = comando.to_lowercase();
+                                    if cmd_lower.contains("dashboard") || cmd_lower.contains("panel") {
+                                        criteria.push("Layout responsivo (CSS Grid/Flexbox)".to_string());
+                                        criteria.push("Contenedores para gráficos interactivos".to_string());
+                                        criteria.push("Separación clara de lógica y UI".to_string());
+                                    }
+
+                                    for c in criteria {
+                                        runtime.contract.add_criterion(
+                                            &format!("AC-{:03}", runtime.contract.acceptance_criteria.len() + 1),
+                                            &c,
+                                            crate::core::mission_contract::VerificationMethod::ManualReview,
+                                            false,
+                                        );
+                                    }
+                                    emit_event(&app_handle, runtime.current_step(), &format!("[CONTRATO] Criterios definidos ({} total)", runtime.contract.acceptance_criteria.len()), "INFO");
                                 }
                                 current_role = AgentRole::Executor;
                                 critic_feedback = None;
@@ -2813,6 +2828,7 @@ pub async fn run_agent_loop(
                         arguments: prog_args,
                         expected_effect: pensamiento.clone(),
                         risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: Some(runtime.current_world_hash()),
                     };
 
                     emit_event(&app_handle, runtime.current_step(), &format!("[ROUTER] Delegando a ProgrammerExecutor (modelo: {})...", target_model), "INFO");
@@ -2964,6 +2980,7 @@ pub async fn run_agent_loop(
                     }),
                     expected_effect: "Visual UI evaluation".to_string(),
                     risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: Some(runtime.current_world_hash()),
                 };
 
                 match runtime.execute_action(&action_proposal).await {
@@ -3043,6 +3060,7 @@ pub async fn run_agent_loop(
                                             arguments: serde_json::json!({ "package": binary }),
                                             expected_effect: format!("Auto-install missing test binary {}", binary),
                                             risk: crate::core::policy::RiskLevel::Moderate,
+            world_hash: Some(runtime.current_world_hash()),
                                         };
                                         if let Ok(env_obs) = runtime.execute_action(&env_prop).await {
                                             if env_obs.status == crate::core::observation::ObservationStatus::Success {
@@ -3503,6 +3521,7 @@ pub async fn run_agent_loop(
                         arguments: serde_json::json!({ "comando": comando.clone() }),
                         expected_effect: "Auto-redirected shell command".to_string(),
                         risk: crate::core::policy::PolicyEngine::classify_terminal_command(&comando),
+            world_hash: Some(runtime.current_world_hash()),
                     };
 
                     if let Err(auth_err) = runtime.authorize_action(&auto_proposal) {

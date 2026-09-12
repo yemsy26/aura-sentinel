@@ -49,7 +49,7 @@ impl ContextMonitor {
 
     /// Check if context should be compacted
     pub fn should_compact(&self, current_len: usize) -> bool {
-        current_len > self.max_chars
+        current_len > (self.max_chars as f32 * 0.85) as usize
     }
 
     pub fn sanitize_tail(tail: &str) -> String {
@@ -81,7 +81,8 @@ impl ContextMonitor {
     /// Compacting logic that strictly preserves the Immutable Task Charter,
     /// the Authoritative Mission State Anchor, and purges stale hallucinated statements from the tail.
     pub fn compact_context(&self, context: &str, mission_state: &str) -> String {
-        if context.len() <= self.max_chars {
+        let target_len = (self.max_chars as f32 * 0.70) as usize;
+        if context.len() <= target_len {
             return context.to_string();
         }
 
@@ -98,7 +99,7 @@ impl ContextMonitor {
         let notice_marker = "\n[... ✂️ HISTORIAL ANTIGUO ELIMINADO Y SANITIZADO PARA PREVENIR ECHOLALIA ...]\n\n";
 
         let fixed_overhead = charter_block.len() + mission_state_block.len() + notice_marker.len();
-        let tail_budget = self.max_chars.saturating_sub(fixed_overhead);
+        let tail_budget = target_len.saturating_sub(fixed_overhead);
 
         let raw_tail: String = context.chars().rev().take(tail_budget).collect::<Vec<_>>().into_iter().rev().collect();
 

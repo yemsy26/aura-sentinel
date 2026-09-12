@@ -407,6 +407,7 @@ mod tests {
             arguments: serde_json::json!({ "comando": "cargo test" }),
             expected_effect: "Run test suite".to_string(),
             risk: RiskLevel::Safe,
+            world_hash: None,
         };
 
         // Execution Gateway: Authorize & Execute
