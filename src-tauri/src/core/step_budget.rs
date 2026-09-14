@@ -28,7 +28,8 @@ impl StepBudget {
         let execution_budget = (total_steps as f32 * 0.40).round() as u32;
         let verification_budget = (total_steps as f32 * 0.30).round() as u32;
         let recovery_budget = (total_steps as f32 * 0.20).round() as u32;
-        let handoff_budget = total_steps.saturating_sub(execution_budget + verification_budget + recovery_budget);
+        let handoff_budget =
+            total_steps.saturating_sub(execution_budget + verification_budget + recovery_budget);
 
         Self {
             total_steps,

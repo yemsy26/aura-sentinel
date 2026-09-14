@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::core::learning::experience::Experience;
 use crate::core::learning::outcome::LearningOutcome;
 use crate::core::learning::strategy::StrategyKind;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Per-model performance statistics for adaptive routing.
 /// Migrates and supersedes llm/router.rs::ModelStats.
@@ -12,8 +12,8 @@ pub struct ModelStats {
     /// Fingerprint language dimension for segmentation
     pub language: Option<String>,
     pub attempts: u64,
-    pub successes: u64,       // LearningOutcome::Success
-    pub partial: u64,         // LearningOutcome::PartialSuccess
+    pub successes: u64, // LearningOutcome::Success
+    pub partial: u64,   // LearningOutcome::PartialSuccess
     pub failures: u64,
     pub total_steps: u64,
     pub total_latency_ms: u64,
@@ -32,13 +32,17 @@ impl ModelStats {
     }
 
     pub fn average_steps(&self) -> f32 {
-        if self.attempts == 0 { return 10.0; }
+        if self.attempts == 0 {
+            return 10.0;
+        }
         self.total_steps as f32 / self.attempts as f32
     }
 
     #[allow(dead_code)]
     pub fn average_latency_ms(&self) -> f32 {
-        if self.attempts == 0 { return 0.0; }
+        if self.attempts == 0 {
+            return 0.0;
+        }
         self.total_latency_ms as f32 / self.attempts as f32
     }
 
@@ -50,7 +54,9 @@ impl ModelStats {
 
     /// Failure penalty: compile + test failures normalized to attempts
     fn failure_penalty(&self) -> f32 {
-        if self.attempts == 0 { return 0.0; }
+        if self.attempts == 0 {
+            return 0.0;
+        }
         let rate = (self.compile_failures + self.test_failures) as f32 / self.attempts as f32;
         rate.min(1.0)
     }
@@ -74,7 +80,7 @@ impl ModelStats {
 /// Per-strategy performance statistics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StrategyStats {
-    pub strategy: String,  // StrategyKind::as_str()
+    pub strategy: String, // StrategyKind::as_str()
     pub language: Option<String>,
     pub attempts: u64,
     pub successes: u64,
@@ -93,7 +99,9 @@ impl StrategyStats {
 
     #[allow(dead_code)]
     pub fn recovery_success_rate(&self) -> f32 {
-        if self.recoveries == 0 { return 0.5; }
+        if self.recoveries == 0 {
+            return 0.5;
+        }
         self.successful_recoveries as f32 / self.recoveries as f32
     }
 }
@@ -111,7 +119,9 @@ pub fn compute_model_stats_from(
         ..Default::default()
     };
     for e in exps {
-        if e.model != model { continue; }
+        if e.model != model {
+            continue;
+        }
         s.attempts += 1;
         match e.result.outcome {
             LearningOutcome::Success => s.successes += 1,
@@ -120,11 +130,21 @@ pub fn compute_model_stats_from(
         }
         s.total_steps += e.result.metrics.steps as u64;
         s.tool_failures += e.result.metrics.failed_actions as u64;
-        s.compile_failures += e.result.failures.iter()
-            .filter(|f| f.class == "Compile").count() as u64;
-        s.test_failures += e.result.failures.iter()
-            .filter(|f| f.class == "Test").count() as u64;
-        if e.result.recovery.is_some() { s.recoveries += 1; }
+        s.compile_failures += e
+            .result
+            .failures
+            .iter()
+            .filter(|f| f.class == "Compile")
+            .count() as u64;
+        s.test_failures += e
+            .result
+            .failures
+            .iter()
+            .filter(|f| f.class == "Test")
+            .count() as u64;
+        if e.result.recovery.is_some() {
+            s.recoveries += 1;
+        }
     }
     s
 }
@@ -141,7 +161,9 @@ pub fn compute_strategy_stats_from(
         ..Default::default()
     };
     for e in exps {
-        if e.strategy.as_str() != strat_str { continue; }
+        if e.strategy.as_str() != strat_str {
+            continue;
+        }
         s.attempts += 1;
         match e.result.outcome {
             LearningOutcome::Success => s.successes += 1,
@@ -151,7 +173,9 @@ pub fn compute_strategy_stats_from(
         s.total_steps += e.result.metrics.steps as u64;
         if let Some(rec) = &e.result.recovery {
             s.recoveries += 1;
-            if rec.succeeded { s.successful_recoveries += 1; }
+            if rec.succeeded {
+                s.successful_recoveries += 1;
+            }
         }
     }
     s
@@ -163,7 +187,9 @@ pub fn build_model_stats_map(exps: &[Experience]) -> HashMap<String, ModelStats>
     let refs: Vec<&Experience> = exps.iter().collect();
     let models: std::collections::HashSet<&str> = refs.iter().map(|e| e.model.as_str()).collect();
     for model in models {
-        let lang = refs.iter().find(|e| e.model == model)
+        let lang = refs
+            .iter()
+            .find(|e| e.model == model)
             .and_then(|e| e.fingerprint.language.as_deref());
         let stats = compute_model_stats_from(model, lang, &refs);
         map.insert(model.to_string(), stats);
@@ -174,11 +200,15 @@ pub fn build_model_stats_map(exps: &[Experience]) -> HashMap<String, ModelStats>
 pub fn build_strategy_stats_map(exps: &[Experience]) -> HashMap<String, StrategyStats> {
     let mut map: HashMap<String, StrategyStats> = HashMap::new();
     let refs: Vec<&Experience> = exps.iter().collect();
-    let strategies: std::collections::HashSet<String> =
-        refs.iter().map(|e| e.strategy.as_str().to_string()).collect();
+    let strategies: std::collections::HashSet<String> = refs
+        .iter()
+        .map(|e| e.strategy.as_str().to_string())
+        .collect();
     for strat_str in strategies {
         let strat = StrategyKind::from_str(&strat_str);
-        let lang = refs.iter().find(|e| e.strategy.as_str() == strat_str)
+        let lang = refs
+            .iter()
+            .find(|e| e.strategy.as_str() == strat_str)
             .and_then(|e| e.fingerprint.language.as_deref());
         let stats = compute_strategy_stats_from(&strat, lang, &refs);
         map.insert(strat_str, stats);

@@ -1,43 +1,46 @@
 pub enum IntentAction {
     Finish(String),
-    Resume { objetivo: String, resume_msg: String },
+    Resume {
+        objetivo: String,
+        resume_msg: String,
+    },
 }
 
 /// Zero-latency intent router that intercepts meta-queries BEFORE the LLM pipeline.
-pub fn try_handle_meta_command(
-    user_message: &str,
-    workspace_path: &str,
-) -> Option<IntentAction> {
+pub fn try_handle_meta_command(user_message: &str, workspace_path: &str) -> Option<IntentAction> {
     let msg = user_message.trim().to_lowercase();
 
     // ── Status / pending task queries ───────────────────────────────────────
-    let is_status_query = contains_any(&msg, &[
-        "que tenia pendiente",
-        "qué tenia pendiente",
-        "que tenía pendiente",
-        "qué tenía pendiente",
-        "que estaba haciendo",
-        "qué estaba haciendo",
-        "revisa que tarea",
-        "revisa qué tarea",
-        "cual era mi tarea",
-        "cuál era mi tarea",
-        "que tarea tenia",
-        "qué tarea tenía",
-        "en que estaba",
-        "en qué estaba",
-        "estado de la mision",
-        "estado de la misión",
-        "show status",
-        "mission status",
-        "que me falta",
-        "qué me falta",
-        "que habia hecho",
-        "qué había hecho",
-        "resumen de la tarea",
-        "check task",
-        "pending task",
-    ]);
+    let is_status_query = contains_any(
+        &msg,
+        &[
+            "que tenia pendiente",
+            "qué tenia pendiente",
+            "que tenía pendiente",
+            "qué tenía pendiente",
+            "que estaba haciendo",
+            "qué estaba haciendo",
+            "revisa que tarea",
+            "revisa qué tarea",
+            "cual era mi tarea",
+            "cuál era mi tarea",
+            "que tarea tenia",
+            "qué tarea tenía",
+            "en que estaba",
+            "en qué estaba",
+            "estado de la mision",
+            "estado de la misión",
+            "show status",
+            "mission status",
+            "que me falta",
+            "qué me falta",
+            "que habia hecho",
+            "qué había hecho",
+            "resumen de la tarea",
+            "check task",
+            "pending task",
+        ],
+    );
 
     if is_status_query {
         let journal = crate::core::session_journal::load_journal(workspace_path);
@@ -46,21 +49,25 @@ pub fn try_handle_meta_command(
     }
 
     // ── Resume / continue task ───────────────────────────────────────────────
-    let is_resume = contains_any(&msg, &[
-        "continua",
-        "continúa",
-        "retoma",
-        "retoma la tarea",
-        "sigue",
-        "continue",
-        "resume",
-        "donde me quede",
-        "donde me quedé",
-    ]);
+    let is_resume = contains_any(
+        &msg,
+        &[
+            "continua",
+            "continúa",
+            "retoma",
+            "retoma la tarea",
+            "sigue",
+            "continue",
+            "resume",
+            "donde me quede",
+            "donde me quedé",
+        ],
+    );
 
     if is_resume {
         let journal = crate::core::session_journal::load_journal(workspace_path);
-        if !journal.objetivo.is_empty() && (journal.status == "EN_PROGRESO" || journal.interrupted) {
+        if !journal.objetivo.is_empty() && (journal.status == "EN_PROGRESO" || journal.interrupted)
+        {
             // Return a message that tells the frontend to re-run with the saved objective
             let resume_msg = format!(
                 "🔄 **Retomando misión desde el paso {}**\n\n\
@@ -85,14 +92,17 @@ pub fn try_handle_meta_command(
     }
 
     // ── Help / capabilities ──────────────────────────────────────────────────
-    let is_help = contains_any(&msg, &[
-        "que puedes hacer",
-        "qué puedes hacer",
-        "ayuda",
-        "help",
-        "comandos disponibles",
-        "herramientas disponibles",
-    ]);
+    let is_help = contains_any(
+        &msg,
+        &[
+            "que puedes hacer",
+            "qué puedes hacer",
+            "ayuda",
+            "help",
+            "comandos disponibles",
+            "herramientas disponibles",
+        ],
+    );
 
     if is_help {
         let help_text = r#"🛡️ **Aura-Sentinel — Comandos Disponibles**

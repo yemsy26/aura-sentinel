@@ -1,5 +1,5 @@
-use std::path::Path;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,7 +45,9 @@ impl ProjectProfile {
         let has_git = ws.join(".git").exists();
 
         // Check package managers
-        if has_cargo { package_managers.push("cargo".to_string()); }
+        if has_cargo {
+            package_managers.push("cargo".to_string());
+        }
         if has_pyproject || has_reqs || has_setup_py {
             if ws.join("poetry.lock").exists() {
                 package_managers.push("poetry".to_string());
@@ -70,27 +72,49 @@ impl ProjectProfile {
         // Framework detection in package.json
         if has_pkg_json {
             if let Ok(content) = std::fs::read_to_string(ws.join("package.json")) {
-                if content.contains("\"react\"") { frameworks.push("React".to_string()); }
-                if content.contains("\"vue\"") { frameworks.push("Vue".to_string()); }
-                if content.contains("\"@angular") { frameworks.push("Angular".to_string()); }
-                if content.contains("\"phaser\"") { frameworks.push("Phaser".to_string()); }
-                if content.contains("\"tauri\"") || content.contains("\"@tauri-apps") { frameworks.push("Tauri".to_string()); }
-                if content.contains("\"express\"") { frameworks.push("Express".to_string()); }
-                if content.contains("\"next\"") { frameworks.push("Next.js".to_string()); }
+                if content.contains("\"react\"") {
+                    frameworks.push("React".to_string());
+                }
+                if content.contains("\"vue\"") {
+                    frameworks.push("Vue".to_string());
+                }
+                if content.contains("\"@angular") {
+                    frameworks.push("Angular".to_string());
+                }
+                if content.contains("\"phaser\"") {
+                    frameworks.push("Phaser".to_string());
+                }
+                if content.contains("\"tauri\"") || content.contains("\"@tauri-apps") {
+                    frameworks.push("Tauri".to_string());
+                }
+                if content.contains("\"express\"") {
+                    frameworks.push("Express".to_string());
+                }
+                if content.contains("\"next\"") {
+                    frameworks.push("Next.js".to_string());
+                }
             }
         }
 
         // Primary & Secondary determination
         let primary = if has_cargo {
             if has_pkg_json {
-                secondary.push(if has_tsconfig { PrimaryLanguage::TypeScript } else { PrimaryLanguage::JavaScript });
+                secondary.push(if has_tsconfig {
+                    PrimaryLanguage::TypeScript
+                } else {
+                    PrimaryLanguage::JavaScript
+                });
             }
             PrimaryLanguage::Rust
         } else if has_go_mod {
             PrimaryLanguage::Go
         } else if has_pyproject || has_reqs || has_setup_py {
             if has_pkg_json {
-                secondary.push(if has_tsconfig { PrimaryLanguage::TypeScript } else { PrimaryLanguage::JavaScript });
+                secondary.push(if has_tsconfig {
+                    PrimaryLanguage::TypeScript
+                } else {
+                    PrimaryLanguage::JavaScript
+                });
             }
             PrimaryLanguage::Python
         } else if has_tsconfig {
@@ -120,9 +144,13 @@ impl ProjectProfile {
             PrimaryLanguage::Rust => Some("cargo test".to_string()),
             PrimaryLanguage::Python => Some("pytest".to_string()),
             PrimaryLanguage::JavaScript | PrimaryLanguage::TypeScript => {
-                let pm = self.package_managers.first().map(|s| s.as_str()).unwrap_or("npm");
+                let pm = self
+                    .package_managers
+                    .first()
+                    .map(|s| s.as_str())
+                    .unwrap_or("npm");
                 Some(format!("{} test", pm))
-            },
+            }
             PrimaryLanguage::Go => Some("go test ./...".to_string()),
             PrimaryLanguage::DotNet => Some("dotnet test".to_string()),
             PrimaryLanguage::HtmlCss | PrimaryLanguage::Unknown => None,
@@ -138,9 +166,13 @@ impl ProjectProfile {
             PrimaryLanguage::Rust => Some("cargo run".to_string()),
             PrimaryLanguage::Python => Some("python main.py".to_string()),
             PrimaryLanguage::JavaScript | PrimaryLanguage::TypeScript => {
-                let pm = self.package_managers.first().map(|s| s.as_str()).unwrap_or("npm");
+                let pm = self
+                    .package_managers
+                    .first()
+                    .map(|s| s.as_str())
+                    .unwrap_or("npm");
                 Some(format!("{} run dev", pm))
-            },
+            }
             PrimaryLanguage::Go => Some("go run .".to_string()),
             PrimaryLanguage::DotNet => Some("dotnet run".to_string()),
             PrimaryLanguage::HtmlCss => Some("start index.html".to_string()),

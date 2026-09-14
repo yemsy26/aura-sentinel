@@ -2,10 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod core;
-mod memory;
 mod llm;
+mod memory;
 mod net;
-
 
 #[tauri::command]
 async fn get_background_tasks() -> Result<Vec<serde_json::Value>, String> {
@@ -22,24 +21,24 @@ fn get_system_stats() -> String {
     use sysinfo::System;
     let mut sys = System::new_all();
     sys.refresh_all();
-    
+
     let total_mem = sys.total_memory() as f64 / 1073741824.0; // GB
     let used_mem = sys.used_memory() as f64 / 1073741824.0; // GB
     let mem_percent = (used_mem / total_mem) * 100.0;
-    
+
     let cpus = sys.cpus();
     let cpu_usage = if !cpus.is_empty() {
         cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpus.len() as f32
     } else {
         0.0
     };
-    
+
     let status = if mem_percent > 85.0 {
         " [OOM SAFE MODE]"
     } else {
         ""
     };
-    
+
     let app_mem = if let Ok(pid) = sysinfo::get_current_pid() {
         if let Some(process) = sys.process(pid) {
             process.memory() as f64 / 1048576.0
@@ -49,15 +48,22 @@ fn get_system_stats() -> String {
     } else {
         0.0
     };
-    
-    format!("CPU: {:.1}% | RAM Sys: {:.1}/{:.1} GB | App: {:.0} MB{}", cpu_usage, used_mem, total_mem, app_mem, status)
-}
 
+    format!(
+        "CPU: {:.1}% | RAM Sys: {:.1}/{:.1} GB | App: {:.0} MB{}",
+        cpu_usage, used_mem, total_mem, app_mem, status
+    )
+}
 
 // ── Fase 4: Scheduler Tauri commands ─────────────────────────────────────────
 
 #[tauri::command]
-fn schedule_task(objective: String, workspace: String, cron_expr: String, description: String) -> String {
+fn schedule_task(
+    objective: String,
+    workspace: String,
+    cron_expr: String,
+    description: String,
+) -> String {
     core::scheduler::register_task(&objective, &workspace, &cron_expr, &description)
 }
 
@@ -110,7 +116,10 @@ async fn get_ollama_models() -> Result<Vec<String>, String> {
                     for m in models {
                         if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
                             let lower = name.to_lowercase();
-                            if !lower.contains("embed") && !lower.contains("bge-") && !lower.contains("minilm") {
+                            if !lower.contains("embed")
+                                && !lower.contains("bge-")
+                                && !lower.contains("minilm")
+                            {
                                 model_names.push(name.to_string());
                             }
                         }
@@ -119,13 +128,12 @@ async fn get_ollama_models() -> Result<Vec<String>, String> {
                 }
             }
             Err("No models found".to_string())
-        },
+        }
         Err(e) => Err(e.to_string()),
     }
 }
 
 fn main() {
-
     // Aislamiento de hardware: Desactivar GPU en WebView2 (Windows)
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
@@ -145,7 +153,7 @@ fn main() {
 
             Ok(())
         })
-.invoke_handler(tauri::generate_handler![
+        .invoke_handler(tauri::generate_handler![
             memory::get_workspace_tree,
             memory::get_current_directory,
             memory::init_memory_log,

@@ -1,5 +1,5 @@
 //! stub_enforcer.rs — Anti-Stub Code Quality Shield
-//! 
+//!
 //! Inspects code proposed by the LLM BEFORE it is written to disk.
 //! Rejects any file that contains stub patterns (empty implementations,
 //! TODO markers, or placeholder bodies) and returns detailed feedback
@@ -57,7 +57,9 @@ pub fn detect_stubs(content: &str, file_path: &str) -> StubReport {
             Cada función debe tener lógica funcional real.",
             file_path,
             warnings.len(),
-            warnings.iter().enumerate()
+            warnings
+                .iter()
+                .enumerate()
                 .map(|(i, w)| format!("  {}. {}", i + 1, w))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -66,7 +68,11 @@ pub fn detect_stubs(content: &str, file_path: &str) -> StubReport {
         String::new()
     };
 
-    StubReport { has_stubs, warnings, rejection_message }
+    StubReport {
+        has_stubs,
+        warnings,
+        rejection_message,
+    }
 }
 
 fn check_python_stubs(content: &str, warnings: &mut Vec<String>) {
@@ -85,7 +91,8 @@ fn check_python_stubs(content: &str, warnings: &mut Vec<String>) {
             if in_function && body_lines == 0 {
                 warnings.push(format!(
                     "Línea {}: función '{}' no tiene cuerpo implementado",
-                    function_line + 1, function_name
+                    function_line + 1,
+                    function_name
                 ));
             }
             // Track new function
@@ -112,16 +119,16 @@ fn check_python_stubs(content: &str, warnings: &mut Vec<String>) {
         // Detect explicit stub patterns regardless of context
         if trimmed == "pass" {
             // Only flag standalone pass (not in control flow like if/try/except)
-            let prev_non_empty = lines[..i].iter().rev()
+            let prev_non_empty = lines[..i]
+                .iter()
+                .rev()
                 .find(|l| !l.trim().is_empty())
                 .map(|l| l.trim())
                 .unwrap_or("");
-            if prev_non_empty.starts_with("def ") 
+            if prev_non_empty.starts_with("def ")
                 || prev_non_empty.starts_with("async def ")
-                || prev_non_empty.ends_with(':') && (
-                    prev_non_empty.starts_with("def ") || 
-                    prev_non_empty.starts_with("class ")
-                )
+                || prev_non_empty.ends_with(':')
+                    && (prev_non_empty.starts_with("def ") || prev_non_empty.starts_with("class "))
             {
                 warnings.push(format!(
                     "Línea {}: 'pass' detectado como cuerpo vacío de función o clase",
@@ -131,16 +138,31 @@ fn check_python_stubs(content: &str, warnings: &mut Vec<String>) {
         }
 
         if trimmed.starts_with("# TODO") || trimmed.starts_with("# todo") {
-            warnings.push(format!("Línea {}: marcador TODO no implementado: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: marcador TODO no implementado: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
         if trimmed.starts_with("# FIXME") || trimmed.starts_with("# fixme") {
-            warnings.push(format!("Línea {}: marcador FIXME encontrado: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: marcador FIXME encontrado: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
         if trimmed.starts_with("raise NotImplementedError") {
-            warnings.push(format!("Línea {}: NotImplementedError — función no implementada", i + 1));
+            warnings.push(format!(
+                "Línea {}: NotImplementedError — función no implementada",
+                i + 1
+            ));
         }
         if trimmed.starts_with("# implement") || trimmed.starts_with("# Implement") {
-            warnings.push(format!("Línea {}: placeholder de implementación: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: placeholder de implementación: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
         if trimmed.starts_with("# draw") || trimmed.starts_with("# Dibujar") {
             // Common chess/game stub: "# Dibujar el tablero y las piezas"
@@ -149,7 +171,8 @@ fn check_python_stubs(content: &str, warnings: &mut Vec<String>) {
                 if next == "pass" || next.is_empty() {
                     warnings.push(format!(
                         "Línea {}: comentario de placeholder sin implementación real: '{}'",
-                        i + 1, trimmed
+                        i + 1,
+                        trimmed
                     ));
                 }
             }
@@ -162,13 +185,20 @@ fn check_rust_stubs(content: &str, warnings: &mut Vec<String>) {
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.contains("todo!()") {
-            warnings.push(format!("Línea {}: todo!() — función no implementada", i + 1));
+            warnings.push(format!(
+                "Línea {}: todo!() — función no implementada",
+                i + 1
+            ));
         }
         if trimmed.contains("unimplemented!()") {
             warnings.push(format!("Línea {}: unimplemented!() detectado", i + 1));
         }
         if trimmed.starts_with("// TODO") || trimmed.starts_with("// todo") {
-            warnings.push(format!("Línea {}: TODO sin implementar: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: TODO sin implementar: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
         // FIX: Only flag empty body {} if the PRECEDING non-empty line is a fn/impl,
         // NOT if it's a struct/enum/type/trait/const (those legitimately have empty {}).
@@ -179,7 +209,7 @@ fn check_rust_stubs(content: &str, warnings: &mut Vec<String>) {
                 .find(|l| !l.trim().is_empty())
                 .map(|l| l.trim())
                 .unwrap_or("");
-            let is_fn_body = prev_code.contains("fn ") 
+            let is_fn_body = prev_code.contains("fn ")
                 || prev_code.contains("async fn ")
                 || (prev_code.ends_with('{') && prev_code.contains("impl "));
             let is_type_def = prev_code.starts_with("struct ")
@@ -191,25 +221,39 @@ fn check_rust_stubs(content: &str, warnings: &mut Vec<String>) {
                 || prev_code.starts_with("pub trait ")
                 || prev_code.contains("derive");
             if is_fn_body && !is_type_def {
-                warnings.push(format!("Línea {}: cuerpo de función vacío detectado", i + 1));
+                warnings.push(format!(
+                    "Línea {}: cuerpo de función vacío detectado",
+                    i + 1
+                ));
             }
         }
     }
 }
 
-
 fn check_js_stubs(content: &str, warnings: &mut Vec<String>) {
     for (i, line) in content.lines().enumerate() {
         let trimmed = line.trim();
-        if trimmed.contains("throw new Error('not implemented')") 
-            || trimmed.contains("throw new Error(\"not implemented\")") {
-            warnings.push(format!("Línea {}: función no implementada (throw Error)", i + 1));
+        if trimmed.contains("throw new Error('not implemented')")
+            || trimmed.contains("throw new Error(\"not implemented\")")
+        {
+            warnings.push(format!(
+                "Línea {}: función no implementada (throw Error)",
+                i + 1
+            ));
         }
         if trimmed.starts_with("// TODO") || trimmed.starts_with("// todo") {
-            warnings.push(format!("Línea {}: TODO sin implementar: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: TODO sin implementar: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
         if trimmed == "// implement here" || trimmed == "// implementar aquí" {
-            warnings.push(format!("Línea {}: placeholder de implementación: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: placeholder de implementación: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
     }
 }
@@ -218,7 +262,11 @@ fn check_go_stubs(content: &str, warnings: &mut Vec<String>) {
     for (i, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("// TODO") || trimmed.starts_with("// todo") {
-            warnings.push(format!("Línea {}: TODO sin implementar: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: TODO sin implementar: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
         if trimmed.contains("panic(\"not implemented\")") {
             warnings.push(format!("Línea {}: panic not implemented detectado", i + 1));
@@ -230,10 +278,17 @@ fn check_java_stubs(content: &str, warnings: &mut Vec<String>) {
     for (i, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("// TODO") || trimmed.starts_with("// todo") {
-            warnings.push(format!("Línea {}: TODO sin implementar: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: TODO sin implementar: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
         if trimmed.contains("throw new UnsupportedOperationException") {
-            warnings.push(format!("Línea {}: UnsupportedOperationException — método no implementado", i + 1));
+            warnings.push(format!(
+                "Línea {}: UnsupportedOperationException — método no implementado",
+                i + 1
+            ));
         }
     }
 }
@@ -242,7 +297,11 @@ fn check_generic_stubs(content: &str, warnings: &mut Vec<String>) {
     for (i, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("# TODO") || trimmed.starts_with("// TODO") {
-            warnings.push(format!("Línea {}: TODO sin implementar: '{}'", i + 1, trimmed));
+            warnings.push(format!(
+                "Línea {}: TODO sin implementar: '{}'",
+                i + 1,
+                trimmed
+            ));
         }
     }
 }
@@ -251,10 +310,14 @@ fn check_bat_stubs(content: &str, warnings: &mut Vec<String>) {
     // FIX: Accept multiple valid pause/silence patterns used by intentional silent scripts.
     // Only warn if the script has real logic (>3 non-comment lines) and NONE of the patterns.
     let lower_content = content.to_lowercase();
-    let real_lines = content.lines()
+    let real_lines = content
+        .lines()
         .filter(|l| {
             let t = l.trim();
-            !t.is_empty() && !t.starts_with("rem ") && !t.starts_with("::") && !t.starts_with("@echo")
+            !t.is_empty()
+                && !t.starts_with("rem ")
+                && !t.starts_with("::")
+                && !t.starts_with("@echo")
         })
         .count();
     let has_pause_pattern = lower_content.contains("pause")
@@ -268,7 +331,6 @@ fn check_bat_stubs(content: &str, warnings: &mut Vec<String>) {
         warnings.push("Script .bat sin pausa ni control de flujo. Si la ventana debe mantenerse abierta, añade 'pause' al final.".to_string());
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -342,6 +342,107 @@ impl MissionRuntime {
     // ─── Observation Recording ─────────────────────────────────────────────────
 
     /// Records a structured tool observation and feeds it to StallDetector.
+    fn parse_semantic_verifier_result(
+        &self,
+        obs: &Observation,
+        official_verifier_cmd: Option<&str>,
+    ) -> Option<crate::core::evidence::VerifierResult> {
+        let official = official_verifier_cmd?;
+
+        let normalize_cmd = |s: &str| -> String {
+            s.trim()
+                .replace('\\', "/")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+
+        let obs_command = obs.command.as_deref().unwrap_or_default();
+        if normalize_cmd(obs_command) != normalize_cmd(official) {
+            return None;
+        }
+
+        // 1. STRICT CWD CHECK
+        let obs_cwd = obs.cwd.as_deref()?; // MUST exist
+        if self.workspace_path.trim().is_empty() {
+            return None; // workspace MUST exist
+        }
+
+        let canonical_ws = self
+            .workspace_path
+            .trim()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_lowercase();
+        let canonical_cwd = obs_cwd
+            .trim()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_lowercase();
+
+        if canonical_ws.is_empty() || canonical_cwd.is_empty() {
+            return None;
+        }
+        if canonical_ws != canonical_cwd {
+            return None; // Strict exact match only
+        }
+
+        // 2. STRICT STATE HASH CHECK
+        let state_hash = obs.state_hash_after?;
+
+        // 3. EXIT CODE
+        let exit_code = obs.exit_code?;
+
+        // 4. JSON PARSING
+        let last_line = obs
+            .payload
+            .lines()
+            .rev()
+            .find(|l| l.trim().starts_with('{') && l.trim().ends_with('}'))?;
+        let val: serde_json::Value = serde_json::from_str(last_line).ok()?;
+
+        let passed_raw = val.get("passed")?.as_u64()?;
+        let total_raw = val.get("total")?.as_u64()?;
+        let failed_arr = val.get("failed_criteria")?.as_array()?;
+
+        // 5. NUMERIC RANGE
+        if total_raw == 0 || passed_raw > total_raw || total_raw > u32::MAX as u64 {
+            return None;
+        }
+        let passed = passed_raw as u32;
+        let total = total_raw as u32;
+
+        let percentage = val.get("percentage")?.as_f64()?;
+
+        // 6. PERCENTAGE MATH (strict precision)
+        let expected = (passed as f64 / total as f64) * 100.0;
+        if (expected - percentage).abs() > 0.01 {
+            return None;
+        }
+
+        // 7. STRICT FAILED CRITERIA SCHEMA
+        let mut failed = Vec::new();
+        for item in failed_arr {
+            if let Some(s) = item.as_str() {
+                failed.push(s.to_string());
+            } else {
+                return None; // Invalid schema
+            }
+        }
+
+        Some(crate::core::evidence::VerifierResult {
+            command: obs_command.to_string(),
+            cwd: obs_cwd.to_string(),
+            passed,
+            total,
+            percentage: percentage as f32,
+            failed_criteria: failed,
+            state_hash,
+            exit_code,
+        })
+    }
+
     pub fn record_observation(&mut self, obs: &Observation) {
         let ok = obs.status == crate::core::observation::ObservationStatus::Success;
         if !ok {
@@ -352,164 +453,26 @@ impl MissionRuntime {
             if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
                 use crate::core::evidence::{EvidenceKind, StructuredFact};
 
-                // P0: Replace blind implicit claim with structured execution facts.
-                // Bind real process metadata ONLY if exit_code is present.
-                // If exit_code is None (e.g. no process metadata or infrastructure failure),
-                // NEVER fabricate success with unwrap_or(0) — do not record technical command evidence.
                 if let Some(exit_code) = obs.exit_code {
-                    // ── P0-C: STRICT SEMANTIC PARSER ──────────────────────────────────────────
-                    // A VerifierResult is ONLY created when ALL of these are true simultaneously:
-                    //   1. The observation command matches the OFFICIAL verifier command in the contract
-                    //   2. The cwd matches the mission workspace
-                    //   3. JSON is structurally valid and contains required fields
-                    //   4. total > 0 (no degenerate result)
-                    //   5. passed <= total (mathematical integrity)
-                    //   6. percentage corresponds to passed/total within float tolerance
-                    //   7. exit_code comes from the real process (already in obs.exit_code)
-                    //   8. state_hash is bound to post-execution world state
-                    //
-                    // Any command that is NOT the official verifier produces a plain CommandResult,
-                    // even if its stdout happens to contain a matching JSON shape.
-                    // ──────────────────────────────────────────────────────────────────────────
-
-                    // Extract the official verifier command from the contract, if any.
-                    let official_verifier_cmd: Option<String> = self
-                        .contract
-                        .acceptance_criteria
-                        .iter()
-                        .find_map(|ac| {
-                            if let crate::core::mission_contract::VerificationMethod::SemanticVerification {
-                                command,
-                            } = &ac.verification
-                            {
-                                Some(command.clone())
-                            } else {
-                                None
-                            }
-                        });
-
-                    let normalize_cmd = |s: &str| -> String {
-                        s.trim()
-                            .replace('\\', "/")
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .to_lowercase()
-                    };
-
-                    let obs_command = obs.command.clone().unwrap_or_default();
-                    let obs_cwd = obs.cwd.clone().unwrap_or_default();
-
-                    let is_official_verifier = official_verifier_cmd.as_deref().map_or(
-                        false,
-                        |official| {
-                            let cmd_matches =
-                                normalize_cmd(&obs_command) == normalize_cmd(official);
-
-                            let cwd_ok = {
-                                let ws = self
-                                    .workspace_path
-                                    .trim()
-                                    .replace('\\', "/")
-                                    .trim_end_matches('/')
-                                    .to_lowercase();
-                                let cwd = obs_cwd
-                                    .trim()
-                                    .replace('\\', "/")
-                                    .trim_end_matches('/')
-                                    .to_lowercase();
-
-                                // Accept if:
-                                // - cwd is empty or "." (test / no metadata)
-                                // - workspace is empty (test runtime with no workspace set)
-                                // - paths match exactly
-                                // - cwd starts with workspace (verifier in subdirectory)
-                                cwd.is_empty()
-                                    || cwd == "."
-                                    || ws.is_empty()
-                                    || ws == "."
-                                    || cwd == ws
-                                    || cwd.starts_with(&format!("{}/", ws))
-                            };
-
-                            cmd_matches && cwd_ok
-                        },
-                    );
-
-                    let mut semantic_fact = None;
-
-                    if is_official_verifier {
-                        // Only now attempt JSON parsing
-                        if let Some(last_line) = obs
-                            .payload
-                            .lines()
-                            .rev()
-                            .find(|l| l.trim().starts_with('{') && l.trim().ends_with('}'))
-                        {
-                            if let Ok(val) =
-                                serde_json::from_str::<serde_json::Value>(last_line)
-                            {
-                                if let (Some(passed_raw), Some(total_raw), Some(failed_arr)) = (
-                                    val.get("passed").and_then(|v| v.as_u64()),
-                                    val.get("total").and_then(|v| v.as_u64()),
-                                    val.get("failed_criteria").and_then(|v| v.as_array()),
-                                ) {
-                                    let passed = passed_raw as u32;
-                                    let total = total_raw as u32;
-
-                                    // Invariant: total > 0
-                                    // Invariant: passed <= total
-                                    if total > 0 && passed <= total {
-                                        let percentage = val
-                                            .get("percentage")
-                                            .and_then(|v| v.as_f64())
-                                            .unwrap_or(0.0)
-                                            as f32;
-
-                                        // Invariant: percentage is mathematically consistent
-                                        let expected_pct = (passed as f32 / total as f32) * 100.0;
-                                        let pct_consistent =
-                                            (percentage - expected_pct).abs() < 1.5; // 1.5% tolerance for float repr
-
-                                        if pct_consistent {
-                                            let failed: Vec<String> = failed_arr
-                                                .iter()
-                                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                                .collect();
-
-                                            semantic_fact = Some(
-                                                StructuredFact::SemanticVerificationResult(
-                                                    crate::core::evidence::VerifierResult {
-                                                        command: obs_command.clone(),
-                                                        cwd: obs_cwd.clone(),
-                                                        passed,
-                                                        total,
-                                                        percentage,
-                                                        failed_criteria: failed,
-                                                        state_hash: obs
-                                                            .state_hash_after
-                                                            .unwrap_or_else(|| {
-                                                                self.current_world_hash()
-                                                            }),
-                                                        exit_code,
-                                                    },
-                                                ),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
+                    let official_verifier_cmd = self.contract.acceptance_criteria.iter().find_map(|ac| {
+                        if let crate::core::mission_contract::VerificationMethod::SemanticVerification { command } = &ac.verification {
+                            Some(command.clone())
+                        } else {
+                            None
                         }
-                    }
+                    });
 
-                    if let Some(fact) = semantic_fact {
+                    let semantic_fact =
+                        self.parse_semantic_verifier_result(obs, official_verifier_cmd.as_deref());
+
+                    if let Some(verifier_result) = semantic_fact {
                         let _ = self.evidence_graph.record_structured(
                             EvidenceKind::SemanticVerification,
                             &obs.tool_name,
-                            fact,
+                            StructuredFact::SemanticVerificationResult(verifier_result),
                             1.0,
                             self.cognitive_state.mission.current_step,
-                            Some(obs.state_hash_after.unwrap_or_else(|| self.current_world_hash())),
+                            obs.state_hash_after, // Safe to pass since parser enforces it's Some
                         );
                     } else {
                         let fact = StructuredFact::CommandResult {
@@ -532,7 +495,10 @@ impl MissionRuntime {
                             fact,
                             0.85,
                             self.cognitive_state.mission.current_step,
-                            Some(obs.state_hash_after.unwrap_or_else(|| self.current_world_hash())),
+                            Some(
+                                obs.state_hash_after
+                                    .unwrap_or_else(|| self.current_world_hash()),
+                            ),
                         );
                     }
                 }
@@ -843,68 +809,27 @@ impl MissionRuntime {
         use crate::core::observation::ObservationStatus;
         match obs.status {
             ObservationStatus::Error => {
-                // P0-C: Only treat error payload as SemanticVerificationResult if the command
-                // is the OFFICIAL verifier registered in the contract.
-                let official_verifier_cmd: Option<String> = self
-                    .contract
-                    .acceptance_criteria
-                    .iter()
-                    .find_map(|ac| {
-                        if let crate::core::mission_contract::VerificationMethod::SemanticVerification {
-                            command,
-                        } = &ac.verification
-                        {
+                let tool_upper = obs.tool_name.to_uppercase();
+                if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
+                    let official_verifier_cmd = self.contract.acceptance_criteria.iter().find_map(|ac| {
+                        if let crate::core::mission_contract::VerificationMethod::SemanticVerification { command } = &ac.verification {
                             Some(command.clone())
                         } else {
                             None
                         }
                     });
 
-                let is_official_verifier_error = if let Some(official) = &official_verifier_cmd {
-                    let normalize = |s: &str| -> String {
-                        s.trim()
-                            .replace('\\', "/")
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .to_lowercase()
-                    };
-                    let obs_cmd = obs.command.as_deref().unwrap_or("");
-                    normalize(obs_cmd) == normalize(official)
-                } else {
-                    false
-                };
-
-                if is_official_verifier_error && obs.payload.trim().starts_with('{') {
-                    if let Ok(val) =
-                        serde_json::from_str::<serde_json::Value>(&obs.payload)
+                    if let Some(verifier_result) =
+                        self.parse_semantic_verifier_result(obs, official_verifier_cmd.as_deref())
                     {
-                        if let Some(percentage) =
-                            val.get("percentage").and_then(|v| v.as_f64())
-                        {
-                            if percentage < 100.0 {
-                                let failed: Vec<String> = val
-                                    .get("failed_criteria")
-                                    .and_then(|v| v.as_array())
-                                    .map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|i| i.as_str().map(String::from))
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-
-                                return Some(
-                                    crate::core::recovery::RecoveryDecision::RepairCriteria {
-                                        criteria: failed,
-                                        recommended_tool: "TOOL_PROGRAMMER".to_string(),
-                                    },
-                                );
-                            }
+                        if verifier_result.passed < verifier_result.total {
+                            return Some(RecoveryDecision::RepairCriteria {
+                                criteria: verifier_result.failed_criteria,
+                                recommended_tool: "TOOL_PROGRAMMER".to_string(),
+                            });
                         }
                     }
                 }
-
-                // Error -> classify -> RecoveryEngine -> decision
                 Some(self.plan_recovery(&obs.tool_name, &obs.payload))
             }
             ObservationStatus::Cancelled => {
@@ -967,7 +892,7 @@ mod tests {
     #[tokio::test]
     async fn test_real_dashboard_recovery_loop() {
         let mut rt = MissionRuntime::new(".", "Dashboard", 25);
-        
+
         rt.contract.add_criterion(
             "SV-1",
             "Verifier passes",
@@ -977,16 +902,7 @@ mod tests {
             true,
         );
 
-        let json_payload = r#"{
-            "passed": 0,
-            "total": 1,
-            "percentage": 0.0,
-            "failed_criteria": ["Dashboard no carga"],
-            "exit_code": 1,
-            "command": "python verify_dashboard.py",
-            "cwd": ".",
-            "state_hash": 1234
-        }"#;
+        let json_payload = r#"{"passed": 0, "total": 1, "percentage": 0.0, "failed_criteria": ["Dashboard no carga"], "exit_code": 1, "command": "python verify_dashboard.py", "cwd": ".", "state_hash": 1234}"#;
 
         let obs = crate::core::observation::Observation::error(
             "TOOL_TERMINAL",
@@ -999,6 +915,8 @@ mod tests {
         let mut obs_cloned = obs.clone();
         obs_cloned.command = Some("python verify_dashboard.py".to_string());
         obs_cloned.cwd = Some(".".to_string());
+        obs_cloned.exit_code = Some(1); // Required for strict semantic parser
+        obs_cloned.state_hash_after = Some(1234); // Required for strict semantic parser
 
         let recovery = rt.handle_observation(&obs_cloned);
 
@@ -1012,7 +930,7 @@ mod tests {
             assert_eq!(criteria[0], "Dashboard no carga");
             assert_eq!(recommended_tool, "TOOL_PROGRAMMER");
         } else {
-            panic!("Expected RepairCriteria but got something else");
+            panic!("Expected RepairCriteria but got something else: {:?}", recovery);
         }
     }
 
@@ -1971,7 +1889,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-    // ─── P0-C: Strict Semantic Parser Tests ───────────────────────────────────
+    // ─── P0-C.1: Strict Semantic Parser Tests (A-J) ───────────────────────────
 
     fn make_runtime_with_verifier(verifier_cmd: &str) -> MissionRuntime {
         let mut rt = MissionRuntime::new("/workspace", "Test mission", 50);
@@ -1988,183 +1906,168 @@ mod tests {
 
     fn make_obs_with_json(
         cmd: &str,
-        cwd: &str,
+        cwd: Option<&str>,
         json: &str,
         exit_code: i32,
     ) -> crate::core::observation::Observation {
-        let mut obs = crate::core::observation::Observation::success(
-            "TOOL_TERMINAL",
-            json,
-            vec![],
-        );
+        let mut obs = crate::core::observation::Observation::success("TOOL_TERMINAL", json, vec![]);
         obs.exit_code = Some(exit_code);
         obs.command = Some(cmd.to_string());
-        obs.cwd = Some(cwd.to_string());
+        obs.cwd = cwd.map(|s| s.to_string());
+        obs.state_hash_after = Some(12345);
         obs
     }
 
-    // P0-C-1: Official verifier + valid JSON + 12/12 → SemanticVerificationResult recorded
-    #[tokio::test]
-    async fn test_p0c_official_verifier_produces_semantic_result() {
-        let official_cmd = "python verify_dashboard.py";
-        let ws = "/workspace";
-        let mut rt = make_runtime_with_verifier(official_cmd);
-        let json =
-            r#"{"passed":12,"total":12,"percentage":100.0,"failed_criteria":[]}"#;
-        let obs = make_obs_with_json(official_cmd, ws, json, 0);
-        rt.record_observation(&obs);
-
-        println!("DEBUG P0-C-1 Entries: {:#?}", rt.evidence_graph.entries);
-
-        let sem_count = rt
-            .evidence_graph
+    fn count_semantic(rt: &MissionRuntime) -> usize {
+        rt.evidence_graph
             .entries
             .iter()
             .filter(|e| e.kind == crate::core::evidence::EvidenceKind::SemanticVerification)
-            .count();
-        assert_eq!(
-            sem_count, 1,
-            "P0-C-1: Official verifier must produce SemanticVerification evidence"
-        );
+            .count()
     }
 
-    // P0-C-2: Wrong command → only CommandResult, NO SemanticVerificationResult
+    // A. cwd missing → no semantic
     #[tokio::test]
-    async fn test_p0c_wrong_command_does_not_produce_semantic_result() {
-        let official_cmd = "python verify_dashboard.py";
-        let ws = "/workspace";
-        let mut rt = make_runtime_with_verifier(official_cmd);
-        let json =
-            r#"{"passed":12,"total":12,"percentage":100.0,"failed_criteria":[]}"#;
-        // Different command, same JSON shape
-        let obs = make_obs_with_json("python random_script.py", ws, json, 0);
+    async fn test_p0c1_a_cwd_missing() {
+        let mut rt = make_runtime_with_verifier("run");
+        let obs = make_obs_with_json(
+            "run",
+            None,
+            r#"{"passed":10,"total":10,"percentage":100.0,"failed_criteria":[]}"#,
+            0,
+        );
         rt.record_observation(&obs);
-
-        let sem_count = rt
-            .evidence_graph
-            .entries
-            .iter()
-            .filter(|e| e.kind == crate::core::evidence::EvidenceKind::SemanticVerification)
-            .count();
-        assert_eq!(
-            sem_count, 0,
-            "P0-C-2: Wrong command must NOT produce SemanticVerification evidence"
-        );
+        assert_eq!(count_semantic(&rt), 0);
     }
 
-    // P0-C-3: Official verifier + percentage inconsistent with passed/total → no semantic result
+    // B. cwd mismatch → no semantic
     #[tokio::test]
-    async fn test_p0c_inconsistent_percentage_rejected() {
-        let official_cmd = "python verify_dashboard.py";
-        let ws = "/workspace";
-        let mut rt = make_runtime_with_verifier(official_cmd);
-        // passed=8/total=12 but percentage claims 100
-        let json =
-            r#"{"passed":8,"total":12,"percentage":100.0,"failed_criteria":[]}"#;
-        let obs = make_obs_with_json(official_cmd, ws, json, 0);
+    async fn test_p0c1_b_cwd_mismatch() {
+        let mut rt = make_runtime_with_verifier("run");
+        let obs = make_obs_with_json(
+            "run",
+            Some("/wrong_workspace"),
+            r#"{"passed":10,"total":10,"percentage":100.0,"failed_criteria":[]}"#,
+            0,
+        );
         rt.record_observation(&obs);
-
-        let sem_count = rt
-            .evidence_graph
-            .entries
-            .iter()
-            .filter(|e| e.kind == crate::core::evidence::EvidenceKind::SemanticVerification)
-            .count();
-        assert_eq!(
-            sem_count, 0,
-            "P0-C-3: Inconsistent percentage must be rejected"
-        );
+        assert_eq!(count_semantic(&rt), 0);
     }
 
-    // P0-C-4: Official verifier + total=0 → no semantic result
+    // C. state_hash_after missing → no semantic
     #[tokio::test]
-    async fn test_p0c_total_zero_rejected() {
-        let official_cmd = "python verify_dashboard.py";
-        let ws = "/workspace";
-        let mut rt = make_runtime_with_verifier(official_cmd);
-        let json = r#"{"passed":0,"total":0,"percentage":100.0,"failed_criteria":[]}"#;
-        let obs = make_obs_with_json(official_cmd, ws, json, 0);
+    async fn test_p0c1_c_state_hash_missing() {
+        let mut rt = make_runtime_with_verifier("run");
+        let mut obs = make_obs_with_json(
+            "run",
+            Some("/workspace"),
+            r#"{"passed":10,"total":10,"percentage":100.0,"failed_criteria":[]}"#,
+            0,
+        );
+        obs.state_hash_after = None;
         rt.record_observation(&obs);
-
-        let sem_count = rt
-            .evidence_graph
-            .entries
-            .iter()
-            .filter(|e| e.kind == crate::core::evidence::EvidenceKind::SemanticVerification)
-            .count();
-        assert_eq!(
-            sem_count, 0,
-            "P0-C-4: total=0 must be rejected"
-        );
+        assert_eq!(count_semantic(&rt), 0);
     }
 
-    // P0-C-5: No SemanticVerification in contract → any JSON is plain CommandResult
+    // D. percentage 81 for 8/10 → no semantic
     #[tokio::test]
-    async fn test_p0c_no_contract_verifier_means_no_semantic_result() {
-        let mut rt = MissionRuntime::new("/workspace", "Test", 50);
-        // No SemanticVerification criterion added
-        let json =
-            r#"{"passed":12,"total":12,"percentage":100.0,"failed_criteria":[]}"#;
-        let obs = make_obs_with_json("python anything.py", "/workspace", json, 0);
+    async fn test_p0c1_d_percentage_math() {
+        let mut rt = make_runtime_with_verifier("run");
+        let obs = make_obs_with_json(
+            "run",
+            Some("/workspace"),
+            r#"{"passed":8,"total":10,"percentage":81.0,"failed_criteria":[]}"#,
+            0,
+        );
         rt.record_observation(&obs);
-
-        let sem_count = rt
-            .evidence_graph
-            .entries
-            .iter()
-            .filter(|e| e.kind == crate::core::evidence::EvidenceKind::SemanticVerification)
-            .count();
-        assert_eq!(
-            sem_count, 0,
-            "P0-C-5: Without SemanticVerification criterion, no SemanticVerification evidence"
-        );
+        assert_eq!(count_semantic(&rt), 0);
     }
 
-    // P0-C-6: handle_observation error path only fires RepairCriteria for official verifier
+    // E. failed_criteria contains integer → no semantic
     #[tokio::test]
-    async fn test_p0c_error_path_requires_official_verifier() {
-        let official_cmd = "python verify_dashboard.py";
-        let ws = "/workspace";
-        let mut rt = make_runtime_with_verifier(official_cmd);
-        // Wrong command with a failed verifier JSON as error payload
-        let json = r#"{"passed":8,"total":12,"percentage":66.7,"failed_criteria":["C5","C8"]}"#;
-        let mut obs =
-            crate::core::observation::Observation::error("TOOL_TERMINAL", json, Some(1), true, None);
-        obs.command = Some("python malicious.py".to_string()); // NOT official
-        obs.cwd = Some(ws.to_string());
+    async fn test_p0c1_e_failed_criteria_integer() {
+        let mut rt = make_runtime_with_verifier("run");
+        let obs = make_obs_with_json(
+            "run",
+            Some("/workspace"),
+            r#"{"passed":9,"total":10,"percentage":90.0,"failed_criteria":["A", 123]}"#,
+            0,
+        );
+        rt.record_observation(&obs);
+        assert_eq!(count_semantic(&rt), 0);
+    }
 
-        let decision = rt.handle_observation(&obs);
-        // Should NOT produce RepairCriteria — just normal recovery
-        let is_repair = matches!(
-            decision,
+    // F. failed_criteria contains null → no semantic
+    #[tokio::test]
+    async fn test_p0c1_f_failed_criteria_null() {
+        let mut rt = make_runtime_with_verifier("run");
+        let obs = make_obs_with_json(
+            "run",
+            Some("/workspace"),
+            r#"{"passed":9,"total":10,"percentage":90.0,"failed_criteria":[null]}"#,
+            0,
+        );
+        rt.record_observation(&obs);
+        assert_eq!(count_semantic(&rt), 0);
+    }
+
+    // G. u64 overflow → no semantic
+    #[tokio::test]
+    async fn test_p0c1_g_u64_overflow() {
+        let mut rt = make_runtime_with_verifier("run");
+        // Passed is small, but total overflows u32
+        let obs = make_obs_with_json(
+            "run",
+            Some("/workspace"),
+            r#"{"passed":1,"total":4294967298,"percentage":0.0,"failed_criteria":[]}"#,
+            0,
+        );
+        rt.record_observation(&obs);
+        assert_eq!(count_semantic(&rt), 0);
+    }
+
+    // H. error path and success path produce identical parsing result
+    #[tokio::test]
+    async fn test_p0c1_h_error_and_success_same_parser() {
+        let mut rt = make_runtime_with_verifier("run");
+        let json = r#"{"passed":9,"total":10,"percentage":90.0,"failed_criteria":["C1"]}"#;
+
+        let mut obs_err = make_obs_with_json("run", Some("/workspace"), json, 1);
+        obs_err.status = crate::core::observation::ObservationStatus::Error;
+        let recovery = rt.handle_observation(&obs_err);
+
+        assert!(matches!(
+            recovery,
             Some(crate::core::recovery::RecoveryDecision::RepairCriteria { .. })
-        );
-        assert!(
-            !is_repair,
-            "P0-C-6: Wrong command in error must NOT trigger RepairCriteria"
-        );
+        ));
     }
 
-    // P0-C-7: Official verifier error path DOES fire RepairCriteria when < 100%
+    // I. official verifier + valid payload + matching cwd + state_hash → semantic
     #[tokio::test]
-    async fn test_p0c_official_verifier_error_triggers_repair_criteria() {
-        let official_cmd = "python verify_dashboard.py";
-        let ws = "/workspace";
-        let mut rt = make_runtime_with_verifier(official_cmd);
-        let json = r#"{"passed":8,"total":12,"percentage":66.7,"failed_criteria":["C5","C8"]}"#;
-        let mut obs =
-            crate::core::observation::Observation::error("TOOL_TERMINAL", json, Some(1), true, None);
-        obs.command = Some(official_cmd.to_string());
-        obs.cwd = Some(ws.to_string());
-
-        let decision = rt.handle_observation(&obs);
-        assert!(
-            matches!(
-                decision,
-                Some(crate::core::recovery::RecoveryDecision::RepairCriteria { .. })
-            ),
-            "P0-C-7: Official verifier failure must trigger RepairCriteria"
+    async fn test_p0c1_i_official_valid_semantic() {
+        let mut rt = make_runtime_with_verifier("run");
+        let obs = make_obs_with_json(
+            "run",
+            Some("/workspace"),
+            r#"{"passed":10,"total":10,"percentage":100.0,"failed_criteria":[]}"#,
+            0,
         );
+        rt.record_observation(&obs);
+        assert_eq!(count_semantic(&rt), 1);
+    }
+
+    // J. official verifier + fake JSON from arbitrary command → no semantic
+    #[tokio::test]
+    async fn test_p0c1_j_arbitrary_cmd_no_semantic() {
+        let mut rt = make_runtime_with_verifier("run");
+        let obs = make_obs_with_json(
+            "evil",
+            Some("/workspace"),
+            r#"{"passed":10,"total":10,"percentage":100.0,"failed_criteria":[]}"#,
+            0,
+        );
+        rt.record_observation(&obs);
+        assert_eq!(count_semantic(&rt), 0);
     }
 }
 

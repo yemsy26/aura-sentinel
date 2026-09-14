@@ -1,8 +1,8 @@
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use crate::core::learning::experience::{Experience, ExperienceStoreV2};
 use crate::core::learning::stats::{ModelStats, StrategyStats};
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 const EXPERIENCES_FILE: &str = "learning_experiences.jsonl";
 const MODEL_STATS_FILE: &str = "model_stats.json";
@@ -37,15 +37,23 @@ impl LearningPersistence {
         Self { dir }
     }
 
-    pub fn experiences_path(&self) -> PathBuf { self.dir.join(EXPERIENCES_FILE) }
-    fn model_stats_path(&self) -> PathBuf { self.dir.join(MODEL_STATS_FILE) }
-    fn strategy_stats_path(&self) -> PathBuf { self.dir.join(STRATEGY_STATS_FILE) }
+    pub fn experiences_path(&self) -> PathBuf {
+        self.dir.join(EXPERIENCES_FILE)
+    }
+    fn model_stats_path(&self) -> PathBuf {
+        self.dir.join(MODEL_STATS_FILE)
+    }
+    fn strategy_stats_path(&self) -> PathBuf {
+        self.dir.join(STRATEGY_STATS_FILE)
+    }
 
     /// Load ExperienceStoreV2. Corrupt lines are silently skipped — cold-start safe.
     pub fn load_experiences(&self, max_entries: usize) -> ExperienceStoreV2 {
         let mut store = ExperienceStoreV2::new(max_entries);
         let path = self.experiences_path();
-        if !path.exists() { return store; }
+        if !path.exists() {
+            return store;
+        }
 
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
@@ -55,14 +63,20 @@ impl LearningPersistence {
         let mut all: Vec<Experience> = Vec::new();
         for line in content.lines() {
             let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
             if let Ok(exp) = serde_json::from_str::<Experience>(trimmed) {
                 all.push(exp);
             }
             // corrupt lines skipped silently — fallback to whatever is valid
         }
 
-        let start = if all.len() > max_entries { all.len() - max_entries } else { 0 };
+        let start = if all.len() > max_entries {
+            all.len() - max_entries
+        } else {
+            0
+        };
         for exp in all.into_iter().skip(start) {
             store.push(exp);
         }
@@ -77,19 +91,20 @@ impl LearningPersistence {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let tmp_path = self.dir.join(format!("exp_{}_{:x}.tmp", std::process::id(), nanos));
+        let tmp_path = self
+            .dir
+            .join(format!("exp_{}_{:x}.tmp", std::process::id(), nanos));
 
         // 1. Read existing content (empty string if file doesn't exist yet)
         let existing = if path.exists() {
-            std::fs::read_to_string(&path)
-                .map_err(|e| format!("PERSIST_READ: {}", e))?
+            std::fs::read_to_string(&path).map_err(|e| format!("PERSIST_READ: {}", e))?
         } else {
             String::new()
         };
 
         // 2. Serialize new experience
-        let new_line = serde_json::to_string(exp)
-            .map_err(|e| format!("PERSIST_SERIALIZE: {}", e))?;
+        let new_line =
+            serde_json::to_string(exp).map_err(|e| format!("PERSIST_SERIALIZE: {}", e))?;
 
         // 3. Write existing + new line to .tmp
         {
@@ -99,8 +114,7 @@ impl LearningPersistence {
                 f.write_all(existing.as_bytes())
                     .map_err(|e| format!("PERSIST_TMP_WRITE_EXISTING: {}", e))?;
             }
-            writeln!(f, "{}", new_line)
-                .map_err(|e| format!("PERSIST_TMP_WRITELN: {}", e))?;
+            writeln!(f, "{}", new_line).map_err(|e| format!("PERSIST_TMP_WRITELN: {}", e))?;
             f.sync_all()
                 .map_err(|e| format!("PERSIST_TMP_FSYNC: {}", e))?;
         }
@@ -110,15 +124,19 @@ impl LearningPersistence {
     }
 
     pub async fn save_model_stats(
-        &self, stats: &HashMap<String, ModelStats>,
+        &self,
+        stats: &HashMap<String, ModelStats>,
     ) -> Result<(), String> {
-        self.atomic_json_write(&self.model_stats_path(), stats).await
+        self.atomic_json_write(&self.model_stats_path(), stats)
+            .await
     }
 
     pub async fn save_strategy_stats(
-        &self, stats: &HashMap<String, StrategyStats>,
+        &self,
+        stats: &HashMap<String, StrategyStats>,
     ) -> Result<(), String> {
-        self.atomic_json_write(&self.strategy_stats_path(), stats).await
+        self.atomic_json_write(&self.strategy_stats_path(), stats)
+            .await
     }
 
     pub fn load_model_stats(&self) -> HashMap<String, ModelStats> {
@@ -126,7 +144,8 @@ impl LearningPersistence {
     }
 
     pub fn load_strategy_stats(&self) -> HashMap<String, StrategyStats> {
-        self.load_json(&self.strategy_stats_path()).unwrap_or_default()
+        self.load_json(&self.strategy_stats_path())
+            .unwrap_or_default()
     }
 
     /// Persist the StateStrategyIndex as a derived cache (AL-v2.3).
@@ -135,11 +154,14 @@ impl LearningPersistence {
         &self,
         index: &crate::core::learning::state_stats::StateStrategyIndex,
     ) -> Result<(), String> {
-        self.atomic_json_write(&self.dir.join("state_strategy_index.json"), index).await
+        self.atomic_json_write(&self.dir.join("state_strategy_index.json"), index)
+            .await
     }
 
     #[allow(dead_code)]
-    pub fn load_state_strategy_index(&self) -> crate::core::learning::state_stats::StateStrategyIndex {
+    pub fn load_state_strategy_index(
+        &self,
+    ) -> crate::core::learning::state_stats::StateStrategyIndex {
         self.load_json(&self.dir.join("state_strategy_index.json"))
             .unwrap_or_default()
     }
@@ -149,7 +171,8 @@ impl LearningPersistence {
         &self,
         index: &crate::core::learning::recovery_index::RecoveryIndex,
     ) -> Result<(), String> {
-        self.atomic_json_write(&self.dir.join("recovery_index.json"), index).await
+        self.atomic_json_write(&self.dir.join("recovery_index.json"), index)
+            .await
     }
 
     #[allow(dead_code)]
@@ -163,7 +186,8 @@ impl LearningPersistence {
         &self,
         index: &crate::core::learning::budget_stats::BudgetAwareIndex,
     ) -> Result<(), String> {
-        self.atomic_json_write(&self.dir.join("budget_index.json"), index).await
+        self.atomic_json_write(&self.dir.join("budget_index.json"), index)
+            .await
     }
 
     #[allow(dead_code)]
@@ -173,18 +197,22 @@ impl LearningPersistence {
     }
 
     async fn atomic_json_write<T: serde::Serialize>(
-        &self, path: &Path, value: &T,
+        &self,
+        path: &Path,
+        value: &T,
     ) -> Result<(), String> {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let tmp = self.dir.join(format!("stats_{}_{:x}.tmp", std::process::id(), nanos));
-        let json = serde_json::to_string_pretty(value)
-            .map_err(|e| format!("PERSIST_SERIALIZE: {}", e))?;
+        let tmp = self
+            .dir
+            .join(format!("stats_{}_{:x}.tmp", std::process::id(), nanos));
+        let json =
+            serde_json::to_string_pretty(value).map_err(|e| format!("PERSIST_SERIALIZE: {}", e))?;
         {
-            let mut f = std::fs::File::create(&tmp)
-                .map_err(|e| format!("PERSIST_TMP_CREATE: {}", e))?;
+            let mut f =
+                std::fs::File::create(&tmp).map_err(|e| format!("PERSIST_TMP_CREATE: {}", e))?;
             f.write_all(json.as_bytes())
                 .map_err(|e| format!("PERSIST_TMP_WRITE: {}", e))?;
             f.sync_all()
@@ -215,7 +243,11 @@ pub(crate) fn atomic_replace_sync(src: &Path, target: &Path) -> Result<(), Strin
         if !target.exists() {
             match std::fs::rename(src, target) {
                 Ok(_) => {
-                    if target.file_name().and_then(|n| n.to_str()).map_or(false, |s| s.starts_with('.')) {
+                    if target
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map_or(false, |s| s.starts_with('.'))
+                    {
                         crate::core::hide_file_windows_sync(target);
                     }
                     return Ok(());
@@ -265,7 +297,11 @@ pub(crate) fn atomic_replace_sync(src: &Path, target: &Path) -> Result<(), Strin
             };
 
             if success != 0 {
-                if target.file_name().and_then(|n| n.to_str()).map_or(false, |s| s.starts_with('.')) {
+                if target
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map_or(false, |s| s.starts_with('.'))
+                {
                     crate::core::hide_file_windows_sync(target);
                 }
                 return Ok(());
@@ -298,4 +334,3 @@ pub(crate) fn atomic_replace_sync(src: &Path, target: &Path) -> Result<(), Strin
         }
     }
 }
-

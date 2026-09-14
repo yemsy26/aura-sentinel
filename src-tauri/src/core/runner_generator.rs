@@ -9,25 +9,25 @@
 //!
 //! Cada script incluye:
 #![allow(dead_code)] // extensions() y variantes de RunnerType son para uso futuro
-//   - Shebang correcto
-//   - set -euo pipefail (bash) / error handling (bat)
-//   - Logging con timestamps
-//   - Validación de prerequisitos
-//   - Cleanup en trap EXIT
+                     //   - Shebang correcto
+                     //   - set -euo pipefail (bash) / error handling (bat)
+                     //   - Logging con timestamps
+                     //   - Validación de prerequisitos
+                     //   - Cleanup en trap EXIT
 
+use chrono;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use chrono;
 
 /// Tipo de runner a generar
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum RunnerType {
-    Test,       // run_tests.sh / run_tests.bat
-    Build,      // build.sh / build.bat
-    Dev,        // dev.sh / dev.bat (servidor desarrollo)
-    Lint,       // lint.sh / lint.bat
-    Docker,     // docker.sh / docker.bat
+    Test,           // run_tests.sh / run_tests.bat
+    Build,          // build.sh / build.bat
+    Dev,            // dev.sh / dev.bat (servidor desarrollo)
+    Lint,           // lint.sh / lint.bat
+    Docker,         // docker.sh / docker.bat
     Custom(String), // nombre personalizado
 }
 
@@ -104,11 +104,15 @@ fn generate_bash_script(config: &RunnerConfig) -> String {
     // Header
     script.push_str("#!/usr/bin/env bash\n");
     script.push_str(&format!("# {name} — Auto-generado por Aura-Sentinel\n"));
-    script.push_str(&format!("# Generado: {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
+    script.push_str(&format!(
+        "# Generado: {}\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    ));
     script.push_str("set -euo pipefail\n\n");
 
     // Logging functions
-    script.push_str(r#"
+    script.push_str(
+        r#"
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
@@ -124,7 +128,8 @@ success() {
 warn() {
     log "⚠️  $*"
 }
-"#);
+"#,
+    );
 
     // Prerequisitos
     if !config.prerequisites.is_empty() {
@@ -148,11 +153,17 @@ warn() {
     }
 
     // Main execution
-    script.push_str(&format!("log \"Iniciando {}...\"\n\n", config.runner_type.base_name()));
-    
+    script.push_str(&format!(
+        "log \"Iniciando {}...\"\n\n",
+        config.runner_type.base_name()
+    ));
+
     // Change to project root
     let root_str = config.project_root.to_string_lossy().replace('\\', "/");
-    script.push_str(&format!("cd \"{}\" || {{ error \"No se pudo acceder a {}\"; exit 1; }}\n", root_str, root_str));
+    script.push_str(&format!(
+        "cd \"{}\" || {{ error \"No se pudo acceder a {}\"; exit 1; }}\n",
+        root_str, root_str
+    ));
 
     // Comando principal según tipo
     match config.runner_type {
@@ -190,7 +201,10 @@ warn() {
         }
         RunnerType::Dev => {
             if let Some(cmd) = &config.dev_command {
-                script.push_str(&format!("log \"Iniciando servidor de desarrollo: {}\"\n", cmd));
+                script.push_str(&format!(
+                    "log \"Iniciando servidor de desarrollo: {}\"\n",
+                    cmd
+                ));
                 script.push_str(&format!("exec {}\n", cmd));
             } else {
                 script.push_str("error \"No hay comando de dev configurado\"\n");
@@ -215,17 +229,26 @@ warn() {
         }
         RunnerType::Docker => {
             if let Some(docker) = &config.docker_config {
-                script.push_str(&format!("log \"Building Docker image: {}\"\n", docker.image_name));
-                script.push_str(&format!("docker build -t {} -f {} .\n", docker.image_name, docker.dockerfile));
+                script.push_str(&format!(
+                    "log \"Building Docker image: {}\"\n",
+                    docker.image_name
+                ));
+                script.push_str(&format!(
+                    "docker build -t {} -f {} .\n",
+                    docker.image_name, docker.dockerfile
+                ));
                 script.push_str("BUILD_EXIT=$?\n");
                 script.push_str("if [ $BUILD_EXIT -ne 0 ]; then\n");
                 script.push_str("    error \"Docker build falló\"\n");
                 script.push_str("    exit $BUILD_EXIT\n");
                 script.push_str("fi\n");
-                
+
                 if let Some(port) = docker.port {
                     script.push_str(&format!("log \"Running container on port {}\"\n", port));
-                    script.push_str(&format!("docker run --rm -p {}:{} {}\n", port, port, docker.image_name));
+                    script.push_str(&format!(
+                        "docker run --rm -p {}:{} {}\n",
+                        port, port, docker.image_name
+                    ));
                 } else {
                     script.push_str(&format!("docker run --rm {}\n", docker.image_name));
                 }
@@ -244,7 +267,6 @@ warn() {
             script.push_str("done\n");
             script.push_str("if [ $found -eq 0 ]; then echo \"[INFO] No se encontraron scripts de prueba automáticos. Considera agregar test_*.py\"; exit 0; fi\n");
         }
-
     }
 
     script.push_str("\n# Fin del script\n");
@@ -258,7 +280,10 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
 
     script.push_str("@echo off\n");
     script.push_str(&format!("REM {name} — Auto-generado por Aura-Sentinel\n"));
-    script.push_str(&format!("REM Generado: {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
+    script.push_str(&format!(
+        "REM Generado: {}\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    ));
     script.push_str("\n");
 
     // Error handling
@@ -275,7 +300,10 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
         for prereq in &config.prerequisites {
             script.push_str(&format!("where {} >nul 2>nul\n", prereq));
             script.push_str("if errorlevel 1 (\n");
-            script.push_str(&format!("    echo %LOG_PREFIX% ERROR: {} no encontrado en PATH\n", prereq));
+            script.push_str(&format!(
+                "    echo %LOG_PREFIX% ERROR: {} no encontrado en PATH\n",
+                prereq
+            ));
             script.push_str("    exit /b 1\n");
             script.push_str(")\n\n");
         }
@@ -291,12 +319,18 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
     }
 
     // Main
-    script.push_str(&format!("echo %LOG_PREFIX% Iniciando {}...\n\n", config.runner_type.base_name()));
-    
+    script.push_str(&format!(
+        "echo %LOG_PREFIX% Iniciando {}...\n\n",
+        config.runner_type.base_name()
+    ));
+
     // Change to project root
     let root_str = config.project_root.to_string_lossy().replace('/', "\\");
     script.push_str(&format!("cd /d \"{}\" || (\n", root_str));
-    script.push_str(&format!("    echo %LOG_PREFIX% ERROR: No se pudo acceder a {}\n", root_str));
+    script.push_str(&format!(
+        "    echo %LOG_PREFIX% ERROR: No se pudo acceder a {}\n",
+        root_str
+    ));
     script.push_str("    exit /b 1\n");
     script.push_str(")\n\n");
 
@@ -309,7 +343,9 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
                 script.push_str("if %EXIT_CODE% equ 0 (\n");
                 script.push_str("    echo %LOG_PREFIX% SUCCESS: Tests pasaron correctamente\n");
                 script.push_str(") else (\n");
-                script.push_str("    echo %LOG_PREFIX% ERROR: Tests fallaron con código %EXIT_CODE%\n");
+                script.push_str(
+                    "    echo %LOG_PREFIX% ERROR: Tests fallaron con código %EXIT_CODE%\n",
+                );
                 script.push_str(")\n");
                 script.push_str("exit /b %EXIT_CODE%\n");
             } else {
@@ -325,7 +361,8 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
                 script.push_str("if %EXIT_CODE% equ 0 (\n");
                 script.push_str("    echo %LOG_PREFIX% SUCCESS: Build completado\n");
                 script.push_str(") else (\n");
-                script.push_str("    echo %LOG_PREFIX% ERROR: Build falló con código %EXIT_CODE%\n");
+                script
+                    .push_str("    echo %LOG_PREFIX% ERROR: Build falló con código %EXIT_CODE%\n");
                 script.push_str(")\n");
                 script.push_str("exit /b %EXIT_CODE%\n");
             } else {
@@ -335,7 +372,10 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
         }
         RunnerType::Dev => {
             if let Some(cmd) = &config.dev_command {
-                script.push_str(&format!("echo %LOG_PREFIX% Iniciando servidor de desarrollo: {}\n", cmd));
+                script.push_str(&format!(
+                    "echo %LOG_PREFIX% Iniciando servidor de desarrollo: {}\n",
+                    cmd
+                ));
                 script.push_str(&format!("{}\n", cmd));
             } else {
                 script.push_str("echo %LOG_PREFIX% ERROR: No hay comando de dev configurado\n");
@@ -360,17 +400,29 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
         }
         RunnerType::Docker => {
             if let Some(docker) = &config.docker_config {
-                script.push_str(&format!("echo %LOG_PREFIX% Building Docker image: {}\n", docker.image_name));
-                script.push_str(&format!("docker build -t {} -f {} .\n", docker.image_name, docker.dockerfile));
+                script.push_str(&format!(
+                    "echo %LOG_PREFIX% Building Docker image: {}\n",
+                    docker.image_name
+                ));
+                script.push_str(&format!(
+                    "docker build -t {} -f {} .\n",
+                    docker.image_name, docker.dockerfile
+                ));
                 script.push_str("set EXIT_CODE=%ERRORLEVEL%\n");
                 script.push_str("if %EXIT_CODE% neq 0 (\n");
                 script.push_str("    echo %LOG_PREFIX% ERROR: Docker build falló\n");
                 script.push_str("    exit /b %EXIT_CODE%\n");
                 script.push_str(")\n");
-                
+
                 if let Some(port) = docker.port {
-                    script.push_str(&format!("echo %LOG_PREFIX% Running container on port {}\n", port));
-                    script.push_str(&format!("docker run --rm -p {}:{} {}\n", port, port, docker.image_name));
+                    script.push_str(&format!(
+                        "echo %LOG_PREFIX% Running container on port {}\n",
+                        port
+                    ));
+                    script.push_str(&format!(
+                        "docker run --rm -p {}:{} {}\n",
+                        port, port, docker.image_name
+                    ));
                 } else {
                     script.push_str(&format!("docker run --rm {}\n", docker.image_name));
                 }
@@ -381,7 +433,8 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
         }
         RunnerType::Custom(ref name) => {
             script.push_str(&format!("REM Custom runner: {}\n", name));
-            script.push_str("REM Auto-generated fallback: discovers and runs available test files\n");
+            script
+                .push_str("REM Auto-generated fallback: discovers and runs available test files\n");
             script.push_str("echo [CUSTOM RUNNER] Buscando tests en el workspace...\n");
             script.push_str("set FOUND=0\n");
             script.push_str("for %%f in (test_*.py verify_*.py *_test.py) do (\n");
@@ -389,7 +442,6 @@ fn generate_batch_script(config: &RunnerConfig) -> String {
             script.push_str(")\n");
             script.push_str("if %FOUND%==0 echo [INFO] No se encontraron scripts de prueba. Considera agregar test_*.py\n");
         }
-
     }
 
     script.push_str("\nREM Fin del script\n");
@@ -402,21 +454,33 @@ fn generate_powershell_script(config: &RunnerConfig) -> String {
     let mut script = String::new();
 
     script.push_str(&format!("# {name} — Auto-generado por Aura-Sentinel\n"));
-    script.push_str(&format!("# Generado: {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
+    script.push_str(&format!(
+        "# Generado: {}\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    ));
     script.push_str("$ErrorActionPreference = \"Stop\"\n");
     script.push_str("Set-StrictMode -Version Latest\n\n");
 
     // Logging
     script.push_str("function Log { param($msg) Write-Host \"[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $msg\" }\n");
-    script.push_str("function Success { param($msg) Write-Host \"✅ $msg\" -ForegroundColor Green }\n");
-    script.push_str("function Error { param($msg) Write-Host \"❌ ERROR: $msg\" -ForegroundColor Red >&2 }\n");
-    script.push_str("function Warn { param($msg) Write-Host \"⚠️  $msg\" -ForegroundColor Yellow }\n\n");
+    script.push_str(
+        "function Success { param($msg) Write-Host \"✅ $msg\" -ForegroundColor Green }\n",
+    );
+    script.push_str(
+        "function Error { param($msg) Write-Host \"❌ ERROR: $msg\" -ForegroundColor Red >&2 }\n",
+    );
+    script.push_str(
+        "function Warn { param($msg) Write-Host \"⚠️  $msg\" -ForegroundColor Yellow }\n\n",
+    );
 
     // Prerequisitos
     if !config.prerequisites.is_empty() {
         script.push_str("# Verificar prerequisitos\n");
         for prereq in &config.prerequisites {
-            script.push_str(&format!("if (-not (Get-Command '{}' -ErrorAction SilentlyContinue)) {{\n", prereq));
+            script.push_str(&format!(
+                "if (-not (Get-Command '{}' -ErrorAction SilentlyContinue)) {{\n",
+                prereq
+            ));
             script.push_str(&format!("    Error \"{} no encontrado en PATH\"\n", prereq));
             script.push_str("    exit 1\n");
             script.push_str("}\n");
@@ -434,7 +498,10 @@ fn generate_powershell_script(config: &RunnerConfig) -> String {
     }
 
     // Main
-    script.push_str(&format!("Log \"Iniciando {}...\"\n\n", config.runner_type.base_name()));
+    script.push_str(&format!(
+        "Log \"Iniciando {}...\"\n\n",
+        config.runner_type.base_name()
+    ));
 
     match config.runner_type {
         RunnerType::Test => {
@@ -469,7 +536,10 @@ fn generate_powershell_script(config: &RunnerConfig) -> String {
         }
         RunnerType::Dev => {
             if let Some(cmd) = &config.dev_command {
-                script.push_str(&format!("Log \"Iniciando servidor de desarrollo: {}\"\n", cmd));
+                script.push_str(&format!(
+                    "Log \"Iniciando servidor de desarrollo: {}\"\n",
+                    cmd
+                ));
                 script.push_str(&format!("{}\n", cmd));
             } else {
                 script.push_str("Error \"No hay comando de dev configurado\"\n");
@@ -493,16 +563,25 @@ fn generate_powershell_script(config: &RunnerConfig) -> String {
         }
         RunnerType::Docker => {
             if let Some(docker) = &config.docker_config {
-                script.push_str(&format!("Log \"Building Docker image: {}\"\n", docker.image_name));
-                script.push_str(&format!("docker build -t {} -f {} .\n", docker.image_name, docker.dockerfile));
+                script.push_str(&format!(
+                    "Log \"Building Docker image: {}\"\n",
+                    docker.image_name
+                ));
+                script.push_str(&format!(
+                    "docker build -t {} -f {} .\n",
+                    docker.image_name, docker.dockerfile
+                ));
                 script.push_str("if ($LASTEXITCODE -ne 0) {\n");
                 script.push_str("    Error \"Docker build falló\"\n");
                 script.push_str("    exit $LASTEXITCODE\n");
                 script.push_str("}\n");
-                
+
                 if let Some(port) = docker.port {
                     script.push_str(&format!("Log \"Running container on port {}\"\n", port));
-                    script.push_str(&format!("docker run --rm -p {}:{} {}\n", port, port, docker.image_name));
+                    script.push_str(&format!(
+                        "docker run --rm -p {}:{} {}\n",
+                        port, port, docker.image_name
+                    ));
                 } else {
                     script.push_str(&format!("docker run --rm {}\n", docker.image_name));
                 }
@@ -521,7 +600,6 @@ fn generate_powershell_script(config: &RunnerConfig) -> String {
             script.push_str("}\n");
             script.push_str("if (-not $found) { Write-Host '[INFO] No se encontraron scripts de prueba. Considera agregar test_*.py' }\n");
         }
-
     }
 
     script.push_str("\n# Fin del script\n");
@@ -531,11 +609,21 @@ fn generate_powershell_script(config: &RunnerConfig) -> String {
 /// Limpia runners obsoletos que hayan sido creados en la raíz del proyecto para evitar contaminación.
 pub fn cleanup_legacy_root_runners(project_root: &Path) {
     let legacy_names = [
-        "run_tests.bat", "run_tests.ps1", "run_tests.sh",
-        "build.bat", "build.ps1", "build.sh",
-        "dev.bat", "dev.ps1", "dev.sh",
-        "lint.bat", "lint.ps1", "lint.sh",
-        "docker.bat", "docker.ps1", "docker.sh",
+        "run_tests.bat",
+        "run_tests.ps1",
+        "run_tests.sh",
+        "build.bat",
+        "build.ps1",
+        "build.sh",
+        "dev.bat",
+        "dev.ps1",
+        "dev.sh",
+        "lint.bat",
+        "lint.ps1",
+        "lint.sh",
+        "docker.bat",
+        "docker.ps1",
+        "docker.sh",
     ];
     for name in &legacy_names {
         let p = project_root.join(name);
@@ -554,12 +642,14 @@ pub async fn generate_runners(config: RunnerConfig) -> Result<Vec<PathBuf>, Stri
     cleanup_legacy_root_runners(project_root);
 
     // Destino: .aura/runtime/runners/ a menos que se haya especificado un output_dir explícito
-    let target_dir = config.output_dir.clone().unwrap_or_else(|| {
-        project_root.join(".aura").join("runtime").join("runners")
-    });
+    let target_dir = config
+        .output_dir
+        .clone()
+        .unwrap_or_else(|| project_root.join(".aura").join("runtime").join("runners"));
 
     // Asegurar directorio interno
-    fs::create_dir_all(&target_dir).await
+    fs::create_dir_all(&target_dir)
+        .await
         .map_err(|e| format!("Error creando directorio de runners: {}", e))?;
 
     // Ocultar directorio .aura en Windows
@@ -573,7 +663,8 @@ pub async fn generate_runners(config: RunnerConfig) -> Result<Vec<PathBuf>, Stri
         // .bat
         let bat_path = target_dir.join(format!("{}.bat", config.runner_type.base_name()));
         let bat_content = generate_batch_script(&config);
-        fs::write(&bat_path, bat_content).await
+        fs::write(&bat_path, bat_content)
+            .await
             .map_err(|e| format!("Error escribiendo .bat: {}", e))?;
         crate::core::hide_file_windows_sync(&bat_path);
         generated.push(bat_path);
@@ -581,7 +672,8 @@ pub async fn generate_runners(config: RunnerConfig) -> Result<Vec<PathBuf>, Stri
         // .ps1
         let ps1_path = target_dir.join(format!("{}.ps1", config.runner_type.base_name()));
         let ps1_content = generate_powershell_script(&config);
-        fs::write(&ps1_path, ps1_content).await
+        fs::write(&ps1_path, ps1_content)
+            .await
             .map_err(|e| format!("Error escribiendo .ps1: {}", e))?;
         crate::core::hide_file_windows_sync(&ps1_path);
         generated.push(ps1_path);
@@ -589,20 +681,24 @@ pub async fn generate_runners(config: RunnerConfig) -> Result<Vec<PathBuf>, Stri
         // .sh
         let sh_path = target_dir.join(format!("{}.sh", config.runner_type.base_name()));
         let sh_content = generate_bash_script(&config);
-        fs::write(&sh_path, sh_content).await
+        fs::write(&sh_path, sh_content)
+            .await
             .map_err(|e| format!("Error escribiendo .sh: {}", e))?;
-        
+
         // Hacer ejecutable (solo Unix)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&sh_path).await
-                .map_err(|e| format!("Error leyendo metadata: {}", e))?.permissions();
+            let mut perms = fs::metadata(&sh_path)
+                .await
+                .map_err(|e| format!("Error leyendo metadata: {}", e))?
+                .permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&sh_path, perms).await
+            fs::set_permissions(&sh_path, perms)
+                .await
                 .map_err(|e| format!("Error estableciendo permisos: {}", e))?;
         }
-        
+
         generated.push(sh_path);
     }
 
@@ -742,7 +838,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_runners_internal_location_and_cleanup() {
-        let temp_dir = std::env::temp_dir().join(format!("aura_runner_test_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("aura_runner_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
         // Simulate a legacy runner in project root
@@ -762,12 +859,21 @@ mod tests {
         assert!(!generated.is_empty());
 
         // The legacy file in root must have been cleaned up
-        assert!(!legacy_file.exists(), "Legacy runner in workspace root should be deleted");
+        assert!(
+            !legacy_file.exists(),
+            "Legacy runner in workspace root should be deleted"
+        );
 
         // The generated runner must be inside .aura/runtime/runners/
         for p in &generated {
-            assert!(p.to_string_lossy().contains(".aura"), "Runner path must be inside .aura");
-            assert!(p.to_string_lossy().contains("runners"), "Runner path must be inside runners directory");
+            assert!(
+                p.to_string_lossy().contains(".aura"),
+                "Runner path must be inside .aura"
+            );
+            assert!(
+                p.to_string_lossy().contains("runners"),
+                "Runner path must be inside runners directory"
+            );
             assert!(p.exists(), "Generated runner must exist");
         }
 

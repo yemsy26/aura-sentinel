@@ -1,14 +1,13 @@
+use crate::core::session_journal::Fase;
 /// PESP v2 — Phase Planner
-/// 
+///
 /// Called once at mission start (before the main agent loop) when the mission
 /// type is Construction or Refactor. Generates a structured list of Fases
 /// that the agent will execute sequentially and autonomously.
 ///
 /// If Qwen fails to produce valid JSON, falls back to a single-phase plan
 /// that is equivalent to the pre-PESP behavior.
-
 use serde::{Deserialize, Serialize};
-use crate::core::session_journal::Fase;
 
 /// Raw JSON structure returned by Qwen's phase architect prompt
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -55,7 +54,10 @@ fn build_architect_prompt(user_message: &str) -> String {
 fn single_phase_fallback(user_message: &str) -> Vec<Fase> {
     vec![Fase {
         numero: 1,
-        descripcion: format!("Ejecutar tarea completa: {}", &user_message[..user_message.len().min(60)]),
+        descripcion: format!(
+            "Ejecutar tarea completa: {}",
+            &user_message[..user_message.len().min(60)]
+        ),
         archivos: vec![],
         criterio_de_exito: String::new(),
         estado: "PENDIENTE".to_string(),
@@ -114,12 +116,17 @@ pub async fn generate_phase_plan(user_message: &str, model: &str) -> Vec<Fase> {
                     // JSON parse error — fall back silently
                     single_phase_fallback(user_message)
                 }
-                Ok(plan) if plan.fases.is_empty() => {
-                    single_phase_fallback(user_message)
-                }
-                Ok(plan) => {
-                    plan.fases.into_iter().enumerate().map(|(i, f)| Fase {
-                        numero: if f.numero == 0 { (i + 1) as u32 } else { f.numero },
+                Ok(plan) if plan.fases.is_empty() => single_phase_fallback(user_message),
+                Ok(plan) => plan
+                    .fases
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, f)| Fase {
+                        numero: if f.numero == 0 {
+                            (i + 1) as u32
+                        } else {
+                            f.numero
+                        },
                         descripcion: if f.descripcion.is_empty() {
                             format!("Fase {}", i + 1)
                         } else {
@@ -128,8 +135,8 @@ pub async fn generate_phase_plan(user_message: &str, model: &str) -> Vec<Fase> {
                         archivos: f.archivos,
                         criterio_de_exito: f.criterio_de_exito,
                         estado: "PENDIENTE".to_string(),
-                    }).collect()
-                }
+                    })
+                    .collect(),
             }
         }
     }

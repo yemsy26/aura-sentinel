@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use chrono::{DateTime, Utc};
 
 /// Represents a single phase of a multi-phase construction mission (PESP v2).
 /// Each phase has a clear goal, required files, and a success criterion.
@@ -117,7 +117,7 @@ pub fn load_journal(workspace_path: &str) -> SessionJournal {
         Ok(content) => {
             let clean = content.trim_start_matches('\u{feff}');
             serde_json::from_str(clean).unwrap_or_default()
-        },
+        }
         Err(_) => SessionJournal::default(),
     };
     if journal.session_id.is_empty() {
@@ -135,8 +135,8 @@ pub fn save_journal(workspace_path: &str, journal: &SessionJournal) -> Result<()
     let json = serde_json::to_string_pretty(journal)
         .map_err(|e| format!("[JOURNAL] serialize error: {}", e))?;
     {
-        let mut f = std::fs::File::create(&tmp_path)
-            .map_err(|e| format!("[JOURNAL] create tmp: {}", e))?;
+        let mut f =
+            std::fs::File::create(&tmp_path).map_err(|e| format!("[JOURNAL] create tmp: {}", e))?;
         f.write_all(json.as_bytes())
             .map_err(|e| format!("[JOURNAL] write: {}", e))?;
         f.sync_all()
@@ -160,9 +160,9 @@ pub fn build_status_report(journal: &SessionJournal) -> String {
 
     let status_icon = match journal.status.as_str() {
         "COMPLETADO" => "✅",
-        "FALLIDO"    => "❌",
-        "ESPERANDO"  => "⏸️",
-        _            => "🔄", // EN_PROGRESO
+        "FALLIDO" => "❌",
+        "ESPERANDO" => "⏸️",
+        _ => "🔄", // EN_PROGRESO
     };
 
     let herramientas = if journal.herramientas_usadas.is_empty() {
@@ -232,7 +232,11 @@ pub fn update_journal(
     journal.workspace_path = workspace_path.to_string();
     journal.ultima_actualizacion = current_timestamp();
 
-    if !herramienta.is_empty() && !journal.herramientas_usadas.contains(&herramienta.to_string()) {
+    if !herramienta.is_empty()
+        && !journal
+            .herramientas_usadas
+            .contains(&herramienta.to_string())
+    {
         journal.herramientas_usadas.push(herramienta.to_string());
     }
     for archivo in archivos {
@@ -244,7 +248,11 @@ pub fn update_journal(
 
 /// Marks the mission as completed or failed.
 /// Returns Err if persistence fails — callers must treat this as a FATAL event.
-pub fn close_journal(journal: &mut SessionJournal, status: &str, workspace_path: &str) -> Result<(), String> {
+pub fn close_journal(
+    journal: &mut SessionJournal,
+    status: &str,
+    workspace_path: &str,
+) -> Result<(), String> {
     journal.status = status.to_string();
     journal.ultima_actualizacion = current_timestamp();
     save_journal(workspace_path, journal)
@@ -267,11 +275,15 @@ mod tests {
         let journal = SessionJournal::default();
         // Use a path that cannot exist on any OS
         let result = save_journal("Z:\\nonexistent\\cannot\\exist\\path", &journal);
-        assert!(result.is_err(), "save_journal must return Err on invalid path");
+        assert!(
+            result.is_err(),
+            "save_journal must return Err on invalid path"
+        );
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("[JOURNAL]"),
-            "Error must include [JOURNAL] prefix for traceability, got: {}", err_msg
+            "Error must include [JOURNAL] prefix for traceability, got: {}",
+            err_msg
         );
     }
 }
@@ -290,7 +302,7 @@ pub fn start_new_mission(workspace_path: &str, objective: &str) -> Result<Sessio
     journal.interrupted = false;
     journal.fases.clear();
     journal.micro_metas.clear();
-    
+
     save_journal(workspace_path, &journal)?;
     Ok(journal)
 }
@@ -310,4 +322,3 @@ pub fn resume_existing_mission(workspace_path: &str) -> Result<SessionJournal, S
     save_journal(workspace_path, &journal)?;
     Ok(journal)
 }
-

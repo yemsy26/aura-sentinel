@@ -55,27 +55,62 @@ pub enum ErrorType {
 /// Detailed classification into modern ErrorClass
 pub fn classify_detailed(stderr: &str, stdout: &str, exit_code: i32) -> ClassifiedError {
     let combined = format!("{} {}", stderr, stdout).to_lowercase();
-    
-    let (class, retryable, max_retries, strategy) = if combined.contains("syntaxerror") || combined.contains("unexpected token") {
-        (ErrorClass::Syntax, true, 4, RecoveryStrategy::ThinkAndPatch)
-    } else if combined.contains("cargo check") || combined.contains("error[e") || combined.contains("compile") {
-        (ErrorClass::Compile, true, 4, RecoveryStrategy::ThinkAndPatch)
-    } else if combined.contains("cannot find module") || combined.contains("not found in path") || combined.contains("no such file or directory") {
-        (ErrorClass::Dependency, true, 2, RecoveryStrategy::ReinstallDependency)
-    } else if combined.contains("assertionerror") || combined.contains("test failed") || combined.contains("[fail]") {
-        (ErrorClass::Test, true, 5, RecoveryStrategy::ThinkAndPatch)
-    } else if combined.contains("access denied") || combined.contains("permission denied") {
-        (ErrorClass::Permission, false, 0, RecoveryStrategy::EscalateUser)
-    } else if combined.contains("timed out") || combined.contains("connection refused") {
-        (ErrorClass::Network, true, 3, RecoveryStrategy::RetryImmediate)
-    } else if exit_code != 0 {
-        (ErrorClass::Runtime, true, 3, RecoveryStrategy::ThinkAndPatch)
-    } else {
-        (ErrorClass::Unknown, false, 1, RecoveryStrategy::ChangeTool)
-    };
 
-    use std::hash::{Hash, Hasher};
+    let (class, retryable, max_retries, strategy) =
+        if combined.contains("syntaxerror") || combined.contains("unexpected token") {
+            (ErrorClass::Syntax, true, 4, RecoveryStrategy::ThinkAndPatch)
+        } else if combined.contains("cargo check")
+            || combined.contains("error[e")
+            || combined.contains("compile")
+        {
+            (
+                ErrorClass::Compile,
+                true,
+                4,
+                RecoveryStrategy::ThinkAndPatch,
+            )
+        } else if combined.contains("cannot find module")
+            || combined.contains("not found in path")
+            || combined.contains("no such file or directory")
+        {
+            (
+                ErrorClass::Dependency,
+                true,
+                2,
+                RecoveryStrategy::ReinstallDependency,
+            )
+        } else if combined.contains("assertionerror")
+            || combined.contains("test failed")
+            || combined.contains("[fail]")
+        {
+            (ErrorClass::Test, true, 5, RecoveryStrategy::ThinkAndPatch)
+        } else if combined.contains("access denied") || combined.contains("permission denied") {
+            (
+                ErrorClass::Permission,
+                false,
+                0,
+                RecoveryStrategy::EscalateUser,
+            )
+        } else if combined.contains("timed out") || combined.contains("connection refused") {
+            (
+                ErrorClass::Network,
+                true,
+                3,
+                RecoveryStrategy::RetryImmediate,
+            )
+        } else if exit_code != 0 {
+            (
+                ErrorClass::Runtime,
+                true,
+                3,
+                RecoveryStrategy::ThinkAndPatch,
+            )
+        } else {
+            (ErrorClass::Unknown, false, 1, RecoveryStrategy::ChangeTool)
+        };
+
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     combined.hash(&mut hasher);
     let fingerprint = format!("{:016x}", hasher.finish());
@@ -95,10 +130,23 @@ pub fn classify_error(stderr: &str, stdout: &str, exit_code: i32) -> ErrorType {
 
     // ── CODE & TEST ASSERTION signals (Always Logic errors, never Blocked) ─
     let code_or_test_signals = [
-        "[fail]", "fail:", "failed", "assertionerror", "syntaxerror",
-        "typeerror", "referenceerror", "nameerror", "indexerror",
-        "valueerror", "missing html", "missing js", "missing css",
-        "traceback", "test failed", "verification failed", "assert "
+        "[fail]",
+        "fail:",
+        "failed",
+        "assertionerror",
+        "syntaxerror",
+        "typeerror",
+        "referenceerror",
+        "nameerror",
+        "indexerror",
+        "valueerror",
+        "missing html",
+        "missing js",
+        "missing css",
+        "traceback",
+        "test failed",
+        "verification failed",
+        "assert ",
     ];
     for sig in &code_or_test_signals {
         if combined.contains(sig) {
@@ -108,16 +156,21 @@ pub fn classify_error(stderr: &str, stdout: &str, exit_code: i32) -> ErrorType {
 
     // ── BLOCKED errors (cannot be fixed by the agent alone) ────────────────
     let blocked_signals = [
-        "access denied", "access is denied",
+        "access denied",
+        "access is denied",
         "permission denied",
         "acceso denegado",
-        "no se reconoce como un comando interno",   // command not found on PATH
+        "no se reconoce como un comando interno", // command not found on PATH
         "is not recognized as",
         "not found in path",
-        "credential", "authentication", "unauthorized",
-        "not installed", "no instalado",
-        "requires administrator", "elevate",
-        "cannot find the file specified",           // binary truly missing
+        "credential",
+        "authentication",
+        "unauthorized",
+        "not installed",
+        "no instalado",
+        "requires administrator",
+        "elevate",
+        "cannot find the file specified", // binary truly missing
     ];
     for sig in &blocked_signals {
         if combined.contains(sig) {
@@ -127,12 +180,17 @@ pub fn classify_error(stderr: &str, stdout: &str, exit_code: i32) -> ErrorType {
 
     // ── TRANSIENT errors (retry same action) ───────────────────────────────
     let transient_signals = [
-        "timeout", "timed out",
-        "connection refused", "connection reset",
+        "timeout",
+        "timed out",
+        "connection refused",
+        "connection reset",
         "temporary failure",
         "resource temporarily unavailable",
-        "econnreset", "epipe",
-        "locked", "file is locked", "being used by another process",
+        "econnreset",
+        "epipe",
+        "locked",
+        "file is locked",
+        "being used by another process",
         "try again",
     ];
     for sig in &transient_signals {
@@ -230,7 +288,9 @@ pub struct RetryTracker {
 }
 
 impl RetryTracker {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Record a failure and return whether the agent should escalate.
     pub fn record_failure(&mut self, tool: &str, error_type: &ErrorType) -> bool {

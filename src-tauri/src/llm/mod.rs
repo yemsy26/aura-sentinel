@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-
 pub mod agent;
-pub mod translator;
-pub mod router;
 pub mod phase_planner;
+pub mod router;
+pub mod translator;
 
 #[derive(Serialize)]
 struct OllamaRequest<'a> {
@@ -20,17 +19,12 @@ struct OllamaResponse {
     response: String,
 }
 
-
-
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub(crate) struct ProgrammerOutput {
     pub pensamiento: Option<String>,
     pub explicacion_tecnica: String,
     pub cambios: Vec<crate::memory::Cambio>,
 }
-
-
-
 
 fn get_safe_num_ctx() -> u32 {
     use sysinfo::System;
@@ -50,7 +44,7 @@ pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
         .build()
         .map_err(|e| format!("Error construyendo cliente HTTP: {}", e))?;
     let url = "http://127.0.0.1:11434/api/generate";
-    
+
     // Forzamos JSON para el Orquestador (necesita respuesta estructurada)
     let payload = OllamaRequest {
         model,
@@ -60,14 +54,17 @@ pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
         options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }),
     };
 
-    let res = client.post(url)
+    let res = client
+        .post(url)
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Error conectando a Ollama: {}", e))?;
 
     if res.status().is_success() {
-        let ollama_res: OllamaResponse = res.json().await
+        let ollama_res: OllamaResponse = res
+            .json()
+            .await
             .map_err(|e| format!("Error parseando la respuesta JSON: {}", e))?;
         Ok(ollama_res.response)
     } else {
@@ -76,13 +73,17 @@ pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
 }
 
 #[allow(dead_code)]
-pub async fn call_ollama_with_schema(model: &str, prompt: &str, schema: serde_json::Value) -> Result<String, String> {
+pub async fn call_ollama_with_schema(
+    model: &str,
+    prompt: &str,
+    schema: serde_json::Value,
+) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| format!("Error construyendo cliente HTTP: {}", e))?;
     let url = "http://127.0.0.1:11434/api/generate";
-    
+
     let payload = OllamaRequest {
         model,
         prompt,
@@ -91,14 +92,17 @@ pub async fn call_ollama_with_schema(model: &str, prompt: &str, schema: serde_js
         options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.05, "temperature": 0.2 }),
     };
 
-    let res = client.post(url)
+    let res = client
+        .post(url)
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Error conectando a Ollama: {}", e))?;
-    
+
     if res.status().is_success() {
-        let ollama_res: OllamaResponse = res.json().await
+        let ollama_res: OllamaResponse = res
+            .json()
+            .await
             .map_err(|e| format!("Error parseando la respuesta JSON: {}", e))?;
         Ok(ollama_res.response)
     } else {
@@ -122,16 +126,24 @@ pub async fn call_ollama_text(model: &str, prompt: &str) -> Result<String, Strin
         .map_err(|e| format!("Error construyendo cliente HTTP (texto): {}", e))?;
     let url = "http://127.0.0.1:11434/api/generate";
 
-    let payload = TextRequest { model, prompt, stream: false, options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }) };
+    let payload = TextRequest {
+        model,
+        prompt,
+        stream: false,
+        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }),
+    };
 
-    let res = client.post(url)
+    let res = client
+        .post(url)
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Error conectando a Ollama (texto): {}", e))?;
 
     if res.status().is_success() {
-        let ollama_res: OllamaResponse = res.json().await
+        let ollama_res: OllamaResponse = res
+            .json()
+            .await
             .map_err(|e| format!("Error parseando respuesta de texto: {}", e))?;
         Ok(ollama_res.response)
     } else {
@@ -159,28 +171,38 @@ pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
         .build()
         .map_err(|e| format!("Error construyendo cliente de embeddings: {}", e))?;
     let url = "http://127.0.0.1:11434/api/embeddings";
-    
+
     let payload = EmbeddingRequest {
         model: DEFAULT_EMBEDDING_MODEL,
         prompt: text,
     };
 
-    let res = client.post(url)
+    let res = client
+        .post(url)
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Timeout/Error en embeddings: {}", e))?;
 
     if res.status().is_success() {
-        let ollama_res: EmbeddingResponse = res.json().await
+        let ollama_res: EmbeddingResponse = res
+            .json()
+            .await
             .map_err(|e| format!("Error parseando respuesta de embeddings: {}", e))?;
         Ok(ollama_res.embedding)
     } else {
-        Err(format!("Error de Ollama Embeddings. Status: {}", res.status()))
+        Err(format!(
+            "Error de Ollama Embeddings. Status: {}",
+            res.status()
+        ))
     }
 }
 
-pub(crate) async fn delegate_to_programmer(task: &str, file_contents: &str, model: &str) -> Result<String, String> {
+pub(crate) async fn delegate_to_programmer(
+    task: &str,
+    file_contents: &str,
+    model: &str,
+) -> Result<String, String> {
     let system_prompt = format!(
         "Eres Aura-Sentinel, el Ingeniero Ejecutor. Tu tarea es ESCRIBIR o MODIFICAR el código real basado en la instrucción.\n\
         Instrucción: {}\n\n\
@@ -240,7 +262,8 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
         Responde en texto plano estructurado, NO uses JSON.",
         file_contents
     );
-    call_ollama_text(model, &audit_prompt).await
+    call_ollama_text(model, &audit_prompt)
+        .await
         .unwrap_or_else(|e| format!("Error en auditoría: {}", e))
 }
 
@@ -266,11 +289,10 @@ pub(crate) async fn delegate_to_logic_solver(file_contents: &str, model: &str) -
         REPORTE LÓGICO:",
         file_contents
     );
-    call_ollama_text(model, &solver_prompt).await
+    call_ollama_text(model, &solver_prompt)
+        .await
         .unwrap_or_else(|e| format!("Error en verificación lógica: {}", e))
 }
-
-
 
 struct AgentLockGuard;
 impl AgentLockGuard {
@@ -303,12 +325,18 @@ pub fn reset_agent_cancel() {
 }
 
 #[tauri::command]
-pub async fn process_user_prompt(mut user_message: String, mut workspace_path: String, orchestrator_model: String, programmer_model: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+pub async fn process_user_prompt(
+    mut user_message: String,
+    mut workspace_path: String,
+    orchestrator_model: String,
+    programmer_model: String,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
     let _guard = match AgentLockGuard::try_lock() {
         Some(g) => {
             reset_agent_cancel();
             g
-        },
+        }
         None => {
             return Ok(serde_json::json!({
                 "status": "FINISH",
@@ -327,8 +355,11 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
 
     let mut enriched_message = String::new();
     let lower_user_msg = user_message.to_lowercase();
-    let is_explicit_continuation = lower_user_msg.contains("continua") || lower_user_msg.contains("sigue") || lower_user_msg.contains("procede") || lower_user_msg.contains("resume");
-    
+    let is_explicit_continuation = lower_user_msg.contains("continua")
+        || lower_user_msg.contains("sigue")
+        || lower_user_msg.contains("procede")
+        || lower_user_msg.contains("resume");
+
     if is_explicit_continuation {
         if let Some(resume) = crate::core::mission_persist::find_pending_mission() {
             workspace_path = resume.workspace_path;
@@ -338,7 +369,9 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
 
     // ── Zero-latency meta-command intercept ──────────────────────────────────
-    if let Some(action) = crate::core::intent_router::try_handle_meta_command(&user_message, &workspace_path) {
+    if let Some(action) =
+        crate::core::intent_router::try_handle_meta_command(&user_message, &workspace_path)
+    {
         match action {
             crate::core::intent_router::IntentAction::Finish(msg) => {
                 agent::emit_event(&app_handle, 0, "[META-CMD] Consulta de estado detectada. Respondiendo desde la memoria local...", "PLANNING");
@@ -348,8 +381,11 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
                     "respuesta_conversacional": msg
                 });
                 return Ok(response.to_string());
-            },
-            crate::core::intent_router::IntentAction::Resume { objetivo, resume_msg } => {
+            }
+            crate::core::intent_router::IntentAction::Resume {
+                objetivo,
+                resume_msg,
+            } => {
                 agent::emit_event(&app_handle, 0, &resume_msg, "INFO");
                 // Bypass translator: directly use the saved objective
                 enriched_message = objetivo;
@@ -361,34 +397,71 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
         let lower_msg = user_message.to_lowercase();
 
         // ── Context-aware follow-up for folder creation ──────────────────────────
-        let waiting_for_folder_name = journal.chat_history.last().map(|msg| {
-            msg.contains("¿Con qué nombre quieres que cree la carpeta? Dime el nombre exacto")
-        }).unwrap_or(false);
+        let waiting_for_folder_name = journal
+            .chat_history
+            .last()
+            .map(|msg| {
+                msg.contains("¿Con qué nombre quieres que cree la carpeta? Dime el nombre exacto")
+            })
+            .unwrap_or(false);
 
         if waiting_for_folder_name && !user_message.trim().is_empty() {
-            let folder_name: String = user_message.split_whitespace().next().unwrap_or("").chars()
+            let folder_name: String = user_message
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .chars()
                 .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
                 .collect();
-            
+
             if !folder_name.is_empty() {
-                agent::emit_event(&app_handle, 0, &format!("[FAST-TRACK] Creando carpeta (seguimiento): {}", folder_name), "ACTION");
+                agent::emit_event(
+                    &app_handle,
+                    0,
+                    &format!(
+                        "[FAST-TRACK] Creando carpeta (seguimiento): {}",
+                        folder_name
+                    ),
+                    "ACTION",
+                );
                 let mkdir_cmd = format!("mkdir \"{}\"", folder_name);
                 match crate::core::execute_terminal_command(&workspace_path, &mkdir_cmd).await {
                     Ok(_) => {
-                        agent::emit_event(&app_handle, 1, &format!("Carpeta '{}' creada exitosamente.", folder_name), "SUCCESS");
-                        let resp_msg = format!("✅ Listo. Carpeta `{}` creada en tu workspace.", folder_name);
-                        journal.chat_history.push(format!("Usuario: {}", user_message));
+                        agent::emit_event(
+                            &app_handle,
+                            1,
+                            &format!("Carpeta '{}' creada exitosamente.", folder_name),
+                            "SUCCESS",
+                        );
+                        let resp_msg = format!(
+                            "✅ Listo. Carpeta `{}` creada en tu workspace.",
+                            folder_name
+                        );
+                        journal
+                            .chat_history
+                            .push(format!("Usuario: {}", user_message));
                         journal.chat_history.push(format!("Aura: {}", resp_msg));
-                        if journal.chat_history.len() > 6 { journal.chat_history.drain(0..journal.chat_history.len() - 6); }
-                        let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
+                        if journal.chat_history.len() > 6 {
+                            journal
+                                .chat_history
+                                .drain(0..journal.chat_history.len() - 6);
+                        }
+                        let _ =
+                            crate::core::session_journal::save_journal(&workspace_path, &journal);
                         let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
                         return Ok(response.to_string());
-                    },
+                    }
                     Err(e) => {
-                        let resp_msg = if e.contains("ya existe") || e.contains("already exists") || e.contains("MKDIR") {
+                        let resp_msg = if e.contains("ya existe")
+                            || e.contains("already exists")
+                            || e.contains("MKDIR")
+                        {
                             format!("ℹ️ La carpeta `{}` ya existe en tu workspace.", folder_name)
                         } else {
-                            format!("⚠️ No pude crear la carpeta `{}`. Error: {}", folder_name, e)
+                            format!(
+                                "⚠️ No pude crear la carpeta `{}`. Error: {}",
+                                folder_name, e
+                            )
                         };
                         let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
                         return Ok(response.to_string());
@@ -400,29 +473,49 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
         // ── Zero-latency folder creation intercept ─────────────────────────────
         // Detect "crea una carpeta X", "crear carpeta X", "make a folder X", etc.
         let mut folder_prefixes = vec![
-            "crea una carpeta con nombre", "crear una carpeta con nombre",
-            "crea la carpeta con nombre", "crear la carpeta con nombre",
-            "crea una carpeta llamada", "crear una carpeta llamada",
-            "crea la carpeta llamada", "crear la carpeta llamada",
-            "crea una carpeta", "crea la carpeta", "crea carpeta", "crear carpeta",
-            "crea el directorio", "crear directorio", "crea directorio",
-            "make a folder", "make folder", "create folder", "create directory"
+            "crea una carpeta con nombre",
+            "crear una carpeta con nombre",
+            "crea la carpeta con nombre",
+            "crear la carpeta con nombre",
+            "crea una carpeta llamada",
+            "crear una carpeta llamada",
+            "crea la carpeta llamada",
+            "crear la carpeta llamada",
+            "crea una carpeta",
+            "crea la carpeta",
+            "crea carpeta",
+            "crear carpeta",
+            "crea el directorio",
+            "crear directorio",
+            "crea directorio",
+            "make a folder",
+            "make folder",
+            "create folder",
+            "create directory",
         ];
         // Sort by length descending so longer prefixes match first
         folder_prefixes.sort_by_key(|b| std::cmp::Reverse(b.len()));
         let folder_name_opt: Option<String> = folder_prefixes.iter().find_map(|prefix| {
             if lower_msg.contains(prefix) {
                 // Extract the word(s) after the prefix
-                let rest = lower_msg[lower_msg.find(prefix).unwrap() + prefix.len()..].trim().to_string();
+                let rest = lower_msg[lower_msg.find(prefix).unwrap() + prefix.len()..]
+                    .trim()
+                    .to_string();
                 // take first token as the folder name (stop at space or special char)
-                let filler_words = ["que", "el", "la", "lo", "un", "una", "te", "pedi",
-                                    "me", "mi", "tu", "a", "de", "en", "con", "por",
-                                    "para", "como", "al", "del", "se", "le", "les",
-                                    "nombre", "llamada", "llamado", "llame", "y"];
+                let filler_words = [
+                    "que", "el", "la", "lo", "un", "una", "te", "pedi", "me", "mi", "tu", "a",
+                    "de", "en", "con", "por", "para", "como", "al", "del", "se", "le", "les",
+                    "nombre", "llamada", "llamado", "llame", "y",
+                ];
                 let mut name = String::new();
                 for word in rest.split_whitespace() {
-                    let clean_word: String = word.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
-                    if !clean_word.is_empty() && !filler_words.contains(&clean_word.to_lowercase().as_str()) {
+                    let clean_word: String = word
+                        .chars()
+                        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                        .collect();
+                    if !clean_word.is_empty()
+                        && !filler_words.contains(&clean_word.to_lowercase().as_str())
+                    {
                         name = clean_word;
                         break;
                     }
@@ -432,29 +525,56 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
                 } else {
                     None
                 }
-            } else { None }
+            } else {
+                None
+            }
         });
 
         let folder_prefix_found = folder_prefixes.iter().any(|p| lower_msg.contains(p));
         if let Some(folder_name) = folder_name_opt {
-            agent::emit_event(&app_handle, 0, &format!("[FAST-TRACK] Creando carpeta: {}", folder_name), "ACTION");
+            agent::emit_event(
+                &app_handle,
+                0,
+                &format!("[FAST-TRACK] Creando carpeta: {}", folder_name),
+                "ACTION",
+            );
             let mkdir_cmd = format!("mkdir \"{}\"", folder_name);
             match crate::core::execute_terminal_command(&workspace_path, &mkdir_cmd).await {
                 Ok(_) => {
-                    agent::emit_event(&app_handle, 1, &format!("Carpeta '{}' creada exitosamente.", folder_name), "SUCCESS");
-                    let resp_msg = format!("✅ Listo. Carpeta `{}` creada en tu workspace.", folder_name);
-                    journal.chat_history.push(format!("Usuario: {}", user_message));
+                    agent::emit_event(
+                        &app_handle,
+                        1,
+                        &format!("Carpeta '{}' creada exitosamente.", folder_name),
+                        "SUCCESS",
+                    );
+                    let resp_msg = format!(
+                        "✅ Listo. Carpeta `{}` creada en tu workspace.",
+                        folder_name
+                    );
+                    journal
+                        .chat_history
+                        .push(format!("Usuario: {}", user_message));
                     journal.chat_history.push(format!("Aura: {}", resp_msg));
-                    if journal.chat_history.len() > 6 { journal.chat_history.drain(0..journal.chat_history.len() - 6); }
+                    if journal.chat_history.len() > 6 {
+                        journal
+                            .chat_history
+                            .drain(0..journal.chat_history.len() - 6);
+                    }
                     let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
                     let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
                     return Ok(response.to_string());
-                },
+                }
                 Err(e) => {
-                    let resp_msg = if e.contains("ya existe") || e.contains("already exists") || e.contains("MKDIR") {
+                    let resp_msg = if e.contains("ya existe")
+                        || e.contains("already exists")
+                        || e.contains("MKDIR")
+                    {
                         format!("ℹ️ La carpeta `{}` ya existe en tu workspace.", folder_name)
                     } else {
-                        format!("⚠️ No pude crear la carpeta `{}`. Error: {}", folder_name, e)
+                        format!(
+                            "⚠️ No pude crear la carpeta `{}`. Error: {}",
+                            folder_name, e
+                        )
                     };
                     let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
                     return Ok(response.to_string());
@@ -463,165 +583,257 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
         } else if folder_prefix_found {
             // Prefix was detected but name was a filler word (e.g. "crea la carpeta que te pedí")
             let resp_msg = "¿Con qué nombre quieres que cree la carpeta? Dime el nombre exacto y la creo al instante.";
-            let response = serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
+            let response =
+                serde_json::json!({"status": "FINISH", "respuesta_conversacional": resp_msg});
             return Ok(response.to_string());
         }
 
         // ── Hardcoded keyword intercept (faster than NLU for known search verbs) ──
-        let search_keywords = ["investiga", "investigue", "investig", "busca", "buscar", "busque", "consulta", "consulte"];
+        let search_keywords = [
+            "investiga",
+            "investigue",
+            "investig",
+            "busca",
+            "buscar",
+            "busque",
+            "consulta",
+            "consulte",
+        ];
         let forced_search = search_keywords.iter().any(|kw| lower_msg.contains(kw));
-        
+
         if forced_search {
-            agent::emit_event(&app_handle, 0, "[INTERCEPT] Verbo de búsqueda detectado. Forzando AGENTIC_TASK.", "INFO");
+            agent::emit_event(
+                &app_handle,
+                0,
+                "[INTERCEPT] Verbo de búsqueda detectado. Forzando AGENTIC_TASK.",
+                "INFO",
+            );
             enriched_message = format!("Petición Original del Usuario: {}\n\nGuía de Traducción Técnica: El usuario usó un verbo de búsqueda explícito. DEBES usar TOOL_WEB_SEARCH para investigar en internet y luego usar TOOL_FINISH para responder en el chat.", user_message);
-            
-            journal.chat_history.push(format!("Usuario: {}", user_message));
+
+            journal
+                .chat_history
+                .push(format!("Usuario: {}", user_message));
             let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
         } else {
-
-        let chat_json = crate::memory::load_chat_history(workspace_path.clone()).await.unwrap_or_else(|_| "[]".to_string());
-        let mut visual_history = Vec::new();
-        if let Ok(messages) = serde_json::from_str::<Vec<serde_json::Value>>(&chat_json) {
-            for msg in messages.iter().rev().take(8).rev() {
-                let sender = msg.get("sender").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let text = msg.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                let prefix = if sender == "user" { "Usuario" } else { "Aura" };
-                visual_history.push(format!("{}: {}", prefix, text));
+            let chat_json = crate::memory::load_chat_history(workspace_path.clone())
+                .await
+                .unwrap_or_else(|_| "[]".to_string());
+            let mut visual_history = Vec::new();
+            if let Ok(messages) = serde_json::from_str::<Vec<serde_json::Value>>(&chat_json) {
+                for msg in messages.iter().rev().take(8).rev() {
+                    let sender = msg
+                        .get("sender")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let text = msg.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    let prefix = if sender == "user" { "Usuario" } else { "Aura" };
+                    visual_history.push(format!("{}: {}", prefix, text));
+                }
             }
-        }
-        
-        let mut combined_history = journal.chat_history.clone();
-        for msg in visual_history {
-            if !combined_history.contains(&msg) {
-                combined_history.push(msg);
+
+            let mut combined_history = journal.chat_history.clone();
+            for msg in visual_history {
+                if !combined_history.contains(&msg) {
+                    combined_history.push(msg);
+                }
             }
-        }
-        if combined_history.len() > 8 {
-            let skip = combined_history.len() - 8;
-            combined_history = combined_history.into_iter().skip(skip).collect();
-        }
-
-        // FIX #2: Synchronize the journal's chat history before NLU so the Agent Loop inherits it
-        journal.chat_history = combined_history.clone();
-        let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
-
-        let mut nlu_response = translator::translate_to_technical_intent(&user_message, &app_handle, &combined_history, &orchestrator_model).await;
-        let start_idx = nlu_response.find('{');
-        let end_idx = nlu_response.rfind('}');
-        if let (Some(s), Some(e)) = (start_idx, end_idx) {
-            if e > s { nlu_response = nlu_response[s..=e].to_string(); }
-        }
-        nlu_response = nlu_response.trim().to_string();
-        println!("[NLU] Input: '{}' -> RAW: '{}'", user_message, nlu_response);
-        
-        let nlu_json: serde_json::Value = serde_json::from_str(&nlu_response).unwrap_or_else(|_| {
-            serde_json::json!({
-                "intent_type": "AGENTIC_TASK",
-                "technical_translation": nlu_response
-            })
-        });
-
-        let mut intent_type = nlu_json.get("intent_type").and_then(|v| v.as_str()).unwrap_or("AGENTIC_TASK");
-
-        let lower_msg = user_message.to_lowercase();
-        if lower_msg.contains("tool_") || lower_msg.contains("script") || lower_msg.contains("reto") || lower_msg.contains("algoritmo") 
-        || lower_msg.contains("crea") || lower_msg.contains("procede") || lower_msg.contains("ejecuta") 
-        || lower_msg.contains("proyecto") || lower_msg.contains("backend") || lower_msg.contains("frontend")
-        || lower_msg.contains("programa") || lower_msg.contains("haz") || lower_msg.contains("prueba") || lower_msg.contains("continua") {
-            intent_type = "AGENTIC_TASK";
-        }
-
-        if intent_type == "CONVERSATION" {
-            let direct_response = nlu_json.get("direct_response").and_then(|v| v.as_str()).unwrap_or("¡Hola! ¿En qué puedo ayudarte?");
-            agent::emit_event(&app_handle, 0, "Conversación fluida detectada.", "SUCCESS");
-            
-            // Save to memory
-            journal.chat_history.push(format!("Usuario: {}", user_message));
-            journal.chat_history.push(format!("Aura: {}", direct_response));
-            if journal.chat_history.len() > 6 {
-                journal.chat_history.drain(0..journal.chat_history.len() - 6);
+            if combined_history.len() > 8 {
+                let skip = combined_history.len() - 8;
+                combined_history = combined_history.into_iter().skip(skip).collect();
             }
+
+            // FIX #2: Synchronize the journal's chat history before NLU so the Agent Loop inherits it
+            journal.chat_history = combined_history.clone();
             let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
 
-            let response = serde_json::json!({
-                "status": "FINISH",
-                "respuesta_conversacional": direct_response
-            });
-            return Ok(response.to_string());
-        }
+            let mut nlu_response = translator::translate_to_technical_intent(
+                &user_message,
+                &app_handle,
+                &combined_history,
+                &orchestrator_model,
+            )
+            .await;
+            let start_idx = nlu_response.find('{');
+            let end_idx = nlu_response.rfind('}');
+            if let (Some(s), Some(e)) = (start_idx, end_idx) {
+                if e > s {
+                    nlu_response = nlu_response[s..=e].to_string();
+                }
+            }
+            nlu_response = nlu_response.trim().to_string();
+            println!("[NLU] Input: '{}' -> RAW: '{}'", user_message, nlu_response);
 
-        // ── NEEDS_CLARIFICATION: El agente pregunta antes de actuar ──────────
-        if intent_type == "NEEDS_CLARIFICATION" {
-            let question = nlu_json.get("clarification_question")
+            let nlu_json: serde_json::Value =
+                serde_json::from_str(&nlu_response).unwrap_or_else(|_| {
+                    serde_json::json!({
+                        "intent_type": "AGENTIC_TASK",
+                        "technical_translation": nlu_response
+                    })
+                });
+
+            let mut intent_type = nlu_json
+                .get("intent_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("AGENTIC_TASK");
+
+            let lower_msg = user_message.to_lowercase();
+            if lower_msg.contains("tool_")
+                || lower_msg.contains("script")
+                || lower_msg.contains("reto")
+                || lower_msg.contains("algoritmo")
+                || lower_msg.contains("crea")
+                || lower_msg.contains("procede")
+                || lower_msg.contains("ejecuta")
+                || lower_msg.contains("proyecto")
+                || lower_msg.contains("backend")
+                || lower_msg.contains("frontend")
+                || lower_msg.contains("programa")
+                || lower_msg.contains("haz")
+                || lower_msg.contains("prueba")
+                || lower_msg.contains("continua")
+            {
+                intent_type = "AGENTIC_TASK";
+            }
+
+            if intent_type == "CONVERSATION" {
+                let direct_response = nlu_json
+                    .get("direct_response")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("¡Hola! ¿En qué puedo ayudarte?");
+                agent::emit_event(&app_handle, 0, "Conversación fluida detectada.", "SUCCESS");
+
+                // Save to memory
+                journal
+                    .chat_history
+                    .push(format!("Usuario: {}", user_message));
+                journal
+                    .chat_history
+                    .push(format!("Aura: {}", direct_response));
+                if journal.chat_history.len() > 6 {
+                    journal
+                        .chat_history
+                        .drain(0..journal.chat_history.len() - 6);
+                }
+                let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
+
+                let response = serde_json::json!({
+                    "status": "FINISH",
+                    "respuesta_conversacional": direct_response
+                });
+                return Ok(response.to_string());
+            }
+
+            // ── NEEDS_CLARIFICATION: El agente pregunta antes de actuar ──────────
+            if intent_type == "NEEDS_CLARIFICATION" {
+                let question = nlu_json.get("clarification_question")
                 .and_then(|v| v.as_str())
                 .unwrap_or("¿Puedes darme más detalles sobre lo que necesitas? Quiero asegurarme de entenderte bien antes de empezar.");
-            agent::emit_event(&app_handle, 0, "[NLU] Mandato ambiguo — solicitando clarificación al usuario.", "WARNING");
-            
-            journal.chat_history.push(format!("Usuario: {}", user_message));
-            journal.chat_history.push(format!("Aura: {}", question));
-            if journal.chat_history.len() > 6 {
-                journal.chat_history.drain(0..journal.chat_history.len() - 6);
+                agent::emit_event(
+                    &app_handle,
+                    0,
+                    "[NLU] Mandato ambiguo — solicitando clarificación al usuario.",
+                    "WARNING",
+                );
+
+                journal
+                    .chat_history
+                    .push(format!("Usuario: {}", user_message));
+                journal.chat_history.push(format!("Aura: {}", question));
+                if journal.chat_history.len() > 6 {
+                    journal
+                        .chat_history
+                        .drain(0..journal.chat_history.len() - 6);
+                }
+                let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
+
+                let response = serde_json::json!({
+                    "status": "FINISH",
+                    "respuesta_conversacional": question
+                });
+                return Ok(response.to_string());
             }
-            let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
 
-            let response = serde_json::json!({
-                "status": "FINISH",
-                "respuesta_conversacional": question
-            });
-            return Ok(response.to_string());
-        }
+            if intent_type == "FAST_TRACK_OS" {
+                if let Some(cmd) = nlu_json.get("os_command").and_then(|v| v.as_str()) {
+                    if !cmd.is_empty() && cmd != "null" {
+                        agent::emit_event(
+                            &app_handle,
+                            0,
+                            &format!("[FAST-TRACK] Ejecutando: {}", cmd),
+                            "ACTION",
+                        );
+                        match crate::core::execute_terminal_command(&workspace_path, cmd).await {
+                            Ok(_) => {
+                                agent::emit_event(
+                                    &app_handle,
+                                    0,
+                                    "[FAST-TRACK] Comando ejecutado con éxito.",
+                                    "SUCCESS",
+                                );
+                                let resp_msg = format!("✅ Listo. Ejecuté: `{}`", cmd);
 
-        if intent_type == "FAST_TRACK_OS" {
-            if let Some(cmd) = nlu_json.get("os_command").and_then(|v| v.as_str()) {
-                if !cmd.is_empty() && cmd != "null" {
-                    agent::emit_event(&app_handle, 0, &format!("[FAST-TRACK] Ejecutando: {}", cmd), "ACTION");
-                    match crate::core::execute_terminal_command(&workspace_path, cmd).await {
-                        Ok(_) => {
-                            agent::emit_event(&app_handle, 0, "[FAST-TRACK] Comando ejecutado con éxito.", "SUCCESS");
-                            let resp_msg = format!("✅ Listo. Ejecuté: `{}`", cmd);
-                            
-                            journal.chat_history.push(format!("Usuario: {}", user_message));
-                            journal.chat_history.push(format!("Aura: {}", resp_msg));
-                            if journal.chat_history.len() > 6 {
-                                journal.chat_history.drain(0..journal.chat_history.len() - 6);
+                                journal
+                                    .chat_history
+                                    .push(format!("Usuario: {}", user_message));
+                                journal.chat_history.push(format!("Aura: {}", resp_msg));
+                                if journal.chat_history.len() > 6 {
+                                    journal
+                                        .chat_history
+                                        .drain(0..journal.chat_history.len() - 6);
+                                }
+                                let _ = crate::core::session_journal::save_journal(
+                                    &workspace_path,
+                                    &journal,
+                                );
+
+                                let response = serde_json::json!({
+                                    "status": "FINISH",
+                                    "respuesta_conversacional": resp_msg
+                                });
+                                return Ok(response.to_string());
                             }
-                            let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
-
-                            let response = serde_json::json!({
-                                "status": "FINISH",
-                                "respuesta_conversacional": resp_msg
-                            });
-                            return Ok(response.to_string());
-                        },
-                        Err(e) => {
-                            agent::emit_event(&app_handle, 0, &format!("[FAST-TRACK] Error: {}. Derivando al Agente...", e), "WARNING");
-                            // Fall through to AGENTIC_TASK
+                            Err(e) => {
+                                agent::emit_event(
+                                    &app_handle,
+                                    0,
+                                    &format!("[FAST-TRACK] Error: {}. Derivando al Agente...", e),
+                                    "WARNING",
+                                );
+                                // Fall through to AGENTIC_TASK
+                            }
                         }
                     }
                 }
             }
-        }
 
-        let technical_intent = nlu_json.get("technical_translation").and_then(|v| v.as_str()).unwrap_or(&user_message);
-        // Include both the original (for user reference) and the cleaned technical intent
-        enriched_message = format!(
+            let technical_intent = nlu_json
+                .get("technical_translation")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&user_message);
+            // Include both the original (for user reference) and the cleaned technical intent
+            enriched_message = format!(
             "Petición Original del Usuario: {}\n\nGuía de Traducción Técnica (generada por NLU): {}",
             user_message, technical_intent
         );
         } // end else (no keyword intercept)
     }
 
-    let workspace_tree_nodes = crate::memory::get_workspace_tree_internal(workspace_path.clone()).await?;
+    let workspace_tree_nodes =
+        crate::memory::get_workspace_tree_internal(workspace_path.clone()).await?;
     // Filter out noise directories — node_modules alone can be 4000+ nodes and pollutes
     // the LLM context and embedding index with irrelevant framework internals.
     let ignored_dirs = ["node_modules", ".git", "__pycache__", "target"];
-    let files_only: Vec<_> = workspace_tree_nodes.iter().filter(|n| {
-        !n.is_dir && !ignored_dirs.iter().any(|d| n.path.contains(d))
-    }).collect();
+    let files_only: Vec<_> = workspace_tree_nodes
+        .iter()
+        .filter(|n| !n.is_dir && !ignored_dirs.iter().any(|d| n.path.contains(d)))
+        .collect();
     let mut index = crate::memory::read_vector_index(&workspace_path).await;
     const MAX_NUEVOS_A_VECTORIZAR: usize = 50;
     if index.len() != files_only.len() {
-        let nuevos: Vec<_> = files_only.iter().filter(|f| !index.iter().any(|n| n.path == f.path)).collect();
+        let nuevos: Vec<_> = files_only
+            .iter()
+            .filter(|f| !index.iter().any(|n| n.path == f.path))
+            .collect();
         if nuevos.len() <= MAX_NUEVOS_A_VECTORIZAR {
             let mut new_index = Vec::new();
             for file in &files_only {
@@ -629,7 +841,10 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
                     new_index.push(existing.clone());
                 } else {
                     if let Ok(emb) = get_embedding(&file.path).await {
-                        new_index.push(crate::memory::VectorNode { path: file.path.clone(), embedding: emb });
+                        new_index.push(crate::memory::VectorNode {
+                            path: file.path.clone(),
+                            embedding: emb,
+                        });
                     }
                 }
             }
@@ -641,10 +856,21 @@ pub async fn process_user_prompt(mut user_message: String, mut workspace_path: S
     }
     // No truncar el árbol de archivos con búsqueda semántica. El agente necesita ver el mapa real.
     let tree_json = serde_json::to_string(
-        &files_only.iter().take(500).map(|n| n.path.clone()).collect::<Vec<String>>()
-    ).unwrap_or_default();
-    
-    agent::run_agent_loop(enriched_message, workspace_path, tree_json, orchestrator_model, programmer_model, app_handle).await
+        &files_only
+            .iter()
+            .take(500)
+            .map(|n| n.path.clone())
+            .collect::<Vec<String>>(),
+    )
+    .unwrap_or_default();
+
+    agent::run_agent_loop(
+        enriched_message,
+        workspace_path,
+        tree_json,
+        orchestrator_model,
+        programmer_model,
+        app_handle,
+    )
+    .await
 }
-
-

@@ -1,17 +1,17 @@
 #[cfg(test)]
 mod tests {
+    use crate::core::learning::{
+        engine::LearningEngine,
+        experience::{Experience, ExperienceStoreV2, SharedExperienceStore, SCHEMA_VERSION},
+        fingerprint::{FingerprintBuilder, TaskFingerprint},
+        outcome::{LearningOutcome, LearningResult, OutcomeMetrics},
+        persistence::LearningPersistence,
+        router::{AdaptiveRouter, RecommendationReason},
+        stats::{compute_model_stats_from, ModelStats},
+        strategy::StrategyKind,
+    };
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    use crate::core::learning::{
-        fingerprint::{TaskFingerprint, FingerprintBuilder},
-        outcome::{LearningOutcome, OutcomeMetrics, LearningResult},
-        strategy::StrategyKind,
-        experience::{Experience, ExperienceStoreV2, SharedExperienceStore, SCHEMA_VERSION},
-        stats::{ModelStats, compute_model_stats_from},
-        router::{AdaptiveRouter, RecommendationReason},
-        engine::LearningEngine,
-        persistence::LearningPersistence,
-    };
 
     fn make_fp(lang: &str, tests: bool) -> TaskFingerprint {
         TaskFingerprint {
@@ -40,7 +40,10 @@ mod tests {
             strategy: StrategyKind::CompileFirst,
             result: LearningResult {
                 outcome,
-                metrics: OutcomeMetrics { steps: 5, ..Default::default() },
+                metrics: OutcomeMetrics {
+                    steps: 5,
+                    ..Default::default()
+                },
                 failures: vec![],
                 recovery: None,
             },
@@ -52,8 +55,10 @@ mod tests {
 
     fn uuid_simple() -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let t = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos()).unwrap_or(0);
+        let t = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         format!("exp_{:x}", t)
     }
 
@@ -65,7 +70,10 @@ mod tests {
         let fp = make_fp("rust", true);
         let rec = router.recommend(&fp, &["qwen3:8b".to_string()]).await;
         assert_eq!(rec.reason, RecommendationReason::ColdStart);
-        assert!((rec.confidence - 0.5).abs() < 0.01, "cold start confidence must be 0.5");
+        assert!(
+            (rec.confidence - 0.5).abs() < 0.01,
+            "cold start confidence must be 0.5"
+        );
     }
 
     // ── Test 2: Successful model increases score ──────────────────────────────
@@ -75,7 +83,11 @@ mod tests {
         stats.attempts = 10;
         stats.successes = 9;
         let rate = stats.smoothed_success_rate();
-        assert!(rate > 0.80, "9/10 successes should give > 0.80 smoothed rate, got {}", rate);
+        assert!(
+            rate > 0.80,
+            "9/10 successes should give > 0.80 smoothed rate, got {}",
+            rate
+        );
     }
 
     // ── Test 3: Failure decreases score ──────────────────────────────────────
@@ -86,16 +98,23 @@ mod tests {
         stats.failures = 9;
         stats.successes = 1;
         let rate = stats.smoothed_success_rate();
-        assert!(rate < 0.30, "1/10 successes should give < 0.30 smoothed rate, got {}", rate);
+        assert!(
+            rate < 0.30,
+            "1/10 successes should give < 0.30 smoothed rate, got {}",
+            rate
+        );
     }
 
     // ── Test 4: Compile failure penalized specifically ────────────────────────
     #[test]
     fn test_compile_failure_penalized_specifically() {
         let mut good = ModelStats::default();
-        good.attempts = 10; good.successes = 8;
+        good.attempts = 10;
+        good.successes = 8;
         let mut bad = ModelStats::default();
-        bad.attempts = 10; bad.successes = 8; bad.compile_failures = 6;
+        bad.attempts = 10;
+        bad.successes = 8;
+        bad.compile_failures = 6;
         assert!(
             good.confidence() > bad.confidence(),
             "Model with compile failures must have lower confidence"
@@ -106,13 +125,16 @@ mod tests {
     #[test]
     fn test_partial_outcome_counts_as_half_success() {
         let mut full = ModelStats::default();
-        full.attempts = 10; full.successes = 10;
+        full.attempts = 10;
+        full.successes = 10;
 
         let mut partial = ModelStats::default();
-        partial.attempts = 10; partial.partial = 10;
+        partial.attempts = 10;
+        partial.partial = 10;
 
         let mut zero = ModelStats::default();
-        zero.attempts = 10; zero.failures = 10;
+        zero.attempts = 10;
+        zero.failures = 10;
 
         assert!(
             full.smoothed_success_rate() > partial.smoothed_success_rate(),
@@ -136,7 +158,11 @@ mod tests {
         stats.attempts = 1;
         stats.successes = 1;
         let weight = stats.sample_weight();
-        assert!(weight < 0.10, "1 sample should have very low weight, got {}", weight);
+        assert!(
+            weight < 0.10,
+            "1 sample should have very low weight, got {}",
+            weight
+        );
     }
 
     // ── Test 7: Fingerprint similarity — same type ────────────────────────────
@@ -145,7 +171,11 @@ mod tests {
         let a = make_fp("rust", true);
         let b = make_fp("rust", true);
         let sim = FingerprintBuilder::similarity(&a, &b);
-        assert!(sim >= 0.95, "Identical fingerprints should have similarity >= 0.95, got {}", sim);
+        assert!(
+            sim >= 0.95,
+            "Identical fingerprints should have similarity >= 0.95, got {}",
+            sim
+        );
     }
 
     // ── Test 8: Fingerprint similarity — different language ───────────────────
@@ -154,7 +184,11 @@ mod tests {
         let a = make_fp("rust", true);
         let b = make_fp("python", true);
         let sim = FingerprintBuilder::similarity(&a, &b);
-        assert!(sim < 0.75, "Different language should reduce similarity, got {}", sim);
+        assert!(
+            sim < 0.75,
+            "Different language should reduce similarity, got {}",
+            sim
+        );
     }
 
     // ── Test 9: Duplicate attempt_id not counted ──────────────────────────────
@@ -176,7 +210,11 @@ mod tests {
         stats.attempts = 100;
         stats.successes = 100;
         let c = stats.confidence();
-        assert!(c >= 0.0 && c <= 1.0, "confidence must be in 0..1, got {}", c);
+        assert!(
+            c >= 0.0 && c <= 1.0,
+            "confidence must be in 0..1, got {}",
+            c
+        );
     }
 
     // ── Test 11: Corruption fallback — ExperienceStore starts empty on bad file ─
@@ -221,17 +259,23 @@ mod tests {
         let store: SharedExperienceStore = Arc::new(RwLock::new(ExperienceStoreV2::new(500)));
         let engine = LearningEngine::with_store(store.clone());
         let fp = make_fp("rust", true);
-        let res = LearningResult::success(OutcomeMetrics { steps: 4, ..Default::default() });
+        let res = LearningResult::success(OutcomeMetrics {
+            steps: 4,
+            ..Default::default()
+        });
 
-        engine.record_outcome(
-            fp,
-            "test_model".to_string(),
-            StrategyKind::CompileFirst,
-            res,
-            0.7,
-            "m_engine_1".to_string(),
-            Some("att_1".to_string()),
-        ).await.unwrap();
+        engine
+            .record_outcome(
+                fp,
+                "test_model".to_string(),
+                StrategyKind::CompileFirst,
+                res,
+                0.7,
+                "m_engine_1".to_string(),
+                Some("att_1".to_string()),
+            )
+            .await
+            .unwrap();
 
         let s = store.read().await;
         assert_eq!(s.len(), 1);
@@ -243,7 +287,12 @@ mod tests {
     async fn test_shared_store_write_visible_to_reader() {
         let store: SharedExperienceStore = Arc::new(RwLock::new(ExperienceStoreV2::new(500)));
         let engine = LearningEngine::with_store(store.clone());
-        let router = AdaptiveRouter::new(Default::default(), Default::default(), store.clone(), "m_seed");
+        let router = AdaptiveRouter::new(
+            Default::default(),
+            Default::default(),
+            store.clone(),
+            "m_seed",
+        );
 
         let fp = make_fp("rust", true);
         // Pre-write: cold start
@@ -252,15 +301,21 @@ mod tests {
 
         // Record 3 experiences
         for i in 1..=3 {
-            engine.record_outcome(
-                fp.clone(),
-                "m1".to_string(),
-                StrategyKind::CompileFirst,
-                LearningResult::success(OutcomeMetrics { steps: 3, ..Default::default() }),
-                0.8,
-                format!("m_multi_{}", i),
-                Some(format!("att_multi_{}", i)),
-            ).await.unwrap();
+            engine
+                .record_outcome(
+                    fp.clone(),
+                    "m1".to_string(),
+                    StrategyKind::CompileFirst,
+                    LearningResult::success(OutcomeMetrics {
+                        steps: 3,
+                        ..Default::default()
+                    }),
+                    0.8,
+                    format!("m_multi_{}", i),
+                    Some(format!("att_multi_{}", i)),
+                )
+                .await
+                .unwrap();
         }
 
         // Post-write: router now sees experiences in shared store!
@@ -283,13 +338,22 @@ mod tests {
 
         // Record successes for MinimalChange strategy on rust
         for i in 1..=4 {
-            let mut exp = make_exp("qwen", LearningOutcome::Success, &format!("att_strat_{}", i));
+            let mut exp = make_exp(
+                "qwen",
+                LearningOutcome::Success,
+                &format!("att_strat_{}", i),
+            );
             exp.strategy = StrategyKind::MinimalChange;
             exp.fingerprint = fp.clone();
             let _ = store.write().await.push(exp);
         }
 
-        let router = AdaptiveRouter::new(Default::default(), Default::default(), store, "m_fixed_seed_strat");
+        let router = AdaptiveRouter::new(
+            Default::default(),
+            Default::default(),
+            store,
+            "m_fixed_seed_strat",
+        );
         let rec = router.recommend(&fp, &["qwen".to_string()]).await;
         // Even if default is CompileFirst, MinimalChange should be selected or explored
         if rec.reason != RecommendationReason::Exploration {
@@ -300,31 +364,59 @@ mod tests {
     // ── Test 17: Truly atomic persistence (including when file already exists on Windows) ──
     #[tokio::test]
     async fn test_persistence_truly_atomic() {
-        let temp_dir = std::env::temp_dir().join(format!("aura_test_atomic_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "aura_test_atomic_{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let persistence = LearningPersistence::with_dir(temp_dir.clone());
         let exp1 = make_exp("atom_model", LearningOutcome::Success, "att_atomic_1");
 
         let res1 = persistence.append_experience(&exp1).await;
-        assert!(res1.is_ok(), "first append_experience must succeed: {:?}", res1);
+        assert!(
+            res1.is_ok(),
+            "first append_experience must succeed: {:?}",
+            res1
+        );
 
         // Second append tests the atomic replace when destination file already exists on Windows
         let exp2 = make_exp("atom_model_2", LearningOutcome::Success, "att_atomic_2");
         let res2 = persistence.append_experience(&exp2).await;
-        assert!(res2.is_ok(), "subsequent append_experience on existing file must succeed on Windows: {:?}", res2);
+        assert!(
+            res2.is_ok(),
+            "subsequent append_experience on existing file must succeed on Windows: {:?}",
+            res2
+        );
 
         // Verify stats atomic replace on existing file as well
         let mut model_stats = std::collections::HashMap::new();
         model_stats.insert("atom_model".to_string(), ModelStats::default());
         let res_stats1 = persistence.save_model_stats(&model_stats).await;
-        assert!(res_stats1.is_ok(), "first save_model_stats must succeed: {:?}", res_stats1);
+        assert!(
+            res_stats1.is_ok(),
+            "first save_model_stats must succeed: {:?}",
+            res_stats1
+        );
 
         let res_stats2 = persistence.save_model_stats(&model_stats).await;
-        assert!(res_stats2.is_ok(), "second save_model_stats on existing file must succeed on Windows: {:?}", res_stats2);
+        assert!(
+            res_stats2.is_ok(),
+            "second save_model_stats on existing file must succeed on Windows: {:?}",
+            res_stats2
+        );
 
         // Verify the file was created and can be loaded
         let loaded = persistence.load_experiences(500);
-        assert!(loaded.experiences.iter().any(|e| e.attempt_id == "att_atomic_1"));
-        assert!(loaded.experiences.iter().any(|e| e.attempt_id == "att_atomic_2"));
+        assert!(loaded
+            .experiences
+            .iter()
+            .any(|e| e.attempt_id == "att_atomic_1"));
+        assert!(loaded
+            .experiences
+            .iter()
+            .any(|e| e.attempt_id == "att_atomic_2"));
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
@@ -340,7 +432,10 @@ mod tests {
 
         // att_evict_1 was drained from the store, so pushing it again should be accepted!
         let exp_re = make_exp("m", LearningOutcome::Success, "att_evict_1");
-        assert!(store.push(exp_re), "Evicted attempt_id must be allowed back if re-encountered");
+        assert!(
+            store.push(exp_re),
+            "Evicted attempt_id must be allowed back if re-encountered"
+        );
     }
 
     // ── Test 19: Full AL-v1 End-to-End Cycle ─────────────────────────────────
@@ -350,11 +445,13 @@ mod tests {
     //        -> ModelStats -> StrategyStats -> AdaptiveRouter update.
     #[tokio::test]
     async fn test_al_v1_e2e_full_cycle() {
-        use crate::core::mission_runtime::MissionRuntime;
-        use crate::core::mission_contract::{MissionContract, AcceptanceCriterion, VerificationMethod, CriterionStatus};
-        use crate::core::project_profile::{ProjectProfile, PrimaryLanguage};
-        use crate::core::policy::{ActionProposal, RiskLevel};
         use crate::core::completion_gate::CompletionDecision;
+        use crate::core::mission_contract::{
+            AcceptanceCriterion, CriterionStatus, MissionContract, VerificationMethod,
+        };
+        use crate::core::mission_runtime::MissionRuntime;
+        use crate::core::policy::{ActionProposal, RiskLevel};
+        use crate::core::project_profile::{PrimaryLanguage, ProjectProfile};
 
         // 1. Mission & Contract
         let mut contract = MissionContract::new("Build and test Rust calculator");
@@ -381,11 +478,25 @@ mod tests {
         assert!(fp.requires_tests);
 
         // 3. AdaptiveRouter initial recommendation (Cold Start)
-        let temp_dir = std::env::temp_dir().join(format!("aura_test_e2e_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "aura_test_e2e_{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let persistence = LearningPersistence::with_dir(temp_dir.clone());
         let store: SharedExperienceStore = Arc::new(RwLock::new(persistence.load_experiences(500)));
-        let router = AdaptiveRouter::new(Default::default(), Default::default(), store.clone(), "m_e2e_1");
-        let available_models = vec!["qwen2.5-coder:7b".to_string(), "deepseek-coder:6.7b".to_string()];
+        let router = AdaptiveRouter::new(
+            Default::default(),
+            Default::default(),
+            store.clone(),
+            "m_e2e_1",
+        );
+        let available_models = vec![
+            "qwen2.5-coder:7b".to_string(),
+            "deepseek-coder:6.7b".to_string(),
+        ];
         let rec1 = router.recommend(&fp, &available_models).await;
         assert_eq!(rec1.reason, RecommendationReason::ColdStart);
 
@@ -394,12 +505,24 @@ mod tests {
         runtime.contract = contract.clone();
 
         // Register real mock executor in ToolRegistry
-        runtime.tool_registry.register("TOOL_TERMINAL", Arc::new(|args| {
-            let cmd = args.get("comando").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            Box::pin(async move {
-                Ok(crate::core::tool_registry::ExecutionResult::success(format!("Command '{}' executed with exit code 0", cmd)))
-            })
-        })).unwrap();
+        runtime
+            .tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(|_ws, args| {
+                    let cmd = args
+                        .get("comando")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    Box::pin(async move {
+                        Ok(crate::core::tool_registry::ExecutionResult::success(
+                            format!("Command '{}' executed with exit code 0", cmd),
+                        ))
+                    })
+                }),
+            )
+            .unwrap();
 
         // Propose action
         let proposal = ActionProposal {
@@ -413,7 +536,10 @@ mod tests {
         // Execution Gateway: Authorize & Execute
         assert!(runtime.authorize_action(&proposal).is_ok());
         let obs = runtime.execute_action(&proposal).await.unwrap();
-        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Success);
+        assert_eq!(
+            obs.status,
+            crate::core::observation::ObservationStatus::Success
+        );
 
         // 5. Evidence & CompletionGate
         // Mark manual criteria as satisfied if any exist (not needed here since AC-1 is automated)
@@ -426,7 +552,7 @@ mod tests {
             "0",
             1.0,
             runtime.current_step(),
-            Some(runtime.current_world_hash())
+            Some(runtime.current_world_hash()),
         );
 
         let decision = runtime.can_complete();
@@ -449,15 +575,17 @@ mod tests {
             recovery: None,
         };
 
-        let record_res = engine.record_outcome(
-            fp.clone(),
-            rec1.model.clone(),
-            rec1.strategy,
-            outcome_result,
-            0.9,
-            runtime.mission_id.clone(),
-            Some(format!("att_e2e_{}", runtime.mission_id)),
-        ).await;
+        let record_res = engine
+            .record_outcome(
+                fp.clone(),
+                rec1.model.clone(),
+                rec1.strategy,
+                outcome_result,
+                0.9,
+                runtime.mission_id.clone(),
+                Some(format!("att_e2e_{}", runtime.mission_id)),
+            )
+            .await;
         assert!(record_res.is_ok());
 
         // 7. Verify Experience, ModelStats & subsequent recommendation update
@@ -466,15 +594,26 @@ mod tests {
 
         let updated_stats = persistence.load_model_stats();
         let chosen_stats = updated_stats.get(&rec1.model);
-        assert!(chosen_stats.is_some(), "Recorded model must have persisted stats");
+        assert!(
+            chosen_stats.is_some(),
+            "Recorded model must have persisted stats"
+        );
         let stats = chosen_stats.unwrap();
         assert_eq!(stats.successes, 1);
         assert_eq!(stats.attempts, 1);
 
         // Router with updated stats should reflect experience
-        let updated_router = AdaptiveRouter::new(updated_stats, persistence.load_strategy_stats(), store.clone(), "m_e2e_2");
+        let updated_router = AdaptiveRouter::new(
+            updated_stats,
+            persistence.load_strategy_stats(),
+            store.clone(),
+            "m_e2e_2",
+        );
         let rec2 = updated_router.recommend(&fp, &available_models).await;
-        assert_eq!(rec2.model, rec1.model, "Successfully reinforced model should be recommended");
+        assert_eq!(
+            rec2.model, rec1.model,
+            "Successfully reinforced model should be recommended"
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -490,10 +629,16 @@ mod tests {
         let _ = engine.store();
 
         // Assert size of LearningEngine is purely store (Arc) + persistence (PathBuf)
-        assert!(std::mem::size_of::<LearningEngine>() <= 64, "LearningEngine must be a lightweight coordinator with no runtime handles");
+        assert!(
+            std::mem::size_of::<LearningEngine>() <= 64,
+            "LearningEngine must be a lightweight coordinator with no runtime handles"
+        );
 
         // Assert size of AdaptiveRouter is purely data (StateStrategyIndex adds a HashMap — still no runtime handles)
-        assert!(std::mem::size_of::<AdaptiveRouter>() <= 256, "AdaptiveRouter must be purely algorithmic without runtime dependencies");
+        assert!(
+            std::mem::size_of::<AdaptiveRouter>() <= 256,
+            "AdaptiveRouter must be purely algorithmic without runtime dependencies"
+        );
     }
 
     // ── AL-v2 Tests: StateSignature & Trajectory Foundation ──────────────────
@@ -535,7 +680,11 @@ mod tests {
             .build();
 
         let sim_close = sig1.similarity(&sig2);
-        assert!(sim_close > 0.85, "Close signatures should have high similarity, got {}", sim_close);
+        assert!(
+            sim_close > 0.85,
+            "Close signatures should have high similarity, got {}",
+            sim_close
+        );
 
         // Very distant signature (different task, different error, stalled)
         let sig_far = StateSignatureBuilder::new("fp_hash_python_script")
@@ -553,14 +702,18 @@ mod tests {
             .build();
 
         let sim_distant = sig1.similarity(&sig_far);
-        assert!(sim_distant < 0.35, "Distant signatures should have low similarity, got {}", sim_distant);
+        assert!(
+            sim_distant < 0.35,
+            "Distant signatures should have low similarity, got {}",
+            sim_distant
+        );
     }
 
     #[test]
     fn test_al_v2_trajectory_step_recording_and_recovery_extraction() {
         use crate::core::learning::signature::{StateSignatureBuilder, VerificationLevel};
-        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
         use crate::core::learning::strategy::StrategyKind;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
 
         let mut traj = Trajectory::new("mission_rec_1", "fp_hash_rust_app");
 
@@ -607,7 +760,11 @@ mod tests {
 
         assert_eq!(traj.step_count(), 2);
         let recoveries = traj.extract_recoveries();
-        assert_eq!(recoveries.len(), 1, "Must extract 1 successful recovery sequence");
+        assert_eq!(
+            recoveries.len(),
+            1,
+            "Must extract 1 successful recovery sequence"
+        );
         assert_eq!(recoveries[0].trigger_error, "CompileError");
         assert_eq!(recoveries[0].strategy, StrategyKind::CompileFirst);
         assert_eq!(recoveries[0].tool, "TOOL_PROGRAMMER");
@@ -617,8 +774,8 @@ mod tests {
     #[test]
     fn test_al_v2_experience_serialization_with_trajectory_backward_compatibility() {
         use crate::core::learning::signature::StateSignatureBuilder;
-        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
         use crate::core::learning::strategy::StrategyKind;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
 
         // 1. Deserializing legacy JSON without "trajectory" field defaults to None
         let legacy_json = r#"{
@@ -660,15 +817,19 @@ mod tests {
         }"#;
 
         let loaded_legacy: Result<Experience, _> = serde_json::from_str(legacy_json);
-        assert!(loaded_legacy.is_ok(), "Legacy experience without trajectory must deserialize successfully");
+        assert!(
+            loaded_legacy.is_ok(),
+            "Legacy experience without trajectory must deserialize successfully"
+        );
         let exp_legacy = loaded_legacy.unwrap();
-        assert!(exp_legacy.trajectory.is_none(), "Legacy experience must have trajectory = None");
+        assert!(
+            exp_legacy.trajectory.is_none(),
+            "Legacy experience must have trajectory = None"
+        );
 
         // 2. Serializing and deserializing experience with an AL-v2 trajectory preserves all data
         let mut traj = Trajectory::new("m_v2", "hash_rust");
-        let state = StateSignatureBuilder::new("hash_rust")
-            .phase(1)
-            .build();
+        let state = StateSignatureBuilder::new("hash_rust").phase(1).build();
         traj.record_step(TrajectoryStep {
             step: 1,
             from_state: state.clone(),
@@ -696,60 +857,79 @@ mod tests {
 
     #[test]
     fn test_al_v2_3_state_strategy_index_update_from_experience() {
-        use crate::core::learning::state_stats::StateStrategyIndex;
-        use crate::core::learning::signature::StateSignatureBuilder;
-        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
-        use crate::core::learning::strategy::StrategyKind;
         use crate::core::learning::outcome::LearningOutcome;
+        use crate::core::learning::signature::StateSignatureBuilder;
+        use crate::core::learning::state_stats::StateStrategyIndex;
+        use crate::core::learning::strategy::StrategyKind;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
 
         let mut idx = StateStrategyIndex::new();
         let state = StateSignatureBuilder::new("fp_v2_3")
-            .phase(0).compile_failures(2).progress_stalled(true).build();
+            .phase(0)
+            .compile_failures(2)
+            .progress_stalled(true)
+            .build();
 
         // Record one successful DiagnoseThenRepair step
         let mut traj = Trajectory::new("m_v2_3_a", "fp_v2_3");
         traj.record_step(TrajectoryStep {
-            step: 1, from_state: state.clone(),
+            step: 1,
+            from_state: state.clone(),
             strategy: StrategyKind::DiagnoseThenRepair,
-            tool: "TOOL_TERMINAL".to_string(), success: true,
-            error_encountered: None, to_state: None,
+            tool: "TOOL_TERMINAL".to_string(),
+            success: true,
+            error_encountered: None,
+            to_state: None,
         });
         traj.finalize(LearningOutcome::Success, 5000);
 
         idx.update_from_experience(&traj.steps, traj.total_duration_ms, &traj.outcome, 1.0);
 
-        assert_eq!(idx.total_records(), 1, "Must have 1 record after one trajectory");
+        assert_eq!(
+            idx.total_records(),
+            1,
+            "Must have 1 record after one trajectory"
+        );
         let (strat, rate) = idx.best_strategy_for_state(&state, 1).unwrap();
         assert_eq!(strat, StrategyKind::DiagnoseThenRepair);
-        assert!(rate > 0.5, "Success rate must exceed 0.5 after one mission success");
+        assert!(
+            rate > 0.5,
+            "Success rate must exceed 0.5 after one mission success"
+        );
     }
 
     #[tokio::test]
     async fn test_al_v2_3_router_uses_state_signature_when_available() {
+        use crate::core::learning::experience::ExperienceStoreV2;
+        use crate::core::learning::outcome::LearningOutcome;
+        use crate::core::learning::router::AdaptiveRouter;
+        use crate::core::learning::signature::StateSignatureBuilder;
+        use crate::core::learning::state_stats::StateStrategyIndex;
+        use crate::core::learning::strategy::StrategyKind;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
         use std::sync::Arc;
         use tokio::sync::RwLock;
-        use crate::core::learning::experience::ExperienceStoreV2;
-        use crate::core::learning::router::AdaptiveRouter;
-        use crate::core::learning::state_stats::StateStrategyIndex;
-        use crate::core::learning::signature::StateSignatureBuilder;
-        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
-        use crate::core::learning::strategy::StrategyKind;
-        use crate::core::learning::outcome::LearningOutcome;
 
         // Build a StateStrategyIndex with clear evidence for IncrementalPatch
         // under a stalled/compile-error state
         let state = StateSignatureBuilder::new("fp_router_state")
-            .phase(1).compile_failures(3).progress_stalled(true).build();
+            .phase(1)
+            .compile_failures(3)
+            .progress_stalled(true)
+            .build();
 
         let mut idx = StateStrategyIndex::new();
         // Record multiple successful IncrementalPatch in this state
         for i in 0..4u32 {
             let mut traj = Trajectory::new(format!("m_rs_{}", i), "fp_router_state");
             traj.record_step(TrajectoryStep {
-                step: 1, from_state: state.clone(),
+                step: 1,
+                from_state: state.clone(),
                 strategy: StrategyKind::IncrementalPatch,
-                tool: "TOOL_PROGRAMMER".to_string(), success: true,
-                error_encountered: None, to_state: None,
+                tool: "TOOL_PROGRAMMER".to_string(),
+                success: true,
+                error_encountered: None,
+                to_state: None,
             });
             traj.finalize(LearningOutcome::Success, 3000);
             idx.update_from_experience(&traj.steps, traj.total_duration_ms, &traj.outcome, 0.0);
@@ -757,8 +937,11 @@ mod tests {
 
         // Verify the index recommends IncrementalPatch for this state
         let (recommended, _) = idx.best_strategy_for_state(&state, 2).unwrap();
-        assert_eq!(recommended, StrategyKind::IncrementalPatch,
-            "Index must recommend IncrementalPatch with 4 successful observations");
+        assert_eq!(
+            recommended,
+            StrategyKind::IncrementalPatch,
+            "Index must recommend IncrementalPatch with 4 successful observations"
+        );
 
         // Wire the router with this index and empty experience store
         let store = Arc::new(RwLock::new(ExperienceStoreV2::new(100)));
@@ -767,31 +950,41 @@ mod tests {
             std::collections::HashMap::new(),
             store,
             "mission_router_state_test",
-        ).with_state_index(idx);
+        )
+        .with_state_index(idx);
 
         let fp = make_fp("rust", true);
         let models = vec!["model-a".to_string()];
 
         // Without state: cold start (no experience data)
         let rec_no_state = router.recommend(&fp, &models).await;
-        assert!(!rec_no_state.state_informed,
-            "Without state arg, state_informed must be false");
+        assert!(
+            !rec_no_state.state_informed,
+            "Without state arg, state_informed must be false"
+        );
 
         // With state: should be state_informed = true since index has data
-        let rec_with_state = router.recommend_with_state(&fp, Some(&state), &models).await;
-        assert!(rec_with_state.state_informed,
-            "With state arg and index data, state_informed must be true");
-        assert_eq!(rec_with_state.strategy, StrategyKind::IncrementalPatch,
-            "Router must select state-informed strategy over fingerprint default");
+        let rec_with_state = router
+            .recommend_with_state(&fp, Some(&state), &models)
+            .await;
+        assert!(
+            rec_with_state.state_informed,
+            "With state arg and index data, state_informed must be true"
+        );
+        assert_eq!(
+            rec_with_state.strategy,
+            StrategyKind::IncrementalPatch,
+            "Router must select state-informed strategy over fingerprint default"
+        );
     }
 
     #[tokio::test]
     async fn test_al_v2_3_router_falls_back_to_fingerprint_when_no_state_data() {
-        use std::sync::Arc;
-        use tokio::sync::RwLock;
         use crate::core::learning::experience::ExperienceStoreV2;
         use crate::core::learning::router::AdaptiveRouter;
         use crate::core::learning::signature::StateSignatureBuilder;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
 
         let store = Arc::new(RwLock::new(ExperienceStoreV2::new(100)));
         let router = AdaptiveRouter::new(
@@ -803,24 +996,27 @@ mod tests {
         // Empty StateStrategyIndex (default)
 
         let fp = make_fp("rust", true);
-        let state = StateSignatureBuilder::new("fp_no_data")
-            .phase(0).build();
+        let state = StateSignatureBuilder::new("fp_no_data").phase(0).build();
         let models = vec!["model-x".to_string()];
 
-        let rec = router.recommend_with_state(&fp, Some(&state), &models).await;
-        assert!(!rec.state_informed,
-            "With empty index, state_informed must be false (fingerprint fallback)");
+        let rec = router
+            .recommend_with_state(&fp, Some(&state), &models)
+            .await;
+        assert!(
+            !rec.state_informed,
+            "With empty index, state_informed must be false (fingerprint fallback)"
+        );
     }
 
     // ── AL-v2.4 Tests — Adaptive Recovery ────────────────────────────────────
 
     #[test]
     fn test_al_v2_4_recovery_index_learns_from_trajectory() {
+        use crate::core::learning::outcome::LearningOutcome;
         use crate::core::learning::recovery_index::RecoveryIndex;
         use crate::core::learning::signature::StateSignatureBuilder;
-        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
         use crate::core::learning::strategy::StrategyKind;
-        use crate::core::learning::outcome::LearningOutcome;
+        use crate::core::learning::trajectory::{Trajectory, TrajectoryStep};
 
         let mut rec_idx = RecoveryIndex::new();
 
@@ -860,36 +1056,48 @@ mod tests {
 
         // Extract recoveries and update the index
         let recoveries = traj.extract_recoveries();
-        assert_eq!(recoveries.len(), 1, "Must extract exactly one recovery sequence");
+        assert_eq!(
+            recoveries.len(),
+            1,
+            "Must extract exactly one recovery sequence"
+        );
         assert_eq!(recoveries[0].trigger_error, "CompileError");
         assert_eq!(recoveries[0].strategy, StrategyKind::DiagnoseThenRepair);
 
         rec_idx.update_from_recoveries(&recoveries);
 
         // Query the index
-        let rec = rec_idx.best_recovery_for("CompileError", Some(&error_state), 1).unwrap();
+        let rec = rec_idx
+            .best_recovery_for("CompileError", Some(&error_state), 1)
+            .unwrap();
         assert_eq!(rec.strategy, StrategyKind::DiagnoseThenRepair);
         assert_eq!(rec.tool, "TOOL_TERMINAL");
-        assert!(rec.confidence > 0.5, "Confidence must be > 0.5 for a successful recovery");
+        assert!(
+            rec.confidence > 0.5,
+            "Confidence must be > 0.5 for a successful recovery"
+        );
     }
 
     #[test]
     fn test_al_v2_4_recovery_index_unknown_error_returns_none() {
         use crate::core::learning::recovery_index::RecoveryIndex;
         let idx = RecoveryIndex::new();
-        assert!(idx.best_recovery_for("UnknownError", None, 1).is_none(),
-            "Empty index must return None for any error class");
+        assert!(
+            idx.best_recovery_for("UnknownError", None, 1).is_none(),
+            "Empty index must return None for any error class"
+        );
     }
 
     #[test]
     fn test_al_v2_4_recovery_recommendation_respects_min_attempts() {
         use crate::core::learning::recovery_index::RecoveryIndex;
         use crate::core::learning::signature::StateSignatureBuilder;
-        use crate::core::learning::trajectory::RecoverySequence;
         use crate::core::learning::strategy::StrategyKind;
+        use crate::core::learning::trajectory::RecoverySequence;
 
         let state = StateSignatureBuilder::new("fp_al24b")
-            .last_error_class(Some("NetworkError".to_string())).build();
+            .last_error_class(Some("NetworkError".to_string()))
+            .build();
         let clean = StateSignatureBuilder::new("fp_al24b").build();
 
         let mut idx = RecoveryIndex::new();
@@ -949,9 +1157,18 @@ mod al_v2_5_tests {
             model: "model-b".to_string(),
             strategy,
             result: if success {
-                LearningResult::success(OutcomeMetrics { steps, ..Default::default() })
+                LearningResult::success(OutcomeMetrics {
+                    steps,
+                    ..Default::default()
+                })
             } else {
-                LearningResult::failed(OutcomeMetrics { steps, ..Default::default() }, vec![])
+                LearningResult::failed(
+                    OutcomeMetrics {
+                        steps,
+                        ..Default::default()
+                    },
+                    vec![],
+                )
             },
             confidence: 0.7,
             lesson: None,
@@ -966,25 +1183,41 @@ mod al_v2_5_tests {
         // DirectImplementation: cheap (20 steps), high success
         for _ in 0..5 {
             idx.update_from_experience(&make_exp_for_budget(
-                StrategyKind::DirectImplementation, "rust", 20, true));
+                StrategyKind::DirectImplementation,
+                "rust",
+                20,
+                true,
+            ));
         }
         // InspectThenImplement: expensive (80 steps), slightly higher success
         for _ in 0..5 {
             idx.update_from_experience(&make_exp_for_budget(
-                StrategyKind::InspectThenImplement, "rust", 80, true));
+                StrategyKind::InspectThenImplement,
+                "rust",
+                80,
+                true,
+            ));
         }
 
         // With tight budget (15 steps, below even the cheap strategy's p75):
         let choice = idx.best_strategy_for_budget(Some("rust"), 15, 2).unwrap();
-        assert_eq!(choice.strategy, StrategyKind::DirectImplementation,
-            "Tight budget must prefer cheaper strategy");
-        assert!(choice.budget_ratio < 1.0, "budget_ratio must be < 1.0 for tight budget");
+        assert_eq!(
+            choice.strategy,
+            StrategyKind::DirectImplementation,
+            "Tight budget must prefer cheaper strategy"
+        );
+        assert!(
+            choice.budget_ratio < 1.0,
+            "budget_ratio must be < 1.0 for tight budget"
+        );
 
         // With ample budget (300 steps): success rate wins
         let choice_ample = idx.best_strategy_for_budget(Some("rust"), 300, 2).unwrap();
         // Both have same success rate (all successful), so this just checks it returns something
-        assert!(choice_ample.budget_ratio >= 2.0,
-            "budget_ratio must be >= 2.0 for ample budget");
+        assert!(
+            choice_ample.budget_ratio >= 2.0,
+            "budget_ratio must be >= 2.0 for ample budget"
+        );
     }
 
     #[tokio::test]
@@ -995,9 +1228,17 @@ mod al_v2_5_tests {
         let mut budget_idx = BudgetAwareIndex::new();
         for _ in 0..4 {
             budget_idx.update_from_experience(&make_exp_for_budget(
-                StrategyKind::MinimalChange, "rust", 10, true));
+                StrategyKind::MinimalChange,
+                "rust",
+                10,
+                true,
+            ));
             budget_idx.update_from_experience(&make_exp_for_budget(
-                StrategyKind::DiagnoseThenRepair, "rust", 80, true));
+                StrategyKind::DiagnoseThenRepair,
+                "rust",
+                80,
+                true,
+            ));
         }
 
         let router = AdaptiveRouter::new(
@@ -1005,29 +1246,46 @@ mod al_v2_5_tests {
             std::collections::HashMap::new(),
             store,
             "budget_test_mission",
-        ).with_budget_index(budget_idx);
+        )
+        .with_budget_index(budget_idx);
 
         let fp = TaskFingerprint {
             language: Some("rust".to_string()),
-            framework: None, complexity: 0.5, ambiguity: 0.2,
-            scope_bucket: 1, requires_code: true,
-            requires_terminal: false, requires_tests: false,
-            requires_network: false, verification_level: 1,
+            framework: None,
+            complexity: 0.5,
+            ambiguity: 0.2,
+            scope_bucket: 1,
+            requires_code: true,
+            requires_terminal: false,
+            requires_tests: false,
+            requires_network: false,
+            verification_level: 1,
         };
 
         let models = vec!["model-x".to_string()];
 
         // Tight budget (5 steps) — must prefer MinimalChange (cheapest)
-        let rec_tight = router.recommend_with_context(&fp, None, Some(5), &models).await;
-        assert_eq!(rec_tight.strategy, StrategyKind::MinimalChange,
-            "Tight budget must select MinimalChange (cheapest historical cost)");
-        assert!(rec_tight.estimated_cost_steps.is_some(),
-            "estimated_cost_steps must be set when budget override is applied");
+        let rec_tight = router
+            .recommend_with_context(&fp, None, Some(5), &models)
+            .await;
+        assert_eq!(
+            rec_tight.strategy,
+            StrategyKind::MinimalChange,
+            "Tight budget must select MinimalChange (cheapest historical cost)"
+        );
+        assert!(
+            rec_tight.estimated_cost_steps.is_some(),
+            "estimated_cost_steps must be set when budget override is applied"
+        );
 
         // No budget constraint — normal recommendation
-        let rec_free = router.recommend_with_context(&fp, None, None, &models).await;
-        assert!(rec_free.estimated_cost_steps.is_none(),
-            "No budget constraint — estimated_cost_steps must be None");
+        let rec_free = router
+            .recommend_with_context(&fp, None, None, &models)
+            .await;
+        assert!(
+            rec_free.estimated_cost_steps.is_none(),
+            "No budget constraint — estimated_cost_steps must be None"
+        );
     }
 
     #[test]
@@ -1039,11 +1297,18 @@ mod al_v2_5_tests {
         ];
 
         let idx = BudgetAwareIndex::rebuild_from_experiences(&exps);
-        assert!(idx.total_profiles() >= 2, // python-specific + any-language
-            "Rebuild must create at least language-specific and any-language profiles");
+        assert!(
+            idx.total_profiles() >= 2, // python-specific + any-language
+            "Rebuild must create at least language-specific and any-language profiles"
+        );
 
-        let choice = idx.best_strategy_for_budget(Some("python"), 100, 2).unwrap();
-        assert_eq!(choice.strategy, StrategyKind::CompileFirst,
-            "Only CompileFirst has data, must be selected");
+        let choice = idx
+            .best_strategy_for_budget(Some("python"), 100, 2)
+            .unwrap();
+        assert_eq!(
+            choice.strategy,
+            StrategyKind::CompileFirst,
+            "Only CompileFirst has data, must be selected"
+        );
     }
 }

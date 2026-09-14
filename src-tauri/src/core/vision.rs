@@ -1,11 +1,17 @@
-use xcap::Monitor;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::json;
+use xcap::Monitor;
 
 /// Check if a vision model is available in local Ollama.
 /// Returns the first available model name, or None if none are installed.
 async fn find_vision_model() -> Option<String> {
-    let candidates = ["moondream", "llava", "llama3.2-vision", "llava-phi3", "bakllava"];
+    let candidates = [
+        "moondream",
+        "llava",
+        "llama3.2-vision",
+        "llava-phi3",
+        "bakllava",
+    ];
     let client = reqwest::Client::new();
     if let Ok(res) = client.get("http://127.0.0.1:11434/api/tags").send().await {
         if let Ok(body) = res.text().await {
@@ -28,13 +34,15 @@ async fn capture_headless_browser(url: &str) -> Result<String, String> {
 
         let edge_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
         let chrome_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-        
+
         let browser_path = if std::path::Path::new(edge_path).exists() {
             edge_path
         } else if std::path::Path::new(chrome_path).exists() {
             chrome_path
         } else {
-            return Err("No compatible browser (Edge/Chrome) found for headless capture".to_string());
+            return Err(
+                "No compatible browser (Edge/Chrome) found for headless capture".to_string(),
+            );
         };
 
         // Run headless browser with virtual-time-budget to allow JS/Canvas to render
@@ -44,7 +52,7 @@ async fn capture_headless_browser(url: &str) -> Result<String, String> {
                 &format!("--screenshot={}", screenshot_path_str),
                 "--window-size=1280,1024",
                 "--virtual-time-budget=3000", // Wait 3000ms for Canvas/JS to draw
-                url
+                url,
             ])
             .status()
             .await
@@ -59,10 +67,12 @@ async fn capture_headless_browser(url: &str) -> Result<String, String> {
         }
 
         // Read bytes
-        let bytes = tokio::fs::read(&screenshot_path).await.map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        let bytes = tokio::fs::read(&screenshot_path)
+            .await
+            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
         // Cleanup
         let _ = tokio::fs::remove_file(&screenshot_path).await;
-        
+
         Ok(STANDARD.encode(&bytes))
     }
     #[cfg(not(target_os = "windows"))]
@@ -71,16 +81,22 @@ async fn capture_headless_browser(url: &str) -> Result<String, String> {
     }
 }
 
-pub async fn evaluate_vision(prompt: &str, use_advanced_model: bool, target_url: Option<&str>) -> Result<String, String> {
+pub async fn evaluate_vision(
+    prompt: &str,
+    use_advanced_model: bool,
+    target_url: Option<&str>,
+) -> Result<String, String> {
     // ── Check if a vision model is available ─────────────────────────────────
     let vision_model = if use_advanced_model {
-        find_vision_model().await.filter(|m| m.contains("llama3.2") || m.contains("llava"))
+        find_vision_model()
+            .await
+            .filter(|m| m.contains("llama3.2") || m.contains("llava"))
             .or_else(|| Some("llama3.2-vision".to_string()))
     } else {
         find_vision_model().await
     };
 
-        if vision_model.is_none() {
+    if vision_model.is_none() {
         // FALLO DE VISION: El sistema no debe simular el exito si no tiene ojos.
         let fallback_msg = format!(
             "[FALLO DE VISION CRITICO - Sin modelo instalado]
@@ -108,7 +124,7 @@ pub async fn evaluate_vision(prompt: &str, use_advanced_model: bool, target_url:
                 return Err(format!(
                     "[ERROR VISUAL CRITICO] Fallo al capturar la URL '{}'. \
                     Error: {}. \
-                    No se puede validar visualmente. NO finjas que la prueba fue exitosa.", 
+                    No se puede validar visualmente. NO finjas que la prueba fue exitosa.",
                     url, e
                 ));
             }
@@ -116,10 +132,14 @@ pub async fn evaluate_vision(prompt: &str, use_advanced_model: bool, target_url:
     } else {
         let monitors = Monitor::all().map_err(|e| format!("Failed to get monitors: {}", e))?;
         let primary = monitors.first().ok_or("No monitors found")?;
-        let image = primary.capture_image().map_err(|e| format!("Failed to capture screen: {}", e))?;
+        let image = primary
+            .capture_image()
+            .map_err(|e| format!("Failed to capture screen: {}", e))?;
         let mut buffer = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut buffer);
-        image.write_to(&mut cursor, image::ImageFormat::Png).map_err(|e| format!("Failed to encode png: {}", e))?;
+        image
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .map_err(|e| format!("Failed to encode png: {}", e))?;
         STANDARD.encode(&buffer)
     };
 
@@ -132,15 +152,20 @@ pub async fn evaluate_vision(prompt: &str, use_advanced_model: bool, target_url:
         "stream": false
     });
 
-    let res = client.post("http://127.0.0.1:11434/api/generate")
+    let res = client
+        .post("http://127.0.0.1:11434/api/generate")
         .json(&payload)
         .send()
         .await
         .map_err(|e| format!("Ollama request failed: {}", e))?;
 
     if res.status().is_success() {
-        let response_text = res.text().await.map_err(|e| format!("Failed to read text: {}", e))?;
-        let json_val: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| format!("Invalid JSON from Ollama: {}", e))?;
+        let response_text = res
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read text: {}", e))?;
+        let json_val: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| format!("Invalid JSON from Ollama: {}", e))?;
         if let Some(resp) = json_val["response"].as_str() {
             Ok(format!("[VISION QA - {}]: {}", model_name, resp))
         } else {

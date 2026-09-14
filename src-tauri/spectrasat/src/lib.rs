@@ -9,11 +9,11 @@ pub mod simd_eval;
 pub mod sos_hierarchy;
 pub mod spectral;
 
-use crate::spectral::Clause3;
-use crate::gf2_elimination::Gf2System;
 use crate::chordal::ChordalExtension;
-use crate::sdp_solver::{solve_sos_sdp, SdpVerdict};
+use crate::gf2_elimination::Gf2System;
 use crate::sdp_branching::branch_and_bound_solve;
+use crate::sdp_solver::{solve_sos_sdp, SdpVerdict};
+use crate::spectral::Clause3;
 
 use serde::Serialize;
 
@@ -37,7 +37,10 @@ pub fn solve_native_rust(n_vars: usize, clauses_in: Vec<Vec<i32>>) -> String {
     // ── Stage 1: GF2 Algebraic pre-filter ─────────────────────────────────
     let mut gf2 = Gf2System::extract_from_3cnf(n_vars, &clauses);
     if gf2.is_tseitin_unsat() {
-        let res = SatResult { status: "UNSAT_GF2".to_string(), assignment: None };
+        let res = SatResult {
+            status: "UNSAT_GF2".to_string(),
+            assignment: None,
+        };
         return serde_json::to_string(&res).unwrap_or_else(|_| "UNSAT_GF2".to_string());
     }
 
@@ -47,7 +50,10 @@ pub fn solve_native_rust(n_vars: usize, clauses_in: Vec<Vec<i32>>) -> String {
     let (verdict, _) = solve_sos_sdp(n_vars, &clauses, false);
 
     let res = match verdict {
-        SdpVerdict::ProvenUnsat { .. } => SatResult { status: "UNSAT_SDP".to_string(), assignment: None },
+        SdpVerdict::ProvenUnsat { .. } => SatResult {
+            status: "UNSAT_SDP".to_string(),
+            assignment: None,
+        },
         SdpVerdict::PossibleSat { .. } | SdpVerdict::Unknown { .. } => {
             // ── Stage 3: Branch & Bound (SDP-guided heuristic) ──────────────
             let (bb_verdict, bb_assign) = branch_and_bound_solve(n_vars, &clauses);
@@ -59,7 +65,8 @@ pub fn solve_native_rust(n_vars: usize, clauses_in: Vec<Vec<i32>>) -> String {
                         return serde_json::to_string(&SatResult {
                             status: "SAT_CERTIFIED".to_string(),
                             assignment: bb_assign,
-                        }).unwrap_or_else(|_| "SAT_CERTIFIED".to_string());
+                        })
+                        .unwrap_or_else(|_| "SAT_CERTIFIED".to_string());
                     }
                 }
             }
@@ -68,8 +75,14 @@ pub fn solve_native_rust(n_vars: usize, clauses_in: Vec<Vec<i32>>) -> String {
             // Branch-and-Bound is heuristic — if its answer fails verification,
             // fall back to exact DPLL which is guaranteed correct.
             match dpll_solve(n_vars, &clauses_in) {
-                Some(assignment) => SatResult { status: "SAT_CERTIFIED".to_string(), assignment: Some(assignment) },
-                None             => SatResult { status: "UNSAT_EXHAUSTED".to_string(), assignment: None },
+                Some(assignment) => SatResult {
+                    status: "SAT_CERTIFIED".to_string(),
+                    assignment: Some(assignment),
+                },
+                None => SatResult {
+                    status: "UNSAT_EXHAUSTED".to_string(),
+                    assignment: None,
+                },
             }
         }
     };
@@ -83,9 +96,15 @@ fn satisfies_all_clauses(assignment: &[bool], clauses: &[Clause3]) -> bool {
     clauses.iter().all(|clause| {
         clause.0.iter().any(|&lit| {
             let var_idx = (lit.unsigned_abs() as usize) - 1;
-            if var_idx >= assignment.len() { return false; }
+            if var_idx >= assignment.len() {
+                return false;
+            }
             let value = assignment[var_idx];
-            if lit > 0 { value } else { !value }
+            if lit > 0 {
+                value
+            } else {
+                !value
+            }
         })
     })
 }
@@ -116,23 +135,34 @@ fn dpll_recursive(assignment: &mut Vec<Option<bool>>, clauses: &[Vec<i32>]) -> b
                 match assignment.get(idx).and_then(|v| *v) {
                     Some(val) => {
                         let sat = if lit > 0 { val } else { !val };
-                        if sat { clause_satisfied = true; all_false = false; break; }
+                        if sat {
+                            clause_satisfied = true;
+                            all_false = false;
+                            break;
+                        }
                         // this literal is false, keep scanning
-                    },
+                    }
                     None => {
                         all_false = false;
                         unset_lit = Some(lit);
                     }
                 }
             }
-            if clause_satisfied { continue; }
-            if all_false { return false; } // conflict
+            if clause_satisfied {
+                continue;
+            }
+            if all_false {
+                return false;
+            } // conflict
             if let Some(unit) = unset_lit {
                 // Check no other unset literal — it's a unit clause
-                let unset_count = clause.iter().filter(|&&l| {
-                    let idx = (l.unsigned_abs() as usize) - 1;
-                    assignment.get(idx).and_then(|v| *v).is_none()
-                }).count();
+                let unset_count = clause
+                    .iter()
+                    .filter(|&&l| {
+                        let idx = (l.unsigned_abs() as usize) - 1;
+                        assignment.get(idx).and_then(|v| *v).is_none()
+                    })
+                    .count();
                 if unset_count == 1 {
                     let idx = (unit.unsigned_abs() as usize) - 1;
                     assignment[idx] = Some(unit > 0);
@@ -140,7 +170,9 @@ fn dpll_recursive(assignment: &mut Vec<Option<bool>>, clauses: &[Vec<i32>]) -> b
                 }
             }
         }
-        if !propagated { break; }
+        if !propagated {
+            break;
+        }
     }
 
     // 2. Check if all clauses satisfied
@@ -151,7 +183,9 @@ fn dpll_recursive(assignment: &mut Vec<Option<bool>>, clauses: &[Vec<i32>]) -> b
                 Some(val) if (lit > 0 && val) || (lit < 0 && !val))
         })
     });
-    if all_sat { return true; }
+    if all_sat {
+        return true;
+    }
 
     // 3. Check for conflict (any clause all-false)
     let conflict = clauses.iter().any(|clause| {
@@ -161,7 +195,9 @@ fn dpll_recursive(assignment: &mut Vec<Option<bool>>, clauses: &[Vec<i32>]) -> b
                 Some(val) if (lit > 0 && !val) || (lit < 0 && val))
         })
     });
-    if conflict { return false; }
+    if conflict {
+        return false;
+    }
 
     // 4. Pick first unset variable and branch
     let branch_var = match assignment.iter().position(|v| v.is_none()) {
@@ -178,7 +214,6 @@ fn dpll_recursive(assignment: &mut Vec<Option<bool>>, clauses: &[Vec<i32>]) -> b
     }
     false
 }
-
 
 #[cfg(feature = "python-ext")]
 use pyo3::prelude::*;

@@ -1,4 +1,4 @@
-﻿use crate::core::tool_registry::ExecutionResult;
+use crate::core::tool_registry::ExecutionResult;
 use crate::core::workspace_resolver::WorkspaceResolver;
 use crate::memory::Cambio;
 
@@ -12,18 +12,21 @@ fn strip_think_tags(mut text: String) -> String {
             break;
         }
     }
-    
+
     let mut clean_text = text.trim().to_string();
     if let Some(start) = clean_text.find('{') {
         if let Some(end) = clean_text.rfind('}') {
             clean_text = clean_text[start..end + 1].to_string();
         }
     }
-    
+
     clean_text
 }
 
-fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Option<crate::llm::ProgrammerOutput> {
+fn try_salvage_programmer_output(
+    raw: &str,
+    requested_files: &[String],
+) -> Option<crate::llm::ProgrammerOutput> {
     if let (Some(first_brace), Some(last_brace)) = (raw.find('{'), raw.rfind('}')) {
         if last_brace > first_brace {
             let candidate = &raw[first_brace..=last_brace];
@@ -34,9 +37,16 @@ fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Optio
     }
 
     let lang_tags = [
-        ("html", "html"), ("htm", "html"), ("python", "py"), ("py", "py"),
-        ("javascript", "js"), ("js", "js"), ("css", "css"), ("rust", "rs"),
-        ("rs", "rs"), ("json", "json"),
+        ("html", "html"),
+        ("htm", "html"),
+        ("python", "py"),
+        ("py", "py"),
+        ("javascript", "js"),
+        ("js", "js"),
+        ("css", "css"),
+        ("rust", "rs"),
+        ("rs", "rs"),
+        ("json", "json"),
     ];
 
     for (tag, ext_match) in &lang_tags {
@@ -50,7 +60,8 @@ fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Optio
             };
             let code_trimmed = code_content.trim();
             if !code_trimmed.is_empty() {
-                let target_file = requested_files.iter()
+                let target_file = requested_files
+                    .iter()
                     .find(|f| f.ends_with(&format!(".{}", ext_match)))
                     .cloned()
                     .or_else(|| requested_files.first().cloned())
@@ -72,37 +83,53 @@ fn try_salvage_programmer_output(raw: &str, requested_files: &[String]) -> Optio
 }
 
 impl ProgrammerExecutor {
-    pub async fn execute(workspace_path: &str, args: serde_json::Value) -> Result<ExecutionResult, String> {
+    pub async fn execute(
+        workspace_path: &str,
+        args: serde_json::Value,
+    ) -> Result<ExecutionResult, String> {
         // Direct 'cambios' array passed explicitly
-        if let Some(cambios_val) = args.get("cambios").and_then(|v| serde_json::from_value::<Vec<Cambio>>(v.clone()).ok()) {
+        if let Some(cambios_val) = args
+            .get("cambios")
+            .and_then(|v| serde_json::from_value::<Vec<Cambio>>(v.clone()).ok())
+        {
             if !cambios_val.is_empty() {
                 return Self::apply_and_validate(workspace_path, cambios_val).await;
             }
         }
 
-        let task = args.get("instruccion")
+        let task = args
+            .get("instruccion")
             .or_else(|| args.get("prompt"))
             .or_else(|| args.get("task"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
 
-        let mut files: Vec<String> = if let Some(arr) = args.get("archivos_a_editar").and_then(|v| v.as_array()) {
-            arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()
-        } else if let Some(arr) = args.get("archivos").and_then(|v| v.as_array()) {
-            arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()
-        } else if let Some(s) = args.get("archivo").and_then(|v| v.as_str()) {
-            vec![s.to_string()]
-        } else {
-            vec![]
-        };
+        let mut files: Vec<String> =
+            if let Some(arr) = args.get("archivos_a_editar").and_then(|v| v.as_array()) {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect()
+            } else if let Some(arr) = args.get("archivos").and_then(|v| v.as_array()) {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect()
+            } else if let Some(s) = args.get("archivo").and_then(|v| v.as_str()) {
+                vec![s.to_string()]
+            } else {
+                vec![]
+            };
 
-        let context = args.get("context")
+        let context = args
+            .get("context")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
 
-        let model = args.get("model")
+        let model = args
+            .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("qwen2.5-coder:7b")
             .to_string();
@@ -110,13 +137,14 @@ impl ProgrammerExecutor {
         if files.is_empty() && task.is_empty() {
             return Ok(ExecutionResult::error(
                 "TOOL_PROGRAMMER requiere al menos 'archivos_a_editar' o 'instruccion'.",
-                1
+                1,
             ));
         }
 
         // Auto-heal check: if workspace has compile/syntax errors, add failing files
         if let Err(compile_err) = crate::core::validate_workspace(workspace_path).await {
-            let failing_files = crate::core::extract_workspace_files_from_error(workspace_path, &compile_err);
+            let failing_files =
+                crate::core::extract_workspace_files_from_error(workspace_path, &compile_err);
             for ff in failing_files {
                 if !files.contains(&ff) {
                     files.push(ff);
@@ -130,7 +158,12 @@ impl ProgrammerExecutor {
         let prompt_res = crate::llm::delegate_to_programmer(&task, &file_contents, &model).await;
         let json_res = match prompt_res {
             Ok(res) => res,
-            Err(e) => return Ok(ExecutionResult::error(format!("Error delegando a programador: {}", e), 1)),
+            Err(e) => {
+                return Ok(ExecutionResult::error(
+                    format!("Error delegando a programador: {}", e),
+                    1,
+                ))
+            }
         };
 
         let clean_json = strip_think_tags(json_res.clone());
@@ -140,23 +173,42 @@ impl ProgrammerExecutor {
 
         let prog_output = match parsed {
             Some(po) => po,
-            None => return Ok(ExecutionResult::error(format!("No se pudo interpretar el JSON del programador: {}", json_res), 1)),
+            None => {
+                return Ok(ExecutionResult::error(
+                    format!(
+                        "No se pudo interpretar el JSON del programador: {}",
+                        json_res
+                    ),
+                    1,
+                ))
+            }
         };
 
         if prog_output.cambios.is_empty() {
-            return Ok(ExecutionResult::error("El programador no propuso ningún cambio en 'cambios'.", 1));
+            return Ok(ExecutionResult::error(
+                "El programador no propuso ningún cambio en 'cambios'.",
+                1,
+            ));
         }
 
         Self::apply_and_validate(workspace_path, prog_output.cambios).await
     }
 
-    pub async fn apply_and_validate(workspace_path: &str, cambios: Vec<Cambio>) -> Result<ExecutionResult, String> {
-        let _ = crate::core::create_git_backup(workspace_path, "Aura-Sentinel: ProgrammerExecutor Backup").await;
+    pub async fn apply_and_validate(
+        workspace_path: &str,
+        cambios: Vec<Cambio>,
+    ) -> Result<ExecutionResult, String> {
+        let _ = crate::core::create_git_backup(
+            workspace_path,
+            "Aura-Sentinel: ProgrammerExecutor Backup",
+        )
+        .await;
 
         // Anti-Stub Check
         let mut stub_rejections = Vec::new();
         for cambio in &cambios {
-            let report = crate::core::stub_enforcer::detect_stubs(&cambio.reemplazar, &cambio.archivo);
+            let report =
+                crate::core::stub_enforcer::detect_stubs(&cambio.reemplazar, &cambio.archivo);
             if report.has_stubs {
                 stub_rejections.push(report.rejection_message);
             }
@@ -171,19 +223,28 @@ impl ProgrammerExecutor {
         // Apply file writes via WorkspaceResolver
         let mut written_files = Vec::new();
         for cambio in cambios {
-            let target_path = match WorkspaceResolver::resolve_create_path(workspace_path, &cambio.archivo) {
-                Ok(p) => p,
-                Err(e) => {
-                    let _ = crate::core::restore_git_backup(workspace_path).await;
-                    let mut err_res = ExecutionResult::error(format!("[SECURITY_VIOLATION] Ruta rechazada para '{}': {}", cambio.archivo, e), 1);
-                    err_res.cwd = Some(workspace_path.to_string());
-                    return Ok(err_res);
-                }
-            };
+            let target_path =
+                match WorkspaceResolver::resolve_create_path(workspace_path, &cambio.archivo) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = crate::core::restore_git_backup(workspace_path).await;
+                        let mut err_res = ExecutionResult::error(
+                            format!(
+                                "[SECURITY_VIOLATION] Ruta rechazada para '{}': {}",
+                                cambio.archivo, e
+                            ),
+                            1,
+                        );
+                        err_res.cwd = Some(workspace_path.to_string());
+                        return Ok(err_res);
+                    }
+                };
 
             let file_exists = target_path.exists();
             let original_content = if file_exists {
-                tokio::fs::read_to_string(&target_path).await.unwrap_or_default()
+                tokio::fs::read_to_string(&target_path)
+                    .await
+                    .unwrap_or_default()
             } else {
                 if let Some(parent) = target_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
@@ -202,7 +263,10 @@ impl ProgrammerExecutor {
 
             if let Err(e) = tokio::fs::write(&target_path, sanitized).await {
                 let _ = crate::core::restore_git_backup(workspace_path).await;
-                let mut err_res = ExecutionResult::error(format!("Error escribiendo '{}': {}", cambio.archivo, e), 1);
+                let mut err_res = ExecutionResult::error(
+                    format!("Error escribiendo '{}': {}", cambio.archivo, e),
+                    1,
+                );
                 err_res.cwd = Some(workspace_path.to_string());
                 return Ok(err_res);
             }
@@ -212,13 +276,18 @@ impl ProgrammerExecutor {
         // Validate workspace compilation/syntax
         if let Err(comp_err) = crate::core::validate_workspace(workspace_path).await {
             let _ = crate::core::restore_git_backup(workspace_path).await;
-            let mut err_res = ExecutionResult::error(format!("[COMPILATION_ERROR]: {}", comp_err), 1);
+            let mut err_res =
+                ExecutionResult::error(format!("[COMPILATION_ERROR]: {}", comp_err), 1);
             err_res.files_affected = written_files;
             err_res.cwd = Some(workspace_path.to_string());
             return Ok(err_res);
         }
 
-        let stdout = format!("{} archivos escritos y validados exitosamente: {:?}", written_files.len(), written_files);
+        let stdout = format!(
+            "{} archivos escritos y validados exitosamente: {:?}",
+            written_files.len(),
+            written_files
+        );
         let mut res = ExecutionResult::success(stdout);
         res.files_affected = written_files;
         res.cwd = Some(workspace_path.to_string());

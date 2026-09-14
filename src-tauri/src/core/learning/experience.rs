@@ -1,10 +1,10 @@
+use crate::core::learning::fingerprint::TaskFingerprint;
+use crate::core::learning::outcome::LearningResult;
+use crate::core::learning::strategy::StrategyKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::core::learning::fingerprint::TaskFingerprint;
-use crate::core::learning::outcome::LearningResult;
-use crate::core::learning::strategy::StrategyKind;
 
 pub const SCHEMA_VERSION: u16 = 2;
 
@@ -71,11 +71,11 @@ impl ExperienceStoreV2 {
     }
 
     /// Experiences with structural similarity >= 0.5, most recent first.
-    pub fn find_similar<'a>(
-        &'a self, fp: &TaskFingerprint, limit: usize,
-    ) -> Vec<&'a Experience> {
+    pub fn find_similar<'a>(&'a self, fp: &TaskFingerprint, limit: usize) -> Vec<&'a Experience> {
         use crate::core::learning::fingerprint::FingerprintBuilder;
-        let mut scored: Vec<(f32, &Experience)> = self.experiences.iter()
+        let mut scored: Vec<(f32, &Experience)> = self
+            .experiences
+            .iter()
             .map(|e| (FingerprintBuilder::similarity(fp, &e.fingerprint), e))
             .filter(|(s, _)| *s >= 0.5)
             .collect();
@@ -85,10 +85,17 @@ impl ExperienceStoreV2 {
 
     #[allow(dead_code)]
     pub fn by_model<'a>(&'a self, model: &str) -> Vec<&'a Experience> {
-        self.experiences.iter().filter(|e| e.model == model).collect()
+        self.experiences
+            .iter()
+            .filter(|e| e.model == model)
+            .collect()
     }
 
-    pub fn len(&self) -> usize { self.experiences.len() }
+    pub fn len(&self) -> usize {
+        self.experiences.len()
+    }
     #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool { self.experiences.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.experiences.is_empty()
+    }
 }

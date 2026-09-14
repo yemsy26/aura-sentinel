@@ -7,7 +7,6 @@
 ///
 /// Guarantees that the Immutable Task Charter (original user prompt/objective)
 /// is NEVER lost during sliding-window compaction.
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,20 +87,34 @@ impl ContextMonitor {
 
         // Anchor 1: Task Charter header
         let charter_block = if !self.task_charter.is_empty() {
-            format!("[🎯 OBJETIVO INMUTABLE DE LA MISIÓN]\n{}\n\n", self.task_charter)
+            format!(
+                "[🎯 OBJETIVO INMUTABLE DE LA MISIÓN]\n{}\n\n",
+                self.task_charter
+            )
         } else {
             String::new()
         };
 
         // Anchor 2: Mission operational state / Mission State Anchor
-        let mission_state_block = format!("\n[ESTADO AUTORITATIVO DEL RUNTIME — MISSION STATE ANCHOR]\n{}\n\n", mission_state);
+        let mission_state_block = format!(
+            "\n[ESTADO AUTORITATIVO DEL RUNTIME — MISSION STATE ANCHOR]\n{}\n\n",
+            mission_state
+        );
 
-        let notice_marker = "\n[... ✂️ HISTORIAL ANTIGUO ELIMINADO Y SANITIZADO PARA PREVENIR ECHOLALIA ...]\n\n";
+        let notice_marker =
+            "\n[... ✂️ HISTORIAL ANTIGUO ELIMINADO Y SANITIZADO PARA PREVENIR ECHOLALIA ...]\n\n";
 
         let fixed_overhead = charter_block.len() + mission_state_block.len() + notice_marker.len();
         let tail_budget = target_len.saturating_sub(fixed_overhead);
 
-        let raw_tail: String = context.chars().rev().take(tail_budget).collect::<Vec<_>>().into_iter().rev().collect();
+        let raw_tail: String = context
+            .chars()
+            .rev()
+            .take(tail_budget)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
 
         // Clean turn boundary search in tail
         let clean_tail = if let Some(pos) = raw_tail.find("[PASO") {
@@ -117,10 +130,7 @@ impl ContextMonitor {
 
         let mut result = format!(
             "{}{}{}{}",
-            charter_block,
-            mission_state_block,
-            notice_marker,
-            sanitized_tail
+            charter_block, mission_state_block, notice_marker, sanitized_tail
         );
 
         if result.len() > self.max_chars {
@@ -142,15 +152,25 @@ mod tests {
         let mission_state = "Paso 1 completado, Paso 2 en curso";
 
         let compacted = monitor.compact_context(&huge_context, mission_state);
-        assert!(compacted.len() <= 500, "Compacted length {} exceeds max_chars 500", compacted.len());
-        assert!(compacted.contains("Construir API REST en Rust"), "Immutable task charter must be preserved");
+        assert!(
+            compacted.len() <= 500,
+            "Compacted length {} exceeds max_chars 500",
+            compacted.len()
+        );
+        assert!(
+            compacted.contains("Construir API REST en Rust"),
+            "Immutable task charter must be preserved"
+        );
     }
 
     #[test]
     fn test_context_monitor_no_compact_when_within_budget() {
         let monitor = ContextMonitor::new(1000, "Mi objetivo");
         let short_context = "Contexto corto";
-        assert_eq!(monitor.compact_context(short_context, "Estado"), short_context);
+        assert_eq!(
+            monitor.compact_context(short_context, "Estado"),
+            short_context
+        );
     }
 
     #[test]
@@ -160,7 +180,10 @@ mod tests {
         let mission_state = "Archivos físicos confirmados en disco: cyber_sentinel.html, style.css";
 
         let compacted = monitor.compact_context(&huge_context, mission_state);
-        assert!(compacted.contains("cyber_sentinel.html, style.css"), "MissionState with physical files must be preserved");
+        assert!(
+            compacted.contains("cyber_sentinel.html, style.css"),
+            "MissionState with physical files must be preserved"
+        );
     }
 
     #[test]

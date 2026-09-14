@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use chrono::{Utc, DateTime};
 use tauri::{AppHandle, Emitter};
 use tokio::time::{interval, Duration};
 
@@ -9,9 +9,9 @@ use tokio::time::{interval, Duration};
 pub struct ScheduledTask {
     pub id: String,
     pub description: String,
-    pub objective: String,    // Instruction passed to the agent loop
+    pub objective: String, // Instruction passed to the agent loop
     pub workspace: String,
-    pub cron_expr: String,    // e.g. "0 9 * * 1" = Monday 9am
+    pub cron_expr: String, // e.g. "0 9 * * 1" = Monday 9am
     pub enabled: bool,
     pub last_run: Option<String>,
     pub created_at: String,
@@ -42,7 +42,12 @@ fn save_tasks(tasks: &[ScheduledTask]) {
 }
 
 /// Register a new scheduled task. Returns the task ID.
-pub fn register_task(objective: &str, workspace: &str, cron_expr: &str, description: &str) -> String {
+pub fn register_task(
+    objective: &str,
+    workspace: &str,
+    cron_expr: &str,
+    description: &str,
+) -> String {
     let mut tasks = load_tasks();
     let id = format!("sched_{:x}", uuid_lite());
     tasks.push(ScheduledTask {
@@ -91,7 +96,9 @@ fn check_and_fire(app: &AppHandle) {
     let mut changed = false;
 
     for task in tasks.iter_mut() {
-        if !task.enabled { continue; }
+        if !task.enabled {
+            continue;
+        }
         if should_fire(&task.cron_expr, &task.last_run, &now) {
             task.last_run = Some(now.format("%Y-%m-%dT%H:%M:%SZ").to_string());
             changed = true;
@@ -107,7 +114,9 @@ fn check_and_fire(app: &AppHandle) {
         }
     }
 
-    if changed { save_tasks(&tasks); }
+    if changed {
+        save_tasks(&tasks);
+    }
 }
 
 /// Minimal cron-like evaluation. Supports:
@@ -117,15 +126,21 @@ fn check_and_fire(app: &AppHandle) {
 /// Fields: minute hour day-of-month month day-of-week
 fn should_fire(cron: &str, last_run: &Option<String>, now: &DateTime<Utc>) -> bool {
     let parts: Vec<&str> = cron.split_whitespace().collect();
-    if parts.len() != 5 { return false; }
+    if parts.len() != 5 {
+        return false;
+    }
 
     let match_part = |part: &str, value: u32, is_dow: bool| -> bool {
-        if part == "*" || part == "?" { return true; }
+        if part == "*" || part == "?" {
+            return true;
+        }
 
         // Handle comma-separated lists e.g. "1,15,30" or "MON,WED,FRI"
         for sub in part.split(',') {
             let sub = sub.trim();
-            if sub.is_empty() { continue; }
+            if sub.is_empty() {
+                continue;
+            }
 
             // Handle steps e.g. "*/5" or "10-30/5"
             if sub.contains('/') {
@@ -134,9 +149,13 @@ fn should_fire(cron: &str, last_run: &Option<String>, now: &DateTime<Utc>) -> bo
                     let step = step_parts[1].parse::<u32>().unwrap_or(0);
                     if step > 0 {
                         if step_parts[0] == "*" {
-                            if value % step == 0 { return true; }
+                            if value % step == 0 {
+                                return true;
+                            }
                         } else if let Ok(start) = step_parts[0].parse::<u32>() {
-                            if value >= start && (value - start) % step == 0 { return true; }
+                            if value >= start && (value - start) % step == 0 {
+                                return true;
+                            }
                         }
                     }
                 }
@@ -147,8 +166,12 @@ fn should_fire(cron: &str, last_run: &Option<String>, now: &DateTime<Utc>) -> bo
             if sub.contains('-') {
                 let range_parts: Vec<&str> = sub.split('-').collect();
                 if range_parts.len() == 2 {
-                    if let (Ok(start), Ok(end)) = (range_parts[0].parse::<u32>(), range_parts[1].parse::<u32>()) {
-                        if value >= start && value <= end { return true; }
+                    if let (Ok(start), Ok(end)) =
+                        (range_parts[0].parse::<u32>(), range_parts[1].parse::<u32>())
+                    {
+                        if value >= start && value <= end {
+                            return true;
+                        }
                     }
                 }
                 continue;
@@ -158,38 +181,63 @@ fn should_fire(cron: &str, last_run: &Option<String>, now: &DateTime<Utc>) -> bo
             if is_dow {
                 let sub_upper = sub.to_uppercase();
                 let dow_val = match sub_upper.as_str() {
-                    "MON" => 1, "TUE" => 2, "WED" => 3, "THU" => 4, "FRI" => 5, "SAT" => 6, "SUN" => 7,
-                    _ => sub.parse::<u32>().map(|v| if v == 0 { 7 } else { v }).unwrap_or(99),
+                    "MON" => 1,
+                    "TUE" => 2,
+                    "WED" => 3,
+                    "THU" => 4,
+                    "FRI" => 5,
+                    "SAT" => 6,
+                    "SUN" => 7,
+                    _ => sub
+                        .parse::<u32>()
+                        .map(|v| if v == 0 { 7 } else { v })
+                        .unwrap_or(99),
                 };
-                if dow_val == value { return true; }
+                if dow_val == value {
+                    return true;
+                }
                 continue;
             }
 
             // Direct numeric match
             if let Ok(v) = sub.parse::<u32>() {
-                if v == value { return true; }
+                if v == value {
+                    return true;
+                }
             }
         }
         false
     };
 
     let minute = now.format("%M").to_string().parse::<u32>().unwrap_or(99);
-    let hour   = now.format("%H").to_string().parse::<u32>().unwrap_or(99);
-    let dom    = now.format("%d").to_string().parse::<u32>().unwrap_or(99);
-    let month  = now.format("%m").to_string().parse::<u32>().unwrap_or(99);
-    let dow    = now.format("%u").to_string().parse::<u32>().unwrap_or(99); // 1=Mon, 7=Sun
+    let hour = now.format("%H").to_string().parse::<u32>().unwrap_or(99);
+    let dom = now.format("%d").to_string().parse::<u32>().unwrap_or(99);
+    let month = now.format("%m").to_string().parse::<u32>().unwrap_or(99);
+    let dow = now.format("%u").to_string().parse::<u32>().unwrap_or(99); // 1=Mon, 7=Sun
 
-    if !match_part(parts[0], minute, false) { return false; }
-    if !match_part(parts[1], hour, false)   { return false; }
-    if !match_part(parts[2], dom, false)    { return false; }
-    if !match_part(parts[3], month, false)  { return false; }
-    if !match_part(parts[4], dow, true)     { return false; }
+    if !match_part(parts[0], minute, false) {
+        return false;
+    }
+    if !match_part(parts[1], hour, false) {
+        return false;
+    }
+    if !match_part(parts[2], dom, false) {
+        return false;
+    }
+    if !match_part(parts[3], month, false) {
+        return false;
+    }
+    if !match_part(parts[4], dow, true) {
+        return false;
+    }
 
     // Don't re-fire if we already ran this minute
     if let Some(last) = last_run {
         if last.len() >= 16 {
             let now_min = now.format("%Y-%m-%dT%H:%M").to_string();
-            if last.starts_with(&now_min) { return false; }
+            if last.starts_with(&now_min) {
+                return false;
+            }
         }
     }
 

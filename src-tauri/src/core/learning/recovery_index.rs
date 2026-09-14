@@ -9,11 +9,11 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
-use crate::core::learning::strategy::StrategyKind;
 use crate::core::learning::signature::StateSignature;
+use crate::core::learning::strategy::StrategyKind;
 use crate::core::learning::trajectory::RecoverySequence;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Aggregated performance data for a (trigger_error, strategy, tool) pattern.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +34,12 @@ pub struct RecoveryPattern {
 }
 
 impl RecoveryPattern {
-    fn new(trigger_error: String, strategy: StrategyKind, tool: String, representative_state: StateSignature) -> Self {
+    fn new(
+        trigger_error: String,
+        strategy: StrategyKind,
+        tool: String,
+        representative_state: StateSignature,
+    ) -> Self {
         Self {
             trigger_error,
             strategy,
@@ -89,7 +94,8 @@ impl RecoveryIndex {
             let patterns = self.index.entry(seq.trigger_error.clone()).or_default();
 
             // Find existing pattern for (strategy, tool) pair
-            let pattern = patterns.iter_mut()
+            let pattern = patterns
+                .iter_mut()
                 .find(|p| p.strategy == seq.strategy && p.tool == seq.tool);
 
             if let Some(p) = pattern {
@@ -122,12 +128,15 @@ impl RecoveryIndex {
     ) -> Option<RecoveryRecommendation> {
         let patterns = self.index.get(error_class)?;
 
-        let best = patterns.iter()
+        let best = patterns
+            .iter()
             .filter(|p| p.attempts >= min_attempts)
             .max_by(|a, b| {
                 let score_a = self.pattern_score(a, current_state);
                 let score_b = self.pattern_score(b, current_state);
-                score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+                score_a
+                    .partial_cmp(&score_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })?;
 
         let confidence = self.pattern_score(best, current_state).clamp(0.0, 1.0);
@@ -171,7 +180,9 @@ mod tests {
 
     fn make_recovery(error: &str, strategy: StrategyKind, tool: &str) -> RecoverySequence {
         let state = StateSignatureBuilder::new("fp_rec_test")
-            .compile_failures(2).progress_stalled(true).build();
+            .compile_failures(2)
+            .progress_stalled(true)
+            .build();
         RecoverySequence {
             trigger_error: error.to_string(),
             strategy,
@@ -184,7 +195,11 @@ mod tests {
     #[test]
     fn test_recovery_index_basic_update_and_query() {
         let mut idx = RecoveryIndex::new();
-        let seq = make_recovery("CompileError", StrategyKind::DiagnoseThenRepair, "TOOL_TERMINAL");
+        let seq = make_recovery(
+            "CompileError",
+            StrategyKind::DiagnoseThenRepair,
+            "TOOL_TERMINAL",
+        );
         idx.update_from_recoveries(&[seq]);
 
         assert_eq!(idx.total_patterns(), 1);
@@ -200,17 +215,26 @@ mod tests {
 
         // Add CompileFirst once (lower success base)
         idx.update_from_recoveries(&[make_recovery(
-            "TestError", StrategyKind::CompileFirst, "TOOL_TERMINAL")]);
+            "TestError",
+            StrategyKind::CompileFirst,
+            "TOOL_TERMINAL",
+        )]);
 
         // Add DiagnoseThenRepair 3 times (more observations = higher confidence)
         for _ in 0..3 {
             idx.update_from_recoveries(&[make_recovery(
-                "TestError", StrategyKind::DiagnoseThenRepair, "TOOL_PROGRAMMER")]);
+                "TestError",
+                StrategyKind::DiagnoseThenRepair,
+                "TOOL_PROGRAMMER",
+            )]);
         }
 
         let rec = idx.best_recovery_for("TestError", None, 1).unwrap();
-        assert_eq!(rec.strategy, StrategyKind::DiagnoseThenRepair,
-            "Pattern with more observations must score higher");
+        assert_eq!(
+            rec.strategy,
+            StrategyKind::DiagnoseThenRepair,
+            "Pattern with more observations must score higher"
+        );
         assert_eq!(rec.sample_size, 3);
     }
 
@@ -224,7 +248,10 @@ mod tests {
     fn test_recovery_index_returns_none_below_min_attempts() {
         let mut idx = RecoveryIndex::new();
         idx.update_from_recoveries(&[make_recovery(
-            "CompileError", StrategyKind::MinimalChange, "TOOL_PROGRAMMER")]);
+            "CompileError",
+            StrategyKind::MinimalChange,
+            "TOOL_PROGRAMMER",
+        )]);
         // Only 1 observation; min_attempts=3 should return None
         assert!(idx.best_recovery_for("CompileError", None, 3).is_none());
     }
@@ -235,16 +262,25 @@ mod tests {
 
         // Two strategies for same error
         idx.update_from_recoveries(&[
-            make_recovery("RuntimeError", StrategyKind::IncrementalPatch, "TOOL_PROGRAMMER"),
+            make_recovery(
+                "RuntimeError",
+                StrategyKind::IncrementalPatch,
+                "TOOL_PROGRAMMER",
+            ),
             make_recovery("RuntimeError", StrategyKind::CompileFirst, "TOOL_TERMINAL"),
         ]);
 
         let query_state = StateSignatureBuilder::new("fp_rec_test")
-            .compile_failures(2).progress_stalled(true).build();
+            .compile_failures(2)
+            .progress_stalled(true)
+            .build();
 
         // With state: should still return a valid recommendation
         let rec = idx.best_recovery_for("RuntimeError", Some(&query_state), 1);
-        assert!(rec.is_some(), "State-aware query must return a recommendation");
+        assert!(
+            rec.is_some(),
+            "State-aware query must return a recommendation"
+        );
         let rec = rec.unwrap();
         assert!(rec.confidence > 0.0 && rec.confidence <= 1.0);
     }

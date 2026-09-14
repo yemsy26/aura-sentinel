@@ -37,10 +37,16 @@ pub async fn read_vector_index(workspace_path: &str) -> Vec<VectorNode> {
     vec![]
 }
 
-pub async fn write_vector_index(workspace_path: &str, index: &Vec<VectorNode>) -> Result<(), String> {
+pub async fn write_vector_index(
+    workspace_path: &str,
+    index: &Vec<VectorNode>,
+) -> Result<(), String> {
     let index_file = Path::new(workspace_path).join(".fenix_index.json");
-    let json = serde_json::to_string(index).map_err(|e| format!("Error serializando index: {}", e))?;
-    fs::write(&index_file, json).await.map_err(|e| format!("Error guardando index: {}", e))?;
+    let json =
+        serde_json::to_string(index).map_err(|e| format!("Error serializando index: {}", e))?;
+    fs::write(&index_file, json)
+        .await
+        .map_err(|e| format!("Error guardando index: {}", e))?;
     crate::core::hide_file_windows(&index_file).await;
     Ok(())
 }
@@ -53,7 +59,10 @@ pub async fn get_workspace_tree_internal(path: String) -> Result<Vec<FileNode>, 
             .git_ignore(true)
             .filter_entry(|e| {
                 let name = e.file_name().to_string_lossy();
-                name != ".git" && name != "node_modules" && name != "__pycache__" && !name.ends_with(".pyc")
+                name != ".git"
+                    && name != "node_modules"
+                    && name != "__pycache__"
+                    && !name.ends_with(".pyc")
             })
             .build();
 
@@ -63,8 +72,11 @@ pub async fn get_workspace_tree_internal(path: String) -> Result<Vec<FileNode>, 
                     let path_str = entry.path().to_string_lossy().to_string();
                     let name = entry.file_name().to_string_lossy().to_string();
                     let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                    
-                    let parent_path = entry.path().parent().map(|p| p.to_string_lossy().to_string());
+
+                    let parent_path = entry
+                        .path()
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string());
 
                     nodes.push(FileNode {
                         name,
@@ -155,7 +167,10 @@ pub fn sanitize_file_content_by_extension(filename: &str, content: &str) -> Stri
         let re_doubled = regex::Regex::new(r#"([a-zA-Z0-9_\-]+)=""([^"'\r\n]+)"""#).ok();
         // 2. Fix unescaped attribute quotes inside HTML tags (with or without closing >)
         // e.g. `<canvas id="radarCanvas"` or `<div class="box">` inside Python string literals
-        let re_tag_attr = regex::Regex::new(r#"(<[a-zA-Z0-9_\-]+[^"'\r\n]*?\s+[a-zA-Z0-9_\-]+)=(?<!\\)"([^"'\r\n]+)(?<!\\)""#).ok();
+        let re_tag_attr = regex::Regex::new(
+            r#"(<[a-zA-Z0-9_\-]+[^"'\r\n]*?\s+[a-zA-Z0-9_\-]+)=(?<!\\)"([^"'\r\n]+)(?<!\\)""#,
+        )
+        .ok();
         let re_tag = regex::Regex::new(r#"<[a-zA-Z0-9_\-]+(?:\s+[^>]+)*>"#).ok();
         let re_attr = regex::Regex::new(r#"([a-zA-Z0-9_\-]+)=(?<!\\)"([^"'\r\n]+)(?<!\\)""#).ok();
 
@@ -167,10 +182,12 @@ pub fn sanitize_file_content_by_extension(filename: &str, content: &str) -> Stri
             sanitized = re_ta.replace_all(&sanitized, "$1=\\\"$2\\\"").into_owned();
         }
         if let (Some(re_t), Some(re_a)) = (re_tag, re_attr) {
-            sanitized = re_t.replace_all(&sanitized, |caps: &regex::Captures| {
-                let tag_str = &caps[0];
-                re_a.replace_all(tag_str, "$1=\\\"$2\\\"").into_owned()
-            }).into_owned();
+            sanitized = re_t
+                .replace_all(&sanitized, |caps: &regex::Captures| {
+                    let tag_str = &caps[0];
+                    re_a.replace_all(tag_str, "$1=\\\"$2\\\"").into_owned()
+                })
+                .into_owned();
         }
 
         // 3. Windows cp1252 terminal safety: replace non-ASCII emojis with ASCII tags
@@ -183,7 +200,9 @@ pub fn sanitize_file_content_by_extension(filename: &str, content: &str) -> Stri
             .replace("🚀", "[RUN]");
 
         // 4. Ensure UTF-8 encoding declaration at the top if missing
-        if !sanitized.starts_with("# -*- coding: utf-8 -*-") && !sanitized.starts_with("# coding: utf-8") {
+        if !sanitized.starts_with("# -*- coding: utf-8 -*-")
+            && !sanitized.starts_with("# coding: utf-8")
+        {
             sanitized = format!("# -*- coding: utf-8 -*-\n{}", sanitized);
         }
 
@@ -223,19 +242,21 @@ pub fn apply_patch_to_string(
     }
 
     if file_exists && !match_encontrado_seguro {
-        let buscar_lines: Vec<&str> = buscar.lines()
+        let buscar_lines: Vec<&str> = buscar
+            .lines()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty())
             .collect();
-            
-        let orig_lines: Vec<(usize, &str)> = contenido_original.lines()
+
+        let orig_lines: Vec<(usize, &str)> = contenido_original
+            .lines()
             .enumerate()
             .map(|(idx, l)| (idx, l.trim()))
             .filter(|(_, l)| !l.is_empty())
             .collect();
 
         let mut matched = false;
-        
+
         if !buscar_lines.is_empty() {
             let window_size = buscar_lines.len();
             let mut match_indices = Vec::new();
@@ -253,20 +274,24 @@ pub fn apply_patch_to_string(
                         match_indices.push(i);
                     }
                 }
-                
+
                 if match_indices.len() == 1 || (match_indices.len() > 1 && window_size >= 3) {
                     let best_match_idx = match_indices[0];
                     let start_idx = orig_lines[best_match_idx].0;
                     let end_idx = orig_lines[best_match_idx + window_size - 1].0;
-                    
+
                     let raw_orig_lines: Vec<&str> = contenido_original.lines().collect();
-                    
+
                     let mut pre_block = raw_orig_lines[0..start_idx].join("\n");
-                    if !pre_block.is_empty() { pre_block.push('\n'); }
-                    
+                    if !pre_block.is_empty() {
+                        pre_block.push('\n');
+                    }
+
                     let mut post_block = raw_orig_lines[end_idx + 1..].join("\n");
-                    if !post_block.is_empty() { post_block.insert(0, '\n'); }
-                    
+                    if !post_block.is_empty() {
+                        post_block.insert(0, '\n');
+                    }
+
                     nuevo_contenido = format!("{}{}{}", pre_block, reemplazar, post_block);
                     matched = true;
                     log_msg = Some(format!("[FUZZY MATCH] Parche semántico aplicado en {}. (Ventana: {}, Coincidencias: {})", archivo, window_size, match_indices.len()));
@@ -282,7 +307,10 @@ pub fn apply_patch_to_string(
 }
 
 #[allow(dead_code)]
-pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> Result<String, String> {
+pub async fn apply_code_changes(
+    workspace_path: &str,
+    cambios: Vec<Cambio>,
+) -> Result<String, String> {
     let mut exitosos = 0;
     let mut exitosos_nombres = Vec::new();
     let mut fuzzy_logs = Vec::new();
@@ -290,19 +318,25 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
     // Without this, apply_code_changes returns Ok("0 archivos...") — a false success.
     let mut patch_not_found_count = 0usize;
     let mut patch_not_found_files: Vec<String> = Vec::new();
-    
-    for cambio in cambios {
-        let full_path = match crate::core::workspace_resolver::WorkspaceResolver::resolve_create_path(workspace_path, &cambio.archivo) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(format!("[SECURITY_VIOLATION] Ruta rechazada para '{}': {}", cambio.archivo, e));
-            }
-        };
 
-        
+    for cambio in cambios {
+        let full_path =
+            match crate::core::workspace_resolver::WorkspaceResolver::resolve_create_path(
+                workspace_path,
+                &cambio.archivo,
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(format!(
+                        "[SECURITY_VIOLATION] Ruta rechazada para '{}': {}",
+                        cambio.archivo, e
+                    ));
+                }
+            };
+
         let mut contenido_original = String::new();
         let file_exists = full_path.exists();
-        
+
         if file_exists {
             match fs::read_to_string(&full_path).await {
                 Ok(c) => contenido_original = c,
@@ -315,17 +349,20 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
             // Si el archivo no existe, lo creamos. Nos aseguramos de que el directorio padre exista.
             if let Some(parent) = full_path.parent() {
                 if let Err(e) = fs::create_dir_all(parent).await {
-                    eprintln!("Aura-Sentinel: Error creando directorio {:?}: {}", parent, e);
+                    eprintln!(
+                        "Aura-Sentinel: Error creando directorio {:?}: {}",
+                        parent, e
+                    );
                     continue;
                 }
             }
         }
-        
+
         let mut nuevo_contenido = contenido_original.clone();
         let mut match_encontrado_seguro = false;
-        
+
         let buscar_str = cambio.buscar.as_str();
-        
+
         if !file_exists || contenido_original.trim().is_empty() || buscar_str.trim().is_empty() {
             // Archivo nuevo, original vacío, o búsqueda vacía: no usamos .replace ni Fuzzy Match
             nuevo_contenido = cambio.reemplazar.clone();
@@ -341,21 +378,24 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
                 // match_encontrado_seguro = false, así entra en Fuzzy Match
             }
         }
-        
+
         if file_exists && !match_encontrado_seguro {
-            let buscar_lines: Vec<&str> = cambio.buscar.lines()
+            let buscar_lines: Vec<&str> = cambio
+                .buscar
+                .lines()
                 .map(|l| l.trim())
                 .filter(|l| !l.is_empty())
                 .collect();
-                
-            let orig_lines: Vec<(usize, &str)> = contenido_original.lines()
+
+            let orig_lines: Vec<(usize, &str)> = contenido_original
+                .lines()
                 .enumerate()
                 .map(|(idx, l)| (idx, l.trim()))
                 .filter(|(_, l)| !l.is_empty())
                 .collect();
 
             let mut matched = false;
-            
+
             if !buscar_lines.is_empty() {
                 let window_size = buscar_lines.len();
                 let mut match_indices = Vec::new();
@@ -373,7 +413,7 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
                             match_indices.push(i);
                         }
                     }
-                    
+
                     // SAFETY: Solo aplicamos Fuzzy Match si hay exactamente 1 coincidencia
                     // o si el tamaño de la ventana es suficientemente grande (>= 3 líneas)
                     // para evitar destruir el archivo reemplazando la primera llave "}" que encuentre.
@@ -381,18 +421,23 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
                         let best_match_idx = match_indices[0];
                         let start_idx = orig_lines[best_match_idx].0;
                         let end_idx = orig_lines[best_match_idx + window_size - 1].0;
-                        
+
                         let raw_orig_lines: Vec<&str> = contenido_original.lines().collect();
-                        
+
                         let mut pre_block = raw_orig_lines[0..start_idx].join("\n");
-                        if !pre_block.is_empty() { pre_block.push('\n'); }
-                        
+                        if !pre_block.is_empty() {
+                            pre_block.push('\n');
+                        }
+
                         let mut post_block = raw_orig_lines[end_idx + 1..].join("\n");
-                        if !post_block.is_empty() { post_block.insert(0, '\n'); }
-                        
-                        nuevo_contenido = format!("{}{}{}", pre_block, cambio.reemplazar, post_block);
+                        if !post_block.is_empty() {
+                            post_block.insert(0, '\n');
+                        }
+
+                        nuevo_contenido =
+                            format!("{}{}{}", pre_block, cambio.reemplazar, post_block);
                         matched = true;
-                        
+
                         let fuzzy_msg = format!("[FUZZY MATCH] Parche semántico aplicado en {}. (Ventana: {}, Coincidencias: {})", cambio.archivo, window_size, match_indices.len());
                         println!("{}", fuzzy_msg);
                         fuzzy_logs.push(fuzzy_msg);
@@ -403,25 +448,33 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
                     }
                 }
             }
-            
+
             if !matched {
-                eprintln!("Aura-Sentinel Aviso: No se encontró el texto exacto ni difuso aplicable en {}", cambio.archivo);
+                eprintln!(
+                    "Aura-Sentinel Aviso: No se encontró el texto exacto ni difuso aplicable en {}",
+                    cambio.archivo
+                );
                 // FIX-B2: Count this as a real patch failure (not just a fuzzy rejection).
                 patch_not_found_count += 1;
                 patch_not_found_files.push(cambio.archivo.clone());
                 continue;
             }
         }
-        
-        let sanitized_contenido = sanitize_file_content_by_extension(&cambio.archivo, &nuevo_contenido);
+
+        let sanitized_contenido =
+            sanitize_file_content_by_extension(&cambio.archivo, &nuevo_contenido);
         match fs::write(&full_path, sanitized_contenido).await {
             Ok(_) => {
                 exitosos += 1;
                 exitosos_nombres.push(cambio.archivo.clone());
-                
+
                 use std::time::{SystemTime, UNIX_EPOCH};
-                let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs().to_string();
-                
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    .to_string();
+
                 let entry = FenixMemoryLog {
                     task_id: format!("TASK-{}", timestamp),
                     timestamp,
@@ -430,7 +483,7 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
                     previous_hash: "hash_placeholder".to_string(),
                     compilation_status: "COMPILACIÓN_PENDIENTE".to_string(),
                 };
-                
+
                 let _ = add_memory_entry(workspace_path.to_string(), entry).await;
             }
             Err(e) => {
@@ -438,9 +491,13 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
             }
         }
     }
-    
+
     let base_msg = if exitosos > 0 {
-        format!("{} archivos modificados exitosamente: {}", exitosos, exitosos_nombres.join(", "))
+        format!(
+            "{} archivos modificados exitosamente: {}",
+            exitosos,
+            exitosos_nombres.join(", ")
+        )
     } else {
         "0 archivos modificados exitosamente.".to_string()
     };
@@ -488,28 +545,28 @@ pub async fn apply_code_changes(workspace_path: &str, cambios: Vec<Cambio>) -> R
 #[allow(dead_code)]
 pub async fn update_last_memory_status(workspace_path: &str, status: &str) -> Result<(), String> {
     let memory_file = Path::new(workspace_path).join(".fenix_memory.json");
-    
+
     let current_data = fs::read_to_string(&memory_file)
         .await
         .unwrap_or_else(|_| "[]".to_string());
-    
-    let mut logs: Vec<FenixMemoryLog> = serde_json::from_str(&current_data)
-        .unwrap_or_else(|_| vec![]);
-        
+
+    let mut logs: Vec<FenixMemoryLog> =
+        serde_json::from_str(&current_data).unwrap_or_else(|_| vec![]);
+
     if let Some(last_log) = logs.last_mut() {
         last_log.compilation_status = status.to_string();
-        
+
         let new_json = serde_json::to_string_pretty(&logs)
             .map_err(|e| format!("Error al serializar: {}", e))?;
-            
-            fs::write(&memory_file, new_json)
-                .await
-                .map_err(|e| format!("Error al guardar la entrada en el archivo: {}", e))?;
-            crate::core::hide_file_windows(&memory_file).await;
-        }
-            
-        Ok(())
+
+        fs::write(&memory_file, new_json)
+            .await
+            .map_err(|e| format!("Error al guardar la entrada en el archivo: {}", e))?;
+        crate::core::hide_file_windows(&memory_file).await;
     }
+
+    Ok(())
+}
 
 #[tauri::command]
 pub fn get_current_directory() -> String {
@@ -551,12 +608,12 @@ pub async fn init_memory_log(workspace_path: String) -> Result<String, String> {
         let empty_logs: Vec<FenixMemoryLog> = vec![];
         let json = serde_json::to_string_pretty(&empty_logs)
             .map_err(|e| format!("Error serializando memoria vacía: {}", e))?;
-        
+
         fs::write(&memory_file, json)
             .await
             .map_err(|e| format!("Error creando archivo de memoria: {}", e))?;
         crate::core::hide_file_windows(&memory_file).await;
-            
+
         Ok("Memoria inicializada correctamente.".to_string())
     } else {
         Ok("El archivo de memoria ya existe en este workspace.".to_string())
@@ -566,24 +623,24 @@ pub async fn init_memory_log(workspace_path: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn add_memory_entry(workspace_path: String, entry: FenixMemoryLog) -> Result<(), String> {
     let memory_file = Path::new(&workspace_path).join(".fenix_memory.json");
-    
+
     let current_data = fs::read_to_string(&memory_file)
         .await
         .unwrap_or_else(|_| "[]".to_string());
-    
-    let mut logs: Vec<FenixMemoryLog> = serde_json::from_str(&current_data)
-        .unwrap_or_else(|_| vec![]);
-        
+
+    let mut logs: Vec<FenixMemoryLog> =
+        serde_json::from_str(&current_data).unwrap_or_else(|_| vec![]);
+
     logs.push(entry);
-    
+
     let new_json = serde_json::to_string_pretty(&logs)
         .map_err(|e| format!("Error al serializar la nueva entrada: {}", e))?;
-        
+
     fs::write(&memory_file, new_json)
         .await
         .map_err(|e| format!("Error al guardar la entrada en el archivo: {}", e))?;
     crate::core::hide_file_windows(&memory_file).await;
-        
+
     Ok(())
 }
 
@@ -614,26 +671,29 @@ pub async fn load_chat_history(workspace_path: String) -> Result<String, String>
 }
 
 #[tauri::command]
-pub async fn save_chat_message(workspace_path: String, message: types::ChatMessage) -> Result<(), String> {
+pub async fn save_chat_message(
+    workspace_path: String,
+    message: types::ChatMessage,
+) -> Result<(), String> {
     let chat_file = Path::new(&workspace_path).join(".fenix_chat.json");
-    
+
     let current_data = fs::read_to_string(&chat_file)
         .await
         .unwrap_or_else(|_| "[]".to_string());
-    
-    let mut messages: Vec<types::ChatMessage> = serde_json::from_str(&current_data)
-        .unwrap_or_else(|_| vec![]);
-        
+
+    let mut messages: Vec<types::ChatMessage> =
+        serde_json::from_str(&current_data).unwrap_or_else(|_| vec![]);
+
     messages.push(message);
-    
+
     let new_json = serde_json::to_string_pretty(&messages)
         .map_err(|e| format!("Error serializando chat: {}", e))?;
-        
+
     fs::write(&chat_file, new_json)
         .await
         .map_err(|e| format!("Error guardando chat: {}", e))?;
     crate::core::hide_file_windows(&chat_file).await;
-        
+
     Ok(())
 }
 
@@ -648,7 +708,9 @@ pub async fn clear_chat_history(workspace_path: String) -> Result<(), String> {
     crate::core::hide_file_windows(&chat_file).await;
 
     // PESP: También limpiamos el diario de sesión para que el agente empiece misiones limpias
-    let journal_file = Path::new(&workspace_path).join(".aura_sentinel").join("session_journal.json");
+    let journal_file = Path::new(&workspace_path)
+        .join(".aura_sentinel")
+        .join("session_journal.json");
     if journal_file.exists() {
         let _ = fs::remove_file(&journal_file).await;
     }
@@ -656,27 +718,41 @@ pub async fn clear_chat_history(workspace_path: String) -> Result<(), String> {
     Ok(())
 }
 
-
 #[tauri::command]
 pub async fn read_file_content(path: String) -> Result<String, String> {
     let file_path = Path::new(&path);
     if !file_path.exists() {
         return Err("El archivo no existe.".to_string());
     }
-    let canonical = file_path.canonicalize().map_err(|e| format!("Error resolviendo ruta: {}", e))?;
+    let canonical = file_path
+        .canonicalize()
+        .map_err(|e| format!("Error resolviendo ruta: {}", e))?;
     let canon_str = canonical.to_string_lossy().to_lowercase();
-    if canon_str.contains("\\windows\\") || canon_str.contains("/windows/") || canon_str.contains("\\system32") || canon_str.contains("/etc/") {
+    if canon_str.contains("\\windows\\")
+        || canon_str.contains("/windows/")
+        || canon_str.contains("\\system32")
+        || canon_str.contains("/etc/")
+    {
         return Err("[SECURITY_VIOLATION] Acceso a ruta del sistema prohibido.".to_string());
     }
     match fs::read(&canonical).await {
         Ok(bytes) => {
             // Evitar intentar mostrar archivos binarios pesados o compilados
-            let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-            if ["pyc", "exe", "dll", "bin", "iso", "png", "jpg", "jpeg", "gif", "ico", "wasm", "pdf", "zip", "tar", "gz"].contains(&ext.as_str()) {
+            let ext = file_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if [
+                "pyc", "exe", "dll", "bin", "iso", "png", "jpg", "jpeg", "gif", "ico", "wasm",
+                "pdf", "zip", "tar", "gz",
+            ]
+            .contains(&ext.as_str())
+            {
                 return Err("Archivo binario no editable en editor de texto.".to_string());
             }
             Ok(String::from_utf8_lossy(&bytes).to_string())
-        },
+        }
         Err(e) => Err(format!("Error al leer archivo: {}", e)),
     }
 }
@@ -686,10 +762,18 @@ pub async fn save_file_content(path: String, content: String) -> Result<(), Stri
     let file_path = Path::new(&path);
     if let Some(parent) = file_path.parent() {
         if parent.exists() {
-            let canon_parent = parent.canonicalize().map_err(|e| format!("Error en directorio destino: {}", e))?;
+            let canon_parent = parent
+                .canonicalize()
+                .map_err(|e| format!("Error en directorio destino: {}", e))?;
             let canon_str = canon_parent.to_string_lossy().to_lowercase();
-            if canon_str.contains("\\windows\\") || canon_str.contains("/windows/") || canon_str.contains("\\system32") || canon_str.contains("/etc/") {
-                return Err("[SECURITY_VIOLATION] Escritura en ruta del sistema prohibida.".to_string());
+            if canon_str.contains("\\windows\\")
+                || canon_str.contains("/windows/")
+                || canon_str.contains("\\system32")
+                || canon_str.contains("/etc/")
+            {
+                return Err(
+                    "[SECURITY_VIOLATION] Escritura en ruta del sistema prohibida.".to_string(),
+                );
             }
         }
     }

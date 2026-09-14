@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::io::{BufRead, Write};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,7 +144,10 @@ impl ExperienceStore {
                 ExperienceOutcome::PartialSuccess => "⚠️ PARCIAL",
                 ExperienceOutcome::Failed(reason) => &format!("❌ FALLO ({})", reason),
             };
-            block.push_str(&format!("• Tarea: {} | Resultado: {}\n", exp.objective, status));
+            block.push_str(&format!(
+                "• Tarea: {} | Resultado: {}\n",
+                exp.objective, status
+            ));
             if !exp.key_lessons.is_empty() {
                 block.push_str(&format!("  Lección: {}\n", exp.key_lessons.join("; ")));
             }

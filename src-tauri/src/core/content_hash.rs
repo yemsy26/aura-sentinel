@@ -1,6 +1,6 @@
 #![allow(dead_code)]
+use sha2::{Digest, Sha256};
 use std::path::Path;
-use sha2::{Sha256, Digest};
 
 /// Computes a deterministic content hash for a file using SHA-256.
 /// Returns a hex string identical format used across WorldState, StateDelta, and Evidence.

@@ -19,18 +19,24 @@ impl SchemaValidator {
                 if let Some(arr) = payload.get("archivos_a_editar").and_then(|v| v.as_array()) {
                     if arr.is_empty() {
                         return SchemaValidationResult::Invalid(
-                            "TOOL_PROGRAMMER requiere al menos un archivo en 'archivos_a_editar'".to_string(),
+                            "TOOL_PROGRAMMER requiere al menos un archivo en 'archivos_a_editar'"
+                                .to_string(),
                         );
                     }
                 } else {
                     return SchemaValidationResult::Invalid(
-                        "TOOL_PROGRAMMER debe incluir 'archivos_a_editar' como un array de strings".to_string(),
+                        "TOOL_PROGRAMMER debe incluir 'archivos_a_editar' como un array de strings"
+                            .to_string(),
                     );
                 }
                 SchemaValidationResult::Valid
-            },
+            }
             "TOOL_TERMINAL" => {
-                let cmd = payload.get("comando").and_then(|v| v.as_str()).unwrap_or("").trim();
+                let cmd = payload
+                    .get("comando")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
                 if cmd.is_empty() {
                     return SchemaValidationResult::Invalid(
                         "TOOL_TERMINAL requiere un 'comando' no vacío".to_string(),
@@ -40,16 +46,20 @@ impl SchemaValidator {
                     return SchemaValidationResult::Invalid(err);
                 }
                 SchemaValidationResult::Valid
-            },
+            }
             "TOOL_ENV_MANAGER" => {
-                let pkg = payload.get("comando").and_then(|v| v.as_str()).unwrap_or("").trim();
+                let pkg = payload
+                    .get("comando")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
                 if pkg.is_empty() {
                     return SchemaValidationResult::Invalid(
                         "TOOL_ENV_MANAGER requiere el nombre del paquete en 'comando'".to_string(),
                     );
                 }
                 SchemaValidationResult::Valid
-            },
+            }
             "TOOL_FINISH" => SchemaValidationResult::Valid,
             "TOOL_THINK" => SchemaValidationResult::Valid,
             _ => SchemaValidationResult::Valid,
@@ -82,7 +92,11 @@ impl SchemaValidator {
                     target_file, target_file
                 ));
             }
-            if target_clean.ends_with(".css") || target_clean.ends_with(".js") || target_clean.ends_with(".json") || target_clean.ends_with(".rs") {
+            if target_clean.ends_with(".css")
+                || target_clean.ends_with(".js")
+                || target_clean.ends_with(".json")
+                || target_clean.ends_with(".rs")
+            {
                 return Some(format!(
                     "DENY_INVALID_INTERPRETER_TARGET: 'python' no puede ejecutar un archivo '{}'. Usa python únicamente con scripts .py.",
                     target_file
@@ -92,7 +106,11 @@ impl SchemaValidator {
 
         // Intérprete Node
         if interp == "node" || interp == "nodejs" {
-            if target_clean.ends_with(".html") || target_clean.ends_with(".htm") || target_clean.ends_with(".css") || target_clean.ends_with(".py") {
+            if target_clean.ends_with(".html")
+                || target_clean.ends_with(".htm")
+                || target_clean.ends_with(".css")
+                || target_clean.ends_with(".py")
+            {
                 return Some(format!(
                     "DENY_INVALID_INTERPRETER_TARGET: 'node' no puede ejecutar un archivo '{}'. Usa node únicamente con archivos de JavaScript/TypeScript (.js, .mjs, .ts).",
                     target_file

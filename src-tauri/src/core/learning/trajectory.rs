@@ -7,10 +7,10 @@
 
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize};
+use crate::core::learning::outcome::LearningOutcome;
 use crate::core::learning::signature::StateSignature;
 use crate::core::learning::strategy::StrategyKind;
-use crate::core::learning::outcome::LearningOutcome;
+use serde::{Deserialize, Serialize};
 
 /// An individual step in an execution trajectory
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -101,7 +101,9 @@ impl Trajectory {
                 &step.to_state,
             ) {
                 // Resolved if target state has no active error or has lower failure counts
-                if to_st.last_error_class.is_none() || (!to_st.progress_stalled && step.from_state.progress_stalled) {
+                if to_st.last_error_class.is_none()
+                    || (!to_st.progress_stalled && step.from_state.progress_stalled)
+                {
                     recoveries.push(RecoverySequence {
                         trigger_error: err.clone(),
                         strategy: step.strategy.clone(),

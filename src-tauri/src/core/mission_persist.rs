@@ -67,7 +67,8 @@ pub fn find_pending_mission() -> Option<ResumeState> {
     for ws in workspaces {
         let journal = load_journal(&ws);
         if journal.interrupted && !journal.objetivo.is_empty() {
-            if let (Some(ctx), Some(role)) = (journal.fsm_context.clone(), journal.fsm_role.clone()) {
+            if let (Some(ctx), Some(role)) = (journal.fsm_context.clone(), journal.fsm_role.clone())
+            {
                 return Some(ResumeState {
                     objective: journal.objetivo.clone(),
                     context: ctx,
@@ -117,4 +118,3 @@ fn dirs_or_fallback() -> String {
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string())
 }
-

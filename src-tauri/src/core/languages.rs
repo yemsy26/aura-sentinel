@@ -33,24 +33,23 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
     // ── Rust ────────────────────────────────────────────────────────────────
     if safe_exists("Cargo.toml") {
         // Only run cargo test if there are actual #[test] functions
-        let has_tests = any_file(&|name| name.ends_with(".rs"))
-            && {
-                // Walk all .rs files looking for #[test]
-                let mut found = false;
-                if let Ok(entries) = std::fs::read_dir(workspace_path) {
-                    'outer: for entry in entries.flatten() {
-                        if entry.path().extension().map(|e| e == "rs").unwrap_or(false) {
-                            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                                if content.contains("#[test]") {
-                                    found = true;
-                                    break 'outer;
-                                }
+        let has_tests = any_file(&|name| name.ends_with(".rs")) && {
+            // Walk all .rs files looking for #[test]
+            let mut found = false;
+            if let Ok(entries) = std::fs::read_dir(workspace_path) {
+                'outer: for entry in entries.flatten() {
+                    if entry.path().extension().map(|e| e == "rs").unwrap_or(false) {
+                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                            if content.contains("#[test]") {
+                                found = true;
+                                break 'outer;
                             }
                         }
                     }
                 }
-                found
-            };
+            }
+            found
+        };
 
         if has_tests {
             return Some(LanguageConfig {
@@ -68,10 +67,18 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    if name.starts_with('.') || name == "vendor" { continue; }
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if name.starts_with('.') || name == "vendor" {
+                        continue;
+                    }
                     if path.is_dir() {
-                        if scan_dir_for_go_tests(&path) { return true; }
+                        if scan_dir_for_go_tests(&path) {
+                            return true;
+                        }
                     } else if name.ends_with("_test.go") {
                         return true;
                     }
@@ -97,14 +104,23 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                if name.starts_with('.') || name == "node_modules" { continue; }
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if name.starts_with('.') || name == "node_modules" {
+                    continue;
+                }
                 if path.is_dir() {
-                    if scan_dir_for_js_tests(&path) { return true; }
+                    if scan_dir_for_js_tests(&path) {
+                        return true;
+                    }
                 } else if name.ends_with(".test.js")
                     || name.ends_with(".test.ts")
                     || name.ends_with(".spec.js")
-                    || name.ends_with(".spec.ts") {
+                    || name.ends_with(".spec.ts")
+                {
                     return true;
                 }
             }
@@ -150,8 +166,8 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
     // ── C++ ─────────────────────────────────────────────────────────────────
     if safe_exists("CMakeLists.txt") || safe_exists("Makefile") {
         // BUG-2 FIX: Only activate if there is a tests/ folder or the Makefile has a test target
-        let has_test_dir = workspace_path.join("tests").is_dir()
-            || workspace_path.join("test").is_dir();
+        let has_test_dir =
+            workspace_path.join("tests").is_dir() || workspace_path.join("test").is_dir();
 
         let makefile_has_test = std::fs::read_to_string(workspace_path.join("Makefile"))
             .or_else(|_| std::fs::read_to_string(workspace_path.join("makefile")))
@@ -175,12 +191,21 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    if name.starts_with('.') || name == "__pycache__" { continue; }
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if name.starts_with('.') || name == "__pycache__" {
+                        continue;
+                    }
                     if path.is_dir() {
-                        if scan_dir_for_py_tests(&path) { return true; }
+                        if scan_dir_for_py_tests(&path) {
+                            return true;
+                        }
                     } else if (name.starts_with("test_") && name.ends_with(".py"))
-                        || name.ends_with("_test.py") {
+                        || name.ends_with("_test.py")
+                    {
                         return true;
                     }
                 }
@@ -212,13 +237,33 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
     if safe_exists("build.gradle") || safe_exists("build.gradle.kts") {
         // Gradle project — could be Java or Kotlin (Android included)
         let is_android = safe_exists("AndroidManifest.xml")
-            || workspace_path.join("app").join("AndroidManifest.xml").exists()
-            || workspace_path.join("app").join("src").join("main").join("AndroidManifest.xml").exists();
+            || workspace_path
+                .join("app")
+                .join("AndroidManifest.xml")
+                .exists()
+            || workspace_path
+                .join("app")
+                .join("src")
+                .join("main")
+                .join("AndroidManifest.xml")
+                .exists();
         #[cfg(target_os = "windows")]
-        let gradle_cmd = if workspace_path.join("gradlew.bat").exists() { "gradlew.bat" } else { "gradle.bat" };
+        let gradle_cmd = if workspace_path.join("gradlew.bat").exists() {
+            "gradlew.bat"
+        } else {
+            "gradle.bat"
+        };
         #[cfg(not(target_os = "windows"))]
-        let gradle_cmd = if workspace_path.join("gradlew").exists() { "./gradlew" } else { "gradle" };
-        let lang_name = if is_android { "Kotlin/Android (Gradle)" } else { "Java/Kotlin (Gradle)" };
+        let gradle_cmd = if workspace_path.join("gradlew").exists() {
+            "./gradlew"
+        } else {
+            "gradle"
+        };
+        let lang_name = if is_android {
+            "Kotlin/Android (Gradle)"
+        } else {
+            "Java/Kotlin (Gradle)"
+        };
         return Some(LanguageConfig {
             name: lang_name,
             test_cmd: (gradle_cmd, vec!["test"]),
@@ -251,13 +296,22 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    if name.starts_with('.') || name == "vendor" { continue; }
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if name.starts_with('.') || name == "vendor" {
+                        continue;
+                    }
                     if path.is_dir() {
-                        if scan_dir_for_php_tests(&path) { return true; }
+                        if scan_dir_for_php_tests(&path) {
+                            return true;
+                        }
                     } else if (name.starts_with("Test") && name.ends_with(".php"))
                         || name.ends_with("Test.php")
-                        || name.ends_with("_test.php") {
+                        || name.ends_with("_test.php")
+                    {
                         return true;
                     }
                 }
@@ -307,12 +361,21 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    if name.starts_with('.') { continue; }
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if name.starts_with('.') {
+                        continue;
+                    }
                     if path.is_dir() {
-                        if scan_dir_for_c_tests(&path) { return true; }
+                        if scan_dir_for_c_tests(&path) {
+                            return true;
+                        }
                     } else if (name.starts_with("test_") && name.ends_with(".c"))
-                        || name.ends_with("_test.c") {
+                        || name.ends_with("_test.c")
+                    {
                         return true;
                     }
                 }
@@ -327,7 +390,13 @@ pub fn detect_language(workspace_path: &Path) -> Option<LanguageConfig> {
         #[cfg(target_os = "windows")]
         return Some(LanguageConfig {
             name: "C",
-            test_cmd: ("cmd", vec!["/C", "for %f in (test_*.c) do (gcc %f -o %~nf_test.exe && %~nf_test.exe)"]),
+            test_cmd: (
+                "cmd",
+                vec![
+                    "/C",
+                    "for %f in (test_*.c) do (gcc %f -o %~nf_test.exe && %~nf_test.exe)",
+                ],
+            ),
         });
         #[cfg(not(target_os = "windows"))]
         return Some(LanguageConfig {

@@ -10,7 +10,7 @@ pub struct SanityReport {
     pub ram_pressure_pct: f32,
     pub consecutive_same_tool: u32,
     pub recommendation: String,
-    pub level: String,  // "GREEN" | "YELLOW" | "RED"
+    pub level: String, // "GREEN" | "YELLOW" | "RED"
     /// When RED, the harness should force this tool next turn (not just inject text)
     pub forced_tool_override: Option<String>,
 }
@@ -35,12 +35,12 @@ impl Default for SanityReport {
 /// `last_error_hashes`: ring buffer of recent terminal output hashes (last 5).
 ///   Caller builds this by hashing each new terminal-output string and pushing.
 pub fn check(
-    tool_history: &[String],     // Last 10 tools chosen
-    context_size: usize,         // Bytes in current_context
+    tool_history: &[String], // Last 10 tools chosen
+    context_size: usize,     // Bytes in current_context
     json_error_count: u32,
     step_count: u32,
     last_step_with_progress: u32,
-    last_error_hashes: &[u64],   // Recent terminal output hashes (newest last)
+    last_error_hashes: &[u64], // Recent terminal output hashes (newest last)
 ) -> SanityReport {
     let mut score: f32 = 1.0;
     let mut issues: Vec<String> = Vec::new();
@@ -51,14 +51,22 @@ pub fn check(
     let consecutive_same = count_consecutive_same(tool_history);
     if consecutive_same >= 4 {
         score -= 0.4;
-        issues.push(format!("🔁 Loop detectado: herramienta '{}' repetida {} veces.", 
-            tool_history.last().cloned().unwrap_or_default(), consecutive_same));
+        issues.push(format!(
+            "🔁 Loop detectado: herramienta '{}' repetida {} veces.",
+            tool_history.last().cloned().unwrap_or_default(),
+            consecutive_same
+        ));
         level = "RED";
         forced_tool = Some("TOOL_THINK".to_string());
     } else if consecutive_same >= 2 {
         score -= 0.15;
-        issues.push(format!("⚠️ Posible loop: herramienta repetida {} veces.", consecutive_same));
-        if level != "RED" { level = "YELLOW"; }
+        issues.push(format!(
+            "⚠️ Posible loop: herramienta repetida {} veces.",
+            consecutive_same
+        ));
+        if level != "RED" {
+            level = "YELLOW";
+        }
     }
 
     // ─── 2. Semantic Error Loop Detection (same error output ≥2 times) ───
@@ -80,7 +88,11 @@ pub fn check(
         } else if last_error_hashes.len() >= 4 {
             let recent_4 = &last_error_hashes[last_error_hashes.len().saturating_sub(4)..];
             // Check alternating error cycle A-B-A-B
-            if recent_4[0] == recent_4[2] && recent_4[1] == recent_4[3] && recent_4[0] != recent_4[1] && recent_4[0] != 0 {
+            if recent_4[0] == recent_4[2]
+                && recent_4[1] == recent_4[3]
+                && recent_4[0] != recent_4[1]
+                && recent_4[0] != 0
+            {
                 score -= 0.50;
                 issues.push("🔴 BUCLE OSCILANTE DETECTADO: Ciclo alternante de 2 errores repetidos detectado en los últimos 4 pasos. Reconsidera la arquitectura.".to_string());
                 level = "RED";
@@ -92,8 +104,13 @@ pub fn check(
     // ─── 3. JSON Parse Failures ───────────────────────────────────────────
     if json_error_count >= 3 {
         score -= 0.3;
-        issues.push(format!("⚠️ {} errores de JSON consecutivos — LLM podría estar degradado.", json_error_count));
-        if level != "RED" { level = "YELLOW"; }
+        issues.push(format!(
+            "⚠️ {} errores de JSON consecutivos — LLM podría estar degradado.",
+            json_error_count
+        ));
+        if level != "RED" {
+            level = "YELLOW";
+        }
     }
 
     // ─── 4. Mission Stall (no progress in last 10 steps) ─────────────────
@@ -101,15 +118,23 @@ pub fn check(
     let stall = step_count > last_step_with_progress + 10;
     if stall {
         score -= 0.25;
-        issues.push(format!("⏱️ Sin progreso detectable en {} pasos.", step_count - last_step_with_progress));
-        if level != "RED" { level = "YELLOW"; }  // FIX: was unconditional, could downgrade RED
+        issues.push(format!(
+            "⏱️ Sin progreso detectable en {} pasos.",
+            step_count - last_step_with_progress
+        ));
+        if level != "RED" {
+            level = "YELLOW";
+        } // FIX: was unconditional, could downgrade RED
     }
 
     // ─── 5. Context Bloat ─────────────────────────────────────────────────
     let context_kb = context_size / 1024;
     if context_kb > 32 {
         score -= 0.1;
-        issues.push(format!("📦 Contexto muy grande: {}KB — considera comprimir historial.", context_kb));
+        issues.push(format!(
+            "📦 Contexto muy grande: {}KB — considera comprimir historial.",
+            context_kb
+        ));
     }
 
     // ─── 6. RAM Pressure ──────────────────────────────────────────────────
@@ -118,7 +143,9 @@ pub fn check(
         score -= 0.2;
         issues.push(format!("🔴 RAM al {:.0}% — riesgo de OOM.", ram_pct));
         level = "RED";
-        if forced_tool.is_none() { forced_tool = Some("TOOL_FINISH".to_string()); }
+        if forced_tool.is_none() {
+            forced_tool = Some("TOOL_FINISH".to_string());
+        }
     } else if ram_pct > 75.0 {
         score -= 0.05;
         issues.push(format!("🟡 RAM al {:.0}% — presión moderada.", ram_pct));
@@ -145,20 +172,25 @@ pub fn check(
 
 /// Emits the sanity report to the frontend UI
 pub fn emit_report(app: &AppHandle, report: &SanityReport) {
-    let _ = app.emit("sanity-report", serde_json::json!({
-        "coherence": report.coherence_score,
-        "stall": report.stall_detected,
-        "ram": report.ram_pressure_pct,
-        "level": report.level,
-        "recommendation": report.recommendation,
-    }));
+    let _ = app.emit(
+        "sanity-report",
+        serde_json::json!({
+            "coherence": report.coherence_score,
+            "stall": report.stall_detected,
+            "ram": report.ram_pressure_pct,
+            "level": report.level,
+            "recommendation": report.recommendation,
+        }),
+    );
 }
 
 /// Builds a context injection string when anomalies are detected.
 /// Returns (hint_text, forced_tool_name_option).
 /// When level is RED, the caller MUST set forced_next_tool — not just inject text.
 pub fn build_correction_hint(report: &SanityReport) -> Option<(String, Option<String>)> {
-    if report.level == "GREEN" { return None; }
+    if report.level == "GREEN" {
+        return None;
+    }
 
     let hint = format!(
         "[⚕️ MONITOR DE CORDURA — NIVEL {}]\n{}\n\
@@ -172,7 +204,9 @@ pub fn build_correction_hint(report: &SanityReport) -> Option<(String, Option<St
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 fn count_consecutive_same(tools: &[String]) -> u32 {
-    if tools.is_empty() { return 0; }
+    if tools.is_empty() {
+        return 0;
+    }
     let last = tools.last().unwrap();
     tools.iter().rev().take_while(|t| *t == last).count() as u32
 }
@@ -182,8 +216,9 @@ fn get_ram_usage_pct() -> f32 {
     let mut sys = System::new();
     sys.refresh_memory();
     let total = sys.total_memory() as f32;
-    let used  = sys.used_memory() as f32;
-    if total == 0.0 { return 0.0; }
+    let used = sys.used_memory() as f32;
+    if total == 0.0 {
+        return 0.0;
+    }
     (used / total) * 100.0
 }
-

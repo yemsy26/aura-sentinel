@@ -1,4 +1,4 @@
-﻿#![allow(dead_code)]
+#![allow(dead_code)]
 use crate::core::content_hash::compute_content_hash;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -38,6 +38,13 @@ impl StateDelta {
         let after_hash = Self::compute_hash(&full_path);
         let after_bytes = full_path.metadata().map(|m| m.len()).unwrap_or(0);
         let changed = before_hash != after_hash;
-        FileDelta { file_path: relative_path.to_string(), changed, before_hash, after_hash, bytes_before: before_bytes, bytes_after: after_bytes }
+        FileDelta {
+            file_path: relative_path.to_string(),
+            changed,
+            before_hash,
+            after_hash,
+            bytes_before: before_bytes,
+            bytes_after: after_bytes,
+        }
     }
 }

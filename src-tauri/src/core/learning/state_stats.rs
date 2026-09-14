@@ -10,13 +10,13 @@
 
 #![allow(dead_code)]
 
+use crate::core::learning::outcome::LearningOutcome;
+use crate::core::learning::signature::StateSignature;
+use crate::core::learning::strategy::StrategyKind;
+use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
-use serde::{Deserialize, Serialize};
-use crate::core::learning::strategy::StrategyKind;
-use crate::core::learning::signature::StateSignature;
-use crate::core::learning::outcome::LearningOutcome;
 
 /// Deterministically hash a StateSignature into a u64 bucket key.
 pub fn hash_state(sig: &StateSignature) -> u64 {
@@ -45,8 +45,12 @@ pub struct StateStrategyRecord {
 impl StateStrategyRecord {
     fn new(state_hash: u64, strategy: StrategyKind) -> Self {
         Self {
-            state_hash, strategy, attempts: 0, successes: 0,
-            avg_duration_ms: 0, avg_recovery_count: 0.0,
+            state_hash,
+            strategy,
+            attempts: 0,
+            successes: 0,
+            avg_duration_ms: 0,
+            avg_recovery_count: 0.0,
         }
     }
 
@@ -56,9 +60,12 @@ impl StateStrategyRecord {
 
     fn record(&mut self, success: bool, duration_ms: u64, recovery_count: f32) {
         self.attempts += 1;
-        if success { self.successes += 1; }
+        if success {
+            self.successes += 1;
+        }
         let n = self.attempts as f32;
-        self.avg_duration_ms = ((self.avg_duration_ms as f32 * (n - 1.0) + duration_ms as f32) / n) as u64;
+        self.avg_duration_ms =
+            ((self.avg_duration_ms as f32 * (n - 1.0) + duration_ms as f32) / n) as u64;
         self.avg_recovery_count = (self.avg_recovery_count * (n - 1.0) + recovery_count) / n;
     }
 }
@@ -71,7 +78,9 @@ pub struct StateStrategyIndex {
 }
 
 impl StateStrategyIndex {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Update the index from a single experience trajectory.
     pub fn update_from_experience(
@@ -81,15 +90,16 @@ impl StateStrategyIndex {
         mission_outcome: &LearningOutcome,
         recovery_count: f32,
     ) {
-        let mission_success = matches!(mission_outcome,
-            LearningOutcome::Success | LearningOutcome::PartialSuccess);
+        let mission_success = matches!(
+            mission_outcome,
+            LearningOutcome::Success | LearningOutcome::PartialSuccess
+        );
 
         for step in trajectory_steps {
             let state_hash = hash_state(&step.from_state);
             let records = self.index.entry(state_hash).or_default();
 
-            let record = records.iter_mut()
-                .find(|r| r.strategy == step.strategy);
+            let record = records.iter_mut().find(|r| r.strategy == step.strategy);
 
             let effective_success = step.success && mission_success;
 
@@ -114,7 +124,8 @@ impl StateStrategyIndex {
 
         // Exact bucket match first
         if let Some(records) = self.index.get(&state_hash) {
-            let best = records.iter()
+            let best = records
+                .iter()
                 .filter(|r| r.attempts >= min_attempts)
                 .max_by(|a, b| {
                     a.smoothed_success_rate()
@@ -145,7 +156,10 @@ mod tests {
 
     fn make_state(phase: u32, compile_fail: u32, stalled: bool) -> StateSignature {
         StateSignatureBuilder::new("fp_hash_test")
-            .phase(phase).compile_failures(compile_fail).progress_stalled(stalled).build()
+            .phase(phase)
+            .compile_failures(compile_fail)
+            .progress_stalled(stalled)
+            .build()
     }
 
     #[test]
@@ -154,10 +168,13 @@ mod tests {
         let state = make_state(0, 2, true);
         let mut traj = Trajectory::new("m_test", "fp_hash_test");
         traj.record_step(TrajectoryStep {
-            step: 1, from_state: state.clone(),
+            step: 1,
+            from_state: state.clone(),
             strategy: StrategyKind::DiagnoseThenRepair,
-            tool: "TOOL_TERMINAL".to_string(), success: true,
-            error_encountered: None, to_state: None,
+            tool: "TOOL_TERMINAL".to_string(),
+            success: true,
+            error_encountered: None,
+            to_state: None,
         });
         traj.finalize(LearningOutcome::Success, 4000);
         idx.update_from_experience(&traj.steps, traj.total_duration_ms, &traj.outcome, 1.0);
@@ -174,19 +191,25 @@ mod tests {
 
         let mut traj1 = Trajectory::new("m1", "fp_hash_test");
         traj1.record_step(TrajectoryStep {
-            step: 1, from_state: state.clone(),
+            step: 1,
+            from_state: state.clone(),
             strategy: StrategyKind::DirectImplementation,
-            tool: "TOOL_PROGRAMMER".to_string(), success: false,
-            error_encountered: None, to_state: None,
+            tool: "TOOL_PROGRAMMER".to_string(),
+            success: false,
+            error_encountered: None,
+            to_state: None,
         });
         traj1.finalize(LearningOutcome::Failed, 5000);
 
         let mut traj2 = Trajectory::new("m2", "fp_hash_test");
         traj2.record_step(TrajectoryStep {
-            step: 1, from_state: state.clone(),
+            step: 1,
+            from_state: state.clone(),
             strategy: StrategyKind::InspectThenImplement,
-            tool: "TOOL_PROGRAMMER".to_string(), success: true,
-            error_encountered: None, to_state: None,
+            tool: "TOOL_PROGRAMMER".to_string(),
+            success: true,
+            error_encountered: None,
+            to_state: None,
         });
         traj2.finalize(LearningOutcome::Success, 3000);
 
@@ -203,10 +226,13 @@ mod tests {
         let state = make_state(0, 0, false);
         let mut traj = Trajectory::new("m_single", "fp_hash_test");
         traj.record_step(TrajectoryStep {
-            step: 1, from_state: state.clone(),
+            step: 1,
+            from_state: state.clone(),
             strategy: StrategyKind::MinimalChange,
-            tool: "TOOL_PROGRAMMER".to_string(), success: true,
-            error_encountered: None, to_state: None,
+            tool: "TOOL_PROGRAMMER".to_string(),
+            success: true,
+            error_encountered: None,
+            to_state: None,
         });
         traj.finalize(LearningOutcome::Success, 2000);
         idx.update_from_experience(&traj.steps, traj.total_duration_ms, &traj.outcome, 0.0);

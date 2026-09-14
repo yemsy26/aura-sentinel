@@ -1,21 +1,26 @@
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
+use crate::core::learning::budget_stats::BudgetAwareIndex;
 use crate::core::learning::experience::{Experience, SharedExperienceStore};
-use crate::core::learning::fingerprint::{TaskFingerprint, FingerprintBuilder};
-use crate::core::learning::stats::{ModelStats, StrategyStats};
-use crate::core::learning::strategy::StrategyKind;
+use crate::core::learning::fingerprint::{FingerprintBuilder, TaskFingerprint};
 use crate::core::learning::signature::StateSignature;
 use crate::core::learning::state_stats::StateStrategyIndex;
-use crate::core::learning::budget_stats::BudgetAwareIndex;
+use crate::core::learning::stats::{ModelStats, StrategyStats};
+use crate::core::learning::strategy::StrategyKind;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 /// Why this recommendation was produced.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecommendationReason {
     ColdStart,
-    GlobalHistory { sample_size: u32 },
-    SimilarTask { sample_size: u32, avg_similarity: f32 },
+    GlobalHistory {
+        sample_size: u32,
+    },
+    SimilarTask {
+        sample_size: u32,
+        avg_similarity: f32,
+    },
     Exploration,
     Fallback,
 }
@@ -64,7 +69,9 @@ impl AdaptiveRouter {
         let mut hasher = DefaultHasher::new();
         mission_id.hash(&mut hasher);
         Self {
-            model_stats, strategy_stats, store,
+            model_stats,
+            strategy_stats,
+            store,
             state_index: StateStrategyIndex::new(),
             budget_index: BudgetAwareIndex::new(),
             exploration_seed: hasher.finish(),
@@ -145,13 +152,15 @@ impl AdaptiveRouter {
         // Gather similar experiences from the shared store
         let similar = store_guard.find_similar(fp, 20);
 
-
         if similar.is_empty() && store_guard.len() < 3 {
             // AL-v2.3: even on cold-start, consult the state index if a StateSignature is provided
             if let Some(sig) = state {
-                if let Some((state_strat, _rate)) = self.state_index.best_strategy_for_state(sig, 2) {
+                if let Some((state_strat, _rate)) = self.state_index.best_strategy_for_state(sig, 2)
+                {
                     return Recommendation {
-                        model: available_models.first().cloned()
+                        model: available_models
+                            .first()
+                            .cloned()
                             .unwrap_or_else(|| "default".to_string()),
                         strategy: state_strat,
                         confidence: 0.5,
@@ -192,7 +201,9 @@ impl AdaptiveRouter {
 
         // AL-v2.3 — blend state-indexed strategy when state data is available
         let (final_strategy, state_informed) = if let Some(sig) = state {
-            if let Some((state_strat, state_score)) = self.state_index.best_strategy_for_state(sig, 2) {
+            if let Some((state_strat, state_score)) =
+                self.state_index.best_strategy_for_state(sig, 2)
+            {
                 // Compute fingerprint strategy score for comparison
                 let fp_score = self.strategy_score_for(&fp_strategy, fp, &similar);
                 // Blend: 60% state evidence + 40% fingerprint evidence
@@ -212,11 +223,15 @@ impl AdaptiveRouter {
 
         // Determine reason and sample depth
         let reason = if similar.is_empty() {
-            RecommendationReason::GlobalHistory { sample_size: store_guard.len() as u32 }
+            RecommendationReason::GlobalHistory {
+                sample_size: store_guard.len() as u32,
+            }
         } else {
-            let avg_similarity = similar.iter()
+            let avg_similarity = similar
+                .iter()
                 .map(|e| FingerprintBuilder::similarity(fp, &e.fingerprint))
-                .sum::<f32>() / (similar.len() as f32);
+                .sum::<f32>()
+                / (similar.len() as f32);
             RecommendationReason::SimilarTask {
                 sample_size: similar.len() as u32,
                 avg_similarity,
@@ -226,16 +241,15 @@ impl AdaptiveRouter {
         // Blend model confidence with sample weight
         let stats = self.model_stats.get(&best_model);
         let sample_weight = stats.map(|s| s.sample_weight()).unwrap_or(0.3);
-        let confidence = (model_confidence * sample_weight
-            + 0.5 * (1.0 - sample_weight)).clamp(0.0, 1.0);
+        let confidence =
+            (model_confidence * sample_weight + 0.5 * (1.0 - sample_weight)).clamp(0.0, 1.0);
 
         Recommendation {
             model: best_model.clone(),
             strategy: final_strategy,
             confidence,
             reason,
-            fallback_model: available_models.iter()
-                .find(|m| **m != best_model).cloned(),
+            fallback_model: available_models.iter().find(|m| **m != best_model).cloned(),
             fallback_strategy: Some(StrategyKind::default_for(fp)),
             state_informed,
             estimated_cost_steps: None,
@@ -257,16 +271,24 @@ impl AdaptiveRouter {
         }
     }
 
-
     fn should_explore(&self) -> bool {
         let total: u64 = self.model_stats.values().map(|s| s.attempts).sum();
-        let exploration_rate = if total > 50 { 5u64 }
-            else if total > 10 { 10 }
-            else { 15 };
+        let exploration_rate = if total > 50 {
+            5u64
+        } else if total > 10 {
+            10
+        } else {
+            15
+        };
         (self.exploration_seed % 100) < exploration_rate
     }
 
-    fn best_model(&self, fp: &TaskFingerprint, available: &[String], similar: &[&Experience]) -> (String, f32) {
+    fn best_model(
+        &self,
+        fp: &TaskFingerprint,
+        available: &[String],
+        similar: &[&Experience],
+    ) -> (String, f32) {
         let lang = fp.language.as_deref();
         let mut best_model = available[0].clone();
         let mut best_score = -1.0f32;
@@ -282,8 +304,11 @@ impl AdaptiveRouter {
                 0.5
             };
 
-            let similar_refs: Vec<&Experience> = similar.iter()
-                .filter(|e| e.model == *model).copied().collect();
+            let similar_refs: Vec<&Experience> = similar
+                .iter()
+                .filter(|e| e.model == *model)
+                .copied()
+                .collect();
 
             let contextual_score = if similar_refs.is_empty() {
                 0.5
@@ -325,14 +350,28 @@ impl AdaptiveRouter {
                 if stats.attempts > 0 {
                     stats.smoothed_success_rate()
                 } else {
-                    self.strategy_stats.get(strat.as_str())
+                    self.strategy_stats
+                        .get(strat.as_str())
                         .map(|s| s.smoothed_success_rate())
-                        .unwrap_or_else(|| if *strat == StrategyKind::default_for(fp) { 0.55 } else { 0.50 })
+                        .unwrap_or_else(|| {
+                            if *strat == StrategyKind::default_for(fp) {
+                                0.55
+                            } else {
+                                0.50
+                            }
+                        })
                 }
             } else {
-                self.strategy_stats.get(strat.as_str())
+                self.strategy_stats
+                    .get(strat.as_str())
                     .map(|s| s.smoothed_success_rate())
-                    .unwrap_or_else(|| if *strat == StrategyKind::default_for(fp) { 0.55 } else { 0.50 })
+                    .unwrap_or_else(|| {
+                        if *strat == StrategyKind::default_for(fp) {
+                            0.55
+                        } else {
+                            0.50
+                        }
+                    })
             };
 
             if score > best_score {
@@ -345,7 +384,12 @@ impl AdaptiveRouter {
 
     /// Returns the smoothed success rate for a given strategy+fingerprint combo.
     /// Used as baseline for state-vs-fingerprint blending in AL-v2.3.
-    fn strategy_score_for(&self, strat: &StrategyKind, fp: &TaskFingerprint, similar: &[&Experience]) -> f32 {
+    fn strategy_score_for(
+        &self,
+        strat: &StrategyKind,
+        fp: &TaskFingerprint,
+        similar: &[&Experience],
+    ) -> f32 {
         let lang = fp.language.as_deref();
         if !similar.is_empty() {
             use crate::core::learning::stats::compute_strategy_stats_from;
@@ -354,7 +398,8 @@ impl AdaptiveRouter {
                 return stats.smoothed_success_rate();
             }
         }
-        self.strategy_stats.get(strat.as_str())
+        self.strategy_stats
+            .get(strat.as_str())
             .map(|s| s.smoothed_success_rate())
             .unwrap_or(0.50)
     }

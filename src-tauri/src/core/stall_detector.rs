@@ -76,7 +76,11 @@ impl StallDetector {
 
         // SameError: same non-zero error hash every step
         let first_err = slice[0].last_verifier_result_hash.as_ref();
-        if first_err.is_some() && slice.iter().all(|s| s.last_verifier_result_hash.as_ref() == first_err) {
+        if first_err.is_some()
+            && slice
+                .iter()
+                .all(|s| s.last_verifier_result_hash.as_ref() == first_err)
+        {
             return Some(StallType::SameError);
         }
 
@@ -130,7 +134,11 @@ mod tests {
             evidence_count: ev,
             last_tool_used: tool.to_string(),
             last_command: cmd.to_string(),
-            last_verifier_result_hash: if err == 0 { None } else { Some(err.to_string()) },
+            last_verifier_result_hash: if err == 0 {
+                None
+            } else {
+                Some(err.to_string())
+            },
             last_action_identity: None,
         }
     }

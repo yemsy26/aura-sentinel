@@ -1,61 +1,60 @@
-pub mod tester;
-pub mod env_check;
-pub mod memory;
-pub mod security;
-pub mod languages;
-pub mod env_manager;
-pub mod session_journal;
-pub mod intent_router;
-pub mod stub_enforcer;
-pub mod dependency_mapper;
-pub mod vision;
-pub mod error_classifier;
 pub mod ask_user;
-pub mod command_trail;
-pub mod runner_generator;
 pub mod auto_validator;
-pub mod map; // generate_repo_map — árbol visual del workspace para contexto LLM
-// ══ Nuevos módulos autónomos (Fase 1-5) ══════════════════════════════
-pub mod mission_persist;    // Fase 1: Persistencia de misión entre reinicios
-pub mod container;          // Fase 2: TOOL_CONTAINER (Docker/Podman)
-pub mod episodic_memory;    // Fase 3: Memoria multi-sesión JSONL
-pub mod scheduler;          // Fase 4: Scheduler autónomo (cron interno)
-pub mod sanity_monitor;     // Fase 5: Monitor de cordura del LLM
-pub mod context_monitor;    // Monitor de ventana de contexto y compactación determinista
-pub mod config;             // Configuración centralizada del sistema
-pub mod logging;            // Logging unificado y estructurado en JSONL
-pub mod health;             // Health checks nativos del sistema y Ollama
-// ══ Arquitectura Cognitiva Determinista (v4) ══════════════════════════════
-pub mod mission_contract;    // Contrato formal de misión y criterios de aceptación
-pub mod cognitive_state;     // Estado cognitivo unificado (MissionState + Metrics)
-pub mod evidence;            // Grafo de evidencia verificable
-pub mod completion_gate;     // Puerta determinista de finalización
-pub mod policy;              // Motor de políticas y autorización de acciones
-pub mod state_delta;         // Detección y hash de diferencias en archivos (FileDelta)
-pub mod stall_detector;      // Detección de estancamiento basada en firmas de progreso
-pub mod experience;          // Memoria cognitiva de experiencias y consolidación
-pub mod project_profile;     // Perfil unificado y detector multi-lenguaje de proyectos
-pub mod mission_runtime;     // Orquestador desacoplado de ejecución de misiones
-pub mod envelope;            // Typed Tool Envelope para retornos de herramientas
-pub mod step_budget;         // Presupuesto de pasos con distribución 40/30/20/10
-pub mod schema_validator;    // Validación de esquemas de llamadas de herramientas
-pub mod content_hash;            // Función unificada de hashing de contenido SHA-256 (identidad determinista)
-pub mod validation;          // Módulos desacoplados de validación sintáctica y de compilación
-pub mod world_state;         // Snapshot determinista del estado del workspace y diffs
-pub mod observation;         // Envelope estructurado de observaciones y ejecución de herramientas
-pub mod recovery;            // Motor determinista de recuperación de fallos y alternativas
-pub mod tool_registry;       // FINAL-2: Autoridad de nombres de herramientas permitidas (ToolRegistry)
+pub mod command_trail;
+pub mod dependency_mapper;
+pub mod env_check;
+pub mod env_manager;
+pub mod error_classifier;
+pub mod intent_router;
+pub mod languages;
+pub mod map;
+pub mod memory;
+pub mod runner_generator;
+pub mod security;
+pub mod session_journal;
+pub mod stub_enforcer;
+pub mod tester;
+pub mod vision; // generate_repo_map — árbol visual del workspace para contexto LLM
+                // ══ Nuevos módulos autónomos (Fase 1-5) ══════════════════════════════
+pub mod config; // Configuración centralizada del sistema
+pub mod container; // Fase 2: TOOL_CONTAINER (Docker/Podman)
+pub mod context_monitor; // Monitor de ventana de contexto y compactación determinista
+pub mod episodic_memory; // Fase 3: Memoria multi-sesión JSONL
+pub mod health;
+pub mod logging; // Logging unificado y estructurado en JSONL
+pub mod mission_persist; // Fase 1: Persistencia de misión entre reinicios
+pub mod sanity_monitor; // Fase 5: Monitor de cordura del LLM
+pub mod scheduler; // Fase 4: Scheduler autónomo (cron interno) // Health checks nativos del sistema y Ollama
+                   // ══ Arquitectura Cognitiva Determinista (v4) ══════════════════════════════
+pub mod cognitive_state; // Estado cognitivo unificado (MissionState + Metrics)
+pub mod completion_gate; // Puerta determinista de finalización
+pub mod content_hash; // Función unificada de hashing de contenido SHA-256 (identidad determinista)
+pub mod envelope; // Typed Tool Envelope para retornos de herramientas
+pub mod evidence; // Grafo de evidencia verificable
+pub mod experience; // Memoria cognitiva de experiencias y consolidación
+pub mod learning;
+pub mod mission_contract; // Contrato formal de misión y criterios de aceptación
+pub mod mission_runtime; // Orquestador desacoplado de ejecución de misiones
+pub mod observation; // Envelope estructurado de observaciones y ejecución de herramientas
+pub mod policy; // Motor de políticas y autorización de acciones
 pub mod programmer_executor; // Ejecutor autónomo de programación y verificación Anti-Stub
-pub mod learning;            // AL-v1: Adaptive Learning — Experience, Stats, Router (recommend only)
+pub mod project_profile; // Perfil unificado y detector multi-lenguaje de proyectos
+pub mod recovery; // Motor determinista de recuperación de fallos y alternativas
+pub mod schema_validator; // Validación de esquemas de llamadas de herramientas
+pub mod stall_detector; // Detección de estancamiento basada en firmas de progreso
+pub mod state_delta; // Detección y hash de diferencias en archivos (FileDelta)
+pub mod step_budget; // Presupuesto de pasos con distribución 40/30/20/10
+pub mod tool_registry; // FINAL-2: Autoridad de nombres de herramientas permitidas (ToolRegistry)
+pub mod validation; // Módulos desacoplados de validación sintáctica y de compilación
+pub mod world_state; // Snapshot determinista del estado del workspace y diffs // AL-v1: Adaptive Learning — Experience, Stats, Router (recommend only)
 
-
-use std::path::Path;
-use tokio::process::Command;
-use std::sync::{Arc, OnceLock};
-use tokio::sync::Mutex;
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, OnceLock};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
+use tokio::sync::Mutex;
 
 /// Represents an asynchronous background task managed by the system.
 pub struct BackgroundTask {
@@ -111,7 +110,9 @@ static BACKGROUND_TASKS: OnceLock<Arc<Mutex<HashMap<String, BackgroundTask>>>> =
 
 /// Retrieves the active background task registry.
 fn get_bg_tasks() -> Arc<Mutex<HashMap<String, BackgroundTask>>> {
-    BACKGROUND_TASKS.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))).clone()
+    BACKGROUND_TASKS
+        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+        .clone()
 }
 
 /// Retrieves the appropriate shell command for the current OS.
@@ -137,7 +138,11 @@ fn get_shell_args() -> &'static str {
 }
 
 /// Spawns an asynchronous command in the background, continuously buffering its logs.
-pub async fn start_background_task(workspace_path: &str, task_id: &str, command: &str) -> Result<String, String> {
+pub async fn start_background_task(
+    workspace_path: &str,
+    task_id: &str,
+    command: &str,
+) -> Result<String, String> {
     let mut child = Command::new(get_shell())
         .args([get_shell_args(), command])
         .current_dir(workspace_path)
@@ -147,9 +152,13 @@ pub async fn start_background_task(workspace_path: &str, task_id: &str, command:
         .spawn()
         .map_err(|e| format!("Error starting task {}: {}", task_id, e))?;
 
-    let stdout = child.stdout.take()
+    let stdout = child
+        .stdout
+        .take()
         .ok_or_else(|| format!("Error: stdout no está disponible para el task {}", task_id))?;
-    let stderr = child.stderr.take()
+    let stderr = child
+        .stderr
+        .take()
         .ok_or_else(|| format!("Error: stderr no está disponible para el task {}", task_id))?;
 
     let logs = Arc::new(Mutex::new(Vec::new()));
@@ -189,7 +198,10 @@ pub async fn start_background_task(workspace_path: &str, task_id: &str, command:
     let tasks = get_bg_tasks();
     tasks.lock().await.insert(task_id.to_string(), task);
 
-    Ok(format!("Asynchronous task '{}' (Command: '{}') started successfully.", task_id, command))
+    Ok(format!(
+        "Asynchronous task '{}' (Command: '{}') started successfully.",
+        task_id, command
+    ))
 }
 
 /// Fetches the recent logs (max 50 lines) of a running background task.
@@ -198,13 +210,23 @@ pub async fn read_task_logs(task_id: &str) -> Result<String, String> {
     let mut tasks_guard = tasks.lock().await;
     if let Some(task) = tasks_guard.get_mut(task_id) {
         let logs_guard = task.logs.lock().await;
-        let mut recent_logs = logs_guard.iter().rev().take(50).rev().cloned().collect::<Vec<_>>().join("\n");
+        let mut recent_logs = logs_guard
+            .iter()
+            .rev()
+            .take(50)
+            .rev()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
         if recent_logs.is_empty() {
             recent_logs = "[No new logs]".to_string();
         }
         Ok(format!("Logs for task '{}':\n{}", task_id, recent_logs))
     } else {
-        Err(format!("Task '{}' not found or already terminated.", task_id))
+        Err(format!(
+            "Task '{}' not found or already terminated.",
+            task_id
+        ))
     }
 }
 
@@ -234,23 +256,43 @@ pub fn extract_workspace_files_from_error(workspace_path: &str, error_text: &str
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_file() {
-                let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let fname = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 if !fname.starts_with('.') && error_text.contains(&fname) {
                     if !found.contains(&fname) {
                         found.push(fname);
                     }
                 }
             } else if p.is_dir() {
-                let sub_name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-                if !sub_name.starts_with('.') && sub_name != "node_modules" && sub_name != "target" && sub_name != "__pycache__" && sub_name != ".git" {
+                let sub_name = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if !sub_name.starts_with('.')
+                    && sub_name != "node_modules"
+                    && sub_name != "target"
+                    && sub_name != "__pycache__"
+                    && sub_name != ".git"
+                {
                     if let Ok(sub_entries) = std::fs::read_dir(&p) {
                         for sub_entry in sub_entries.flatten() {
                             let sub_p = sub_entry.path();
                             if sub_p.is_file() {
-                                let sub_fname = sub_p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                let sub_fname = sub_p
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string();
                                 let rel_path = format!("{}/{}", sub_name, sub_fname);
                                 let rel_path_win = format!("{}\\{}", sub_name, sub_fname);
-                                if error_text.contains(&sub_fname) || error_text.contains(&rel_path) || error_text.contains(&rel_path_win) {
+                                if error_text.contains(&sub_fname)
+                                    || error_text.contains(&rel_path)
+                                    || error_text.contains(&rel_path_win)
+                                {
                                     let canonical_rel = rel_path.replace('\\', "/");
                                     if !found.contains(&canonical_rel) {
                                         found.push(canonical_rel);
@@ -289,15 +331,26 @@ node_modules/\n\
 ";
     if !gitignore_path.exists() {
         if let Err(e) = std::fs::write(&gitignore_path, gitignore_content) {
-            eprintln!("Aura-Sentinel Warning: No se pudo escribir .gitignore - {}", e);
+            eprintln!(
+                "Aura-Sentinel Warning: No se pudo escribir .gitignore - {}",
+                e
+            );
         } else {
             hide_file_windows_sync(&gitignore_path);
         }
     } else {
         if let Ok(existing) = std::fs::read_to_string(&gitignore_path) {
-            if !existing.contains(".fenix_memory.json") || !existing.contains(".aura_command_trail.json") {
-                if let Err(e) = std::fs::write(&gitignore_path, format!("{}\n{}", existing.trim_end(), gitignore_content)) {
-                    eprintln!("Aura-Sentinel Warning: No se pudo actualizar .gitignore - {}", e);
+            if !existing.contains(".fenix_memory.json")
+                || !existing.contains(".aura_command_trail.json")
+            {
+                if let Err(e) = std::fs::write(
+                    &gitignore_path,
+                    format!("{}\n{}", existing.trim_end(), gitignore_content),
+                ) {
+                    eprintln!(
+                        "Aura-Sentinel Warning: No se pudo actualizar .gitignore - {}",
+                        e
+                    );
                 }
             }
         }
@@ -325,7 +378,10 @@ node_modules/\n\
 
     // Commit
     let _ = Command::new(get_shell())
-        .args([get_shell_args(), &format!("git commit -m \"{}\"", commit_message)])
+        .args([
+            get_shell_args(),
+            &format!("git commit -m \"{}\"", commit_message),
+        ])
         .current_dir(workspace_path)
         .stdin(Stdio::null())
         .output()
@@ -427,7 +483,10 @@ pub fn hide_workspace_internal_files(workspace_path: &str) {
 }
 
 /// Executes a synchronous terminal command inside the active workspace, returning full process metadata.
-pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &str) -> Result<crate::core::tool_registry::ExecutionResult, String> {
+pub async fn execute_terminal_command_detailed(
+    workspace_path: &str,
+    command: &str,
+) -> Result<crate::core::tool_registry::ExecutionResult, String> {
     // ── Windows Command Normalizer ────────────────────────────────────────────
     // Translates Unix-style commands and fixes common Windows path issues so
     // the LLM doesn't have to know the exact Windows syntax every time.
@@ -449,7 +508,11 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
             format!("echo. > \"{}\"", rest.trim())
         // rm → del
         } else if let Some(rest) = trimmed.strip_prefix("rm -rf ") {
-            format!("rd /s /q \"{}\" 2>nul & del /f /q \"{}\" 2>nul", rest.trim(), rest.trim())
+            format!(
+                "rd /s /q \"{}\" 2>nul & del /f /q \"{}\" 2>nul",
+                rest.trim(),
+                rest.trim()
+            )
         } else if let Some(rest) = trimmed.strip_prefix("rm ") {
             format!("del /f \"{}\"", rest.trim())
         // cp → copy
@@ -492,7 +555,10 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
             let after_start = trimmed["start".len()..].trim();
             let browser_stripped = browsers.iter().find_map(|b| {
                 let lower = after_start.to_lowercase();
-                if lower.starts_with(b) && after_start.len() > b.len() && after_start.as_bytes().get(b.len()) == Some(&b' ') {
+                if lower.starts_with(b)
+                    && after_start.len() > b.len()
+                    && after_start.as_bytes().get(b.len()) == Some(&b' ')
+                {
                     Some(after_start[b.len()..].trim())
                 } else {
                     None
@@ -502,29 +568,49 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
             if let Some(raw_path) = browser_stripped {
                 // Strip file:// if present
                 let raw_path = raw_path.trim_matches('"').trim_matches('\'');
-                let raw_path = if raw_path.starts_with("file:///") { &raw_path[8..] }
-                               else if raw_path.starts_with("file://") { &raw_path[7..] }
-                               else { raw_path };
+                let raw_path = if raw_path.starts_with("file:///") {
+                    &raw_path[8..]
+                } else if raw_path.starts_with("file://") {
+                    &raw_path[7..]
+                } else {
+                    raw_path
+                };
                 let fixed = raw_path.replace('/', "\\");
                 // Heal underscores→spaces if the exact path doesn't exist
                 let healed = if !std::path::Path::new(&fixed).exists() {
                     let candidate = fixed.replace('_', " ");
-                    if std::path::Path::new(&candidate).exists() { candidate } else { fixed }
-                } else { fixed };
+                    if std::path::Path::new(&candidate).exists() {
+                        candidate
+                    } else {
+                        fixed
+                    }
+                } else {
+                    fixed
+                };
                 format!("start \"\" \"{}\"", healed)
             } else if trimmed.contains("file:///") {
                 // 3b. file:/// URL (no browser prefix)
                 let after_start = after_start.trim_start_matches("\"\"").trim();
                 let path_raw = after_start.trim_matches('"').trim_matches('\'');
-                let path_raw = if path_raw.starts_with("file:///") { &path_raw[8..] }
-                               else if path_raw.starts_with("file://") { &path_raw[7..] }
-                               else { path_raw };
+                let path_raw = if path_raw.starts_with("file:///") {
+                    &path_raw[8..]
+                } else if path_raw.starts_with("file://") {
+                    &path_raw[7..]
+                } else {
+                    path_raw
+                };
                 let fixed = path_raw.replace('/', "\\");
                 // Heal underscores→spaces
                 let healed = if !std::path::Path::new(&fixed).exists() {
                     let candidate = fixed.replace('_', " ");
-                    if std::path::Path::new(&candidate).exists() { candidate } else { fixed }
-                } else { fixed };
+                    if std::path::Path::new(&candidate).exists() {
+                        candidate
+                    } else {
+                        fixed
+                    }
+                } else {
+                    fixed
+                };
                 format!("start \"\" \"{}\"", healed)
             } else {
                 // 3c. Relative path with spaces: `start index.html` or `start some file.html`
@@ -542,15 +628,15 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
         //    Commands like `python -m http.server`, `npx serve`, `npm start` etc.
         //    block the terminal forever. For static web projects just open the file.
         let trimmed_lower = trimmed.to_lowercase();
-        let is_blocking_server = 
-            trimmed_lower.contains("-m http.server") ||
-            trimmed_lower.contains("-m httpserver") ||
-            trimmed_lower.starts_with("npx serve") ||
-            trimmed_lower.starts_with("npx http-server") ||
-            trimmed_lower == "npm start" ||
-            trimmed_lower.starts_with("serve ") || trimmed_lower == "serve" ||
-            trimmed_lower.starts_with("live-server") ||
-            trimmed_lower.starts_with("php -s");
+        let is_blocking_server = trimmed_lower.contains("-m http.server")
+            || trimmed_lower.contains("-m httpserver")
+            || trimmed_lower.starts_with("npx serve")
+            || trimmed_lower.starts_with("npx http-server")
+            || trimmed_lower == "npm start"
+            || trimmed_lower.starts_with("serve ")
+            || trimmed_lower == "serve"
+            || trimmed_lower.starts_with("live-server")
+            || trimmed_lower.starts_with("php -s");
         // Mark blocking commands so the caller can return early
         let trimmed = if is_blocking_server {
             // Return a synthetic echo so the terminal handler gets a fast OK
@@ -564,30 +650,66 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
         //    instead of a real command. Detect this and return an empty string so the caller
         //    triggers the empty-command handler (which has its own guidance loop).
         let trimmed = {
-            let first_word = trimmed.split_whitespace().next().unwrap_or("").to_lowercase();
+            let first_word = trimmed
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
             // Spanish/English prose markers that are never valid shell commands
             let prose_starters = [
-                "para", "por", "el", "la", "los", "las", "se", "si", "en",
-                "ejecuta", "verifica", "abre", "asegurate", "navega",
-                "hemos", "he", "ahora", "luego", "primero", "luego",
-                "please", "run", "note", "make", "ensure", "check",
+                "para",
+                "por",
+                "el",
+                "la",
+                "los",
+                "las",
+                "se",
+                "si",
+                "en",
+                "ejecuta",
+                "verifica",
+                "abre",
+                "asegurate",
+                "navega",
+                "hemos",
+                "he",
+                "ahora",
+                "luego",
+                "primero",
+                "luego",
+                "please",
+                "run",
+                "note",
+                "make",
+                "ensure",
+                "check",
             ];
             // Also reject if the string contains `: ` (looks like "command: explanation")
             let has_colon_explanation = trimmed.contains(": ") && trimmed.len() > 40;
             if prose_starters.contains(&first_word.as_str()) || has_colon_explanation {
                 // Try to extract a real command from inside quotes or after a colon
-                let extracted = if let Some(after_colon) = trimmed.split("ejecuta:").nth(1)
+                let extracted = if let Some(after_colon) = trimmed
+                    .split("ejecuta:")
+                    .nth(1)
                     .or_else(|| trimmed.split("command:").nth(1))
                     .or_else(|| trimmed.split("run:").nth(1))
                 {
                     // Extract first quoted or unquoted token after the colon
                     let candidate = after_colon.trim().trim_matches(|c| c == '\'' || c == '"');
                     let first_cmd = candidate.split_whitespace().next().unwrap_or("");
-                    if first_cmd.len() > 1 { first_cmd.to_string() } else { String::new() }
+                    if first_cmd.len() > 1 {
+                        first_cmd.to_string()
+                    } else {
+                        String::new()
+                    }
                 } else {
                     String::new()
                 };
-                eprintln!("[PROSE_DETECTOR] Rejected prose comando: '{}' -> extracted: '{}'", &trimmed[..trimmed.len().min(60)], extracted);
+                eprintln!(
+                    "[PROSE_DETECTOR] Rejected prose comando: '{}' -> extracted: '{}'",
+                    &trimmed[..trimmed.len().min(60)],
+                    extracted
+                );
                 extracted
             } else {
                 trimmed
@@ -600,20 +722,29 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
         let trimmed = {
             // Only applies to commands that open files/folders: explorer, start, code, notepad, etc.
             let openers = ["explorer", "start", "code", "notepad", "chrome", "firefox"];
-            let first_word = trimmed.split_whitespace().next().unwrap_or("").to_lowercase();
+            let first_word = trimmed
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
             if openers.contains(&first_word.as_str()) {
                 // Extract the path argument (everything after the first word)
-                let rest = trimmed[first_word.len()..].trim().trim_matches('"').trim_matches('\'');
+                let rest = trimmed[first_word.len()..]
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'');
                 // Check if the path doesn't exist but a space-joined version does
                 // Pattern: detect sequences like `\de\`, `\preuba\`, `\de ` etc.
                 // Strategy: try converting each `\word\` that's a short lowercase word (likely a space) back to ` word `
-                let needs_healing = rest.contains('\\') && !std::path::Path::new(rest).exists() && !rest.starts_with('"');
+                let needs_healing = rest.contains('\\')
+                    && !std::path::Path::new(rest).exists()
+                    && !rest.starts_with('"');
                 if needs_healing {
                     // Attempt 1: replace ALL backslashes with spaces and see if a variant exists
                     let space_path = rest.replace('\\', " ");
                     // Now try to find a valid prefix that is a real absolute Windows path
                     // e.g. "C: Users yemsy OneDrive..." → doesn't help
-                    // Attempt 2: Split on `\` and for each token that is a short (<=4 char) lowercase word, 
+                    // Attempt 2: Split on `\` and for each token that is a short (<=4 char) lowercase word,
                     // try merging with the previous token with a space.
                     let parts: Vec<&str> = rest.split('\\').collect();
                     let mut healed = String::new();
@@ -622,7 +753,9 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
                         let part = parts[i];
                         // If it looks like a drive root (C:), keep as path separator
                         if part.ends_with(':') || part.is_empty() {
-                            if !healed.is_empty() { healed.push('\\'); }
+                            if !healed.is_empty() {
+                                healed.push('\\');
+                            }
                             healed.push_str(part);
                             i += 1;
                         } else if i + 1 < parts.len() {
@@ -634,16 +767,22 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
                                 format!("{}\\{}", healed, merged)
                             };
                             if std::path::Path::new(&candidate_path).exists() {
-                                if !healed.is_empty() { healed.push('\\'); }
+                                if !healed.is_empty() {
+                                    healed.push('\\');
+                                }
                                 healed.push_str(&merged);
                                 i += 2; // consumed both parts
                             } else {
-                                if !healed.is_empty() { healed.push('\\'); }
+                                if !healed.is_empty() {
+                                    healed.push('\\');
+                                }
                                 healed.push_str(part);
                                 i += 1;
                             }
                         } else {
-                            if !healed.is_empty() { healed.push('\\'); }
+                            if !healed.is_empty() {
+                                healed.push('\\');
+                            }
                             healed.push_str(part);
                             i += 1;
                         }
@@ -679,13 +818,28 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
         let profile = std::env::var("USERPROFILE").unwrap_or_default();
         // Try Miniconda3 first, then Anaconda3, then scoop, then fallback to bare 'python'
         let candidates = vec![
-            std::path::PathBuf::from(&profile).join("Miniconda3").join("python.exe"),
-            std::path::PathBuf::from(&profile).join("Anaconda3").join("python.exe"),
-            std::path::PathBuf::from(&profile).join("miniconda3").join("python.exe"),
-            std::path::PathBuf::from(&profile).join("anaconda3").join("python.exe"),
-            std::path::PathBuf::from(&profile).join("scoop").join("apps").join("python").join("current").join("python.exe"),
+            std::path::PathBuf::from(&profile)
+                .join("Miniconda3")
+                .join("python.exe"),
+            std::path::PathBuf::from(&profile)
+                .join("Anaconda3")
+                .join("python.exe"),
+            std::path::PathBuf::from(&profile)
+                .join("miniconda3")
+                .join("python.exe"),
+            std::path::PathBuf::from(&profile)
+                .join("anaconda3")
+                .join("python.exe"),
+            std::path::PathBuf::from(&profile)
+                .join("scoop")
+                .join("apps")
+                .join("python")
+                .join("current")
+                .join("python.exe"),
         ];
-        let python_path = candidates.into_iter().find(|p| p.exists())
+        let python_path = candidates
+            .into_iter()
+            .find(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned());
 
         if let Some(py) = python_path {
@@ -697,7 +851,9 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
                     if args.len() == 2 {
                         let script_arg = args[0].trim_matches('"').trim_matches('\'');
                         let rest = args[1];
-                        let script_fixed = if std::path::Path::new(script_arg).is_absolute() && script_arg.contains(' ') {
+                        let script_fixed = if std::path::Path::new(script_arg).is_absolute()
+                            && script_arg.contains(' ')
+                        {
                             format!("\"{}\" {}", script_arg, rest)
                         } else if script_arg.contains(' ') && !script_arg.starts_with('"') {
                             format!("\"{}\" {}", script_arg, rest)
@@ -705,7 +861,10 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
                             stripped.to_string()
                         };
                         script_fixed
-                    } else if stripped.contains(' ') && !stripped.starts_with('-') && !stripped.starts_with('"') {
+                    } else if stripped.contains(' ')
+                        && !stripped.starts_with('-')
+                        && !stripped.starts_with('"')
+                    {
                         // Single argument with spaces — likely a path without quotes
                         format!("\"{}\"", stripped)
                     } else {
@@ -743,7 +902,10 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(if output.status.success() { 0 } else { 1 });
+    let exit_code = output
+        .status
+        .code()
+        .unwrap_or(if output.status.success() { 0 } else { 1 });
     let stdout_hash = crate::core::content_hash::hash_bytes(stdout.as_bytes());
     let stderr_hash = crate::core::content_hash::hash_bytes(stderr.as_bytes());
 
@@ -760,7 +922,10 @@ pub async fn execute_terminal_command_detailed(workspace_path: &str, command: &s
 }
 
 /// Executes a synchronous terminal command inside the active workspace, returning a simple Result<String, String>.
-pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Result<String, String> {
+pub async fn execute_terminal_command(
+    workspace_path: &str,
+    command: &str,
+) -> Result<String, String> {
     let res = execute_terminal_command_detailed(workspace_path, command).await?;
     if res.exit_code == 0 {
         Ok(res.stdout)
@@ -768,7 +933,6 @@ pub async fn execute_terminal_command(workspace_path: &str, command: &str) -> Re
         Err(format!("{} {}", res.stdout, res.stderr).trim().to_string())
     }
 }
-
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let mut dot_product = 0.0;
@@ -791,7 +955,10 @@ pub async fn format_system_error(error_msg: &str) -> String {
         let tasks = get_bg_tasks();
         let guard = tasks.lock().await;
         let active_ids: Vec<String> = guard.keys().cloned().collect();
-        format!("{} Los IDs activos son {:?}. Corrige el nombre y reintenta.", error_msg, active_ids)
+        format!(
+            "{} Los IDs activos son {:?}. Corrige el nombre y reintenta.",
+            error_msg, active_ids
+        )
     } else {
         error_msg.to_string()
     }

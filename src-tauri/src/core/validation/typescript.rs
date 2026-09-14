@@ -1,7 +1,7 @@
 #![allow(dead_code)]
+use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
-use std::path::Path;
 
 pub async fn validate_typescript(workspace_path: &str) -> Result<(), String> {
     let path = Path::new(workspace_path);
@@ -45,7 +45,9 @@ pub async fn validate_typescript(workspace_path: &str) -> Result<(), String> {
             if !out.status.success() {
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                return Err(format!("[TYPESCRIPT_TYPE_ERROR] {} {}", stdout, stderr).trim().to_string());
+                return Err(format!("[TYPESCRIPT_TYPE_ERROR] {} {}", stdout, stderr)
+                    .trim()
+                    .to_string());
             }
         }
         return Ok(());
@@ -64,9 +66,13 @@ pub async fn validate_typescript(workspace_path: &str) -> Result<(), String> {
         if !out.status.success() && !out.stderr.is_empty() {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             // If npx failed because tsc isn't installed in project, don't block
-            if !stderr.contains("could not determine executable") && !stderr.contains("command not found") {
+            if !stderr.contains("could not determine executable")
+                && !stderr.contains("command not found")
+            {
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                return Err(format!("[TYPESCRIPT_ERROR] {} {}", stdout, stderr).trim().to_string());
+                return Err(format!("[TYPESCRIPT_ERROR] {} {}", stdout, stderr)
+                    .trim()
+                    .to_string());
             }
         }
     }

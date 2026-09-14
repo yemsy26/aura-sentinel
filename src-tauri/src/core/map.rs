@@ -1,16 +1,16 @@
 use ignore::WalkBuilder;
 use std::path::Path;
 
-
 /// Genera un mapa del repositorio (Repository Map) excluyendo carpetas pesadas
 /// y ocultas para inyectar en el contexto del LLM.
 pub fn generate_repo_map(workspace: &Path) -> String {
     let mut builder = WalkBuilder::new(workspace);
-    builder.max_depth(Some(5))
-           .hidden(true)
-           .git_ignore(true)
-           .ignore(true);
-           
+    builder
+        .max_depth(Some(5))
+        .hidden(true)
+        .git_ignore(true)
+        .ignore(true);
+
     // Filtro adicional manual de seguridad para optimizar tokens
     builder.filter_entry(|entry| {
         let name = entry.file_name().to_string_lossy();
@@ -21,7 +21,6 @@ pub fn generate_repo_map(workspace: &Path) -> String {
     });
 
     let mut map_output = String::from("REPOSITORY MAP:\n/\n");
-    
 
     for result in builder.build() {
         if let Ok(entry) = result {
@@ -45,7 +44,7 @@ pub fn generate_repo_map(workspace: &Path) -> String {
             }
         }
     }
-    
+
     if map_output.lines().count() <= 2 {
         map_output.push_str("  (directorio vacío)\n");
     }

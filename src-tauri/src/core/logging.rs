@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use chrono::Utc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LogLevel {
@@ -47,7 +47,11 @@ impl AuraLogger {
         let log_path = Path::new(&self.workspace).join(".aura_logs.jsonl");
         if let Ok(json) = serde_json::to_string(&entry) {
             use std::io::Write;
-            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+            {
                 let _ = writeln!(file, "{}", json);
                 crate::core::hide_file_windows_sync(&log_path);
             }

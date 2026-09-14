@@ -1,6 +1,6 @@
 use std::path::Path;
-use tokio::fs;
 use tauri;
+use tokio::fs;
 
 #[allow(dead_code)] // Severity::Info reservado para uso futuro
 
@@ -49,11 +49,11 @@ impl AutoValidator {
     /// Valida archivos HTML
     async fn validate_html(&self, result: &mut ValidationResult) {
         let html_files = self.find_files("*.html", &mut result.issues).await;
-        
+
         for html_file in html_files {
             if let Ok(content) = fs::read_to_string(&html_file).await {
                 let path_str = html_file.to_string_lossy().to_string();
-                
+
                 // Buscar scripts
                 for (line_num, line) in content.lines().enumerate() {
                     if line.contains("<script") && line.contains("src=") {
@@ -76,7 +76,13 @@ impl AutoValidator {
         }
     }
 
-    fn validate_script_src(&self, src: &str, html_file: &str, line: usize, result: &mut ValidationResult) {
+    fn validate_script_src(
+        &self,
+        src: &str,
+        html_file: &str,
+        line: usize,
+        result: &mut ValidationResult,
+    ) {
         // Ignorar URLs externas
         if src.starts_with("http://") || src.starts_with("https://") || src.starts_with("//") {
             return;
@@ -92,8 +98,15 @@ impl AutoValidator {
                 severity: Severity::Warning,
                 file: html_file.to_string(),
                 line: Some(line),
-                message: format!("Script referenciado aún no existe o ruta pendiente: '{}' (resuelto a: {})", src, script_path.display()),
-                suggested_fix: Some(format!("Verificar ruta o crear archivo: {}", script_path.display())),
+                message: format!(
+                    "Script referenciado aún no existe o ruta pendiente: '{}' (resuelto a: {})",
+                    src,
+                    script_path.display()
+                ),
+                suggested_fix: Some(format!(
+                    "Verificar ruta o crear archivo: {}",
+                    script_path.display()
+                )),
             });
         }
     }
@@ -101,27 +114,41 @@ impl AutoValidator {
     /// Valida archivos JS/TS
     async fn validate_js(&self, result: &mut ValidationResult) {
         let js_files = self.find_files("*.js", &mut result.issues).await;
-        
+
         for js_file in js_files {
             if let Ok(content) = fs::read_to_string(&js_file).await {
                 let path_str = js_file.to_string_lossy().to_string();
-                
+
                 for (line_num, line) in content.lines().enumerate() {
                     let trimmed = line.trim();
-                    
+
                     // this.load.image('key', 'path')
-                    if trimmed.contains("this.load.image") || trimmed.contains("this.load.audio") || trimmed.contains("this.load.atlas") || trimmed.contains("this.load.spritesheet") {
+                    if trimmed.contains("this.load.image")
+                        || trimmed.contains("this.load.audio")
+                        || trimmed.contains("this.load.atlas")
+                        || trimmed.contains("this.load.spritesheet")
+                    {
                         if let Some(start) = line.find("'") {
                             let rest = &line[start + 1..];
                             if let Some(end) = rest.find("'") {
                                 let asset_path = &rest[..end];
-                                self.validate_asset_path(asset_path, &path_str, line_num + 1, result);
+                                self.validate_asset_path(
+                                    asset_path,
+                                    &path_str,
+                                    line_num + 1,
+                                    result,
+                                );
                             }
                         } else if let Some(start) = line.find("\"") {
                             let rest = &line[start + 1..];
                             if let Some(end) = rest.find("\"") {
                                 let asset_path = &rest[..end];
-                                self.validate_asset_path(asset_path, &path_str, line_num + 1, result);
+                                self.validate_asset_path(
+                                    asset_path,
+                                    &path_str,
+                                    line_num + 1,
+                                    result,
+                                );
                             }
                         }
                     }
@@ -130,9 +157,18 @@ impl AutoValidator {
         }
     }
 
-    fn validate_asset_path(&self, asset_path: &str, js_file: &str, line: usize, result: &mut ValidationResult) {
+    fn validate_asset_path(
+        &self,
+        asset_path: &str,
+        js_file: &str,
+        line: usize,
+        result: &mut ValidationResult,
+    ) {
         // Ignorar URLs y data URIs
-        if asset_path.starts_with("http://") || asset_path.starts_with("https://") || asset_path.starts_with("data:") {
+        if asset_path.starts_with("http://")
+            || asset_path.starts_with("https://")
+            || asset_path.starts_with("data:")
+        {
             return;
         }
 
@@ -146,8 +182,15 @@ impl AutoValidator {
                 severity: Severity::Warning,
                 file: js_file.to_string(),
                 line: Some(line),
-                message: format!("Asset referenciado aún no existe o ruta pendiente: '{}' (resuelto a: {})", asset_path, asset_full.display()),
-                suggested_fix: Some(format!("Crear asset o corregir ruta: {}", asset_full.display())),
+                message: format!(
+                    "Asset referenciado aún no existe o ruta pendiente: '{}' (resuelto a: {})",
+                    asset_path,
+                    asset_full.display()
+                ),
+                suggested_fix: Some(format!(
+                    "Crear asset o corregir ruta: {}",
+                    asset_full.display()
+                )),
             });
         }
     }
@@ -155,13 +198,19 @@ impl AutoValidator {
     /// Valida assets referenciados en HTML/CSS
     async fn validate_assets(&self, result: &mut ValidationResult) {
         // Verificar carpeta assets/ solo si existen referencias reales a assets o es un proyecto de juego
-        let has_game = self.find_files("*.js", &mut result.issues).await.iter().any(|f| {
-            if let Ok(content) = std::fs::read_to_string(f) {
-                content.contains("Phaser") || content.contains("canvas") || content.contains("this.load.")
-            } else {
-                false
-            }
-        });
+        let has_game = self
+            .find_files("*.js", &mut result.issues)
+            .await
+            .iter()
+            .any(|f| {
+                if let Ok(content) = std::fs::read_to_string(f) {
+                    content.contains("Phaser")
+                        || content.contains("canvas")
+                        || content.contains("this.load.")
+                } else {
+                    false
+                }
+            });
 
         if !has_game {
             return; // Proyectos web estándar o backend no requieren forzosamente carpeta assets/
@@ -169,24 +218,36 @@ impl AutoValidator {
 
         let assets_dir = Path::new(&self.workspace_path).join("assets");
         let src_assets = Path::new(&self.workspace_path).join("src/assets");
-        
+
         if !assets_dir.exists() && !src_assets.exists() {
             result.issues.push(ValidationIssue {
                 severity: Severity::Warning,
                 file: "workspace".to_string(),
                 line: None,
-                message: "No se encontró carpeta de assets (assets/ o src/assets/) para el juego".to_string(),
-                suggested_fix: Some("Crear carpeta assets/ y añadir assets, o usar gráficos programáticos".to_string()),
+                message: "No se encontró carpeta de assets (assets/ o src/assets/) para el juego"
+                    .to_string(),
+                suggested_fix: Some(
+                    "Crear carpeta assets/ y añadir assets, o usar gráficos programáticos"
+                        .to_string(),
+                ),
             });
         }
     }
 
     /// Valida runners de prueba (en .aura/runtime/runners o en la raíz)
     async fn validate_runners(&self, result: &mut ValidationResult) {
-        let runners = ["run_tests.bat", "run_tests.ps1", "run_tests.sh", "run_game.bat", "run_game.ps1", "dev.sh", "dev.bat"];
+        let runners = [
+            "run_tests.bat",
+            "run_tests.ps1",
+            "run_tests.sh",
+            "run_game.bat",
+            "run_game.ps1",
+            "dev.sh",
+            "dev.bat",
+        ];
         let root = Path::new(&self.workspace_path);
         let internal_runners = root.join(".aura").join("runtime").join("runners");
-        
+
         let mut found = false;
         for runner in &runners {
             if internal_runners.join(runner).exists() || root.join(runner).exists() {
@@ -194,13 +255,15 @@ impl AutoValidator {
                 break;
             }
         }
-        
+
         if !found {
             result.issues.push(ValidationIssue {
                 severity: Severity::Warning,
                 file: "workspace".to_string(),
                 line: None,
-                message: "No se encontraron scripts de ejecución (run_tests.bat, run_game.ps1, etc.)".to_string(),
+                message:
+                    "No se encontraron scripts de ejecución (run_tests.bat, run_game.ps1, etc.)"
+                        .to_string(),
                 suggested_fix: Some("Generar runners con TOOL_CREATE_RUNNER".to_string()),
             });
         }
@@ -208,11 +271,21 @@ impl AutoValidator {
 
     /// Aplica auto-fixes
 
-
     /// Busca archivos por patrón
-    async fn find_files(&self, pattern: &str, issues: &mut Vec<ValidationIssue>) -> Vec<std::path::PathBuf> {
+    async fn find_files(
+        &self,
+        pattern: &str,
+        issues: &mut Vec<ValidationIssue>,
+    ) -> Vec<std::path::PathBuf> {
         let mut results = Vec::new();
-        self.find_files_recursive(Path::new(&self.workspace_path), pattern, &mut results, issues, 0).await;
+        self.find_files_recursive(
+            Path::new(&self.workspace_path),
+            pattern,
+            &mut results,
+            issues,
+            0,
+        )
+        .await;
         results
     }
 
@@ -225,7 +298,9 @@ impl AutoValidator {
         depth: u32,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
-            if depth > 5 { return; }
+            if depth > 5 {
+                return;
+            }
             match fs::read_dir(dir).await {
                 Ok(mut entries) => {
                     loop {
@@ -234,13 +309,29 @@ impl AutoValidator {
                                 let path = entry.path();
                                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                                 let name_str = name.as_ref();
-                                
+
                                 // Saltar directorios ignorados
                                 if path.is_dir() {
-                                    if matches!(name_str, "node_modules" | ".git" | "target" | "dist" | "build" | ".next" | ".nuxt") {
+                                    if matches!(
+                                        name_str,
+                                        "node_modules"
+                                            | ".git"
+                                            | "target"
+                                            | "dist"
+                                            | "build"
+                                            | ".next"
+                                            | ".nuxt"
+                                    ) {
                                         continue;
                                     }
-                                    self.find_files_recursive(&path, pattern, results, issues, depth + 1).await;
+                                    self.find_files_recursive(
+                                        &path,
+                                        pattern,
+                                        results,
+                                        issues,
+                                        depth + 1,
+                                    )
+                                    .await;
                                 } else if self.match_pattern(name_str, pattern) {
                                     results.push(path);
                                 }
@@ -264,8 +355,14 @@ impl AutoValidator {
                         severity: Severity::Error,
                         file: dir.to_string_lossy().to_string(),
                         line: None,
-                        message: format!("[WORKSPACE_READ_ERROR] Error leyendo directorio {}: {}", dir.display(), e),
-                        suggested_fix: Some("Verificar permisos y accesibilidad del directorio".to_string()),
+                        message: format!(
+                            "[WORKSPACE_READ_ERROR] Error leyendo directorio {}: {}",
+                            dir.display(),
+                            e
+                        ),
+                        suggested_fix: Some(
+                            "Verificar permisos y accesibilidad del directorio".to_string(),
+                        ),
                     });
                 }
             }
@@ -273,7 +370,9 @@ impl AutoValidator {
     }
 
     fn match_pattern(&self, name: &str, pattern: &str) -> bool {
-        if pattern == "*" { return true; }
+        if pattern == "*" {
+            return true;
+        }
         if pattern.starts_with("*.") {
             let ext = &pattern[1..];
             return name.ends_with(ext);
@@ -313,37 +412,67 @@ pub enum Severity {
 pub async fn run_auto_validation(workspace_path: String) -> Result<String, String> {
     let validator = AutoValidator::new(&workspace_path);
     let result = validator.validate_and_fix().await;
-    
+
     let mut output = String::new();
     output.push_str("📊 REPORTE DE AUTO-VALIDACIÓN\n");
     output.push_str("==========================\n");
-    output.push_str(&format!("Estado: {}\n", if result.passed { "✅ ÉXITO" } else { "❌ FALLÓ" }));
-    output.push_str(&format!("Errores: {}\n", result.issues.iter().filter(|i| i.severity == Severity::Error).count()));
-    output.push_str(&format!("Advertencias: {}\n", result.issues.iter().filter(|i| i.severity == Severity::Warning).count()));
-    output.push_str(&format!("Auto-fixes aplicados: {}\n\n", result.auto_fixed.len()));
-    
+    output.push_str(&format!(
+        "Estado: {}\n",
+        if result.passed {
+            "✅ ÉXITO"
+        } else {
+            "❌ FALLÓ"
+        }
+    ));
+    output.push_str(&format!(
+        "Errores: {}\n",
+        result
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .count()
+    ));
+    output.push_str(&format!(
+        "Advertencias: {}\n",
+        result
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Warning)
+            .count()
+    ));
+    output.push_str(&format!(
+        "Auto-fixes aplicados: {}\n\n",
+        result.auto_fixed.len()
+    ));
+
     for issue in &result.issues {
         let icon = match issue.severity {
             Severity::Error => "❌",
             Severity::Warning => "⚠️",
             Severity::Info => "ℹ️",
         };
-        output.push_str(&format!("{} [{}] {} (línea: {:?})\n", icon, issue.file, issue.message, issue.line));
+        output.push_str(&format!(
+            "{} [{}] {} (línea: {:?})\n",
+            icon, issue.file, issue.message, issue.line
+        ));
         if let Some(fix) = &issue.suggested_fix {
             output.push_str(&format!("   🔧 Fix: {}\n", fix));
         }
     }
-    
+
     if !result.auto_fixed.is_empty() {
         output.push_str("\n🔧 AUTO-FIXES APLICADOS:\n");
         for fix in &result.auto_fixed {
             output.push_str(&format!("  ✅ {}\n", fix));
         }
     }
-    
+
     if result.passed {
         Ok(format!("{}\n\n✅ VALIDACIÓN EXITOSA", output))
     } else {
-        Ok(format!("{}\n\n❌ VALIDACIÓN FALLÓ - Revisar errores arriba", output))
+        Ok(format!(
+            "{}\n\n❌ VALIDACIÓN FALLÓ - Revisar errores arriba",
+            output
+        ))
     }
 }

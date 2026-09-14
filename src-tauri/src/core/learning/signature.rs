@@ -74,7 +74,7 @@ impl StateSignature {
         match (&self.last_error_class, &other.last_error_class) {
             (Some(a), Some(b)) if a == b => score += w_error,
             (None, None) => score += w_error,
-            _ => {},
+            _ => {}
         }
 
         // 3. Stalled state component (weight 0.15)
@@ -100,7 +100,9 @@ impl StateSignature {
         let total_b = (other.criteria_satisfied + other.criteria_remaining).max(1) as f32;
         let ratio_b = other.criteria_satisfied as f32 / total_b;
         let ratio_diff = (ratio_a - ratio_b).abs();
-        let v_diff = ((self.verification_level as i32) - (other.verification_level as i32)).abs() as f32 / 3.0;
+        let v_diff = ((self.verification_level as i32) - (other.verification_level as i32)).abs()
+            as f32
+            / 3.0;
         let progress_sim = (1.0 - (ratio_diff * 0.5 + v_diff * 0.5)).max(0.0);
         score += w_progress * progress_sim;
 

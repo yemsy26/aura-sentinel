@@ -1,7 +1,7 @@
 #![allow(dead_code)]
+use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
-use std::path::Path;
 
 pub async fn validate_javascript(workspace_path: &str) -> Result<(), String> {
     let path = Path::new(workspace_path);
@@ -24,7 +24,7 @@ pub async fn validate_javascript(workspace_path: &str) -> Result<(), String> {
                         Debes usar TOOL_PROGRAMMER para agregar los scripts correctos al package.json antes de continuar.".to_string()
                     );
                 }
-            },
+            }
             Err(e) => {
                 return Err(format!(
                     "[JSON_SYNTAX_ERROR] El package.json tiene errores de sintaxis (Línea {}): {}. \
@@ -64,7 +64,11 @@ pub async fn validate_javascript(workspace_path: &str) -> Result<(), String> {
         if let Ok(out) = output {
             if !out.status.success() {
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                return Err(format!("[NODE_SYNTAX_ERROR] Archivo {}: {}", js_file, stderr).trim().to_string());
+                return Err(
+                    format!("[NODE_SYNTAX_ERROR] Archivo {}: {}", js_file, stderr)
+                        .trim()
+                        .to_string(),
+                );
             }
         }
     }
@@ -121,7 +125,12 @@ pub async fn validate_javascript(workspace_path: &str) -> Result<(), String> {
                     if let Ok(out) = output {
                         if !out.status.success() {
                             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                            return Err(format!("[NODE_SYNTAX_ERROR] Script en {}: {}", html_file, stderr).trim().to_string());
+                            return Err(format!(
+                                "[NODE_SYNTAX_ERROR] Script en {}: {}",
+                                html_file, stderr
+                            )
+                            .trim()
+                            .to_string());
                         }
                     }
                 }

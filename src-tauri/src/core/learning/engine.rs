@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use crate::core::learning::experience::{Experience, SharedExperienceStore, SCHEMA_VERSION};
 use crate::core::learning::fingerprint::TaskFingerprint;
 use crate::core::learning::outcome::LearningResult;
 use crate::core::learning::persistence::LearningPersistence;
-use crate::core::learning::strategy::StrategyKind;
 use crate::core::learning::state_stats::StateStrategyIndex;
+use crate::core::learning::strategy::StrategyKind;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Read-only snapshot of MissionRuntime metrics for LearningEngine.
 /// LearningEngine DOES NOT hold a reference to MissionRuntime — it receives a plain data copy.
@@ -41,18 +41,15 @@ impl LearningEngine {
 
     pub fn with_store(store: SharedExperienceStore) -> Self {
         let persistence = LearningPersistence::new();
-        Self {
-            store,
-            persistence,
-        }
+        Self { store, persistence }
     }
 
     #[allow(dead_code)]
-    pub fn with_store_and_persistence(store: SharedExperienceStore, persistence: LearningPersistence) -> Self {
-        Self {
-            store,
-            persistence,
-        }
+    pub fn with_store_and_persistence(
+        store: SharedExperienceStore,
+        persistence: LearningPersistence,
+    ) -> Self {
+        Self { store, persistence }
     }
 
     #[allow(dead_code)]
@@ -74,8 +71,16 @@ impl LearningEngine {
         attempt_id: Option<String>,
     ) -> Result<(), String> {
         self.record_outcome_with_trajectory(
-            fingerprint, model, strategy, result, confidence, mission_id, attempt_id, None,
-        ).await
+            fingerprint,
+            model,
+            strategy,
+            result,
+            confidence,
+            mission_id,
+            attempt_id,
+            None,
+        )
+        .await
     }
 
     /// Record the outcome of a completed mission, optionally with an execution trajectory.
@@ -90,9 +95,7 @@ impl LearningEngine {
         attempt_id: Option<String>,
         trajectory: Option<crate::core::learning::trajectory::Trajectory>,
     ) -> Result<(), String> {
-        let final_attempt_id = attempt_id.unwrap_or_else(|| {
-            Self::generate_attempt_id(&mission_id)
-        });
+        let final_attempt_id = attempt_id.unwrap_or_else(|| Self::generate_attempt_id(&mission_id));
 
         let exp = Experience {
             schema_version: SCHEMA_VERSION,
@@ -113,7 +116,11 @@ impl LearningEngine {
         let (pushed, all_exps) = {
             let mut store = self.store.write().await;
             let pushed = store.push(exp.clone());
-            let all_exps = if pushed { store.experiences.clone() } else { Vec::new() };
+            let all_exps = if pushed {
+                store.experiences.clone()
+            } else {
+                Vec::new()
+            };
             (pushed, all_exps)
         };
 
@@ -178,7 +185,6 @@ impl LearningEngine {
                     eprintln!("[LearningEngine] PERSIST_BUDGET_IDX_WARN: {}", e);
                 }
             }
-
         }
 
         Ok(())

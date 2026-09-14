@@ -1,9 +1,9 @@
+use serde::{Deserialize, Serialize};
 use spectrasat_core::chordal::ChordalExtension;
 use spectrasat_core::gf2_elimination::Gf2System;
 use spectrasat_core::sdp_branching::branch_and_bound_solve;
 use spectrasat_core::sdp_solver::{solve_sos_sdp, SdpVerdict};
 use spectrasat_core::spectral::Clause3;
-use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
 use std::time::Instant;
 

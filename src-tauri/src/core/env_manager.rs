@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::env;
+use std::process::Command;
 
 // ── Scoop bootstrap command ─────────────────────────────────────────────────
 #[cfg(target_os = "windows")]
@@ -91,12 +91,8 @@ async fn install_dependency_windows(package_raw: &str) -> Result<String, String>
     let pm = detect_package_manager();
 
     match pm {
-        PackageManager::Scoop => {
-            install_with_scoop(&scoop_pkg).await
-        }
-        PackageManager::Winget => {
-            install_with_winget(&winget_pkg).await
-        }
+        PackageManager::Scoop => install_with_scoop(&scoop_pkg).await,
+        PackageManager::Winget => install_with_winget(&winget_pkg).await,
         PackageManager::None => {
             // Try to bootstrap Scoop first, then retry
             eprintln!("[ENV_MANAGER] No package manager found. Bootstrapping Scoop...");
@@ -121,15 +117,15 @@ fn resolve_package_aliases(pkg: &str) -> (String, String) {
     let (scoop, winget) = match pkg {
         "node" | "nodejs" => ("nodejs", "OpenJS.NodeJS"),
         "python" | "python3" => ("python", "Python.Python.3"),
-        "go" | "golang"  => ("go", "GoLang.Go"),
-        "rust"           => ("rustup-init", "Rustlang.Rustup"),
-        "java"           => ("openjdk", "EclipseAdoptium.Temurin.21.JDK"),
-        "dart"           => ("dart", "Dart.Dart"),
-        "flutter"        => ("flutter", "Google.Flutter"),
-        "php"            => ("php", "PHP.PHP"),
-        "git"            => ("git", "Git.Git"),
-        "gh"             => ("gh", "GitHub.cli"),
-        other            => (other, other),
+        "go" | "golang" => ("go", "GoLang.Go"),
+        "rust" => ("rustup-init", "Rustlang.Rustup"),
+        "java" => ("openjdk", "EclipseAdoptium.Temurin.21.JDK"),
+        "dart" => ("dart", "Dart.Dart"),
+        "flutter" => ("flutter", "Google.Flutter"),
+        "php" => ("php", "PHP.PHP"),
+        "git" => ("git", "Git.Git"),
+        "gh" => ("gh", "GitHub.cli"),
+        other => (other, other),
     };
     (scoop.to_string(), winget.to_string())
 }
@@ -196,7 +192,8 @@ async fn install_with_winget(package_id: &str) -> Result<String, String> {
     let result = Command::new("winget")
         .args([
             "install",
-            "--id", package_id,
+            "--id",
+            package_id,
             "--silent",
             "--accept-package-agreements",
             "--accept-source-agreements",
@@ -231,7 +228,7 @@ pub fn hot_reload_path() {
     #[cfg(target_os = "windows")]
     {
         let machine_path = read_env_var_from_registry("Machine");
-        let user_path    = read_env_var_from_registry("User");
+        let user_path = read_env_var_from_registry("User");
 
         // Also pick up Scoop's shims directory explicitly in case it was just installed
         let scoop_shims = {
@@ -292,7 +289,10 @@ use crate::core::tool_registry::ExecutionResult;
 pub async fn execute_env_manager_detailed(package: &str) -> Result<ExecutionResult, String> {
     let pkg = package.trim();
     if pkg.is_empty() {
-        return Ok(ExecutionResult::error("TOOL_ENV_MANAGER requiere un nombre de paquete.", 1));
+        return Ok(ExecutionResult::error(
+            "TOOL_ENV_MANAGER requiere un nombre de paquete.",
+            1,
+        ));
     }
     match install_dependency(pkg).await {
         Ok(msg) => {
@@ -307,4 +307,3 @@ pub async fn execute_env_manager_detailed(package: &str) -> Result<ExecutionResu
         }
     }
 }
-

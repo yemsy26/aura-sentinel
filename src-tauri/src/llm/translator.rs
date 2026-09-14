@@ -1,10 +1,15 @@
 use super::call_ollama_text;
-use tauri::AppHandle;
 use crate::llm::agent::emit_event;
+use tauri::AppHandle;
 
 /// NLU unificado: una sola llamada LLM que corrige ortografía Y clasifica intención.
 /// Usa el modelo seleccionado por el usuario para coherencia global.
-pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHandle, chat_history: &[String], requested_model: &str) -> String {
+pub async fn translate_to_technical_intent(
+    user_input: &str,
+    app_handle: &AppHandle,
+    chat_history: &[String],
+    requested_model: &str,
+) -> String {
     // Resolver modelos disponibles
     let mut available_models = Vec::new();
     if let Ok(res) = reqwest::Client::new()
@@ -25,12 +30,20 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
 
     let model = crate::llm::agent::resolve_model_or_fallback(requested_model, &available_models);
 
-    emit_event(app_handle, 0, &format!("🧠 [NLU] Analizando con {}...", model), "PLANNING");
+    emit_event(
+        app_handle,
+        0,
+        &format!("🧠 [NLU] Analizando con {}...", model),
+        "PLANNING",
+    );
 
     let context_str = if chat_history.is_empty() {
         "".to_string()
     } else {
-        format!("CONTEXTO RECIENTE DE LA CONVERSACIÓN:\n{}\n\n", chat_history.join("\n"))
+        format!(
+            "CONTEXTO RECIENTE DE LA CONVERSACIÓN:\n{}\n\n",
+            chat_history.join("\n")
+        )
     };
 
     // Una sola llamada: el modelo corrige ortografía Y clasifica en el mismo prompt
@@ -67,20 +80,35 @@ pub async fn translate_to_technical_intent(user_input: &str, app_handle: &AppHan
             }
 
             if serde_json::from_str::<serde_json::Value>(&clean_text).is_err() {
-                emit_event(app_handle, 0, "NLU JSON inválido. Fallback a AGENTIC_TASK.", "WARNING");
+                emit_event(
+                    app_handle,
+                    0,
+                    "NLU JSON inválido. Fallback a AGENTIC_TASK.",
+                    "WARNING",
+                );
                 return format!("{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"{}\",\"os_command\":null,\"direct_response\":null,\"clarification_question\":null}}", user_input.replace('"', "\\\""));
             }
 
             if clean_text.is_empty() {
-                emit_event(app_handle, 0, "NLU vacío. Forzando tarea agente.", "WARNING");
+                emit_event(
+                    app_handle,
+                    0,
+                    "NLU vacío. Forzando tarea agente.",
+                    "WARNING",
+                );
                 format!("{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"{}\",\"os_command\":null,\"direct_response\":null,\"clarification_question\":null}}", user_input.replace('"', "\\\""))
             } else {
                 emit_event(app_handle, 0, "✅ Intención clasificada.", "SUCCESS");
                 clean_text
             }
-        },
+        }
         Err(e) => {
-            emit_event(app_handle, 0, &format!("NLU Falló: {}. Forzando tarea agente.", e), "ERROR");
+            emit_event(
+                app_handle,
+                0,
+                &format!("NLU Falló: {}. Forzando tarea agente.", e),
+                "ERROR",
+            );
             format!("{{\"intent_type\":\"AGENTIC_TASK\",\"technical_translation\":\"{}\",\"os_command\":null,\"direct_response\":null,\"clarification_question\":null}}", user_input.replace('"', "\\\""))
         }
     }

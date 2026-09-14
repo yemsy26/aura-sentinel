@@ -40,7 +40,8 @@ pub async fn perform_health_check(workspace: &str) -> HealthCheck {
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .unwrap_or_default();
-    let ollama_available = client.get("http://127.0.0.1:11434/api/tags")
+    let ollama_available = client
+        .get("http://127.0.0.1:11434/api/tags")
         .send()
         .await
         .map(|r| r.status().is_success())
@@ -50,7 +51,11 @@ pub async fn perform_health_check(workspace: &str) -> HealthCheck {
 
     let total_mem = sys.total_memory() as f64 / (1024.0 * 1024.0);
     let used_mem = sys.used_memory() as f64 / (1024.0 * 1024.0);
-    let mem_percent = if total_mem > 0.0 { (used_mem / total_mem) * 100.0 } else { 0.0 };
+    let mem_percent = if total_mem > 0.0 {
+        (used_mem / total_mem) * 100.0
+    } else {
+        0.0
+    };
     let memory_adequate = mem_percent < 90.0;
 
     let status = if !ollama_available || !workspace_accessible {

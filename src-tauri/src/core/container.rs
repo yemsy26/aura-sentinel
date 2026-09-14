@@ -37,9 +37,13 @@ fn detect_runtime() -> Option<&'static str> {
             .map(|o| o.status.success())
             .unwrap_or(false)
     };
-    if check("docker") { Some("docker") }
-    else if check("podman") { Some("podman") }
-    else { None }
+    if check("docker") {
+        Some("docker")
+    } else if check("podman") {
+        Some("podman")
+    } else {
+        None
+    }
 }
 
 /// Execute a container operation. Returns stdout or error string.
@@ -55,40 +59,59 @@ pub async fn container_exec(
     let output = match action {
         ContainerAction::Run => {
             Command::new(runtime)
-                .args(["run", "-d", "--name", &format!("aura_{}", sanitize(image_or_id)),
-                       "-v", &format!("{}:/workspace", workspace),
-                       image_or_id])
-                .output().await
-        },
+                .args([
+                    "run",
+                    "-d",
+                    "--name",
+                    &format!("aura_{}", sanitize(image_or_id)),
+                    "-v",
+                    &format!("{}:/workspace", workspace),
+                    image_or_id,
+                ])
+                .output()
+                .await
+        }
         ContainerAction::Exec => {
             // Exec requires a running container ID + cmd
             Command::new(runtime)
                 .args(["exec", image_or_id, "sh", "-c", cmd])
-                .output().await
-        },
+                .output()
+                .await
+        }
         ContainerAction::Stop => {
             Command::new(runtime)
                 .args(["stop", image_or_id])
-                .output().await
-        },
+                .output()
+                .await
+        }
         ContainerAction::Remove => {
             Command::new(runtime)
                 .args(["rm", "-f", image_or_id])
-                .output().await
-        },
+                .output()
+                .await
+        }
         ContainerAction::Status => {
             Command::new(runtime)
-                .args(["ps", "-a", "--filter", &format!("name={}", image_or_id), "--format", "table {{.Names}}\t{{.Status}}\t{{.Ports}}"])
-                .output().await
-        },
+                .args([
+                    "ps",
+                    "-a",
+                    "--filter",
+                    &format!("name={}", image_or_id),
+                    "--format",
+                    "table {{.Names}}\t{{.Status}}\t{{.Ports}}",
+                ])
+                .output()
+                .await
+        }
         ContainerAction::Logs => {
             Command::new(runtime)
                 .args(["logs", "--tail", "50", image_or_id])
-                .output().await
-        },
+                .output()
+                .await
+        }
         ContainerAction::ActivateEnv => {
             return activate_project_env(workspace).await;
-        },
+        }
     };
 
     match output {
@@ -100,7 +123,7 @@ pub async fn container_exec(
             } else {
                 Err(format!("❌ [{}] Error: {}", runtime, stderr.trim()))
             }
-        },
+        }
         Err(e) => Err(format!("❌ No se pudo ejecutar {}: {}", runtime, e)),
     }
 }
@@ -117,7 +140,7 @@ pub async fn activate_project_env(workspace: &str) -> Result<String, String> {
             Ok(o) if o.status.success() => {
                 let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
                 activations.push(format!("✅ Node.js detectado: {}", ver));
-            },
+            }
             _ => activations.push("⚠️ Node.js no encontrado. Instala nvm o Node.js.".to_string()),
         }
     }
@@ -130,7 +153,8 @@ pub async fn activate_project_env(workspace: &str) -> Result<String, String> {
             let _ = Command::new("python")
                 .args(["-m", "venv", ".venv"])
                 .current_dir(workspace)
-                .output().await;
+                .output()
+                .await;
             activations.push("✅ Python venv creado en .venv/".to_string());
         } else {
             activations.push("✅ Python venv existente en .venv/".to_string());
@@ -143,7 +167,7 @@ pub async fn activate_project_env(workspace: &str) -> Result<String, String> {
         match rustup_check {
             Ok(o) if o.status.success() => {
                 activations.push("✅ Rust/Cargo activo vía rustup.".to_string());
-            },
+            }
             _ => activations.push("⚠️ rustup no encontrado.".to_string()),
         }
     }
@@ -156,5 +180,7 @@ pub async fn activate_project_env(workspace: &str) -> Result<String, String> {
 }
 
 fn sanitize(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-').collect()
+    s.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .collect()
 }

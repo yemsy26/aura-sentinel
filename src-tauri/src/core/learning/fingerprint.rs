@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::core::mission_contract::MissionContract;
-use crate::core::project_profile::{ProjectProfile, PrimaryLanguage};
+use crate::core::project_profile::{PrimaryLanguage, ProjectProfile};
+use serde::{Deserialize, Serialize};
 
 /// AL-v1 TaskFingerprint v2 — structural classification of a mission.
 /// Deterministic: built from MissionContract + ProjectProfile only.
@@ -47,14 +47,28 @@ impl FingerprintBuilder {
 
         // Complexity signals (max 8 with world & contract context)
         let mut complexity_signals: u32 = 0;
-        if !profile.secondary.is_empty()     { complexity_signals += 1; }
-        if !profile.frameworks.is_empty()    { complexity_signals += 1; }
-        if profile.has_docker                { complexity_signals += 1; }
-        if obj.contains("test") || obj.contains("prueba") { complexity_signals += 1; }
-        if obj.contains("integra") || obj.contains("connect") { complexity_signals += 1; }
-        if obj.contains("refactor") || obj.contains("restructur") { complexity_signals += 1; }
+        if !profile.secondary.is_empty() {
+            complexity_signals += 1;
+        }
+        if !profile.frameworks.is_empty() {
+            complexity_signals += 1;
+        }
+        if profile.has_docker {
+            complexity_signals += 1;
+        }
+        if obj.contains("test") || obj.contains("prueba") {
+            complexity_signals += 1;
+        }
+        if obj.contains("integra") || obj.contains("connect") {
+            complexity_signals += 1;
+        }
+        if obj.contains("refactor") || obj.contains("restructur") {
+            complexity_signals += 1;
+        }
         // Contract criteria depth
-        if contract.acceptance_criteria.len() >= 3 { complexity_signals += 1; }
+        if contract.acceptance_criteria.len() >= 3 {
+            complexity_signals += 1;
+        }
         // World state workspace size / existing code scale
         if let Some(ws) = world_state {
             if ws.files.len() > 10 {
@@ -65,11 +79,20 @@ impl FingerprintBuilder {
 
         // Ambiguity: long + abstract objective → higher ambiguity
         let word_count = obj.split_whitespace().count();
-        let abstract_words = ["improve", "better", "optimize", "enhance",
-                               "mejorar", "optimizar", "arreglar", "corregir"];
+        let abstract_words = [
+            "improve",
+            "better",
+            "optimize",
+            "enhance",
+            "mejorar",
+            "optimizar",
+            "arreglar",
+            "corregir",
+        ];
         let abstract_count = abstract_words.iter().filter(|&&w| obj.contains(w)).count();
         let ambiguity = ((word_count as f32 / 30.0).min(0.6)
-            + (abstract_count as f32 / 4.0).min(0.4)).clamp(0.0, 1.0);
+            + (abstract_count as f32 / 4.0).min(0.4))
+        .clamp(0.0, 1.0);
 
         // Scope bucket — estimated from complexity and architecture signals
         let scope_bucket = match complexity_signals {
@@ -79,26 +102,59 @@ impl FingerprintBuilder {
             _ => 3,
         };
 
-        let requires_code     = obj.contains("creat") || obj.contains("implement")
-            || obj.contains("escrib") || obj.contains("add") || obj.contains("añad")
+        let requires_code = obj.contains("creat")
+            || obj.contains("implement")
+            || obj.contains("escrib")
+            || obj.contains("add")
+            || obj.contains("añad")
             || !contract.acceptance_criteria.is_empty();
-        let requires_terminal = obj.contains("ejecut") || obj.contains("run")
-            || obj.contains("compil") || obj.contains("build") || obj.contains("instala")
-            || contract.acceptance_criteria.iter().any(|c| matches!(c.verification, crate::core::mission_contract::VerificationMethod::CommandExitZero(_)));
-        let requires_tests    = obj.contains("test") || obj.contains("prueba")
-            || obj.contains("verif") || obj.contains("assert")
-            || contract.acceptance_criteria.iter().any(|c| matches!(c.verification, crate::core::mission_contract::VerificationMethod::TestPassed));
-        let requires_network  = obj.contains("http") || obj.contains("api")
-            || obj.contains("fetch") || obj.contains("request") || obj.contains("endpoint");
+        let requires_terminal = obj.contains("ejecut")
+            || obj.contains("run")
+            || obj.contains("compil")
+            || obj.contains("build")
+            || obj.contains("instala")
+            || contract.acceptance_criteria.iter().any(|c| {
+                matches!(
+                    c.verification,
+                    crate::core::mission_contract::VerificationMethod::CommandExitZero(_)
+                )
+            });
+        let requires_tests = obj.contains("test")
+            || obj.contains("prueba")
+            || obj.contains("verif")
+            || obj.contains("assert")
+            || contract.acceptance_criteria.iter().any(|c| {
+                matches!(
+                    c.verification,
+                    crate::core::mission_contract::VerificationMethod::TestPassed
+                )
+            });
+        let requires_network = obj.contains("http")
+            || obj.contains("api")
+            || obj.contains("fetch")
+            || obj.contains("request")
+            || obj.contains("endpoint");
 
-        let verification_level = if requires_tests && obj.contains("integr") { 3 }
-            else if requires_tests { 2 }
-            else if requires_terminal { 1 }
-            else { 0 };
+        let verification_level = if requires_tests && obj.contains("integr") {
+            3
+        } else if requires_tests {
+            2
+        } else if requires_terminal {
+            1
+        } else {
+            0
+        };
 
         TaskFingerprint {
-            language, framework, complexity, ambiguity, scope_bucket,
-            requires_code, requires_terminal, requires_tests, requires_network,
+            language,
+            framework,
+            complexity,
+            ambiguity,
+            scope_bucket,
+            requires_code,
+            requires_terminal,
+            requires_tests,
+            requires_network,
             verification_level,
         }
     }
@@ -108,27 +164,35 @@ impl FingerprintBuilder {
         let mut score = 0.0f32;
 
         // Language match (weight 0.30)
-        if a.language == b.language { score += 0.30; }
+        if a.language == b.language {
+            score += 0.30;
+        }
 
         // Framework match (weight 0.10)
-        if a.framework == b.framework { score += 0.10; }
+        if a.framework == b.framework {
+            score += 0.10;
+        }
 
         // Complexity proximity (weight 0.20)
         score += 0.20 * (1.0 - (a.complexity - b.complexity).abs());
 
         // Boolean flags (weight 0.08 each × 4 = 0.32)
         let booleans = [
-            (a.requires_code,     b.requires_code),
+            (a.requires_code, b.requires_code),
             (a.requires_terminal, b.requires_terminal),
-            (a.requires_tests,    b.requires_tests),
-            (a.requires_network,  b.requires_network),
+            (a.requires_tests, b.requires_tests),
+            (a.requires_network, b.requires_network),
         ];
         for (x, y) in booleans {
-            if x == y { score += 0.08; }
+            if x == y {
+                score += 0.08;
+            }
         }
 
         // Verification level match (weight 0.08)
-        if a.verification_level == b.verification_level { score += 0.08; }
+        if a.verification_level == b.verification_level {
+            score += 0.08;
+        }
 
         score.clamp(0.0, 1.0)
     }
@@ -136,12 +200,12 @@ impl FingerprintBuilder {
 
 fn language_str(lang: &PrimaryLanguage) -> &'static str {
     match lang {
-        PrimaryLanguage::Rust       => "rust",
-        PrimaryLanguage::Python     => "python",
+        PrimaryLanguage::Rust => "rust",
+        PrimaryLanguage::Python => "python",
         PrimaryLanguage::JavaScript => "javascript",
         PrimaryLanguage::TypeScript => "typescript",
-        PrimaryLanguage::Go         => "go",
-        PrimaryLanguage::Unknown    => "unknown",
+        PrimaryLanguage::Go => "go",
+        PrimaryLanguage::Unknown => "unknown",
         _ => "unknown",
     }
 }

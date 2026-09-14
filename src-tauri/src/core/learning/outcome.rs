@@ -15,9 +15,9 @@ impl LearningOutcome {
     #[allow(dead_code)]
     pub fn success_weight(&self) -> f32 {
         match self {
-            LearningOutcome::Success        => 1.0,
+            LearningOutcome::Success => 1.0,
             LearningOutcome::PartialSuccess => 0.5,
-            _                               => 0.0,
+            _ => 0.0,
         }
     }
 }
@@ -47,7 +47,7 @@ pub struct FailureInfo {
 /// Enables learning which recovery strategies work for which failure classes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryRecord {
-    pub strategy: String,   // "Retry", "ChangeStrategy", "ChangeTool", "Replan", "Abort"
+    pub strategy: String, // "Retry", "ChangeStrategy", "ChangeTool", "Replan", "Abort"
     pub succeeded: bool,
 }
 

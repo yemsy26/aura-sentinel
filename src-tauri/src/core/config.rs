@@ -80,7 +80,6 @@ pub fn save_config(workspace: &str, config: &AuraConfig) -> Result<(), String> {
     let config_path = Path::new(workspace).join("aura_config.json");
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Error serializando config: {}", e))?;
-    std::fs::write(&config_path, json)
-        .map_err(|e| format!("Error guardando config: {}", e))?;
+    std::fs::write(&config_path, json).map_err(|e| format!("Error guardando config: {}", e))?;
     Ok(())
 }

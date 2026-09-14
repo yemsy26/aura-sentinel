@@ -7,9 +7,9 @@
 //!   2. A `.aura_graph.json` file persisted on disk for inter-session reuse.
 //!   3. A human-readable text report injected into the LLM context.
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 // ─── Data Structures ──────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub struct GraphNode {
     pub id: String,
     pub label: String,
-    pub file_type: String,    // "python" | "javascript" | "typescript" | "rust" | "go" | "other"
+    pub file_type: String, // "python" | "javascript" | "typescript" | "rust" | "go" | "other"
     pub source_file: String,
     pub imports: Vec<String>, // raw import strings from the file
 }
@@ -26,7 +26,7 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub source: String,
     pub target: String,
-    pub relation: String, // "imports" | "depends_on"
+    pub relation: String,   // "imports" | "depends_on"
     pub confidence: String, // "EXTRACTED" | "INFERRED"
 }
 
@@ -35,8 +35,8 @@ pub struct DependencyGraph {
     pub workspace: String,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
-    pub build_order: Vec<String>, // topologically sorted file list
-    pub god_nodes: Vec<String>,   // files imported by 3+ others
+    pub build_order: Vec<String>,    // topologically sorted file list
+    pub god_nodes: Vec<String>,      // files imported by 3+ others
     pub isolated_nodes: Vec<String>, // files with no connections
     pub cycles: Vec<Vec<String>>,    // circular dependency groups
     pub generated_at: String,
@@ -46,14 +46,14 @@ pub struct DependencyGraph {
 
 fn detect_language(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
-        "py"           => "python",
-        "js" | "mjs"   => "javascript",
-        "ts" | "tsx"   => "typescript",
-        "jsx"          => "javascript",
-        "rs"           => "rust",
-        "go"           => "go",
+        "py" => "python",
+        "js" | "mjs" => "javascript",
+        "ts" | "tsx" => "typescript",
+        "jsx" => "javascript",
+        "rs" => "rust",
+        "go" => "go",
         "c" | "cpp" | "h" | "hpp" => "c_cpp",
-        _              => "other",
+        _ => "other",
     }
 }
 
@@ -74,7 +74,9 @@ fn extract_python_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with('#') || line.is_empty() { continue; }
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
 
         if let Some(rest) = line.strip_prefix("from ") {
             // "from X import Y" → extract X
@@ -105,13 +107,17 @@ fn extract_js_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with("//") || line.is_empty() { continue; }
+        if line.starts_with("//") || line.is_empty() {
+            continue;
+        }
 
         // ESM: import ... from 'path'
         if line.starts_with("import ") {
             if let Some(from_idx) = line.rfind("from ") {
                 let after = &line[from_idx + 5..];
-                let path = after.trim().trim_matches(|c| c == '\'' || c == '"' || c == ';');
+                let path = after
+                    .trim()
+                    .trim_matches(|c| c == '\'' || c == '"' || c == ';');
                 if !path.is_empty() {
                     imports.push(path.to_string());
                 }
@@ -122,7 +128,11 @@ fn extract_js_imports(content: &str) -> Vec<String> {
         if line.contains("require(") {
             let after_require = line.split("require(").nth(1).unwrap_or("");
             // naive regex-less approach: path is usually surrounded by quotes
-            let path = after_require.split(['\'', '"', ')']).next().unwrap_or("").trim();
+            let path = after_require
+                .split(['\'', '"', ')'])
+                .next()
+                .unwrap_or("")
+                .trim();
             if !path.is_empty() {
                 imports.push(path.to_string());
             }
@@ -136,7 +146,9 @@ fn extract_rust_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with("//") || line.is_empty() { continue; }
+        if line.starts_with("//") || line.is_empty() {
+            continue;
+        }
 
         if line.starts_with("use ") || line.starts_with("mod ") || line.starts_with("pub mod ") {
             // Take everything up to { or ; or ::
@@ -162,14 +174,24 @@ fn extract_go_imports(content: &str) -> Vec<String> {
     let mut in_import_block = false;
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with("import (") { in_import_block = true; continue; }
+        if line.starts_with("import (") {
+            in_import_block = true;
+            continue;
+        }
         if in_import_block {
-            if line == ")" { in_import_block = false; continue; }
+            if line == ")" {
+                in_import_block = false;
+                continue;
+            }
             let path = line.trim_matches(|c| c == '"' || c == ' ' || c == '\t');
-            if !path.is_empty() { imports.push(path.to_string()); }
+            if !path.is_empty() {
+                imports.push(path.to_string());
+            }
         } else if line.starts_with("import \"") {
             let path = line.trim_start_matches("import ").trim_matches('"');
-            if !path.is_empty() { imports.push(path.to_string()); }
+            if !path.is_empty() {
+                imports.push(path.to_string());
+            }
         }
     }
     imports
@@ -177,11 +199,11 @@ fn extract_go_imports(content: &str) -> Vec<String> {
 
 fn extract_imports(path: &Path, content: &str) -> Vec<String> {
     match detect_language(path) {
-        "python"                  => extract_python_imports(content),
+        "python" => extract_python_imports(content),
         "javascript" | "typescript" => extract_js_imports(content),
-        "rust"                    => extract_rust_imports(content),
-        "go"                      => extract_go_imports(content),
-        _                         => Vec::new(),
+        "rust" => extract_rust_imports(content),
+        "go" => extract_go_imports(content),
+        _ => Vec::new(),
     }
 }
 
@@ -189,14 +211,30 @@ fn extract_imports(path: &Path, content: &str) -> Vec<String> {
 
 fn scan_workspace_files(workspace: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    let skip_dirs = ["node_modules", ".git", "__pycache__", "target", ".venv", "venv", "dist", "build", ".next"];
+    let skip_dirs = [
+        "node_modules",
+        ".git",
+        "__pycache__",
+        "target",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".next",
+    ];
 
     fn recurse(dir: &Path, files: &mut Vec<PathBuf>, skip: &[&str], depth: usize) {
-        if depth > 6 { return; }
+        if depth > 6 {
+            return;
+        }
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 if path.is_dir() {
                     if !skip.contains(&name.as_str()) && !name.starts_with('.') {
                         recurse(&path, files, skip, depth + 1);
@@ -228,7 +266,9 @@ fn resolve_local_import(
         || import_str.starts_with('@')  // npm scoped packages
         || import_str.contains("node_modules");
 
-    if is_stdlib_or_external { return None; }
+    if is_stdlib_or_external {
+        return None;
+    }
 
     // Relative JS/TS import: "./utils" or "../lib/helper"
     if import_str.starts_with('.') {
@@ -258,8 +298,13 @@ fn resolve_local_import(
 
     // Plain module name (Python, Rust mod, Go pkg)
     // Check if a file with that stem exists in the workspace
-    let stem = import_str.split("::").next().unwrap_or(import_str)
-        .split('.').next().unwrap_or(import_str)
+    let stem = import_str
+        .split("::")
+        .next()
+        .unwrap_or(import_str)
+        .split('.')
+        .next()
+        .unwrap_or(import_str)
         .replace('-', "_");
 
     if let Some(path) = all_stems.get(&stem) {
@@ -272,7 +317,10 @@ fn resolve_local_import(
 
 // ─── Topological Sort (Kahn's algorithm) ─────────────────────────────────────
 
-fn topological_sort(nodes: &[String], edges: &[(String, String)]) -> (Vec<String>, Vec<Vec<String>>) {
+fn topological_sort(
+    nodes: &[String],
+    edges: &[(String, String)],
+) -> (Vec<String>, Vec<Vec<String>>) {
     let mut in_degree: HashMap<&str, usize> = nodes.iter().map(|n| (n.as_str(), 0)).collect();
     let mut adj: HashMap<&str, Vec<&str>> = nodes.iter().map(|n| (n.as_str(), vec![])).collect();
 
@@ -283,7 +331,8 @@ fn topological_sort(nodes: &[String], edges: &[(String, String)]) -> (Vec<String
         }
     }
 
-    let mut queue: VecDeque<&str> = in_degree.iter()
+    let mut queue: VecDeque<&str> = in_degree
+        .iter()
         .filter(|(_, &d)| d == 0)
         .map(|(n, _)| *n)
         .collect();
@@ -310,7 +359,8 @@ fn topological_sort(nodes: &[String], edges: &[(String, String)]) -> (Vec<String
     let mut cycles = Vec::new();
     if visited_count < nodes.len() {
         let in_order: HashSet<&str> = order.iter().map(|s| s.as_str()).collect();
-        let cycle_nodes: Vec<String> = nodes.iter()
+        let cycle_nodes: Vec<String> = nodes
+            .iter()
             .filter(|n| !in_order.contains(n.as_str()))
             .cloned()
             .collect();
@@ -347,7 +397,11 @@ pub fn analyze_workspace(workspace_path: &str) -> DependencyGraph {
     for file in &files {
         let rel_path = file.strip_prefix(workspace).unwrap_or(file);
         let id = rel_path.to_string_lossy().replace('\\', "/");
-        let label = rel_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let label = rel_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let lang = detect_language(file).to_string();
 
         let content = std::fs::read_to_string(file).unwrap_or_default();
@@ -388,16 +442,19 @@ pub fn analyze_workspace(workspace_path: &str) -> DependencyGraph {
     for (_, tgt) in &raw_edges {
         *import_count.entry(tgt.clone()).or_insert(0) += 1;
     }
-    let god_nodes: Vec<String> = import_count.iter()
+    let god_nodes: Vec<String> = import_count
+        .iter()
         .filter(|(_, &c)| c >= 3)
         .map(|(n, _)| n.clone())
         .collect();
 
     // Find isolated nodes
-    let connected: HashSet<String> = raw_edges.iter()
+    let connected: HashSet<String> = raw_edges
+        .iter()
         .flat_map(|(s, t)| [s.clone(), t.clone()])
         .collect();
-    let isolated_nodes: Vec<String> = node_ids.iter()
+    let isolated_nodes: Vec<String> = node_ids
+        .iter()
         .filter(|n| !connected.contains(*n))
         .cloned()
         .collect();
@@ -435,12 +492,17 @@ pub fn format_graph_report(graph: &DependencyGraph) -> String {
     report.push_str("╚══════════════════════════════════════════════════════════════╝\n\n");
 
     report.push_str(&format!("📁 Workspace: {}\n", graph.workspace));
-    report.push_str(&format!("📊 Total files: {} nodes, {} dependency edges\n\n",
-        graph.nodes.len(), graph.edges.len()));
+    report.push_str(&format!(
+        "📊 Total files: {} nodes, {} dependency edges\n\n",
+        graph.nodes.len(),
+        graph.edges.len()
+    ));
 
     // Build order — most important section
     if !graph.build_order.is_empty() {
-        report.push_str("🔨 ORDEN DE ESCRITURA RECOMENDADO (escribe primero los que no tienen dependencias):\n");
+        report.push_str(
+            "🔨 ORDEN DE ESCRITURA RECOMENDADO (escribe primero los que no tienen dependencias):\n",
+        );
         for (i, file) in graph.build_order.iter().enumerate() {
             report.push_str(&format!("  {}. {}\n", i + 1, file));
         }
@@ -460,7 +522,10 @@ pub fn format_graph_report(graph: &DependencyGraph) -> String {
     if !graph.edges.is_empty() {
         report.push_str("🔗 GRAFO DE DEPENDENCIAS:\n");
         for edge in &graph.edges {
-            report.push_str(&format!("  {} → {} [{}]\n", edge.source, edge.target, edge.relation));
+            report.push_str(&format!(
+                "  {} → {} [{}]\n",
+                edge.source, edge.target, edge.relation
+            ));
         }
         report.push('\n');
     }

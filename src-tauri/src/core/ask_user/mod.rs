@@ -1,8 +1,8 @@
-use std::sync::{Mutex, OnceLock};
-use std::collections::HashMap;
-use tokio::sync::oneshot;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use tauri::Emitter;
+use tokio::sync::oneshot;
 
 type PromptsMap = HashMap<String, oneshot::Sender<String>>;
 
@@ -22,28 +22,28 @@ pub struct AskEvent {
 /// Ask the user a question via a dialog in the Tauri frontend.
 /// This function blocks the async task until the user responds.
 pub async fn ask_user_async(
-    app: &tauri::AppHandle, 
-    question: String, 
-    options: Vec<String>, 
-    context: String
+    app: &tauri::AppHandle,
+    question: String,
+    options: Vec<String>,
+    context: String,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
-    
+
     {
         let mut map = pending_prompts().lock().unwrap();
         map.insert(id.clone(), tx);
     }
-    
+
     let event = AskEvent {
         id: id.clone(),
         question,
         options,
         context,
     };
-    
+
     let _ = app.emit("agent-ask-user", event);
-    
+
     // Esperar respuesta (puede demorar si el usuario lee y piensa)
     match rx.await {
         Ok(reply) => Ok(reply),

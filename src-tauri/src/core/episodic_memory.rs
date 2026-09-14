@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-use std::io::{BufRead, Write};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use std::io::{BufRead, Write};
+use std::path::Path;
 
 /// A single episode = one completed (or failed) agent mission.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -10,11 +10,11 @@ pub struct Episode {
     pub timestamp: String,
     pub workspace: String,
     pub objective: String,
-    pub outcome: String,             // "COMPLETADO" | "FALLIDO" | "INTERRUMPIDO"
+    pub outcome: String, // "COMPLETADO" | "FALLIDO" | "INTERRUMPIDO"
     pub tools_used: Vec<String>,
     pub files_touched: Vec<String>,
-    pub summary: String,             // Short LLM-compressed summary (max 300 chars)
-    pub tags: Vec<String>,           // Auto-extracted semantic tags
+    pub summary: String,   // Short LLM-compressed summary (max 300 chars)
+    pub tags: Vec<String>, // Auto-extracted semantic tags
 }
 
 const EPISODES_FILE: &str = ".aura_episodes.jsonl";
@@ -45,10 +45,14 @@ pub fn save_episode(
         objective: objective.chars().take(200).collect(),
         outcome: outcome.to_string(),
         tools_used: tools_used.to_vec(),
-        files_touched: files_touched.iter()
-            .map(|f| Path::new(f).file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| f.clone()))
+        files_touched: files_touched
+            .iter()
+            .map(|f| {
+                Path::new(f)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| f.clone())
+            })
             .collect(),
         summary,
         tags,
@@ -56,7 +60,9 @@ pub fn save_episode(
 
     if let Ok(line) = serde_json::to_string(&episode) {
         if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true).append(true).open(episodes_path())
+            .create(true)
+            .append(true)
+            .open(episodes_path())
         {
             let _ = writeln!(file, "{}", line);
         }
@@ -89,9 +95,12 @@ pub fn get_episode_context(n: usize) -> String {
 /// Loads the last N episodes from the JSONL file (reads from end)
 pub fn load_recent_episodes(n: usize) -> Vec<Episode> {
     let path = episodes_path();
-    let Ok(file) = std::fs::File::open(&path) else { return Vec::new() };
+    let Ok(file) = std::fs::File::open(&path) else {
+        return Vec::new();
+    };
     let reader = std::io::BufReader::new(file);
-    let mut episodes: Vec<Episode> = reader.lines()
+    let mut episodes: Vec<Episode> = reader
+        .lines()
         .filter_map(|line| line.ok())
         .filter_map(|line| serde_json::from_str(&line).ok())
         .collect();
@@ -103,7 +112,8 @@ pub fn load_recent_episodes(n: usize) -> Vec<Episode> {
 /// Searches episodes by keyword in objective or tags
 pub fn search_episodes(query: &str) -> Vec<Episode> {
     let q = query.to_lowercase();
-    load_recent_episodes(100).into_iter()
+    load_recent_episodes(100)
+        .into_iter()
         .filter(|ep| {
             ep.objective.to_lowercase().contains(&q)
                 || ep.tags.iter().any(|t| t.contains(&q))
@@ -118,7 +128,11 @@ fn auto_extract_tags(objective: &str, tools: &[String]) -> Vec<String> {
     let mut tags = Vec::new();
     let lower = objective.to_lowercase();
 
-    if lower.contains("sat") || lower.contains("cláusula") || lower.contains("booleano") || lower.contains("lógica") {
+    if lower.contains("sat")
+        || lower.contains("cláusula")
+        || lower.contains("booleano")
+        || lower.contains("lógica")
+    {
         tags.push("matematica".to_string());
     }
     if lower.contains("docker") || lower.contains("contenedor") || lower.contains("container") {
@@ -143,7 +157,10 @@ fn auto_extract_tags(objective: &str, tools: &[String]) -> Vec<String> {
 
 fn build_summary(objective: &str, outcome: &str, tools: usize, files: usize) -> String {
     let obj = objective.chars().take(150).collect::<String>();
-    format!("{} → {} ({} herramientas, {} archivos)", obj, outcome, tools, files)
+    format!(
+        "{} → {} ({} herramientas, {} archivos)",
+        obj, outcome, tools, files
+    )
 }
 
 fn uuid_lite() -> u64 {

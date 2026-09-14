@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use crate::core::content_hash::compute_content_hash;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileSnapshot {
@@ -46,7 +46,9 @@ pub struct WorldStateDiff {
 
 impl WorldStateDiff {
     pub fn has_changes(&self) -> bool {
-        !self.added_files.is_empty() || !self.modified_files.is_empty() || !self.deleted_files.is_empty()
+        !self.added_files.is_empty()
+            || !self.modified_files.is_empty()
+            || !self.deleted_files.is_empty()
     }
 }
 
@@ -54,12 +56,15 @@ impl WorldState {
     pub fn capture(workspace_path: &str) -> Result<Self, String> {
         Self::capture_incremental(workspace_path, None)
     }
-    
+
     pub fn capture_full(workspace_path: &str) -> Result<Self, String> {
         Self::capture_incremental(workspace_path, None)
     }
 
-    pub fn capture_incremental(workspace_path: &str, previous: Option<&WorldState>) -> Result<Self, String> {
+    pub fn capture_incremental(
+        workspace_path: &str,
+        previous: Option<&WorldState>,
+    ) -> Result<Self, String> {
         let ws = Path::new(workspace_path);
         let mut files = HashMap::new();
 
@@ -77,20 +82,42 @@ impl WorldState {
 
         Self::scan_dir_recursive(ws, "", &mut files, previous)?;
 
-        let environment = previous.map(|p| p.environment.clone()).unwrap_or_else(|| Self::detect_environment());
-        let git = previous.map(|p| p.git.clone()).unwrap_or_else(|| Self::detect_git(workspace_path));
+        let environment = previous
+            .map(|p| p.environment.clone())
+            .unwrap_or_else(|| Self::detect_environment());
+        let git = previous
+            .map(|p| p.git.clone())
+            .unwrap_or_else(|| Self::detect_git(workspace_path));
 
-        Ok(Self { timestamp_secs: now, workspace_root: workspace_path.to_string(), files, environment, git })
+        Ok(Self {
+            timestamp_secs: now,
+            workspace_root: workspace_path.to_string(),
+            files,
+            environment,
+            git,
+        })
     }
 
-    fn scan_dir_recursive(current: &Path, rel_prefix: &str, out: &mut HashMap<String, FileSnapshot>, previous: Option<&WorldState>) -> Result<(), String> {
+    fn scan_dir_recursive(
+        current: &Path,
+        rel_prefix: &str,
+        out: &mut HashMap<String, FileSnapshot>,
+        previous: Option<&WorldState>,
+    ) -> Result<(), String> {
         let entries = match std::fs::read_dir(current) {
             Ok(e) => e,
-            Err(e) => return Err(format!("WORKSPACE_SCAN_FAILED: {}: {}", current.display(), e)),
+            Err(e) => {
+                return Err(format!(
+                    "WORKSPACE_SCAN_FAILED: {}: {}",
+                    current.display(),
+                    e
+                ))
+            }
         };
 
         for entry_res in entries {
-            let entry = entry_res.map_err(|e| format!("WORKSPACE_SCAN_FAILED: {}: {}", current.display(), e))?;
+            let entry = entry_res
+                .map_err(|e| format!("WORKSPACE_SCAN_FAILED: {}: {}", current.display(), e))?;
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
@@ -101,17 +128,31 @@ impl WorldState {
             };
 
             if path.is_dir() {
-                if name == "node_modules" || name == ".git" || name == "target" || name == "__pycache__" || name == ".venv" || name == ".aura" {
+                if name == "node_modules"
+                    || name == ".git"
+                    || name == "target"
+                    || name == "__pycache__"
+                    || name == ".venv"
+                    || name == ".aura"
+                {
                     continue;
                 }
                 Self::scan_dir_recursive(&path, &rel_str, out, previous)?;
             } else if path.is_file() {
-                if name == ".aura_session.json" || name == ".aura_session.json.tmp" || name == ".aura_graph.json" || name == ".fenix_index.json" || name.starts_with(".aura") {
+                if name == ".aura_session.json"
+                    || name == ".aura_session.json.tmp"
+                    || name == ".aura_graph.json"
+                    || name == ".fenix_index.json"
+                    || name.starts_with(".aura")
+                {
                     continue;
                 }
-                let meta = path.metadata().map_err(|e| format!("WORKSPACE_SCAN_FAILED: {}: {}", path.display(), e))?;
+                let meta = path
+                    .metadata()
+                    .map_err(|e| format!("WORKSPACE_SCAN_FAILED: {}: {}", path.display(), e))?;
                 let size = meta.len();
-                let mtime_nanos = meta.modified()
+                let mtime_nanos = meta
+                    .modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_nanos())
@@ -131,42 +172,80 @@ impl WorldState {
                 } else {
                     compute_content_hash(&path).unwrap_or_else(|| "hash_err".to_string())
                 };
-                out.insert(rel_str.clone(), FileSnapshot {
-                    relative_path: rel_str,
-                    size_bytes: size,
-                    modified_secs: mtime_secs,
-                    metadata_fingerprint: fingerprint,
-                    content_hash: hash,
-                });
+                out.insert(
+                    rel_str.clone(),
+                    FileSnapshot {
+                        relative_path: rel_str,
+                        size_bytes: size,
+                        modified_secs: mtime_secs,
+                        metadata_fingerprint: fingerprint,
+                        content_hash: hash,
+                    },
+                );
             }
         }
         Ok(())
     }
 
     fn detect_environment() -> EnvSnapshot {
-        let has_git = std::process::Command::new("git").arg("--version").output().is_ok();
-        let has_node = std::process::Command::new("node").arg("--version").output().is_ok();
-        let has_python = std::process::Command::new("python").arg("--version").output().is_ok();
-        let has_cargo = std::process::Command::new("cargo").arg("--version").output().is_ok();
-        EnvSnapshot { has_git, has_node, has_python, has_cargo }
+        let has_git = std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok();
+        let has_node = std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok();
+        let has_python = std::process::Command::new("python")
+            .arg("--version")
+            .output()
+            .is_ok();
+        let has_cargo = std::process::Command::new("cargo")
+            .arg("--version")
+            .output()
+            .is_ok();
+        EnvSnapshot {
+            has_git,
+            has_node,
+            has_python,
+            has_cargo,
+        }
     }
 
     fn detect_git(workspace_path: &str) -> Option<GitSnapshot> {
         let ws = Path::new(workspace_path);
-        if !ws.join(".git").exists() { return None; }
+        if !ws.join(".git").exists() {
+            return None;
+        }
 
         let branch_out = std::process::Command::new("git")
-            .arg("rev-parse").arg("--abbrev-ref").arg("HEAD")
-            .current_dir(workspace_path).output().ok()?;
-        let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+            .arg("rev-parse")
+            .arg("--abbrev-ref")
+            .arg("HEAD")
+            .current_dir(workspace_path)
+            .output()
+            .ok()?;
+        let branch = String::from_utf8_lossy(&branch_out.stdout)
+            .trim()
+            .to_string();
 
         let status_out = std::process::Command::new("git")
-            .arg("status").arg("--porcelain")
-            .current_dir(workspace_path).output().ok()?;
+            .arg("status")
+            .arg("--porcelain")
+            .current_dir(workspace_path)
+            .output()
+            .ok()?;
         let lines: Vec<&str> = std::str::from_utf8(&status_out.stdout)
-            .unwrap_or("").lines().filter(|l| !l.trim().is_empty()).collect();
+            .unwrap_or("")
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
 
-        Some(GitSnapshot { branch, clean: lines.is_empty(), modified_count: lines.len() })
+        Some(GitSnapshot {
+            branch,
+            clean: lines.is_empty(),
+            modified_count: lines.len(),
+        })
     }
 
     pub fn diff(&self, current: &WorldState) -> WorldStateDiff {
@@ -178,17 +257,27 @@ impl WorldState {
             match self.files.get(path) {
                 None => added.push(path.clone()),
                 Some(prev_snap) => {
-                    if prev_snap.content_hash != curr_snap.content_hash || prev_snap.size_bytes != curr_snap.size_bytes {
+                    if prev_snap.content_hash != curr_snap.content_hash
+                        || prev_snap.size_bytes != curr_snap.size_bytes
+                    {
                         modified.push(path.clone());
                     }
                 }
             }
         }
         for path in self.files.keys() {
-            if !current.files.contains_key(path) { deleted.push(path.clone()); }
+            if !current.files.contains_key(path) {
+                deleted.push(path.clone());
+            }
         }
-        added.sort(); modified.sort(); deleted.sort();
-        WorldStateDiff { added_files: added, modified_files: modified, deleted_files: deleted }
+        added.sort();
+        modified.sort();
+        deleted.sort();
+        WorldStateDiff {
+            added_files: added,
+            modified_files: modified,
+            deleted_files: deleted,
+        }
     }
 }
 
@@ -199,33 +288,63 @@ mod tests {
     #[test]
     fn test_world_state_diff() {
         let mut prev_files = HashMap::new();
-        prev_files.insert("unchanged.txt".to_string(), FileSnapshot {
-            relative_path: "unchanged.txt".to_string(), size_bytes: 10,
-            modified_secs: 100, metadata_fingerprint: "10_100".to_string(), content_hash: "aaa".to_string(),
-        });
-        prev_files.insert("deleted.txt".to_string(), FileSnapshot {
-            relative_path: "deleted.txt".to_string(), size_bytes: 20,
-            modified_secs: 100, metadata_fingerprint: "20_100".to_string(), content_hash: "bbb".to_string(),
-        });
+        prev_files.insert(
+            "unchanged.txt".to_string(),
+            FileSnapshot {
+                relative_path: "unchanged.txt".to_string(),
+                size_bytes: 10,
+                modified_secs: 100,
+                metadata_fingerprint: "10_100".to_string(),
+                content_hash: "aaa".to_string(),
+            },
+        );
+        prev_files.insert(
+            "deleted.txt".to_string(),
+            FileSnapshot {
+                relative_path: "deleted.txt".to_string(),
+                size_bytes: 20,
+                modified_secs: 100,
+                metadata_fingerprint: "20_100".to_string(),
+                content_hash: "bbb".to_string(),
+            },
+        );
 
         let prev = WorldState {
-            timestamp_secs: 100, workspace_root: "/test".to_string(),
-            files: prev_files, environment: EnvSnapshot::default(), git: None,
+            timestamp_secs: 100,
+            workspace_root: "/test".to_string(),
+            files: prev_files,
+            environment: EnvSnapshot::default(),
+            git: None,
         };
 
         let mut curr_files = HashMap::new();
-        curr_files.insert("unchanged.txt".to_string(), FileSnapshot {
-            relative_path: "unchanged.txt".to_string(), size_bytes: 10,
-            modified_secs: 100, metadata_fingerprint: "10_100".to_string(), content_hash: "aaa".to_string(),
-        });
-        curr_files.insert("added.txt".to_string(), FileSnapshot {
-            relative_path: "added.txt".to_string(), size_bytes: 30,
-            modified_secs: 200, metadata_fingerprint: "30_200".to_string(), content_hash: "ccc".to_string(),
-        });
+        curr_files.insert(
+            "unchanged.txt".to_string(),
+            FileSnapshot {
+                relative_path: "unchanged.txt".to_string(),
+                size_bytes: 10,
+                modified_secs: 100,
+                metadata_fingerprint: "10_100".to_string(),
+                content_hash: "aaa".to_string(),
+            },
+        );
+        curr_files.insert(
+            "added.txt".to_string(),
+            FileSnapshot {
+                relative_path: "added.txt".to_string(),
+                size_bytes: 30,
+                modified_secs: 200,
+                metadata_fingerprint: "30_200".to_string(),
+                content_hash: "ccc".to_string(),
+            },
+        );
 
         let curr = WorldState {
-            timestamp_secs: 200, workspace_root: "/test".to_string(),
-            files: curr_files, environment: EnvSnapshot::default(), git: None,
+            timestamp_secs: 200,
+            workspace_root: "/test".to_string(),
+            files: curr_files,
+            environment: EnvSnapshot::default(),
+            git: None,
         };
 
         let diff = prev.diff(&curr);
@@ -243,7 +362,8 @@ mod tests {
         std::fs::write(temp_dir.join("style.css"), "body{}").unwrap();
         std::fs::write(temp_dir.join("subdir").join("helper.js"), "console.log(1);").unwrap();
 
-        let state = WorldState::capture(temp_dir.to_str().unwrap()).expect("capture should succeed");
+        let state =
+            WorldState::capture(temp_dir.to_str().unwrap()).expect("capture should succeed");
         assert_eq!(state.files.len(), 3);
         assert!(state.files.contains_key("cyber_sentinel.html"));
         assert!(state.files.contains_key("style.css"));

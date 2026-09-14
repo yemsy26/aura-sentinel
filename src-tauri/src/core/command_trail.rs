@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::Path;
 
-
 /// Máximo de pasos guardados en memoria (rotating buffer)
 const MAX_TRAIL_STEPS: usize = 200;
 
@@ -22,14 +21,14 @@ const TRAIL_FILE: &str = ".aura_command_trail.json";
 pub struct TrailStep {
     pub step: u32,
     pub timestamp: String,
-    pub role: String,                    // "Planner" | "Executor" | "Critic"
-    pub tool: String,                    // "TOOL_PROGRAMMER", "TOOL_TERMINAL", etc.
-    pub comando: String,                 // comando ejecutado (si aplica)
-    pub archivos: Vec<String>,           // archivos afectados
-    pub resultado: StepResult,           // "Success" | "Error" | "Blocked"
-    pub error: Option<String>,           // mensaje de error si falló
-    pub duracion_ms: u64,                // tiempo de ejecución
-    pub contexto_hash: String,           // hash del contexto relevante
+    pub role: String,          // "Planner" | "Executor" | "Critic"
+    pub tool: String,          // "TOOL_PROGRAMMER", "TOOL_TERMINAL", etc.
+    pub comando: String,       // comando ejecutado (si aplica)
+    pub archivos: Vec<String>, // archivos afectados
+    pub resultado: StepResult, // "Success" | "Error" | "Blocked"
+    pub error: Option<String>, // mensaje de error si falló
+    pub duracion_ms: u64,      // tiempo de ejecución
+    pub contexto_hash: String, // hash del contexto relevante
 }
 
 /// Resultado de un paso
@@ -77,7 +76,9 @@ fn new_session_id() -> String {
 
 /// Timestamp ISO 8601 UTC
 fn now_iso() -> String {
-    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+    chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string()
 }
 
 /// Hash simple del contexto (para detectar cambios)
@@ -159,12 +160,12 @@ impl CommandTrail {
         };
 
         self.steps.push_back(step);
-        
+
         // Mantener tamaño máximo (rotating buffer)
         if self.steps.len() > MAX_TRAIL_STEPS {
             self.steps.pop_front();
         }
-        
+
         self.updated_at = now_iso();
     }
 
@@ -175,7 +176,8 @@ impl CommandTrail {
 
     /// Obtiene pasos fallidos
     pub fn failed_steps(&self) -> Vec<&TrailStep> {
-        self.steps.iter()
+        self.steps
+            .iter()
             .filter(|s| s.resultado == StepResult::Error || s.resultado == StepResult::Blocked)
             .collect()
     }
@@ -183,11 +185,17 @@ impl CommandTrail {
     /// Genera reporte legible
     pub fn report(&self) -> String {
         let mut out = String::new();
-        out.push_str(&format!("📋 Command Trail — Sesión: {}\n", &self.session_id[..8]));
+        out.push_str(&format!(
+            "📋 Command Trail — Sesión: {}\n",
+            &self.session_id[..8]
+        ));
         out.push_str(&format!("🎯 Objetivo: {}\n", self.objetivo));
-        out.push_str(&format!("📅 Creado: {} | Actualizado: {}\n", self.created_at, self.updated_at));
+        out.push_str(&format!(
+            "📅 Creado: {} | Actualizado: {}\n",
+            self.created_at, self.updated_at
+        ));
         out.push_str(&format!("📊 Pasos totales: {}\n", self.steps.len()));
-        
+
         let failed = self.failed_steps().len();
         if failed > 0 {
             out.push_str(&format!("❌ Pasos fallidos: {}\n", failed));
@@ -201,12 +209,26 @@ impl CommandTrail {
                 StepResult::Blocked => "🚫",
                 StepResult::Skipped => "⏭️",
             };
-            let archivos_str = if step.archivos.is_empty() { "—".to_string() } else { step.archivos.join(", ") };
-            let comando_str = if step.comando.is_empty() { "—".to_string() } else { step.comando.clone() };
+            let archivos_str = if step.archivos.is_empty() {
+                "—".to_string()
+            } else {
+                step.archivos.join(", ")
+            };
+            let comando_str = if step.comando.is_empty() {
+                "—".to_string()
+            } else {
+                step.comando.clone()
+            };
             out.push_str(&format!(
                 "{} Paso {} [{}] {} → {}\n   🛠 {} | 📁 {} | ⏱ {}ms\n",
-                icon, step.step, step.role, step.tool, step.resultado,
-                comando_str, archivos_str, step.duracion_ms
+                icon,
+                step.step,
+                step.role,
+                step.tool,
+                step.resultado,
+                comando_str,
+                archivos_str,
+                step.duracion_ms
             ));
             if let Some(err) = &step.error {
                 out.push_str(&format!("   ⚠️  {}\n", err));
@@ -237,9 +259,15 @@ mod tests {
     fn test_add_step() {
         let mut trail = CommandTrail::new("Test");
         trail.add_step(
-            1, "Executor", "TOOL_PROGRAMMER", "cargo build",
+            1,
+            "Executor",
+            "TOOL_PROGRAMMER",
+            "cargo build",
             vec!["src/main.rs".to_string()],
-            StepResult::Success, None, 1500, "contexto test"
+            StepResult::Success,
+            None,
+            1500,
+            "contexto test",
         );
         assert_eq!(trail.steps.len(), 1);
         assert_eq!(trail.steps[0].tool, "TOOL_PROGRAMMER");
@@ -250,8 +278,15 @@ mod tests {
         let mut trail = CommandTrail::new("Test");
         for i in 0..MAX_TRAIL_STEPS + 10 {
             trail.add_step(
-                i as u32, "Executor", "TOOL_TEST", "test",
-                vec![], StepResult::Success, None, 100, "ctx"
+                i as u32,
+                "Executor",
+                "TOOL_TEST",
+                "test",
+                vec![],
+                StepResult::Success,
+                None,
+                100,
+                "ctx",
             );
         }
         assert_eq!(trail.steps.len(), MAX_TRAIL_STEPS);

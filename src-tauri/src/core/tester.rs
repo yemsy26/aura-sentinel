@@ -1,12 +1,12 @@
 use std::path::Path;
-use tokio::process::Command;
 use std::process::Stdio;
+use tokio::process::Command;
 
 /// The result of a test run.
 pub enum TestResult {
-    NoTests,          // No test framework detected — do nothing, don't revert
-    Passed(String),   // Tests ran and passed
-    Failed(String),   // Tests ran and actually failed
+    NoTests,        // No test framework detected — do nothing, don't revert
+    Passed(String), // Tests ran and passed
+    Failed(String), // Tests ran and actually failed
 }
 
 /// Check if a runner script exists for the given language (checks .aura/runtime/runners/ first)
@@ -16,7 +16,7 @@ fn find_runner_script(workspace_path: &str, runner_name: &str) -> Option<std::pa
     } else {
         vec![".sh"]
     };
-    
+
     let root = Path::new(workspace_path);
     let internal_dir = root.join(".aura").join("runtime").join("runners");
 
@@ -58,12 +58,26 @@ fn find_runner_script(workspace_path: &str, runner_name: &str) -> Option<std::pa
 fn build_runner_command(runner_path: &Path) -> (String, Vec<String>) {
     if cfg!(target_os = "windows") {
         if runner_path.extension().map(|e| e == "ps1").unwrap_or(false) {
-            ("powershell".to_string(), vec!["-ExecutionPolicy".to_string(), "Bypass".to_string(), "-File".to_string(), runner_path.to_string_lossy().to_string()])
+            (
+                "powershell".to_string(),
+                vec![
+                    "-ExecutionPolicy".to_string(),
+                    "Bypass".to_string(),
+                    "-File".to_string(),
+                    runner_path.to_string_lossy().to_string(),
+                ],
+            )
         } else {
-            ("cmd".to_string(), vec!["/C".to_string(), runner_path.to_string_lossy().to_string()])
+            (
+                "cmd".to_string(),
+                vec!["/C".to_string(), runner_path.to_string_lossy().to_string()],
+            )
         }
     } else {
-        ("bash".to_string(), vec![runner_path.to_string_lossy().to_string()])
+        (
+            "bash".to_string(),
+            vec![runner_path.to_string_lossy().to_string()],
+        )
     }
 }
 
@@ -73,8 +87,18 @@ pub async fn run_tests(workspace_path: &str) -> TestResult {
 
     // ── Language + test-framework detection ──────────────────────────────────
     if let Some(lang_config) = crate::core::languages::detect_language(path) {
-        let runner_name = format!("run_{}", lang_config.name.to_lowercase().replace(" ", "_").replace(".", "_").replace("(", "").replace(")", "").replace("/", "_"));
-        
+        let runner_name = format!(
+            "run_{}",
+            lang_config
+                .name
+                .to_lowercase()
+                .replace(" ", "_")
+                .replace(".", "_")
+                .replace("(", "")
+                .replace(")", "")
+                .replace("/", "_")
+        );
+
         // Try to find and use runner script first
         if let Some(runner_path) = find_runner_script(workspace_path, &runner_name) {
             emit_tester_info(&format!(
@@ -82,9 +106,9 @@ pub async fn run_tests(workspace_path: &str) -> TestResult {
                 lang_config.name,
                 runner_path.display()
             ));
-            
+
             let (cmd, args) = build_runner_command(&runner_path);
-            
+
             let output = Command::new(&cmd)
                 .args(&args)
                 .current_dir(workspace_path)
@@ -94,7 +118,7 @@ pub async fn run_tests(workspace_path: &str) -> TestResult {
 
             return handle_test_output(output, &lang_config.name).await;
         }
-        
+
         // Fallback to direct command execution
         let (cmd, args) = lang_config.test_cmd;
 
@@ -119,21 +143,17 @@ pub async fn run_tests(workspace_path: &str) -> TestResult {
     TestResult::NoTests
 }
 
-async fn handle_test_output(output: Result<std::process::Output, std::io::Error>, lang_name: &str) -> TestResult {
+async fn handle_test_output(
+    output: Result<std::process::Output, std::io::Error>,
+    lang_name: &str,
+) -> TestResult {
     match output {
         // Binary not found → surface as ENV_FAILURE
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            TestResult::Failed(format!(
-                "[ENV_FAILURE] No se encontró el comando o ejecutable en PATH. \
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => TestResult::Failed(format!(
+            "[ENV_FAILURE] No se encontró el comando o ejecutable en PATH. \
                  Verifica que las herramientas y dependencias del entorno estén instaladas."
-            ))
-        }
-        Err(e) => {
-            TestResult::Failed(format!(
-                "Error ejecutando test de {}: {}",
-                lang_name, e
-            ))
-        }
+        )),
+        Err(e) => TestResult::Failed(format!("Error ejecutando test de {}: {}", lang_name, e)),
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -183,7 +203,12 @@ pub async fn execute_tester_detailed(workspace_path: &str) -> Result<ExecutionRe
             let mut has_html = false;
             if let Ok(entries) = std::fs::read_dir(root) {
                 for entry in entries.flatten() {
-                    if entry.path().extension().map(|e| e == "html" || e == "htm").unwrap_or(false) {
+                    if entry
+                        .path()
+                        .extension()
+                        .map(|e| e == "html" || e == "htm")
+                        .unwrap_or(false)
+                    {
                         has_html = true;
                         break;
                     }
@@ -204,4 +229,3 @@ pub async fn execute_tester_detailed(workspace_path: &str) -> Result<ExecutionRe
         }
     }
 }
-

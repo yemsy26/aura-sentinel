@@ -4,7 +4,6 @@
 /// The LLM delivers an ActionProposal. The Runtime resolves and dispatches
 /// the executor via this registry. agent.rs NEVER decides which code runs
 /// for a given tool name — ToolRegistry is the sole dispatch authority.
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -62,7 +61,7 @@ pub type BoxFuture = Pin<Box<dyn Future<Output = ToolResult> + Send>>;
 
 /// The type of a registered executor function.
 /// Takes the tool arguments (from ActionProposal.arguments) and returns a BoxFuture.
-pub type ExecutorFn = Arc<dyn Fn(serde_json::Value) -> BoxFuture + Send + Sync>;
+pub type ExecutorFn = Arc<dyn Fn(String, serde_json::Value) -> BoxFuture + Send + Sync>;
 
 /// All tool names the agent is allowed to request.
 /// Adding a new tool requires updating this list — by design.
@@ -106,7 +105,9 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self { executors: HashMap::new() }
+        Self {
+            executors: HashMap::new(),
+        }
     }
 
     /// Returns true if the tool name is in the static KNOWN_TOOLS list.
@@ -157,9 +158,14 @@ impl ToolRegistry {
 
     /// Dispatches the registered executor for the given tool.
     /// Returns TOOL_UNREGISTERED if the tool has no executor (known but not registered).
-    pub async fn dispatch(&self, tool: &str, args: serde_json::Value) -> ToolResult {
+    pub async fn dispatch(
+        &self,
+        tool: &str,
+        args: serde_json::Value,
+        workspace_path: &str,
+    ) -> ToolResult {
         match self.resolve(tool) {
-            Some(executor) => executor(args).await,
+            Some(executor) => executor(workspace_path.to_string(), args).await,
             None => Err(format!(
                 "TOOL_UNREGISTERED: '{}' is known but has no executor registered. \
                  Call runtime.tool_registry.register() before starting the mission loop.",
@@ -176,8 +182,11 @@ mod tests {
     #[test]
     fn test_known_tools_are_valid() {
         for tool in KNOWN_TOOLS {
-            assert!(ToolRegistry::is_known(tool),
-                "KNOWN_TOOLS entry '{}' must be recognized by is_known()", tool);
+            assert!(
+                ToolRegistry::is_known(tool),
+                "KNOWN_TOOLS entry '{}' must be recognized by is_known()",
+                tool
+            );
         }
     }
 
@@ -198,18 +207,20 @@ mod tests {
     #[test]
     fn test_register_known_tool_succeeds() {
         let mut registry = ToolRegistry::new();
-        let result = registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok(ExecutionResult::success("ok")) })
-        }));
+        let result = registry.register(
+            "TOOL_TERMINAL",
+            Arc::new(|_ws, _args| Box::pin(async { Ok(ExecutionResult::success("ok")) })),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_register_unknown_tool_fails() {
         let mut registry = ToolRegistry::new();
-        let result = registry.register("TOOL_INVENTED", Arc::new(|_args| {
-            Box::pin(async { Ok(ExecutionResult::success("ok")) })
-        }));
+        let result = registry.register(
+            "TOOL_INVENTED",
+            Arc::new(|_ws, _args| Box::pin(async { Ok(ExecutionResult::success("ok")) })),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("TOOL_UNKNOWN"));
     }
@@ -217,10 +228,17 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_registered_tool() {
         let mut registry = ToolRegistry::new();
-        registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok(ExecutionResult::success("dispatched")) })
-        })).unwrap();
-        let result = registry.dispatch("TOOL_TERMINAL", serde_json::Value::Null).await;
+        registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(|_ws, _args| {
+                    Box::pin(async { Ok(ExecutionResult::success("dispatched")) })
+                }),
+            )
+            .unwrap();
+        let result = registry
+            .dispatch("TOOL_TERMINAL", serde_json::Value::Null, ".")
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().stdout, "dispatched");
     }
@@ -228,7 +246,9 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_unregistered_known_tool_fails() {
         let registry = ToolRegistry::new(); // nothing registered
-        let result = registry.dispatch("TOOL_TERMINAL", serde_json::Value::Null).await;
+        let result = registry
+            .dispatch("TOOL_TERMINAL", serde_json::Value::Null, ".")
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("TOOL_UNREGISTERED"));
     }

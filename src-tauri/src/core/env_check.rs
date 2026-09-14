@@ -1,8 +1,8 @@
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
-use std::net::{TcpStream, SocketAddr};
 use std::time::Duration;
-use tokio::process::Command;
 use sysinfo::Disks;
+use tokio::process::Command;
 
 /// Checks if a single command is available in the PATH.
 async fn is_cmd_available(cmd: &str) -> bool {
@@ -30,7 +30,13 @@ fn inject_scoop_path() {
         let ollama_dir = format!("{}\\AppData\\Local\\Programs\\Ollama", profile);
 
         let current = std::env::var("PATH").unwrap_or_default();
-        let extras = [shims.as_str(), scripts.as_str(), python_dir.as_str(), node_dir.as_str(), ollama_dir.as_str()];
+        let extras = [
+            shims.as_str(),
+            scripts.as_str(),
+            python_dir.as_str(),
+            node_dir.as_str(),
+            ollama_dir.as_str(),
+        ];
         let mut new_path = current.clone();
         for extra in &extras {
             if !current.contains(extra) {
@@ -46,10 +52,11 @@ fn inject_scoop_path() {
 pub async fn ensure_ollama_running() -> Result<(), String> {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_millis(800))
-        .build() {
-            Ok(c) => c,
-            Err(e) => return Err(e.to_string()),
-        };
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return Err(e.to_string()),
+    };
 
     // 1. Verificación rápida si ya está escuchando
     if let Ok(res) = client.get("http://127.0.0.1:11434/api/tags").send().await {
@@ -64,7 +71,10 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
         candidates.push(format!(r"{}\Programs\Ollama\ollama.exe", local_app_data));
     }
     if let Ok(user_profile) = std::env::var("USERPROFILE") {
-        candidates.push(format!(r"{}\AppData\Local\Programs\Ollama\ollama.exe", user_profile));
+        candidates.push(format!(
+            r"{}\AppData\Local\Programs\Ollama\ollama.exe",
+            user_profile
+        ));
     }
 
     let mut spawned = false;
@@ -191,7 +201,10 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
     }
     let test_file = Path::new(workspace_path).join(".aura_test_write");
     if std::fs::write(&test_file, "test").is_err() {
-        errors.push(format!("No tengo permisos de escritura en el directorio: {}", workspace_path));
+        errors.push(format!(
+            "No tengo permisos de escritura en el directorio: {}",
+            workspace_path
+        ));
     } else {
         let _ = std::fs::remove_file(&test_file);
     }
@@ -207,7 +220,8 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
             if free_mb < 500 {
                 errors.push(format!(
                     "Espacio en disco insuficiente en {}. Libre: {} MB. Mínimo requerido: 500 MB.",
-                    disk.mount_point().display(), free_mb
+                    disk.mount_point().display(),
+                    free_mb
                 ));
             }
             break;
@@ -228,12 +242,15 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
     // 4. Network connectivity (soft warning, not blocking)
     let addr: SocketAddr = "8.8.8.8:53".parse().unwrap();
     if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_err() {
-        warnings.push("No hay conectividad a Internet. TOOL_WEB_SCRAPER no funcionará, pero el resto sí.".to_string());
+        warnings.push(
+            "No hay conectividad a Internet. TOOL_WEB_SCRAPER no funcionará, pero el resto sí."
+                .to_string(),
+        );
     }
 
     // 5. Ollama — REQUIRED (the agent itself depends on this)
     let mut available_models = Vec::new();
-    
+
     // Auto-recuperación: Si el servicio no responde, intentar levantarlo de forma desacoplada
     let _ = ensure_ollama_running().await;
 
@@ -251,12 +268,18 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
             }
             if available_models.is_empty() {
                 errors.push("Ollama está instalado, pero no tienes ningún modelo descargado. Descarga al menos qwen2.5-coder:7b con: ollama pull qwen2.5-coder:7b".to_string());
-            } else if !available_models.iter().any(|m| m.starts_with("nomic-embed-text")) {
+            } else if !available_models
+                .iter()
+                .any(|m| m.starts_with("nomic-embed-text"))
+            {
                 errors.push("Falta el modelo de embeddings: 'nomic-embed-text'. Necesario para la memoria RAG. Ejecuta: ollama pull nomic-embed-text".to_string());
             }
         }
         Ok(res) => {
-            errors.push(format!("El servicio de Ollama devolvió HTTP {}", res.status()));
+            errors.push(format!(
+                "El servicio de Ollama devolvió HTTP {}",
+                res.status()
+            ));
         }
         Err(e) => {
             errors.push(format!("No se pudo conectar a la API de Ollama (http://127.0.0.1:11434). Asegúrate de que el servicio de Ollama esté corriendo. Detalle: {}", e));

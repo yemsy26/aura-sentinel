@@ -1,7 +1,7 @@
 #![allow(dead_code)]
-pub mod rust;
-pub mod python;
 pub mod javascript;
+pub mod python;
+pub mod rust;
 pub mod typescript;
 
 use crate::core::auto_validator::{AutoValidator, Severity};
@@ -23,7 +23,11 @@ pub async fn validate_workspace(workspace_path: &str) -> Result<(), String> {
     // 5. AutoValidator: verify local script and asset integrity (pure read-only)
     let auto_val = AutoValidator::new(workspace_path);
     let auto_res = auto_val.validate().await;
-    let errors: Vec<_> = auto_res.issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    let errors: Vec<_> = auto_res
+        .issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
     if !errors.is_empty() {
         let mut err_msg = String::from("[ASSET_OR_SCRIPT_MISSING] Se detectaron referencias a archivos faltantes en el workspace:\n");
         for err in errors {

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use tokio::process::Command;
 use tauri::AppHandle;
+use tokio::process::Command;
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
@@ -92,16 +92,14 @@ pub async fn get_best_model(
     // Cold-start → brains.json order unchanged (confidence = 0.5, no reorder).
     // AdaptiveRouter cannot execute tools — it only produces a Recommendation.
     {
-        use crate::core::learning::{AdaptiveRouter, FingerprintBuilder};
         use crate::core::learning::persistence::LearningPersistence;
+        use crate::core::learning::{AdaptiveRouter, FingerprintBuilder};
         use crate::core::mission_contract::MissionContract;
         use crate::core::project_profile::ProjectProfile;
         use std::sync::Arc;
 
         // Build a minimal fingerprint from context (no LLM, no I/O errors)
-        let dummy_contract = MissionContract::new(
-            &context.language.clone().unwrap_or_default()
-        );
+        let dummy_contract = MissionContract::new(&context.language.clone().unwrap_or_default());
         let dummy_profile = ProjectProfile::detect(".");
 
         let fp = FingerprintBuilder::from_mission(&dummy_contract, &dummy_profile);
@@ -130,29 +128,57 @@ pub async fn get_best_model(
 
     if let Some(first_choice) = ranked.first() {
         if !available_models.iter().any(|m| m.starts_with(first_choice)) {
-            crate::llm::agent::emit_event(app_handle, step,
-                &format!("Modelo preferido '{}' no encontrado. Descargando automaticamente...", first_choice),
-                "WARNING");
-            let status = Command::new("ollama").args(["pull", first_choice]).status().await;
+            crate::llm::agent::emit_event(
+                app_handle,
+                step,
+                &format!(
+                    "Modelo preferido '{}' no encontrado. Descargando automaticamente...",
+                    first_choice
+                ),
+                "WARNING",
+            );
+            let status = Command::new("ollama")
+                .args(["pull", first_choice])
+                .status()
+                .await;
             match status {
                 Ok(s) if s.success() => {
-                    crate::llm::agent::emit_event(app_handle, step,
-                        &format!("Modelo '{}' descargado exitosamente.", first_choice), "SUCCESS");
+                    crate::llm::agent::emit_event(
+                        app_handle,
+                        step,
+                        &format!("Modelo '{}' descargado exitosamente.", first_choice),
+                        "SUCCESS",
+                    );
                     return Ok(first_choice.clone());
                 }
                 _ => {
-                    crate::llm::agent::emit_event(app_handle, step,
-                        &format!("Fallo al descargar '{}'. Haciendo fallback...", first_choice), "ERROR");
+                    crate::llm::agent::emit_event(
+                        app_handle,
+                        step,
+                        &format!(
+                            "Fallo al descargar '{}'. Haciendo fallback...",
+                            first_choice
+                        ),
+                        "ERROR",
+                    );
                 }
             }
         }
     }
 
     let has_model = |prefix: &str| -> Option<String> {
-        available_models.iter().find(|m| m.starts_with(prefix)).cloned()
+        available_models
+            .iter()
+            .find(|m| m.starts_with(prefix))
+            .cloned()
     };
     for model in ranked {
-        if let Some(m) = has_model(&model) { return Ok(m); }
+        if let Some(m) = has_model(&model) {
+            return Ok(m);
+        }
     }
-    Err("No hay modelos compatibles disponibles en brains.json para ejecutar esta tarea.".to_string())
+    Err(
+        "No hay modelos compatibles disponibles en brains.json para ejecutar esta tarea."
+            .to_string(),
+    )
 }

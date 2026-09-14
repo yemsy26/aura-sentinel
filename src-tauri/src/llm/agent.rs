@@ -1964,7 +1964,10 @@ pub async fn run_agent_loop(
                     .iter()
                     .any(|f| f.starts_with("verify_") || f.starts_with("test_"));
 
-                if stall == crate::core::stall_detector::StallType::RepeatedCommand || stall == crate::core::stall_detector::StallType::SameError || stall == crate::core::stall_detector::StallType::RepeatedTool {
+                if stall == crate::core::stall_detector::StallType::RepeatedCommand
+                    || stall == crate::core::stall_detector::StallType::SameError
+                    || stall == crate::core::stall_detector::StallType::RepeatedTool
+                {
                     forced_next_tool = Some((
                         "TOOL_PROGRAMMER".to_string(),
                         "Estancamiento grave: Bucle de herramientas repetidas o errores idénticos. NO repitas la acción. Usa TOOL_PROGRAMMER para corregir el código subyacente.".to_string(),
@@ -4503,7 +4506,11 @@ pub async fn run_agent_loop(
                                 );
                             }
                         } else {
-                            if let Some(crate::core::recovery::RecoveryDecision::RepairCriteria { criteria, recommended_tool }) = runtime.handle_observation(&obs) {
+                            if let Some(crate::core::recovery::RecoveryDecision::RepairCriteria {
+                                criteria,
+                                recommended_tool,
+                            }) = runtime.handle_observation(&obs)
+                            {
                                 emit_event(&app_handle, runtime.current_step(), &format!("[SEMANTIC_VERIFICATION] Fallo detectado. Forzando transición a {}.", recommended_tool), "WARNING");
                                 current_role = AgentRole::Executor;
                                 forced_next_tool = Some((
@@ -6272,7 +6279,11 @@ mod tests {
         // 4. Assert dispatching to each tool resolves to a real executor and doesn't fail with TOOL_UNREGISTERED
         let think_res = runtime
             .tool_registry
-            .dispatch("TOOL_THINK", serde_json::json!({ "thought": "cogito" }), ".")
+            .dispatch(
+                "TOOL_THINK",
+                serde_json::json!({ "thought": "cogito" }),
+                ".",
+            )
             .await;
         assert!(think_res.is_ok());
         assert_eq!(think_res.unwrap().stdout, "cogito");
@@ -6292,7 +6303,7 @@ mod tests {
                     "n_vars": 1,
                     "clauses": [[1]]
                 }),
-                "."
+                ".",
             )
             .await;
         assert!(logic_res.is_ok());

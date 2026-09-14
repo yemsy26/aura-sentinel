@@ -3,7 +3,7 @@ use std::path::Path;
 /// Describes why a path was rejected by the jail.
 #[derive(Debug, PartialEq)]
 pub enum PathJailError {
-    AbsoluteUnix,        // Starts with '/'  (e.g. /etc/passwd)
+    AbsoluteUnix,         // Starts with '/'  (e.g. /etc/passwd)
     AbsoluteWindowsDrive, // Starts with [X]:\ or [X]:/ (e.g. C:\Windows)
     DirectoryTraversal,   // Contains '..' segments
     OutsideWorkspace,     // Resolved path is not under workspace root
@@ -36,7 +36,7 @@ fn is_windows_drive_absolute(s: &str) -> bool {
     }
     let drive = bytes[0];
     let colon = bytes[1];
-    let sep   = bytes[2];
+    let sep = bytes[2];
     drive.is_ascii_alphabetic() && colon == b':' && (sep == b'\\' || sep == b'/')
 }
 
@@ -70,7 +70,11 @@ pub fn check_path(workspace_path: &Path, target_path: &Path) -> Result<(), PathJ
         // But if the target jumps to a *different* drive we reject immediately.
         let workspace_str = workspace_path.to_string_lossy();
         let target_drive = raw.chars().next().unwrap_or(' ').to_ascii_uppercase();
-        let workspace_drive = workspace_str.chars().next().unwrap_or(' ').to_ascii_uppercase();
+        let workspace_drive = workspace_str
+            .chars()
+            .next()
+            .unwrap_or(' ')
+            .to_ascii_uppercase();
         if target_drive != workspace_drive {
             return Err(PathJailError::AbsoluteWindowsDrive);
         }
@@ -86,8 +90,8 @@ pub fn check_path(workspace_path: &Path, target_path: &Path) -> Result<(), PathJ
 
     // ── Canonical containment check (authoritative) ────────────────────────
 
-    let workspace_canon = std::fs::canonicalize(workspace_path)
-        .map_err(|_| PathJailError::WorkspaceInvalid)?;
+    let workspace_canon =
+        std::fs::canonicalize(workspace_path).map_err(|_| PathJailError::WorkspaceInvalid)?;
 
     // Build the absolute target path (joining relative paths under workspace)
     let target_absolute = if target_path.is_absolute() {
@@ -119,8 +123,7 @@ pub fn check_path(workspace_path: &Path, target_path: &Path) -> Result<(), PathJ
         parent = p.parent();
     }
 
-    if target_absolute.starts_with(&workspace_canon)
-        || target_absolute.starts_with(workspace_path)
+    if target_absolute.starts_with(&workspace_canon) || target_absolute.starts_with(workspace_path)
     {
         Ok(())
     } else {

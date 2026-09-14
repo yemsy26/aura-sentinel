@@ -9,8 +9,7 @@ use spectrasat_core::spectral::Clause3;
 fn main() {
     println!("\n🚀 INICIANDO SPECTRASAT BENCHMARK SUITE (MODO ESTRÉS) 🚀\n");
 
-    
-    let (n1, clauses1) = gen_3sat_pt(20, 85); 
+    let (n1, clauses1) = gen_3sat_pt(20, 85);
     run_benchmark(
         "Transición de Fase 3-SAT (n=20, m=85) [GF2 ACTIVO]",
         n1,
@@ -24,7 +23,6 @@ fn main() {
         true,
     );
 
-    
     let (n2, clauses2) = gen_php_4_3();
     run_benchmark(
         "Principio del Palomar PHP(4,3) [GF2 ACTIVO]",
@@ -39,7 +37,6 @@ fn main() {
         true,
     );
 
-    
     let (n3, clauses3) = gen_tseitin_noise(25, 100);
     run_benchmark(
         "Tseitin con Ruido No Lineal (n=25) [GF2 ACTIVO]",
@@ -55,15 +52,11 @@ fn main() {
     );
 }
 
-
-
-
 fn run_benchmark(name: &str, n_vars: usize, clauses: &[Clause3], bypass_gf2: bool) {
     println!("==================================================");
     println!("🧪 TARGET: {}", name);
     println!("📊 TOPO: {} variables, {} cláusulas", n_vars, clauses.len());
 
-    
     if !bypass_gf2 {
         let t_gf2 = Instant::now();
         let mut gf2 = Gf2System::extract_from_3cnf(n_vars, clauses);
@@ -82,7 +75,6 @@ fn run_benchmark(name: &str, n_vars: usize, clauses: &[Clause3], bypass_gf2: boo
         println!("🚧 BYPASS: GF(2) desactivado. Forzando motor estructural AMD+SDP.");
     }
 
-    
     let t_amd = Instant::now();
     let mut chordal = ChordalExtension::new(n_vars, clauses);
     let cliques = chordal.extract_maximal_cliques();
@@ -96,7 +88,6 @@ fn run_benchmark(name: &str, n_vars: usize, clauses: &[Clause3], bypass_gf2: boo
         d_amd
     );
 
-    
     let t_admm = Instant::now();
     let (verdict, _) = solve_sos_sdp(n_vars, clauses, false);
     let d_admm = t_admm.elapsed();
@@ -110,7 +101,6 @@ fn run_benchmark(name: &str, n_vars: usize, clauses: &[Clause3], bypass_gf2: boo
             println!("📉 RESIDUOS: Primal = {:.4e}, Dual = {:.4e}", residual, 0.0);
             println!("⚠️ VEREDICTO SDP: INCONCLUSIVO (Atrapado en Relajación/Pseudo-Expectativas)");
 
-            
             println!("🌲 INICIANDO BRANCH-AND-BOUND (Poda Espectral)...");
             let t_bab = Instant::now();
             let (final_verdict_str, _assignment) =
@@ -143,10 +133,6 @@ fn run_benchmark(name: &str, n_vars: usize, clauses: &[Clause3], bypass_gf2: boo
     println!("🏁 VEREDICTO FINAL: {}", v_str);
     println!("==================================================\n");
 }
-
-
-
-
 
 fn gen_3sat_pt(n: usize, m: usize) -> (usize, Vec<Clause3>) {
     let mut rng = rand::thread_rng();
@@ -187,7 +173,6 @@ fn gen_tseitin_noise(n: usize, m: usize) -> (usize, Vec<Clause3>) {
     let mut rng = rand::thread_rng();
     let mut clauses = Vec::new();
 
-    
     clauses.push(Clause3([1, 3, 3]));
     clauses.push(Clause3([1, 2, 2]));
     clauses.push(Clause3([2, 3, 3]));

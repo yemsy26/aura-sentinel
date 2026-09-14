@@ -1,7 +1,7 @@
 #![allow(dead_code)]
+use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
-use std::path::Path;
 
 pub async fn validate_python(workspace_path: &str) -> Result<(), String> {
     let path = Path::new(workspace_path);
@@ -10,7 +10,9 @@ pub async fn validate_python(workspace_path: &str) -> Result<(), String> {
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
                 if let Some(ext) = entry.path().extension() {
-                    if ext == "py" { return true; }
+                    if ext == "py" {
+                        return true;
+                    }
                 }
             }
         }
@@ -40,8 +42,10 @@ pub async fn validate_python(workspace_path: &str) -> Result<(), String> {
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            Err(format!("[PYTHON_SYNTAX_ERROR] {} {}", stdout, stderr).trim().to_string())
-        },
+            Err(format!("[PYTHON_SYNTAX_ERROR] {} {}", stdout, stderr)
+                .trim()
+                .to_string())
+        }
         Err(_) => {
             // python not found in PATH — treat as a no-op
             Ok(())

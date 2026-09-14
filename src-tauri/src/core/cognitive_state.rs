@@ -1,6 +1,6 @@
-﻿#![allow(dead_code)]
-use serde::{Deserialize, Serialize};
+#![allow(dead_code)]
 use crate::core::world_state::WorldState;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MissionStatus {
@@ -9,6 +9,7 @@ pub enum MissionStatus {
     Verifying,
     Blocked,
     WaitingUser,
+    Paused,
     Completed,
     Failed,
     Cancelled,
