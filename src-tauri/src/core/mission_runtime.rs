@@ -1,16 +1,24 @@
 #![allow(dead_code)]
-use crate::core::mission_contract::MissionContract;
 use crate::core::cognitive_state::CognitiveState;
+use crate::core::completion_gate::{CompletionDecision, CompletionGate};
 use crate::core::evidence::EvidenceGraph;
-use crate::core::stall_detector::{StallDetector, StallType, ProgressSignature};
-use crate::core::policy::{PolicyEngine, ActionProposal, PolicyDecision};
-use crate::core::completion_gate::{CompletionGate, CompletionDecision};
-use crate::core::step_budget::StepBudget;
-use crate::core::recovery::{RecoveryEngine, RecoveryDecision, classify_error};
-use crate::core::world_state::WorldState;
+use crate::core::mission_contract::MissionContract;
 use crate::core::observation::Observation;
-use crate::core::schema_validator::{SchemaValidator, SchemaValidationResult};
+use crate::core::policy::{ActionProposal, PolicyDecision, PolicyEngine};
+use crate::core::recovery::{classify_error, RecoveryDecision, RecoveryEngine};
+use crate::core::schema_validator::{SchemaValidationResult, SchemaValidator};
+use crate::core::stall_detector::{ProgressSignature, StallDetector, StallType};
+use crate::core::step_budget::StepBudget;
 use crate::core::tool_registry::ToolRegistry;
+use crate::core::world_state::WorldState;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeTerminalState {
+    Running,
+    Failed(String),
+    Completed,
+    WaitingUser(String),
+}
 
 /// Runtime governance controller — the cognitive brain of agent.rs.
 pub struct MissionRuntime {
@@ -25,6 +33,7 @@ pub struct MissionRuntime {
     pub world: Option<WorldState>,
     pub world_version: u64,
     pub state_anchor: MissionStateAnchor,
+    pub terminal_state: Option<RuntimeTerminalState>,
     /// FINAL-6: Owns the executor dispatch table. Register all tools before the mission loop.
     pub tool_registry: ToolRegistry,
 }
@@ -65,7 +74,7 @@ impl MissionRuntime {
             last_error: None,
             next_required_action: None,
         };
-        MissionRuntime {
+        let mut runtime = MissionRuntime {
             contract: MissionContract::new(objective),
             cognitive_state: CognitiveState::new(&mission_id, objective),
             evidence_graph: EvidenceGraph::new(),
@@ -75,10 +84,51 @@ impl MissionRuntime {
             world: None,
             world_version: 0,
             state_anchor: anchor,
+            terminal_state: Some(RuntimeTerminalState::Running),
             workspace_path: workspace_path.to_string(),
             mission_id,
             tool_registry: ToolRegistry::new(),
+        };
+        
+        // P0-A: Initial world capture mandatory
+        if let Err(e) = runtime.observe_world() {
+            eprintln!("Warning: Failed to capture initial world state: {}", e);
         }
+        
+        runtime
+    }
+
+    pub fn fail_mission(&mut self, reason: String) {
+        self.cognitive_state.mission.status = crate::core::cognitive_state::MissionStatus::Failed;
+        self.state_anchor.last_error = Some(reason.clone());
+        self.terminal_state = Some(RuntimeTerminalState::Failed(reason));
+    }
+
+    pub fn wait_user(&mut self, prompt: String) {
+        self.cognitive_state.mission.status = crate::core::cognitive_state::MissionStatus::Paused;
+        self.terminal_state = Some(RuntimeTerminalState::WaitingUser(prompt));
+    }
+
+    pub fn complete_mission(&mut self) {
+        self.cognitive_state.mission.status =
+            crate::core::cognitive_state::MissionStatus::Completed;
+        self.terminal_state = Some(RuntimeTerminalState::Completed);
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        !matches!(
+            self.terminal_state,
+            Some(RuntimeTerminalState::Running) | None
+        )
+    }
+
+    pub fn can_continue(&self) -> bool {
+        matches!(
+            self.cognitive_state.mission.status,
+            crate::core::cognitive_state::MissionStatus::Planning
+                | crate::core::cognitive_state::MissionStatus::Executing
+                | crate::core::cognitive_state::MissionStatus::Verifying
+        ) && !self.is_terminal()
     }
 
     // ——— Budget ————————————————————————————————————————————————————————
@@ -154,13 +204,15 @@ impl MissionRuntime {
         if self.budget.remaining_steps() > self.budget.total_steps {
             violations.push(format!(
                 "BUDGET_INVALID: remaining({}) > total({})",
-                self.budget.remaining_steps(), self.budget.total_steps
+                self.budget.remaining_steps(),
+                self.budget.total_steps
             ));
         }
         if self.current_step() > self.budget.total_steps {
             violations.push(format!(
                 "STEP_EXCEEDS_BUDGET: step({}) > budget({})",
-                self.current_step(), self.budget.total_steps
+                self.current_step(),
+                self.budget.total_steps
             ));
         }
         violations
@@ -187,23 +239,27 @@ impl MissionRuntime {
     /// Returns the current world state hash using content hashes, not just file sizes.
     /// This correctly detects when a file changes content but keeps the same size.
     pub fn current_world_hash(&self) -> u64 {
-        self.world.as_ref().map(|w| {
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            let mut entries: Vec<(&String, &crate::core::world_state::FileSnapshot)> = w.files.iter().collect();
-            entries.sort_by_key(|(p, _)| p.as_str());
-            
-            for (path, snap) in entries {
-                hasher.update(path.as_bytes());
-                hasher.update(b"|");
-                hasher.update(snap.content_hash.as_bytes());
-                hasher.update(b"|");
-            }
-            let result = hasher.finalize();
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(&result[0..8]);
-            u64::from_be_bytes(buf)
-        }).unwrap_or(0)
+        self.world
+            .as_ref()
+            .map(|w| {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                let mut entries: Vec<(&String, &crate::core::world_state::FileSnapshot)> =
+                    w.files.iter().collect();
+                entries.sort_by_key(|(p, _)| p.as_str());
+
+                for (path, snap) in entries {
+                    hasher.update(path.as_bytes());
+                    hasher.update(b"|");
+                    hasher.update(snap.content_hash.as_bytes());
+                    hasher.update(b"|");
+                }
+                let result = hasher.finalize();
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&result[0..8]);
+                u64::from_be_bytes(buf)
+            })
+            .unwrap_or(0)
     }
 
     /// Authoritative State Synchronization: updates self.state_anchor directly from physical reality.
@@ -212,7 +268,7 @@ impl MissionRuntime {
         if world_hash != self.state_anchor.world_hash {
             self.world_version += 1;
         }
-        
+
         let mut existing_files: Vec<String> = match &self.world {
             Some(w) => w.files.keys().cloned().collect(),
             None => Vec::new(),
@@ -227,7 +283,9 @@ impl MissionRuntime {
                         required_files.push(f.clone());
                     }
                 }
-                crate::core::mission_contract::VerificationMethod::ContentMatches { file, .. } => {
+                crate::core::mission_contract::VerificationMethod::ContentMatches {
+                    file, ..
+                } => {
                     if !required_files.contains(file) {
                         required_files.push(file.clone());
                     }
@@ -238,7 +296,12 @@ impl MissionRuntime {
         required_files.sort();
 
         let criteria_satisfied = self.verified_criteria_count();
-        let total_required = self.contract.acceptance_criteria.iter().filter(|c| c.required).count() as u32;
+        let total_required = self
+            .contract
+            .acceptance_criteria
+            .iter()
+            .filter(|c| c.required)
+            .count() as u32;
         let criteria_remaining = total_required.saturating_sub(criteria_satisfied);
 
         let current_phase = format!("{:?}", self.cognitive_state.mission.status);
@@ -252,7 +315,10 @@ impl MissionRuntime {
                 obs.payload.clone()
             });
             self.state_anchor.last_verified_effect = if !obs.files_affected.is_empty() {
-                Some(format!("Archivos afectados: {}", obs.files_affected.join(", ")))
+                Some(format!(
+                    "Archivos afectados: {}",
+                    obs.files_affected.join(", ")
+                ))
             } else if obs.exit_code == Some(0) {
                 Some("Comando finalizado con éxito (exit code 0)".to_string())
             } else {
@@ -285,54 +351,114 @@ impl MissionRuntime {
             let tool_upper = obs.tool_name.to_uppercase();
             if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
                 use crate::core::evidence::{EvidenceKind, StructuredFact};
-                
+
                 // P0: Replace blind implicit claim with structured execution facts.
                 // Bind real process metadata ONLY if exit_code is present.
                 // If exit_code is None (e.g. no process metadata or infrastructure failure),
                 // NEVER fabricate success with unwrap_or(0) — do not record technical command evidence.
                 if let Some(exit_code) = obs.exit_code {
-                    let fact = StructuredFact::CommandResult {
-                        command: obs.command.clone().unwrap_or_else(|| "unknown".to_string()),
-                        cwd: obs.cwd.clone().unwrap_or_else(|| self.workspace_path.clone()),
-                        exit_code, 
-                        stdout_hash: obs.stdout_hash.clone().unwrap_or_else(|| "unknown".to_string()),
-                        stderr_hash: obs.stderr_hash.clone().unwrap_or_default(),
-                    };
-                    
-                    let _ = self.evidence_graph.record_structured(
-                        EvidenceKind::CommandExitCode,
-                        &obs.tool_name,
-                        fact,
-                        0.85,
-                        self.cognitive_state.mission.current_step,
-                        obs.state_hash_after, // P0: Bind to exact world state
-                    );
+                    let mut semantic_fact = None;
+                    if let Some(last_line) = obs
+                        .payload
+                        .lines()
+                        .rev()
+                        .find(|l| l.trim().starts_with('{') && l.trim().ends_with('}'))
+                    {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(last_line) {
+                            if let (Some(passed), Some(total), Some(failed_criteria)) = (
+                                val.get("passed").and_then(|v| v.as_u64()),
+                                val.get("total").and_then(|v| v.as_u64()),
+                                val.get("failed_criteria").and_then(|v| v.as_array()),
+                            ) {
+                                let failed: Vec<String> = failed_criteria
+                                    .iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect();
+                                let percentage =
+                                    val.get("percentage")
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.0) as f32;
+                                semantic_fact = Some(StructuredFact::SemanticVerificationResult(
+                                    crate::core::evidence::VerifierResult {
+                                        command: obs.command.clone().unwrap_or_default(),
+                                        cwd: obs.cwd.clone().unwrap_or_default(),
+                                        passed: passed as u32,
+                                        total: total as u32,
+                                        percentage,
+                                        failed_criteria: failed,
+                                        state_hash: obs
+                                            .state_hash_after
+                                            .unwrap_or(self.current_world_hash()),
+                                        exit_code,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some(fact) = semantic_fact {
+                        let _ = self.evidence_graph.record_structured(
+                            EvidenceKind::SemanticVerification,
+                            &obs.tool_name,
+                            fact,
+                            1.0,
+                            self.cognitive_state.mission.current_step,
+                            obs.state_hash_after,
+                        );
+                    } else {
+                        let fact = StructuredFact::CommandResult {
+                            command: obs.command.clone().unwrap_or_else(|| "unknown".to_string()),
+                            cwd: obs
+                                .cwd
+                                .clone()
+                                .unwrap_or_else(|| self.workspace_path.clone()),
+                            exit_code,
+                            stdout_hash: obs
+                                .stdout_hash
+                                .clone()
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            stderr_hash: obs.stderr_hash.clone().unwrap_or_default(),
+                        };
+
+                        let _ = self.evidence_graph.record_structured(
+                            EvidenceKind::CommandExitCode,
+                            &obs.tool_name,
+                            fact,
+                            0.85,
+                            self.cognitive_state.mission.current_step,
+                            obs.state_hash_after,
+                        );
+                    }
                 }
             }
         }
 
         // Feed stall detector with REAL command and state hash from observation
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
-        if !ok { obs.payload.hash(&mut hasher); }
+        if !ok {
+            obs.payload.hash(&mut hasher);
+        }
         let err_hash = if ok { 0 } else { hasher.finish() };
 
         // Use real state_hash from observation if available, else fall back to current world hash
-        let state_hash = obs.state_hash_after
+        let state_hash = obs
+            .state_hash_after
             .or(obs.state_hash_before)
             .unwrap_or_else(|| self.current_world_hash());
 
         let sig = ProgressSignature {
             step: self.cognitive_state.mission.current_step,
             state_hash,
-            files_changed: obs.physical_files_changed.unwrap_or(obs.files_affected.len() as u32),
+            world_version: self.world_version,
             criteria_satisfied: self.verified_criteria_count(),
+            criteria_remaining: self.contract.acceptance_criteria.len() as u32 - self.verified_criteria_count(),
             evidence_count: self.evidence_graph.entries.len() as u32,
             last_tool_used: obs.tool_name.clone(),
             last_command: obs.command.clone().unwrap_or_default(),
-            last_files: obs.files_affected.join(","),
-            last_error_hash: err_hash,
+            last_action_identity: obs.action_identity.clone(),
+            last_verifier_result_hash: None,
         };
         self.stall_detector.record_signature(sig);
     }
@@ -340,14 +466,25 @@ impl MissionRuntime {
     /// Evaluates how many criteria are actually verified dynamically by CompletionGate.
     pub fn verified_criteria_count(&self) -> u32 {
         let ws = std::path::Path::new(&self.workspace_path);
-        let decision = CompletionGate::evaluate(&self.contract, &self.cognitive_state, &self.evidence_graph, self.current_world_hash(), ws);
-        
-        let total = self.contract.acceptance_criteria.iter().filter(|c| c.required).count() as u32;
+        let decision = CompletionGate::evaluate(
+            &self.contract,
+            &self.cognitive_state,
+            &self.evidence_graph,
+            self.current_world_hash(),
+            ws,
+        );
+
+        let total = self
+            .contract
+            .acceptance_criteria
+            .iter()
+            .filter(|c| c.required)
+            .count() as u32;
         let missing = match decision {
             CompletionDecision::Complete => 0,
             CompletionDecision::Incomplete(m) | CompletionDecision::Blocked(m) => m.len() as u32,
         };
-        
+
         total.saturating_sub(missing)
     }
 
@@ -372,19 +509,27 @@ impl MissionRuntime {
 
         // P0-4: Recovery Barrier
         if let Some(stall) = self.should_stall_recover(3) {
-            // If the model is stalled, check if the current proposal is IDENTICAL to the last action.
             if let Some(last_sig) = self.stall_detector.last_signature() {
-                let cmd = proposal.arguments.get("comando")
-                    .or_else(|| proposal.arguments.get("command"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let files = proposal.arguments.get("archivos_a_editar")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(","))
-                    .unwrap_or_default();
-                
-                if proposal.tool == last_sig.last_tool_used && cmd == last_sig.last_command && files == last_sig.last_files {
-                    return Err(format!("RECOVERY_BARRIER: Acción repetida bloqueada por estancamiento ({:?}). Debes cambiar tu estrategia o comando/archivo.", stall));
+                let current_identity =
+                    proposal.identity(&self.workspace_path, self.current_world_hash(), None);
+
+                if let Some(last_identity) = &last_sig.last_action_identity {
+                    if current_identity == *last_identity {
+                        return Err(format!("RECOVERY_BARRIER: Acción repetida bloqueada por estancamiento ({:?}). Debes cambiar tu estrategia (herramienta, comando o archivo objetivo).", stall));
+                    }
+                } else {
+                    // Fallback to old comparison just in case
+                    let cmd = current_identity.command;
+                    let files = current_identity.files.join(",");
+                    if proposal.tool == last_sig.last_tool_used
+                        && cmd == last_sig.last_command
+                        
+                    {
+                        return Err(format!(
+                            "RECOVERY_BARRIER: Acción repetida bloqueada por estancamiento ({:?}).",
+                            stall
+                        ));
+                    }
                 }
             }
         }
@@ -401,8 +546,9 @@ impl MissionRuntime {
 
         // 1. Schema — does the payload match the expected shape for this tool?
         match SchemaValidator::validate_tool_payload(&proposal.tool, &proposal.arguments) {
-            SchemaValidationResult::Invalid(reason) =>
-                return Err(format!("SCHEMA_INVALID: {}", reason)),
+            SchemaValidationResult::Invalid(reason) => {
+                return Err(format!("SCHEMA_INVALID: {}", reason))
+            }
             SchemaValidationResult::Valid => {}
         }
 
@@ -431,8 +577,7 @@ impl MissionRuntime {
     pub async fn execute_action(
         &mut self,
         proposal: &ActionProposal,
-    ) -> Result<Observation, String>
-    {
+    ) -> Result<Observation, String> {
         // 1. Full authorization gate: name → schema → budget → policy
         self.authorize_action(proposal)?;
 
@@ -449,7 +594,7 @@ impl MissionRuntime {
                 );
                 obs.state_hash_before = Some(self.current_world_hash());
                 obs.state_hash_after = obs.state_hash_before;
-                
+
                 // Record the observation so it goes to StallDetector
                 self.record_observation(&obs);
                 self.update_anchor(Some(&obs));
@@ -463,11 +608,11 @@ impl MissionRuntime {
         }
         let hash_before = self.current_world_hash();
 
-        // 3. ToolRegistry dispatches — Runtime resolves which code runs, not agent.rs
-        let exec_result = self.tool_registry.dispatch(
-            &proposal.tool,
-            proposal.arguments.clone(),
-        ).await;
+        // 3. ToolRegistry dispatches - Runtime resolves which code runs, not agent.rs
+        let exec_result = self
+            .tool_registry
+            .dispatch(&proposal.tool, proposal.arguments.clone(), &self.workspace_path)
+            .await;
 
         let old_world = self.world.clone();
         // 4. World snapshot AFTER — None = observation failed (not "no change")
@@ -481,7 +626,11 @@ impl MissionRuntime {
         let mut obs = match exec_result {
             Ok(ref res) => {
                 if res.exit_code == 0 {
-                    let mut o = Observation::success(&proposal.tool, &res.stdout, res.files_affected.clone());
+                    let mut o = Observation::success(
+                        &proposal.tool,
+                        &res.stdout,
+                        res.files_affected.clone(),
+                    );
                     o.exit_code = Some(0);
                     o.command = res.command.clone();
                     o.cwd = res.cwd.clone();
@@ -496,7 +645,13 @@ impl MissionRuntime {
                     } else {
                         format!("Process exited with code {}", res.exit_code)
                     };
-                    let mut o = Observation::error(&proposal.tool, err_payload, Some(res.exit_code), true, None);
+                    let mut o = Observation::error(
+                        &proposal.tool,
+                        err_payload,
+                        Some(res.exit_code),
+                        true,
+                        None,
+                    );
                     o.command = res.command.clone();
                     o.cwd = res.cwd.clone();
                     o.stdout_hash = Some(res.stdout_hash.clone());
@@ -504,14 +659,16 @@ impl MissionRuntime {
                     o.files_affected = res.files_affected.clone();
                     o
                 }
-            },
-            Err(ref err)   => {
+            }
+            Err(ref err) => {
                 let o = Observation::error(&proposal.tool, err, None, true, None);
                 o
-            },
+            }
         };
         if obs.command.is_none() && proposal.tool == "TOOL_TERMINAL" {
-            obs.command = proposal.arguments.get("comando")
+            obs.command = proposal
+                .arguments
+                .get("comando")
                 .or_else(|| proposal.arguments.get("command"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
@@ -520,7 +677,7 @@ impl MissionRuntime {
             obs.cwd = Some(self.workspace_path.clone());
         }
         obs.state_hash_before = Some(hash_before);
-        obs.state_hash_after  = hash_after;
+        obs.state_hash_after = hash_after;
 
         let diff_count = if let (Some(w1), Some(w2)) = (&old_world, &self.world) {
             let diff = w1.diff(w2);
@@ -529,6 +686,11 @@ impl MissionRuntime {
             0
         };
         obs.physical_files_changed = Some(diff_count);
+        obs.action_identity = Some(proposal.identity(
+            obs.cwd.as_deref().unwrap_or(&self.workspace_path),
+            hash_before,
+            None,
+        ));
 
         // 6. Record through full circuit (StallDetector, EvidenceGraph)
         self.record_observation(&obs);
@@ -545,8 +707,8 @@ impl MissionRuntime {
     /// Never let agent.rs declare completion without calling this.
     pub fn can_complete(&self) -> CompletionDecision {
         CompletionGate::evaluate(
-            &self.contract, 
-            &self.cognitive_state, 
+            &self.contract,
+            &self.cognitive_state,
             &self.evidence_graph,
             self.current_world_hash(),
             std::path::Path::new(&self.workspace_path),
@@ -573,7 +735,27 @@ impl MissionRuntime {
         use crate::core::observation::ObservationStatus;
         match obs.status {
             ObservationStatus::Error => {
-                // Error → classify → RecoveryEngine → decision
+                // Check if this error contains a Semantic Verification Result JSON
+                if obs.payload.trim().starts_with("{") {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&obs.payload) {
+                        if let Some(percentage) = val.get("percentage").and_then(|v| v.as_f64()) {
+                            if percentage < 100.0 {
+                                let failed: Vec<String> = val
+                                    .get("failed_criteria")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| arr.iter().filter_map(|i| i.as_str().map(String::from)).collect())
+                                    .unwrap_or_default();
+                                
+                                return Some(crate::core::recovery::RecoveryDecision::RepairCriteria {
+                                    criteria: failed,
+                                    recommended_tool: "TOOL_PROGRAMMER".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Error -> classify -> RecoveryEngine -> decision
                 Some(self.plan_recovery(&obs.tool_name, &obs.payload))
             }
             ObservationStatus::Cancelled => {
@@ -584,9 +766,18 @@ impl MissionRuntime {
             _ => None, // Success / BlockedByPolicy / Timeout / SchemaViolation handled by agent
         }
     }
-    pub fn get_state_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> MissionStateAnchor {
+    pub fn get_state_anchor(
+        &self,
+        journal: &crate::core::session_journal::SessionJournal,
+        current_role: &str,
+        last_error: &str,
+    ) -> MissionStateAnchor {
         let current_meta = if journal.micro_meta_actual < journal.micro_metas.len() {
-            Some(journal.micro_metas[journal.micro_meta_actual].descripcion.clone())
+            Some(
+                journal.micro_metas[journal.micro_meta_actual]
+                    .descripcion
+                    .clone(),
+            )
         } else {
             None
         };
@@ -600,13 +791,17 @@ impl MissionRuntime {
         }
         anchor
     }
-    
-    pub fn format_anchor(&self, journal: &crate::core::session_journal::SessionJournal, current_role: &str, last_error: &str) -> String {
+
+    pub fn format_anchor(
+        &self,
+        journal: &crate::core::session_journal::SessionJournal,
+        current_role: &str,
+        last_error: &str,
+    ) -> String {
         let anchor = self.get_state_anchor(journal, current_role, last_error);
         anchor.format_prompt_block()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -619,6 +814,43 @@ mod tests {
         assert!(!rt.is_budget_exhausted());
         assert_eq!(rt.budget_remaining(), 50);
     }
+    /// P0-F: Real dashboard recovery loop simulation
+    #[tokio::test]
+    async fn test_real_dashboard_recovery_loop() {
+        let mut rt = MissionRuntime::new(".", "Dashboard", 25);
+        
+        let json_payload = r#"{
+            "passed": 0,
+            "total": 1,
+            "percentage": 0.0,
+            "failed_criteria": ["Dashboard no carga"],
+            "exit_code": 1,
+            "command": "python verify_dashboard.py",
+            "cwd": ".",
+            "state_hash": 1234
+        }"#;
+        
+        let obs = crate::core::observation::Observation::error(
+            "TOOL_TERMINAL",
+            json_payload,
+            None,
+            true,
+            None
+        );
+        
+        // Let's directly handle observation since record_observation is just internal state.
+        let recovery = rt.handle_observation(&obs);
+        
+        assert!(recovery.is_some());
+        if let Some(crate::core::recovery::RecoveryDecision::RepairCriteria { criteria, recommended_tool }) = recovery {
+            assert_eq!(criteria.len(), 1);
+            assert_eq!(criteria[0], "Dashboard no carga");
+            assert_eq!(recommended_tool, "TOOL_PROGRAMMER");
+        } else {
+            panic!("Expected RepairCriteria but got something else");
+        }
+    }
+
 
     #[test]
     fn test_runtime_delegates_to_completion_gate() {
@@ -626,13 +858,18 @@ mod tests {
         // With no criteria and no evidence, empty contract must NOT complete.
         // This guards against silent false-positive completions.
         let dec = rt.can_complete();
-        assert!(matches!(dec, crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+        assert!(matches!(
+            dec,
+            crate::core::completion_gate::CompletionDecision::Incomplete(_)
+        ));
     }
 
     #[test]
     fn test_runtime_budget_tracking() {
         let mut rt = MissionRuntime::new(".", "Test", 10);
-        for _ in 0..10 { rt.record_step(); }
+        for _ in 0..10 {
+            rt.record_step();
+        }
         assert!(rt.is_budget_exhausted());
         assert_eq!(rt.budget_remaining(), 0);
     }
@@ -659,14 +896,23 @@ mod tests {
     #[tokio::test]
     async fn test_p0_3_action_identity_and_stale_rejection() {
         let mut rt = MissionRuntime::new(".", "Test", 10);
-        rt.tool_registry.register("TOOL_TERMINAL", std::sync::Arc::new(|_cmd| {
-            Box::pin(async move {
-                Ok(crate::core::tool_registry::ExecutionResult {
-                    stdout: "".to_string(), stderr: "".to_string(), exit_code: 0, files_affected: vec![],
-                    command: None, cwd: None, stdout_hash: "".to_string(), stderr_hash: "".to_string(),
+        rt.tool_registry.register(
+            "TOOL_TERMINAL",
+            std::sync::Arc::new(|_ws, _cmd| {
+                Box::pin(async move {
+                    Ok(crate::core::tool_registry::ExecutionResult {
+                        stdout: "".to_string(),
+                        stderr: "".to_string(),
+                        exit_code: 0,
+                        files_affected: vec![],
+                        command: None,
+                        cwd: None,
+                        stdout_hash: "".to_string(),
+                        stderr_hash: "".to_string(),
+                    })
                 })
-            })
-        }));
+            }),
+        );
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".to_string(),
             arguments: serde_json::json!({ "comando": "echo 1" }),
@@ -677,24 +923,36 @@ mod tests {
         let res = rt.execute_action(&proposal).await;
         assert!(res.is_ok());
         let obs = res.unwrap();
-        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error);
+        assert_eq!(
+            obs.status,
+            crate::core::observation::ObservationStatus::Error
+        );
         assert!(obs.payload.contains("STALE_ACTION"));
     }
 
     #[tokio::test]
     async fn test_final_integration_19_step_simulation() {
         let mut rt = MissionRuntime::new(".", "Build Dashboard", 25);
-        rt.tool_registry.register("TOOL_THINK", std::sync::Arc::new(|_cmd| {
-            Box::pin(async move {
-                Ok(crate::core::tool_registry::ExecutionResult {
-                    stdout: "Pensando...".to_string(), stderr: "".to_string(), exit_code: 0, files_affected: vec![],
-                    command: None, cwd: None, stdout_hash: "".to_string(), stderr_hash: "".to_string(),
+        rt.tool_registry.register(
+            "TOOL_THINK",
+            std::sync::Arc::new(|_ws, _cmd| {
+                Box::pin(async move {
+                    Ok(crate::core::tool_registry::ExecutionResult {
+                        stdout: "Pensando...".to_string(),
+                        stderr: "".to_string(),
+                        exit_code: 0,
+                        files_affected: vec![],
+                        command: None,
+                        cwd: None,
+                        stdout_hash: "".to_string(),
+                        stderr_hash: "".to_string(),
+                    })
                 })
-            })
-        }));
-        
+            }),
+        );
+
         let mut loop_detected = false;
-        
+
         for _ in 1..=19 {
             let proposal = crate::core::policy::ActionProposal {
                 tool: "TOOL_THINK".to_string(),
@@ -703,7 +961,7 @@ mod tests {
                 risk: crate::core::policy::RiskLevel::Safe,
                 world_hash: Some(rt.current_world_hash()),
             };
-            
+
             let res = rt.execute_action(&proposal).await;
             if let Err(err) = res {
                 if err.contains("RECOVERY_BARRIER") {
@@ -713,8 +971,87 @@ mod tests {
             }
             rt.record_step(); // advance step to simulate loop
         }
-        
-        assert!(loop_detected, "Recovery Barrier should have triggered within 19 steps");
+
+        assert!(
+            loop_detected,
+            "Recovery Barrier should have triggered within 19 steps"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_p0_5_agent_loop_recovery_abort_terminates_system() {
+        let mut rt = MissionRuntime::new(".", "Test Abort", 25);
+        rt.tool_registry.register(
+            "TOOL_TERMINAL",
+            std::sync::Arc::new(|_ws, _cmd| {
+                Box::pin(async move {
+                    Ok(crate::core::tool_registry::ExecutionResult {
+                        stdout: "".to_string(),
+                        stderr: "Critical error!".to_string(),
+                        exit_code: 1,
+                        files_affected: vec![],
+                        command: Some("bad_cmd".to_string()),
+                        cwd: None,
+                        stdout_hash: "".to_string(),
+                        stderr_hash: "".to_string(),
+                    })
+                })
+            }),
+        );
+
+        let mut iterations = 0;
+        let mut mission_failed = false;
+
+        // Simulating the agent.rs loop
+        while !rt.is_budget_exhausted() {
+            if !rt.can_continue() {
+                mission_failed = matches!(rt.terminal_state, Some(RuntimeTerminalState::Failed(_)));
+                break;
+            }
+
+            iterations += 1;
+
+            let proposal = crate::core::policy::ActionProposal {
+                tool: "TOOL_TERMINAL".to_string(),
+                arguments: serde_json::json!({ "comando": format!("bad_cmd_{}", iterations) }),
+                expected_effect: "None".to_string(),
+                risk: crate::core::policy::RiskLevel::Safe,
+                world_hash: Some(rt.current_world_hash()),
+            };
+
+            let result = rt.execute_action(&proposal).await;
+            match &result {
+                Ok(_) => {}
+                Err(err) => {
+                    panic!("Unexpected policy rejection: {}", err);
+                }
+            }
+
+            // Wait, execute_action returns Ok(obs) even for tool errors. We should check the returned Observation.
+            if let Ok(obs) = result {
+                if let Some(crate::core::recovery::RecoveryDecision::Abort { reason }) =
+                    rt.handle_observation(&obs)
+                {
+                    rt.fail_mission(reason);
+                }
+            }
+
+            rt.record_step();
+
+            // Safety break to prevent actual infinite loop in the test
+            if iterations > 30 {
+                break;
+            }
+        }
+
+        assert!(
+            mission_failed,
+            "The agent loop should have terminated due to Abort -> fail_mission"
+        );
+        assert!(
+            iterations < 30,
+            "The agent loop should not run indefinitely"
+        );
     }
 
     // ── H-11: Architecture invariant tests ──────────────────────────────────
@@ -736,12 +1073,20 @@ mod tests {
     fn test_authorize_action_denies_on_exhausted_budget() {
         use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test budget gate", 2);
-        rt.record_step(); rt.record_step();
+        rt.record_step();
+        rt.record_step();
         assert!(rt.is_budget_exhausted());
         // Must register executor so check 0b passes and budget check is reached
-        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("ok")) })
-        })).unwrap();
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(|_ws, _args| {
+                    Box::pin(async {
+                        Ok(crate::core::tool_registry::ExecutionResult::success("ok"))
+                    })
+                }),
+            )
+            .unwrap();
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
             arguments: serde_json::json!({"comando": "dir"}),
@@ -750,7 +1095,10 @@ mod tests {
             world_hash: None,
         };
         let result = rt.authorize_action(&proposal);
-        assert!(result.is_err(), "authorize_action must deny when budget is exhausted");
+        assert!(
+            result.is_err(),
+            "authorize_action must deny when budget is exhausted"
+        );
         assert!(result.unwrap_err().contains("BUDGET_EXHAUSTED"));
     }
 
@@ -761,7 +1109,8 @@ mod tests {
         let violations = rt.check_invariants();
         assert!(
             violations.iter().any(|v| v.contains("CONTRACT_EMPTY")),
-            "Expected CONTRACT_EMPTY violation, got: {:?}", violations
+            "Expected CONTRACT_EMPTY violation, got: {:?}",
+            violations
         );
     }
 
@@ -771,20 +1120,33 @@ mod tests {
         let rt = MissionRuntime::new(".", "Build a CLI tool", 50);
         let violations = rt.check_invariants();
         // mission_id mismatch may fire because cognitive_state.mission.id is default — filter for BUDGET/STEP/WORKSPACE
-        let critical: Vec<_> = violations.iter()
-            .filter(|v| v.contains("BUDGET_INVALID") || v.contains("STEP_EXCEEDS") || v.contains("WORKSPACE_EMPTY"))
+        let critical: Vec<_> = violations
+            .iter()
+            .filter(|v| {
+                v.contains("BUDGET_INVALID")
+                    || v.contains("STEP_EXCEEDS")
+                    || v.contains("WORKSPACE_EMPTY")
+            })
             .collect();
-        assert!(critical.is_empty(), "Unexpected critical violations: {:?}", critical);
+        assert!(
+            critical.is_empty(),
+            "Unexpected critical violations: {:?}",
+            critical
+        );
     }
 
     /// H-11-E: Observation::cancelled is distinct from Observation::error.
     #[test]
     fn test_cancellation_observation_is_not_error() {
-        let obs = crate::core::observation::Observation::cancelled(
-            "AGENT", "User pressed stop"
+        let obs = crate::core::observation::Observation::cancelled("AGENT", "User pressed stop");
+        assert_eq!(
+            obs.status,
+            crate::core::observation::ObservationStatus::Cancelled
         );
-        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Cancelled);
-        assert_ne!(obs.status, crate::core::observation::ObservationStatus::Error);
+        assert_ne!(
+            obs.status,
+            crate::core::observation::ObservationStatus::Error
+        );
         assert!(!obs.retryable, "Cancelled must not be retryable");
     }
 
@@ -794,7 +1156,10 @@ mod tests {
         let rt = MissionRuntime::new(".", "Do something", 50);
         let dec = rt.can_complete();
         assert!(
-            matches!(dec, crate::core::completion_gate::CompletionDecision::Incomplete(_)),
+            matches!(
+                dec,
+                crate::core::completion_gate::CompletionDecision::Incomplete(_)
+            ),
             "Empty contract must produce Incomplete, not Complete"
         );
     }
@@ -816,10 +1181,23 @@ mod tests {
             true,
         );
         // Initially incomplete
-        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+        assert!(matches!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Incomplete(_)
+        ));
 
         // Satisfy manual criterion
-        rt.evidence_graph.record_with_hash(crate::core::evidence::EvidenceKind::UserConfirmation, "USER", "AC-DELIVERABLES verified manually", "OK", 1.0, 1, None).unwrap();
+        rt.evidence_graph
+            .record_with_hash(
+                crate::core::evidence::EvidenceKind::UserConfirmation,
+                "USER",
+                "AC-DELIVERABLES verified manually",
+                "OK",
+                1.0,
+                1,
+                None,
+            )
+            .unwrap();
         // Provide actual structured evidence for TestPassed criterion to satisfy CompletionGate dynamically
         let _ = rt.evidence_graph.record_structured(
             crate::core::evidence::EvidenceKind::Test,
@@ -833,10 +1211,13 @@ mod tests {
             },
             1.0,
             1,
-            Some(rt.current_world_hash())
+            Some(rt.current_world_hash()),
         );
 
-        assert_eq!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Complete);
+        assert_eq!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Complete
+        );
     }
 
     /// H-11-G: record_step() is the only way step advances — no += 1 outside runtime.
@@ -851,7 +1232,11 @@ mod tests {
         // restore_step does not increment budget
         rt.restore_step(10);
         assert_eq!(rt.current_step(), 10);
-        assert_eq!(rt.budget_remaining(), 48, "budget should only decrease by record_step calls");
+        assert_eq!(
+            rt.budget_remaining(),
+            48,
+            "budget should only decrease by record_step calls"
+        );
     }
 
     /// H-15: execute_action() runs the full pipeline through Runtime via ToolRegistry.
@@ -860,9 +1245,18 @@ mod tests {
         use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test execution gateway", 10);
         // Register a simulated executor BEFORE execute_action
-        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("simulated terminal output")) })
-        })).unwrap();
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(|_ws, _args| {
+                    Box::pin(async {
+                        Ok(crate::core::tool_registry::ExecutionResult::success(
+                            "simulated terminal output",
+                        ))
+                    })
+                }),
+            )
+            .unwrap();
 
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
@@ -873,10 +1267,19 @@ mod tests {
         };
 
         let obs = rt.execute_action(&proposal).await;
-        assert!(obs.is_ok(), "execute_action must succeed for authorized registered action");
+        assert!(
+            obs.is_ok(),
+            "execute_action must succeed for authorized registered action"
+        );
         let o = obs.unwrap();
-        assert_eq!(o.status, crate::core::observation::ObservationStatus::Success);
-        assert!(o.state_hash_before.is_some(), "world hash before must be recorded");
+        assert_eq!(
+            o.status,
+            crate::core::observation::ObservationStatus::Success
+        );
+        assert!(
+            o.state_hash_before.is_some(),
+            "world hash before must be recorded"
+        );
         assert_eq!(o.tool_name, "TOOL_TERMINAL");
         assert_eq!(rt.cognitive_state.metrics.tool_calls, 1);
     }
@@ -886,10 +1289,20 @@ mod tests {
     async fn test_execute_action_denies_on_exhausted_budget() {
         use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test deny on exhausted", 2);
-        rt.record_step(); rt.record_step();
-        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("should not run")) })
-        })).unwrap();
+        rt.record_step();
+        rt.record_step();
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(|_ws, _args| {
+                    Box::pin(async {
+                        Ok(crate::core::tool_registry::ExecutionResult::success(
+                            "should not run",
+                        ))
+                    })
+                }),
+            )
+            .unwrap();
 
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
@@ -909,22 +1322,33 @@ mod tests {
     /// AtomicBool proves the registered executor body was never entered.
     #[tokio::test]
     async fn test_executor_not_called_when_denied() {
-        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
 
         let mut rt = MissionRuntime::new(".", "Test executor not called", 2);
-        rt.record_step(); rt.record_step(); // exhaust budget
+        rt.record_step();
+        rt.record_step(); // exhaust budget
 
         let executed = Arc::new(AtomicBool::new(false));
         let executed_clone = executed.clone();
 
         // Register executor that sets the flag if called
-        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(move |_args| {
-            let flag = executed_clone.clone();
-            Box::pin(async move {
-                flag.store(true, Ordering::SeqCst);
-                Ok(crate::core::tool_registry::ExecutionResult::success("should not run"))
-            })
-        })).unwrap();
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(move |_ws, args| {
+                    let flag = executed_clone.clone();
+                    Box::pin(async move {
+                        flag.store(true, Ordering::SeqCst);
+                        Ok(crate::core::tool_registry::ExecutionResult::success(
+                            "should not run",
+                        ))
+                    })
+                }),
+            )
+            .unwrap();
 
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
@@ -948,9 +1372,14 @@ mod tests {
         use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test recovery circuit", 10);
 
-        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Err("error[E0001]: command not found: rustc".to_string()) })
-        })).unwrap();
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(|_ws, _args| {
+                    Box::pin(async { Err("error[E0001]: command not found: rustc".to_string()) })
+                }),
+            )
+            .unwrap();
 
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
@@ -960,32 +1389,49 @@ mod tests {
             world_hash: None,
         };
 
-        let obs = rt.execute_action(&proposal).await
+        let obs = rt
+            .execute_action(&proposal)
+            .await
             .expect("execute_action itself should succeed even on tool error");
 
-        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error,
-            "Failed executor must produce Error observation");
+        assert_eq!(
+            obs.status,
+            crate::core::observation::ObservationStatus::Error,
+            "Failed executor must produce Error observation"
+        );
         let recovery = rt.handle_observation(&obs);
-        assert!(recovery.is_some(),
-            "Error Observation MUST produce a RecoveryDecision via handle_observation()");
+        assert!(
+            recovery.is_some(),
+            "Error Observation MUST produce a RecoveryDecision via handle_observation()"
+        );
     }
 
     /// FINAL-5-C: Schema INVALID blocks before dispatch — executor never runs.
     #[tokio::test]
     async fn test_schema_invalid_blocks_execution() {
-        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
 
         let mut rt = MissionRuntime::new(".", "Test schema gate", 10);
         let executed = Arc::new(AtomicBool::new(false));
         let executed_clone = executed.clone();
 
-        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(move |_args| {
-            let flag = executed_clone.clone();
-            Box::pin(async move {
-                flag.store(true, Ordering::SeqCst);
-                Ok(crate::core::tool_registry::ExecutionResult::success("should not run"))
-            })
-        })).unwrap();
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(move |_ws, args| {
+                    let flag = executed_clone.clone();
+                    Box::pin(async move {
+                        flag.store(true, Ordering::SeqCst);
+                        Ok(crate::core::tool_registry::ExecutionResult::success(
+                            "should not run",
+                        ))
+                    })
+                }),
+            )
+            .unwrap();
 
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
@@ -998,8 +1444,10 @@ mod tests {
         let result = rt.execute_action(&proposal).await;
         assert!(result.is_err(), "Empty command must be rejected");
         assert!(result.unwrap_err().contains("SCHEMA_INVALID"));
-        assert!(!executed.load(Ordering::SeqCst),
-            "registered executor MUST NOT run when Schema validation fails");
+        assert!(
+            !executed.load(Ordering::SeqCst),
+            "registered executor MUST NOT run when Schema validation fails"
+        );
     }
 
     // ——— FINAL-6: ToolRegistry as dispatch authority ————————————————————————————
@@ -1018,8 +1466,10 @@ mod tests {
         };
         let result = rt.execute_action(&proposal).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("TOOL_UNREGISTERED"),
-            "Known but unregistered tool must fail with TOOL_UNREGISTERED");
+        assert!(
+            result.unwrap_err().contains("TOOL_UNREGISTERED"),
+            "Known but unregistered tool must fail with TOOL_UNREGISTERED"
+        );
     }
 
     /// FINAL-6-B: After registration, ToolRegistry dispatches correctly.
@@ -1027,9 +1477,18 @@ mod tests {
     async fn test_registered_tool_dispatches_via_registry() {
         use std::sync::Arc;
         let mut rt = MissionRuntime::new(".", "Test registry dispatch", 10);
-        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(|_args| {
-            Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("registry_dispatched")) })
-        })).unwrap();
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(|_ws, _args| {
+                    Box::pin(async {
+                        Ok(crate::core::tool_registry::ExecutionResult::success(
+                            "registry_dispatched",
+                        ))
+                    })
+                }),
+            )
+            .unwrap();
 
         let proposal = crate::core::policy::ActionProposal {
             tool: "TOOL_TERMINAL".into(),
@@ -1050,53 +1509,92 @@ mod tests {
         std::fs::create_dir_all(&src_dir).unwrap();
 
         let mut rt = MissionRuntime::new(temp_dir.to_str().unwrap(), "Crea CLI word-stats", 50);
-        
-        rt.contract.add_criterion("AC-BUILD", "cargo build exitoso", crate::core::mission_contract::VerificationMethod::CommandExitZero("cargo build".to_string()), true);
-        rt.contract.add_criterion("AC-TEST", "cargo test con 3 tests", crate::core::mission_contract::VerificationMethod::TestPassed, true);
-        rt.contract.add_criterion("AC-JSON", "Genera word_stats.json válido", crate::core::mission_contract::VerificationMethod::FileExistence("word_stats.json".to_string()), true);
+
+        rt.contract.add_criterion(
+            "AC-BUILD",
+            "cargo build exitoso",
+            crate::core::mission_contract::VerificationMethod::CommandExitZero(
+                "cargo build".to_string(),
+            ),
+            true,
+        );
+        rt.contract.add_criterion(
+            "AC-TEST",
+            "cargo test con 3 tests",
+            crate::core::mission_contract::VerificationMethod::TestPassed,
+            true,
+        );
+        rt.contract.add_criterion(
+            "AC-JSON",
+            "Genera word_stats.json válido",
+            crate::core::mission_contract::VerificationMethod::FileExistence(
+                "word_stats.json".to_string(),
+            ),
+            true,
+        );
 
         // 1. Initial State -> Missing files and evidence -> Incomplete
-        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+        assert!(matches!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Incomplete(_)
+        ));
 
         // 2. LLM creates Cargo.toml and src/main.rs physically
-        std::fs::write(temp_dir.join("Cargo.toml"), "[package]\nname=\"word-stats\"\nversion=\"0.1.0\"\n").unwrap();
-        std::fs::write(src_dir.join("main.rs"), "fn main() { println!(\"hello\"); }").unwrap();
+        std::fs::write(
+            temp_dir.join("Cargo.toml"),
+            "[package]\nname=\"word-stats\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src_dir.join("main.rs"),
+            "fn main() { println!(\"hello\"); }",
+        )
+        .unwrap();
 
         rt.observe_world().unwrap();
         let hash_step1 = rt.current_world_hash();
-        
+
         // 3. LLM executes cargo build and cargo test successfully
-        let _ = rt.evidence_graph.record_structured(
-            crate::core::evidence::EvidenceKind::CommandExitCode,
-            "TOOL_TERMINAL",
-            crate::core::evidence::StructuredFact::CommandResult {
-                command: "cargo build".to_string(),
-                cwd: temp_dir.to_str().unwrap().to_string(),
-                exit_code: 0,
-                stdout_hash: "mock".to_string(),
-                stderr_hash: "".to_string(),
-            },
-            1.0,
-            rt.current_step(),
-            Some(hash_step1),
-        ).unwrap();
-        let _ = rt.evidence_graph.record_structured(
-            crate::core::evidence::EvidenceKind::Test,
-            "TOOL_TERMINAL",
-            crate::core::evidence::StructuredFact::CommandResult {
-                command: "cargo test".to_string(),
-                cwd: temp_dir.to_str().unwrap().to_string(),
-                exit_code: 0,
-                stdout_hash: "mock".to_string(),
-                stderr_hash: "".to_string(),
-            },
-            1.0,
-            rt.current_step(),
-            Some(hash_step1),
-        ).unwrap();
+        let _ = rt
+            .evidence_graph
+            .record_structured(
+                crate::core::evidence::EvidenceKind::CommandExitCode,
+                "TOOL_TERMINAL",
+                crate::core::evidence::StructuredFact::CommandResult {
+                    command: "cargo build".to_string(),
+                    cwd: temp_dir.to_str().unwrap().to_string(),
+                    exit_code: 0,
+                    stdout_hash: "mock".to_string(),
+                    stderr_hash: "".to_string(),
+                },
+                1.0,
+                rt.current_step(),
+                Some(hash_step1),
+            )
+            .unwrap();
+        let _ = rt
+            .evidence_graph
+            .record_structured(
+                crate::core::evidence::EvidenceKind::Test,
+                "TOOL_TERMINAL",
+                crate::core::evidence::StructuredFact::CommandResult {
+                    command: "cargo test".to_string(),
+                    cwd: temp_dir.to_str().unwrap().to_string(),
+                    exit_code: 0,
+                    stdout_hash: "mock".to_string(),
+                    stderr_hash: "".to_string(),
+                },
+                1.0,
+                rt.current_step(),
+                Some(hash_step1),
+            )
+            .unwrap();
 
         // Still incomplete because word_stats.json does NOT physically exist on disk yet!
-        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+        assert!(matches!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Incomplete(_)
+        ));
 
         // 4. LLM runs binary, physically creating word_stats.json on disk
         std::fs::write(temp_dir.join("word_stats.json"), r#"{"total_words": 10}"#).unwrap();
@@ -1104,48 +1602,67 @@ mod tests {
         rt.observe_world().unwrap();
         let hash_step2 = rt.current_world_hash();
         // Record test/build evidence for the new state hash
-        let _ = rt.evidence_graph.record_structured(
-            crate::core::evidence::EvidenceKind::CommandExitCode,
-            "TOOL_TERMINAL",
-            crate::core::evidence::StructuredFact::CommandResult {
-                command: "cargo build".to_string(),
-                cwd: temp_dir.to_str().unwrap().to_string(),
-                exit_code: 0,
-                stdout_hash: "mock".to_string(),
-                stderr_hash: "".to_string(),
-            },
-            1.0,
-            rt.current_step(),
-            Some(hash_step2),
-        ).unwrap();
-        let _ = rt.evidence_graph.record_structured(
-            crate::core::evidence::EvidenceKind::Test,
-            "TOOL_TERMINAL",
-            crate::core::evidence::StructuredFact::CommandResult {
-                command: "cargo test".to_string(),
-                cwd: temp_dir.to_str().unwrap().to_string(),
-                exit_code: 0,
-                stdout_hash: "mock".to_string(),
-                stderr_hash: "".to_string(),
-            },
-            1.0,
-            rt.current_step(),
-            Some(hash_step2),
-        ).unwrap();
+        let _ = rt
+            .evidence_graph
+            .record_structured(
+                crate::core::evidence::EvidenceKind::CommandExitCode,
+                "TOOL_TERMINAL",
+                crate::core::evidence::StructuredFact::CommandResult {
+                    command: "cargo build".to_string(),
+                    cwd: temp_dir.to_str().unwrap().to_string(),
+                    exit_code: 0,
+                    stdout_hash: "mock".to_string(),
+                    stderr_hash: "".to_string(),
+                },
+                1.0,
+                rt.current_step(),
+                Some(hash_step2),
+            )
+            .unwrap();
+        let _ = rt
+            .evidence_graph
+            .record_structured(
+                crate::core::evidence::EvidenceKind::Test,
+                "TOOL_TERMINAL",
+                crate::core::evidence::StructuredFact::CommandResult {
+                    command: "cargo test".to_string(),
+                    cwd: temp_dir.to_str().unwrap().to_string(),
+                    exit_code: 0,
+                    stdout_hash: "mock".to_string(),
+                    stderr_hash: "".to_string(),
+                },
+                1.0,
+                rt.current_step(),
+                Some(hash_step2),
+            )
+            .unwrap();
 
         // 5. Everything matches state and physical disk -> Complete!
-        assert_eq!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Complete);
+        assert_eq!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Complete
+        );
 
         // 6. NEGATIVE TEST 1: LLM modifies main.rs AFTER passing tests (invalidating state_hash)
-        std::fs::write(src_dir.join("main.rs"), "fn main() { println!(\"broken code extra long\"); }").unwrap();
+        std::fs::write(
+            src_dir.join("main.rs"),
+            "fn main() { println!(\"broken code extra long\"); }",
+        )
+        .unwrap();
         rt.observe_world().unwrap();
         // World state hash changes! CompletionGate MUST reject!
-        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+        assert!(matches!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Incomplete(_)
+        ));
 
         // 7. NEGATIVE TEST 2: File deleted physically
         std::fs::remove_file(temp_dir.join("word_stats.json")).unwrap();
         rt.observe_world().unwrap();
-        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+        assert!(matches!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Incomplete(_)
+        ));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -1153,10 +1670,12 @@ mod tests {
     #[tokio::test]
     async fn test_e2e_agent_runtime_registry_observation_evidence_gate_chain() {
         use std::sync::Arc;
-        let temp_dir = std::env::temp_dir().join(format!("aura_chain_e2e_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("aura_chain_e2e_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let mut rt = MissionRuntime::new(temp_dir.to_str().unwrap(), "Complete full-chain test", 20);
+        let mut rt =
+            MissionRuntime::new(temp_dir.to_str().unwrap(), "Complete full-chain test", 20);
 
         // 1. Contract requires test passed
         rt.contract.add_criterion(
@@ -1167,29 +1686,42 @@ mod tests {
         );
 
         // Before any tool execution -> CompletionGate must report Incomplete
-        assert!(matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Incomplete(_)));
+        assert!(matches!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Incomplete(_)
+        ));
 
         // 2. Register real executor in ToolRegistry for TOOL_TERMINAL
         let ws_clone = temp_dir.to_string_lossy().to_string();
-        rt.tool_registry.register("TOOL_TERMINAL", Arc::new(move |args| {
-            let ws = ws_clone.clone();
-            Box::pin(async move {
-                let cmd = args.get("comando").and_then(|v| v.as_str()).unwrap_or("");
-                if cmd == "cargo test" {
-                    let mut res = crate::core::tool_registry::ExecutionResult::success("test result: ok. 1 passed; 0 failed");
-                    res.command = Some("cargo test".to_string());
-                    res.cwd = Some(ws);
-                    res.exit_code = 0;
-                    Ok(res)
-                } else {
-                    let mut res = crate::core::tool_registry::ExecutionResult::error("unknown command", 1);
-                    res.command = Some(cmd.to_string());
-                    res.cwd = Some(ws);
-                    res.exit_code = 1;
-                    Ok(res)
-                }
-            })
-        })).unwrap();
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                Arc::new(move |_ws, args| {
+                    let ws = ws_clone.clone();
+                    Box::pin(async move {
+                        let cmd = args.get("comando").and_then(|v| v.as_str()).unwrap_or("");
+                        if cmd == "cargo test" {
+                            let mut res = crate::core::tool_registry::ExecutionResult::success(
+                                "test result: ok. 1 passed; 0 failed",
+                            );
+                            res.command = Some("cargo test".to_string());
+                            res.cwd = Some(ws);
+                            res.exit_code = 0;
+                            Ok(res)
+                        } else {
+                            let mut res = crate::core::tool_registry::ExecutionResult::error(
+                                "unknown command",
+                                1,
+                            );
+                            res.command = Some(cmd.to_string());
+                            res.cwd = Some(ws);
+                            res.exit_code = 1;
+                            Ok(res)
+                        }
+                    })
+                }),
+            )
+            .unwrap();
 
         // 3. Agent constructs ActionProposal
         let proposal = crate::core::policy::ActionProposal {
@@ -1201,9 +1733,15 @@ mod tests {
         };
 
         // 4. Dispatch through Runtime: ActionProposal -> Policy -> ToolRegistry -> Executor -> Observation -> Evidence
-        let obs = rt.execute_action(&proposal).await.expect("Runtime execution must succeed");
+        let obs = rt
+            .execute_action(&proposal)
+            .await
+            .expect("Runtime execution must succeed");
 
-        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Success);
+        assert_eq!(
+            obs.status,
+            crate::core::observation::ObservationStatus::Success
+        );
         assert_eq!(obs.exit_code, Some(0));
         assert_eq!(obs.tool_name, "TOOL_TERMINAL");
 
@@ -1220,10 +1758,20 @@ mod tests {
 
     #[test]
     fn test_mission_state_anchor_tracks_physical_world_accurately() {
-        let temp_dir = std::env::temp_dir().join(format!("aura_test_anchor_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "aura_test_anchor_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let mut rt = MissionRuntime::new(temp_dir.to_str().unwrap(), "Crear cyber_sentinel frontend", 20);
+        let mut rt = MissionRuntime::new(
+            temp_dir.to_str().unwrap(),
+            "Crear cyber_sentinel frontend",
+            20,
+        );
 
         // 1. Initial state: workspace is physically empty
         let _ = rt.observe_world();
@@ -1232,14 +1780,24 @@ mod tests {
         assert!(initial_prompt_block.contains("El workspace está actualmente vacío"));
 
         // 2. Physical files created
-        std::fs::write(temp_dir.join("cyber_sentinel.html"), "<!DOCTYPE html><html></html>").unwrap();
+        std::fs::write(
+            temp_dir.join("cyber_sentinel.html"),
+            "<!DOCTYPE html><html></html>",
+        )
+        .unwrap();
         std::fs::write(temp_dir.join("style.css"), "body { margin: 0; }").unwrap();
 
         // 3. World observed: anchor immediately syncs with reality
         rt.observe_world().expect("observe_world must succeed");
         assert_eq!(rt.state_anchor.existing_files.len(), 2);
-        assert!(rt.state_anchor.existing_files.contains(&"cyber_sentinel.html".to_string()));
-        assert!(rt.state_anchor.existing_files.contains(&"style.css".to_string()));
+        assert!(rt
+            .state_anchor
+            .existing_files
+            .contains(&"cyber_sentinel.html".to_string()));
+        assert!(rt
+            .state_anchor
+            .existing_files
+            .contains(&"style.css".to_string()));
 
         let prompt_block = rt.state_anchor.format_prompt_block();
         assert!(prompt_block.contains("cyber_sentinel.html"));
@@ -1324,7 +1882,7 @@ impl MissionStateAnchor {
         };
 
         format!(
-r#"================================================================================
+            r#"================================================================================
 ESTADO AUTORITATIVO DEL RUNTIME (MISSION STATE ANCHOR - REALIDAD FÍSICA INMUTABLE)
 ================================================================================
 Misión ID: {mission_id} | Versión Mundo: v{world_ver} | Hash Mundo: {world_hash:016x}
@@ -1365,4 +1923,6 @@ CRITERIOS: Satisfechos: {sat} | Restantes: {rem}
             workspace_status_rule = workspace_status_rule,
         )
     }
+
+
 }

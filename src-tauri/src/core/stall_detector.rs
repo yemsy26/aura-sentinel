@@ -15,13 +15,14 @@ pub enum StallType {
 pub struct ProgressSignature {
     pub step: u32,
     pub state_hash: u64,
-    pub files_changed: u32,
+    pub world_version: u64,
     pub criteria_satisfied: u32,
+    pub criteria_remaining: u32,
     pub evidence_count: u32,
     pub last_tool_used: String,
     pub last_command: String,
-    pub last_files: String,
-    pub last_error_hash: u64,
+    pub last_action_identity: Option<crate::core::policy::ActionIdentity>,
+    pub last_verifier_result_hash: Option<String>,
 }
 
 pub struct StallDetector {
@@ -31,7 +32,10 @@ pub struct StallDetector {
 
 impl StallDetector {
     pub fn new(max_history: usize) -> Self {
-        Self { signatures: Vec::new(), max_history }
+        Self {
+            signatures: Vec::new(),
+            max_history,
+        }
     }
 
     /// Number of stall signatures recorded (for LearningEngine snapshot).
@@ -71,15 +75,15 @@ impl StallDetector {
         }
 
         // SameError: same non-zero error hash every step
-        let first_err = slice[0].last_error_hash;
-        if first_err != 0 && slice.iter().all(|s| s.last_error_hash == first_err) {
+        let first_err = slice[0].last_verifier_result_hash.as_ref();
+        if first_err.is_some() && slice.iter().all(|s| s.last_verifier_result_hash.as_ref() == first_err) {
             return Some(StallType::SameError);
         }
 
         // NoStateChange: no file, criteria, evidence or state_hash change
         let first = &slice[0];
         let has_progress = slice.iter().skip(1).any(|s| {
-            s.files_changed != first.files_changed
+            s.world_version != first.world_version
                 || s.criteria_satisfied != first.criteria_satisfied
                 || s.evidence_count != first.evidence_count
                 || s.state_hash != first.state_hash
@@ -89,8 +93,14 @@ impl StallDetector {
         }
 
         // NoCriteriaProgress: criteria count frozen across window even though other things changed
-        let criteria_frozen = slice.iter().all(|s| s.criteria_satisfied == first.criteria_satisfied);
-        if criteria_frozen && slice.iter().any(|s| s.evidence_count != first.evidence_count) {
+        let criteria_frozen = slice
+            .iter()
+            .all(|s| s.criteria_satisfied == first.criteria_satisfied);
+        if criteria_frozen
+            && slice
+                .iter()
+                .any(|s| s.evidence_count != first.evidence_count)
+        {
             return Some(StallType::NoCriteriaProgress);
         }
 
@@ -102,17 +112,35 @@ impl StallDetector {
 mod tests {
     use super::*;
 
-    fn sig(step: u32, tool: &str, cmd: &str, err: u64, files: u32, crit: u32, ev: u32) -> ProgressSignature {
+    fn sig(
+        step: u32,
+        tool: &str,
+        cmd: &str,
+        err: u64,
+        files: u32,
+        crit: u32,
+        ev: u32,
+    ) -> ProgressSignature {
         ProgressSignature {
-            step, state_hash: 0, files_changed: files, criteria_satisfied: crit, evidence_count: ev,
-            last_tool_used: tool.to_string(), last_command: cmd.to_string(), last_files: "".to_string(), last_error_hash: err,
+            step,
+            state_hash: 0,
+            world_version: files as u64,
+            criteria_satisfied: crit,
+            criteria_remaining: 10 - crit,
+            evidence_count: ev,
+            last_tool_used: tool.to_string(),
+            last_command: cmd.to_string(),
+            last_verifier_result_hash: if err == 0 { None } else { Some(err.to_string()) },
+            last_action_identity: None,
         }
     }
 
     #[test]
     fn test_stall_repeated_tool() {
         let mut d = StallDetector::new(5);
-        for i in 0..3 { d.record_signature(sig(i, "TOOL_TERMINAL", "cargo build", 0, i, 0, 0)); }
+        for i in 0..3 {
+            d.record_signature(sig(i, "TOOL_TERMINAL", "cargo build", 0, i, 0, 0));
+        }
         assert_eq!(d.detect_stall(3), Some(StallType::RepeatedTool));
     }
 
@@ -130,7 +158,9 @@ mod tests {
     #[test]
     fn test_stall_no_state_change() {
         let mut d = StallDetector::new(5);
-        for i in 0..3 { d.record_signature(sig(i, "", "", 0, 5, 2, 10)); }
+        for i in 0..3 {
+            d.record_signature(sig(i, "", "", 0, 5, 2, 10));
+        }
         assert_eq!(d.detect_stall(3), Some(StallType::NoStateChange));
     }
 
