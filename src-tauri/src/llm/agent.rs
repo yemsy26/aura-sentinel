@@ -2684,16 +2684,34 @@ pub async fn run_agent_loop(
                         // ── Route through Runtime Gateway (P0 fix) ───────────────────────────
                         // execute_action() = authorize_action (already passed) + ToolRegistry.dispatch()
                         // The TOOL_TERMINAL executor is registered above and calls execute_terminal_command().
+                        let mut repair_decision = None;
                         let unified_res = match runtime.execute_action(&action_proposal).await {
                             Ok(obs)
                                 if obs.status
                                     == crate::core::observation::ObservationStatus::Error =>
                             {
+                                repair_decision = runtime.handle_observation(&obs);
                                 Err(obs.payload)
                             }
                             Ok(obs) => Ok(obs),
                             Err(e) => Err(e),
                         };
+
+                        // P0-D Fix: Typed Repair Transition
+                        if let Some(crate::core::recovery::RecoveryDecision::RepairCriteria {
+                            criteria,
+                            recommended_tool,
+                        }) = repair_decision
+                        {
+                            emit_event(&app_handle, runtime.current_step(), &format!("[SEMANTIC_VERIFICATION] Verificador falló. Transición a {}.", recommended_tool), "WARNING");
+                            current_role = AgentRole::Executor;
+                            forced_next_tool = Some((
+                                recommended_tool.clone(),
+                                format!("Corrige los siguientes criterios semánticos que fallaron:\n- {}", criteria.join("\n- "))
+                            ));
+                            continue; // Break the execution loop and transition instantly to repairing
+                        }
+
                         match unified_res {
                             Ok(observation) => {
                                 // execute_action() already records world snapshots before/after internally
@@ -5323,16 +5341,33 @@ pub async fn run_agent_loop(
                             runtime.current_world_hash()
                         ));
                         // P0 fix: route through Runtime Gateway, not direct execution
+                        let mut repair_decision = None;
                         let unified_auto_res = match runtime.execute_action(&auto_proposal).await {
                             Ok(obs)
                                 if obs.status
                                     == crate::core::observation::ObservationStatus::Error =>
                             {
+                                repair_decision = runtime.handle_observation(&obs);
                                 Err(obs.payload)
                             }
                             Ok(obs) => Ok(obs),
                             Err(e) => Err(e),
                         };
+
+                        if let Some(crate::core::recovery::RecoveryDecision::RepairCriteria {
+                            criteria,
+                            recommended_tool,
+                        }) = repair_decision
+                        {
+                            emit_event(&app_handle, runtime.current_step(), &format!("[SEMANTIC_VERIFICATION] Verificador falló (auto). Transición a {}.", recommended_tool), "WARNING");
+                            current_role = AgentRole::Executor;
+                            forced_next_tool = Some((
+                                recommended_tool.clone(),
+                                format!("Corrige los siguientes criterios semánticos que fallaron:\n- {}", criteria.join("\n- "))
+                            ));
+                            continue;
+                        }
+
                         match unified_auto_res {
                             Ok(obs) => {
                                 current_context.push_str(&format!(
