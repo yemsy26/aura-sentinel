@@ -667,12 +667,19 @@ pub fn resolve_model_or_fallback(requested: &str, available_models: &[String]) -
 
 pub async fn run_agent_loop(
     mut user_message: String,
-    workspace_path: String,
+    raw_workspace_path: String,
     _tree_json: String,
     orchestrator_model: String,
     programmer_model: String,
     app_handle: AppHandle,
 ) -> Result<String, String> {
+    // P0-G Fix: Workspace Authority - always canonicalize to absolute paths to prevent '.' bypasses
+    let workspace_path = std::path::Path::new(&raw_workspace_path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(&raw_workspace_path))
+        .to_string_lossy()
+        .to_string();
+
     // PRE-FLIGHT CHECK
     emit_event(
         &app_handle,
@@ -5480,16 +5487,36 @@ pub async fn run_agent_loop(
             &current_context,
         );
         command_trail.save(&workspace_path);
-    }
+    } // End of while loop
 
-    emit_event(
-        &app_handle,
-        runtime.current_step(),
-        "Límite máximo de pasos alcanzado. Bucle abortado.",
-        "FATAL",
-    );
-    // ── Journal: mark as waiting for user ──
-    journal.status = "ESPERANDO".to_string();
+    let (final_status, reason) = match &runtime.terminal_state {
+        Some(crate::core::mission_runtime::RuntimeTerminalState::Failed(msg)) => {
+            emit_event(&app_handle, runtime.current_step(), &format!("Abortando misión: {}", msg), "FATAL");
+            ("ERROR", format!("La misión ha sido abortada por un error crítico: {}", msg))
+        }
+        Some(crate::core::mission_runtime::RuntimeTerminalState::WaitingUser(prompt)) => {
+            ("WAITING_USER", prompt.clone())
+        }
+        Some(crate::core::mission_runtime::RuntimeTerminalState::Completed) => {
+            ("FINISH", "Misión completada con éxito.".to_string())
+        }
+        _ => {
+            emit_event(
+                &app_handle,
+                runtime.current_step(),
+                "Límite máximo de pasos alcanzado. Bucle abortado.",
+                "FATAL",
+            );
+            ("ERROR", format!(
+                "He alcanzado el límite máximo de {} pasos sin llegar a una conclusión. \
+                 Por favor, revisa el historial de pasos y proporciona más contexto.",
+                runtime.budget.total_steps
+            ))
+        }
+    };
+
+    // ── Journal: mark status ──
+    journal.status = if final_status == "FINISH" { "FINALIZADO".to_string() } else { "ESPERANDO".to_string() };
     if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) {
         emit_event(
             &app_handle,
@@ -5498,13 +5525,10 @@ pub async fn run_agent_loop(
             "FATAL",
         );
     }
+
     let final_res = FinalResponse {
-        status: "FINISH".to_string(),
-        respuesta_conversacional: format!(
-            "He alcanzado el límite máximo de {} pasos sin llegar a una conclusión. \
-             Por favor, revisa el historial de pasos y proporciona más contexto.",
-            runtime.budget.total_steps
-        ),
+        status: final_status.to_string(),
+        respuesta_conversacional: reason,
     };
     Ok(serde_json::to_string(&final_res).unwrap())
 }

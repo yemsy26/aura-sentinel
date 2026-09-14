@@ -59,6 +59,21 @@ pub struct MissionContract {
 }
 
 impl MissionContract {
+    pub fn load_from_workspace(workspace_path: &std::path::Path) -> Option<Self> {
+        let candidates = [".mission_contract.json", ".cyber_sentinel.json"];
+        for candidate in candidates.iter() {
+            let path = workspace_path.join(candidate);
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(contract) = serde_json::from_str::<Self>(&content) {
+                        return Some(contract);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn new(objective: &str) -> Self {
         Self {
             objective: objective.to_string(),

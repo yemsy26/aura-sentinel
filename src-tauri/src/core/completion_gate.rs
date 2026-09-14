@@ -26,9 +26,12 @@ fn paths_match(p1: &str, p2: &str) -> bool {
     if s1.is_empty() || s2.is_empty() {
         return false;
     }
-    let n1 = s1.replace('\\', "/").trim_end_matches('/').to_lowercase();
-    let n2 = s2.replace('\\', "/").trim_end_matches('/').to_lowercase();
-    n1 == n2 || n1 == "." || n2 == "."
+    
+    // P0-G: Strict canonical matching. Reject '.' bypass.
+    let c1 = std::path::Path::new(s1).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(s1));
+    let c2 = std::path::Path::new(s2).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(s2));
+    
+    c1 == c2
 }
 
 pub struct CompletionGate;

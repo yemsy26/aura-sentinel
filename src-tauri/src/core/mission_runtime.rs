@@ -74,8 +74,10 @@ impl MissionRuntime {
             last_error: None,
             next_required_action: None,
         };
+        let contract = MissionContract::load_from_workspace(std::path::Path::new(workspace_path))
+            .unwrap_or_else(|| MissionContract::new(objective));
         let mut runtime = MissionRuntime {
-            contract: MissionContract::new(objective),
+            contract,
             cognitive_state: CognitiveState::new(&mission_id, objective),
             evidence_graph: EvidenceGraph::new(),
             stall_detector: StallDetector::new(6),
@@ -369,19 +371,15 @@ impl MissionRuntime {
             return None; // workspace MUST exist
         }
 
-        let canonical_ws = self
-            .workspace_path
-            .trim()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_lowercase();
-        let canonical_cwd = obs_cwd
-            .trim()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_lowercase();
+        let canonical_ws = std::path::Path::new(&self.workspace_path)
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(&self.workspace_path));
+        
+        let canonical_cwd = std::path::Path::new(obs_cwd)
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(obs_cwd));
 
-        if canonical_ws.is_empty() || canonical_cwd.is_empty() {
+        if canonical_ws.as_os_str().is_empty() || canonical_cwd.as_os_str().is_empty() {
             return None;
         }
         if canonical_ws != canonical_cwd {
