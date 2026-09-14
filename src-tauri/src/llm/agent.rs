@@ -865,6 +865,7 @@ pub async fn run_agent_loop(
     let mut mandatory_tools_executed: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     let mut forced_next_tool: Option<(String, String)> = None;
+    let mut last_stall_recovery_step: u32 = 0; // prevent recovering from the same stall on consecutive steps
     let mut intercept_consecutive: u32 = 0; // track consecutive LLM disobedience
     let mut ask_user_consecutive: u32 = 0; // track consecutive user questions to prevent stalling loops
                                            // FIX-B3: Per-file patch failure counter. When a file accumulates 3+ PATCH_FAILs in a row,
@@ -1957,12 +1958,15 @@ pub async fn run_agent_loop(
         // ── MissionRuntime: step tracking + stall detection (single source of truth) ──
         runtime.record_step();
         if let Some(stall) = runtime.should_stall_recover(4) {
-            let stall_msg = format!(
-                "[STALL DETECTOR] {:?} detectado. Forzando transición de estrategia.",
-                stall
-            );
-            emit_event(&app_handle, runtime.current_step(), &stall_msg, "WARNING");
-            if forced_next_tool.is_none() {
+            // Only force a transition if we haven't just done one recently
+            if runtime.current_step() > last_stall_recovery_step + 3 {
+                last_stall_recovery_step = runtime.current_step();
+                let stall_msg = format!(
+                    "[STALL DETECTOR] {:?} detectado. Forzando transición de estrategia.",
+                    stall
+                );
+                emit_event(&app_handle, runtime.current_step(), &stall_msg, "WARNING");
+                if forced_next_tool.is_none() {
                 // Determine strategy transition based on physical reality from state_anchor
                 let has_existing_files = !runtime.state_anchor.existing_files.is_empty();
                 let has_test_file = runtime
@@ -2012,6 +2016,7 @@ pub async fn run_agent_loop(
                     ));
                     current_context.push_str(&format!("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: Ejecuta el test existente '{}' para verificar la solución.\n\n", test_cmd));
                 }
+            }
             }
         }
 

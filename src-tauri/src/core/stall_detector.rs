@@ -96,7 +96,8 @@ impl StallDetector {
             return Some(StallType::NoStateChange);
         }
 
-        // NoCriteriaProgress: criteria count frozen across window even though other things changed
+        // NoCriteriaProgress disabled to prevent aggressive false-positive stalls
+        /*
         let criteria_frozen = slice
             .iter()
             .all(|s| s.criteria_satisfied == first.criteria_satisfied);
@@ -107,6 +108,7 @@ impl StallDetector {
         {
             return Some(StallType::NoCriteriaProgress);
         }
+        */
 
         None
     }
