@@ -5544,7 +5544,7 @@ pub fn register_default_tools(
 
     // TOOL_TERMINAL: core command execution
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_TERMINAL",
             Arc::new(move |ws, args| {
@@ -5563,7 +5563,7 @@ pub fn register_default_tools(
 
     // TOOL_WORKSPACE_MANAGER: secure deletion through WorkspaceResolver
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register("TOOL_WORKSPACE_MANAGER", Arc::new(move |ws, args| {
             let workspace = ws.clone();
             Box::pin(async move {
@@ -5632,7 +5632,7 @@ pub fn register_default_tools(
 
     // TOOL_READ_FILE: secure read through WorkspaceResolver
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_READ_FILE",
             Arc::new(move |ws, args| {
@@ -5688,7 +5688,7 @@ pub fn register_default_tools(
 
     // TOOL_PROGRAMMER: real execution via ProgrammerExecutor
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_PROGRAMMER",
             Arc::new(move |ws, args| {
@@ -5703,10 +5703,10 @@ pub fn register_default_tools(
 
     // TOOL_TESTER: real execution via execute_tester_detailed
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_TESTER",
-            Arc::new(move |ws, args| {
+            Arc::new(move |ws, _args| {
                 let workspace = ws.clone();
                 Box::pin(
                     async move { crate::core::tester::execute_tester_detailed(&workspace).await },
@@ -5733,7 +5733,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_ENV_MANAGER",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let package = args
                         .get("package")
@@ -5749,7 +5749,7 @@ pub fn register_default_tools(
 
     // TOOL_ASSET_MANAGER: real execution via asset_fetcher with WorkspaceResolver
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_ASSET_MANAGER",
             Arc::new(move |ws, args| {
@@ -5801,7 +5801,7 @@ pub fn register_default_tools(
 
     // TOOL_BACKGROUND_START: real execution via start_background_task
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_BACKGROUND_START",
             Arc::new(move |ws, args| {
@@ -5829,7 +5829,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_BACKGROUND_READ",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let task_id = args
                         .get("task_id")
@@ -5848,7 +5848,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_BACKGROUND_KILL",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let task_id = args
                         .get("task_id")
@@ -5867,7 +5867,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_BACKGROUND_QUERY",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let task_id = args
                         .get("task_id")
@@ -5886,7 +5886,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_WEB_SCRAPER",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let url = args
                         .get("url_a_investigar")
@@ -5908,7 +5908,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_BROWSE",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let url = args
                         .get("url")
@@ -5928,7 +5928,7 @@ pub fn register_default_tools(
 
     // TOOL_GIT: real execution via execute_terminal_command_detailed
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_GIT",
             Arc::new(move |ws, args| {
@@ -5950,7 +5950,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_THINK",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let thought = args
                         .get("pensamiento")
@@ -5968,7 +5968,7 @@ pub fn register_default_tools(
 
     // TOOL_AUDITOR: real audit reading workspace files
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_AUDITOR",
             Arc::new(move |ws, args| {
@@ -5994,10 +5994,10 @@ pub fn register_default_tools(
 
     // TOOL_MAPPER: real dependency analysis via analyze_workspace
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_MAPPER",
-            Arc::new(move |ws, args| {
+            Arc::new(move |ws, _args| {
                 let workspace = ws.clone();
                 Box::pin(async move {
                     let graph = crate::core::dependency_mapper::analyze_workspace(&workspace);
@@ -6012,7 +6012,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_AST_INJECT",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let opcode = args.get("opcode").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
                     let parent_id = args.get("parent_id").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -6042,7 +6042,7 @@ pub fn register_default_tools(
 
     // TOOL_CONTAINER: real container execution
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_CONTAINER",
             Arc::new(move |ws, args| {
@@ -6083,7 +6083,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_VISION_EVALUATOR",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let prompt = args
                         .get("prompt")
@@ -6107,7 +6107,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_ASK_USER",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let q = args
                         .get("pregunta")
@@ -6126,7 +6126,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_LEARN",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let k = args
                         .get("conocimiento")
@@ -6143,11 +6143,11 @@ pub fn register_default_tools(
 
     // TOOL_CREATE_RUNNER: real runner generation
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let prompt = original_prompt_parsed.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_CREATE_RUNNER",
-            Arc::new(move |ws, args| {
+            Arc::new(move |ws, _args| {
                 let workspace = ws.clone();
                 let p = prompt.clone();
                 Box::pin(async move {
@@ -6171,7 +6171,7 @@ pub fn register_default_tools(
 
     // TOOL_SCHEDULER: real task registration
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_SCHEDULER",
             Arc::new(move |ws, args| {
@@ -6205,7 +6205,7 @@ pub fn register_default_tools(
 
     // TOOL_SEARCH: real memory query & safe file reading
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_SEARCH",
             Arc::new(move |ws, args| {
@@ -6238,7 +6238,7 @@ pub fn register_default_tools(
     {
         let _ = runtime.tool_registry.register(
             "TOOL_LOGIC_SOLVER",
-            Arc::new(move |ws, args| {
+            Arc::new(move |_ws, args| {
                 Box::pin(async move {
                     let n_vars_opt = args
                         .get("n_vars")
@@ -6277,10 +6277,10 @@ pub fn register_default_tools(
 
     // TOOL_ARCHITECT: real execution via dependency_mapper
     {
-        let ws = workspace_path.to_string();
+        let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_ARCHITECT",
-            Arc::new(move |ws, args| {
+            Arc::new(move |ws, _args| {
                 let workspace = ws.clone();
                 Box::pin(async move {
                     let graph = crate::core::dependency_mapper::analyze_workspace(&workspace);

@@ -510,7 +510,7 @@ impl MissionRuntime {
         if !ok {
             obs.payload.hash(&mut hasher);
         }
-        let err_hash = if ok { 0 } else { hasher.finish() };
+        let _err_hash = if ok { 0 } else { hasher.finish() };
 
         // Use real state_hash from observation if available, else fall back to current world hash
         let state_hash = obs
@@ -591,7 +591,7 @@ impl MissionRuntime {
                 } else {
                     // Fallback to old comparison just in case
                     let cmd = current_identity.command;
-                    let files = current_identity.files.join(",");
+                    let _files = current_identity.files.join(",");
                     if proposal.tool == last_sig.last_tool_used && cmd == last_sig.last_command {
                         return Err(format!(
                             "RECOVERY_BARRIER: Acción repetida bloqueada por estancamiento ({:?}).",

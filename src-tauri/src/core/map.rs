@@ -3,6 +3,7 @@ use std::path::Path;
 
 /// Genera un mapa del repositorio (Repository Map) excluyendo carpetas pesadas
 /// y ocultas para inyectar en el contexto del LLM.
+#[allow(dead_code)]
 pub fn generate_repo_map(workspace: &Path) -> String {
     let mut builder = WalkBuilder::new(workspace);
     builder
