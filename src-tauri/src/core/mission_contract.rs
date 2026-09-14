@@ -13,8 +13,18 @@ pub enum VerificationMethod {
     FileExistence(String),
     CommandExitZero(String),
     TestPassed,
-    ContentMatches { file: String, regex: String },
+    ContentMatches {
+        file: String,
+        regex: String,
+    },
     ManualReview,
+    /// The official semantic verifier for this mission.
+    /// CompletionGate will ONLY accept a VerifierResult whose command matches
+    /// this one exactly, with 100% pass rate, and whose state_hash matches the
+    /// current world hash.
+    SemanticVerification {
+        command: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

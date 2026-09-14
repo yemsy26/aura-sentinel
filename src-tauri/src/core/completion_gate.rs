@@ -157,6 +157,44 @@ impl CompletionGate {
                         1.0,
                         current_world_hash,
                     ),
+                crate::core::mission_contract::VerificationMethod::SemanticVerification {
+                    command: expected_cmd,
+                } => {
+                    use crate::core::evidence::StructuredFact;
+                    let expected_norm = normalize_command_str(expected_cmd);
+                    let ws_str = workspace_path.to_string_lossy().to_string();
+                    evidence.has_valid_structured_evidence(0.9, current_world_hash, |fact| {
+                        match fact {
+                            StructuredFact::SemanticVerificationResult(res) => {
+                                // 1. Command must be the registered official verifier
+                                let cmd_matches =
+                                    normalize_command_str(&res.command) == expected_norm;
+                                // 2. exit_code must be 0
+                                let exit_ok = res.exit_code == 0;
+                                // 3. Mathematical integrity: passed == total, total > 0
+                                let math_ok = res.total > 0 && res.passed == res.total;
+                                // 4. percentage must be exactly 100.0 (no rounding tricks)
+                                let pct_ok = (res.percentage - 100.0_f32).abs() < f32::EPSILON;
+                                // 5. No failed criteria
+                                let criteria_ok = res.failed_criteria.is_empty();
+                                // 6. Verifier was run inside the mission workspace
+                                let cwd_ok = paths_match(&res.cwd, &ws_str);
+                                // 7. state_hash matches current world — evidence cannot be stale
+                                let hash_ok = res.state_hash == current_world_hash;
+
+                                cmd_matches
+                                    && exit_ok
+                                    && math_ok
+                                    && pct_ok
+                                    && criteria_ok
+                                    && cwd_ok
+                                    && hash_ok
+                            }
+                            // Any other fact type CANNOT satisfy a SemanticVerification criterion
+                            _ => false,
+                        }
+                    })
+                }
             };
 
             if !is_satisfied {
@@ -889,5 +927,340 @@ mod tests {
         assert_eq!(dec_3, CompletionDecision::Complete);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    // ─── P0-B: SemanticVerification tests (A-L) ──────────────────────────────
+
+    use crate::core::evidence::VerifierResult;
+    use crate::core::mission_contract::VerificationMethod;
+
+    fn sem_contract(cmd: &str) -> MissionContract {
+        let mut c = MissionContract::new("Dashboard");
+        c.add_criterion(
+            "SV-1",
+            "Verifier must pass",
+            VerificationMethod::SemanticVerification {
+                command: cmd.to_string(),
+            },
+            true,
+        );
+        c
+    }
+
+    fn sem_result(
+        cmd: &str,
+        ws: &str,
+        passed: u32,
+        total: u32,
+        pct: f32,
+        failed: Vec<String>,
+        exit_code: i32,
+        state_hash: u64,
+    ) -> VerifierResult {
+        VerifierResult {
+            command: cmd.to_string(),
+            cwd: ws.to_string(),
+            passed,
+            total,
+            percentage: pct,
+            failed_criteria: failed,
+            exit_code,
+            state_hash,
+        }
+    }
+
+    fn record_sem(evidence: &mut EvidenceGraph, res: VerifierResult, world_hash: u64) {
+        evidence
+            .record_structured(
+                EvidenceKind::SemanticVerification,
+                "TOOL_TERMINAL",
+                StructuredFact::SemanticVerificationResult(res),
+                1.0,
+                1,
+                Some(world_hash),
+            )
+            .unwrap();
+    }
+
+    // A. 12/12 => Complete
+    #[test]
+    fn test_sem_a_12_of_12_complete() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        record_sem(
+            &mut evidence,
+            sem_result(cmd, ws, 12, 12, 100.0, vec![], 0, hash),
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert_eq!(
+            dec,
+            CompletionDecision::Complete,
+            "A: 12/12 must be Complete"
+        );
+    }
+
+    // B. 8/12 => Incomplete
+    #[test]
+    fn test_sem_b_8_of_12_incomplete() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        record_sem(
+            &mut evidence,
+            sem_result(
+                cmd,
+                ws,
+                8,
+                12,
+                66.7,
+                vec!["C5".to_string(), "C8".to_string()],
+                0,
+                hash,
+            ),
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "B: 8/12 must be Incomplete"
+        );
+    }
+
+    // C. percentage=100 but passed < total => Incomplete (mathematical inconsistency)
+    #[test]
+    fn test_sem_c_pct_100_but_passed_lt_total() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        record_sem(
+            &mut evidence,
+            sem_result(cmd, ws, 8, 12, 100.0, vec![], 0, hash), // pct lies
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "C: pct=100 but passed<total must be Incomplete"
+        );
+    }
+
+    // D. failed_criteria non-empty => Incomplete
+    #[test]
+    fn test_sem_d_failed_criteria_nonempty() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        record_sem(
+            &mut evidence,
+            sem_result(
+                cmd,
+                ws,
+                12,
+                12,
+                100.0,
+                vec!["C9 radar".to_string()],
+                0,
+                hash,
+            ),
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "D: non-empty failed_criteria must be Incomplete"
+        );
+    }
+
+    // E. exit_code != 0 => Incomplete
+    #[test]
+    fn test_sem_e_exit_code_nonzero() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        record_sem(
+            &mut evidence,
+            sem_result(cmd, ws, 12, 12, 100.0, vec![], 1, hash), // exit_code=1
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "E: exit_code=1 must be Incomplete"
+        );
+    }
+
+    // F. Different command => Incomplete
+    #[test]
+    fn test_sem_f_wrong_command() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let contract = sem_contract("python verify_dashboard.py");
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        // Record a result from a DIFFERENT command
+        record_sem(
+            &mut evidence,
+            sem_result("python fake_checker.py", ws, 12, 12, 100.0, vec![], 0, hash),
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "F: wrong command must be Incomplete"
+        );
+    }
+
+    // G. cwd outside workspace => Incomplete
+    #[test]
+    fn test_sem_g_wrong_cwd() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        record_sem(
+            &mut evidence,
+            sem_result(cmd, "/tmp/other", 12, 12, 100.0, vec![], 0, hash),
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "G: wrong cwd must be Incomplete"
+        );
+    }
+
+    // H. state_hash mismatch (stale evidence) => Incomplete
+    #[test]
+    fn test_sem_h_stale_state_hash() {
+        let ws = "/workspace/project";
+        let current_hash = 200u64;
+        let stale_hash = 100u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        // Evidence recorded against stale world
+        record_sem(
+            &mut evidence,
+            sem_result(cmd, ws, 12, 12, 100.0, vec![], 0, stale_hash),
+            stale_hash,
+        );
+        let dec =
+            CompletionGate::evaluate(&contract, &state, &evidence, current_hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "H: stale state_hash must be Incomplete"
+        );
+    }
+
+    // I. total = 0 => Incomplete (division by zero / degenerate case)
+    #[test]
+    fn test_sem_i_total_zero() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        record_sem(
+            &mut evidence,
+            sem_result(cmd, ws, 0, 0, 100.0, vec![], 0, hash),
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "I: total=0 must be Incomplete"
+        );
+    }
+
+    // J. Old semantic evidence + new world hash => Incomplete
+    #[test]
+    fn test_sem_j_old_evidence_new_world() {
+        let ws = "/workspace/project";
+        let old_hash = 50u64;
+        let new_hash = 999u64;
+        let cmd = "python verify_dashboard.py";
+        let contract = sem_contract(cmd);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        // Evidence from old world was perfect
+        record_sem(
+            &mut evidence,
+            sem_result(cmd, ws, 12, 12, 100.0, vec![], 0, old_hash),
+            old_hash,
+        );
+        // But world has changed
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, new_hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "J: old evidence + new world must be Incomplete"
+        );
+    }
+
+    // K. CriterionStatus::Satisfied without evidence => Incomplete (LLM cannot self-certify)
+    #[test]
+    fn test_sem_k_status_satisfied_no_evidence() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let mut contract = sem_contract("python verify_dashboard.py");
+        // Simulate the LLM or old code marking the criterion as Satisfied
+        contract.mark_criterion("SV-1", true);
+        let state = CognitiveState::new("m1", "Dashboard");
+        let evidence = EvidenceGraph::new(); // no actual evidence
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "K: CriterionStatus::Satisfied without evidence must be Incomplete"
+        );
+    }
+
+    // L. JSON-compatible output from a different command does NOT satisfy SemanticVerification
+    #[test]
+    fn test_sem_l_fake_json_from_wrong_command_rejected() {
+        let ws = "/workspace/project";
+        let hash = 100u64;
+        let contract = sem_contract("python verify_dashboard.py");
+        let state = CognitiveState::new("m1", "Dashboard");
+        let mut evidence = EvidenceGraph::new();
+        // A completely different command happens to output the right JSON shape
+        record_sem(
+            &mut evidence,
+            sem_result(
+                "python random_script.py", // NOT the official verifier
+                ws,
+                12,
+                12,
+                100.0,
+                vec![],
+                0,
+                hash,
+            ),
+            hash,
+        );
+        let dec = CompletionGate::evaluate(&contract, &state, &evidence, hash, Path::new(ws));
+        assert!(
+            matches!(dec, CompletionDecision::Incomplete(_)),
+            "L: fake JSON from wrong command must NOT satisfy SemanticVerification"
+        );
     }
 }
