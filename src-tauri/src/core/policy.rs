@@ -16,6 +16,24 @@ pub enum PolicyDecision {
     Sandbox(String),
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionIdentity {
+    pub tool: String,
+    pub command: String,
+    pub cwd: String,
+    pub files: Vec<String>,
+    pub world_hash: u64,
+    pub active_criterion: Option<String>,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyFingerprint {
+    pub tool: String,
+    pub command: String,
+    pub target_files: Vec<String>,
+    pub approach: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionProposal {
     pub tool: String,
@@ -23,6 +41,45 @@ pub struct ActionProposal {
     pub expected_effect: String,
     pub risk: RiskLevel,
     pub world_hash: Option<u64>,
+}
+
+impl ActionProposal {
+    pub fn identity(
+        &self,
+        cwd: &str,
+        world_hash: u64,
+        active_criterion: Option<String>,
+    ) -> ActionIdentity {
+        let command = self
+            .arguments
+            .get("comando")
+            .or_else(|| self.arguments.get("command"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let mut files = Vec::new();
+        if let Some(archivos) = self
+            .arguments
+            .get("archivos_a_editar")
+            .and_then(|v| v.as_array())
+        {
+            for v in archivos {
+                if let Some(s) = v.as_str() {
+                    files.push(s.to_string());
+                }
+            }
+        }
+
+        ActionIdentity {
+            tool: self.tool.clone(),
+            command,
+            cwd: cwd.to_string(),
+            files,
+            world_hash,
+            active_criterion,
+        }
+    }
 }
 
 pub struct PolicyEngine;
@@ -34,7 +91,9 @@ impl PolicyEngine {
 
         // 1. Reglas estrictas para TOOL_TERMINAL
         if tool == "TOOL_TERMINAL" {
-            let cmd = proposal.arguments.get("comando")
+            let cmd = proposal
+                .arguments
+                .get("comando")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
@@ -43,8 +102,14 @@ impl PolicyEngine {
 
             // Bloquear comandos destructivos y operaciones críticas del sistema operativo
             let dangerous_patterns = [
-                "format ", "del /f /s /q c:\\", "rmdir /s /q c:\\", "rd /s /q c:\\",
-                "drop database", "shutdown", "reg delete", "diskpart",
+                "format ",
+                "del /f /s /q c:\\",
+                "rmdir /s /q c:\\",
+                "rd /s /q c:\\",
+                "drop database",
+                "shutdown",
+                "reg delete",
+                "diskpart",
                 "powershell remove-item -recurse -force c:\\",
                 ":(){ :|:& };:", // forkbomb
             ];
@@ -60,7 +125,10 @@ impl PolicyEngine {
 
             // Operaciones que requieren confirmación explícita del usuario
             let user_required_patterns = [
-                "git push --force", "git reset --hard", "drop table", "truncate table"
+                "git push --force",
+                "git reset --hard",
+                "drop table",
+                "truncate table",
             ];
 
             for pattern in &user_required_patterns {
@@ -86,9 +154,16 @@ impl PolicyEngine {
     /// Clasifica el nivel de riesgo de un comando terminal
     pub fn classify_terminal_command(command: &str) -> RiskLevel {
         let cmd_lower = command.to_lowercase();
-        if cmd_lower.contains("rm ") || cmd_lower.contains("del ") || cmd_lower.contains("rd ") || cmd_lower.contains("remove-item") {
+        if cmd_lower.contains("rm ")
+            || cmd_lower.contains("del ")
+            || cmd_lower.contains("rd ")
+            || cmd_lower.contains("remove-item")
+        {
             RiskLevel::Moderate
-        } else if cmd_lower.contains("format") || cmd_lower.contains("diskpart") || cmd_lower.contains("reg delete") {
+        } else if cmd_lower.contains("format")
+            || cmd_lower.contains("diskpart")
+            || cmd_lower.contains("reg delete")
+        {
             RiskLevel::Dangerous
         } else {
             RiskLevel::Safe

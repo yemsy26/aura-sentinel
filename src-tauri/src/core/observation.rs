@@ -21,6 +21,7 @@ pub struct Observation {
     pub payload: String,
     pub exit_code: Option<i32>,
     pub files_affected: Vec<String>,
+    pub action_identity: Option<crate::core::policy::ActionIdentity>,
     /// The exact command string that was executed (for RepeatedCommand stall detection)
     pub command: Option<String>,
     /// World state hash before the tool ran (for NoStateChange stall detection)
@@ -41,13 +42,18 @@ pub struct Observation {
 }
 
 impl Observation {
-    pub fn success(tool_name: impl Into<String>, payload: impl Into<String>, files: Vec<String>) -> Self {
+    pub fn success(
+        tool_name: impl Into<String>,
+        payload: impl Into<String>,
+        files: Vec<String>,
+    ) -> Self {
         Self {
             tool_name: tool_name.into(),
             status: ObservationStatus::Success,
             payload: payload.into(),
             exit_code: Some(0),
             files_affected: files,
+            action_identity: None,
             command: None,
             state_hash_before: None,
             state_hash_after: None,
@@ -70,6 +76,7 @@ impl Observation {
             payload: reason.into(),
             exit_code: None,
             files_affected: vec![],
+            action_identity: None,
             command: None,
             state_hash_before: None,
             state_hash_after: None,
@@ -96,6 +103,7 @@ impl Observation {
             payload: error_msg.into(),
             exit_code,
             files_affected: Vec::new(),
+            action_identity: None,
             command: None,
             state_hash_before: None,
             state_hash_after: None,
@@ -116,6 +124,7 @@ impl Observation {
             payload: reason.into(),
             exit_code: None,
             files_affected: Vec::new(),
+            action_identity: None,
             command: None,
             state_hash_before: None,
             state_hash_after: None,
@@ -136,6 +145,7 @@ impl Observation {
             payload: reason.into(),
             exit_code: None,
             files_affected: Vec::new(),
+            action_identity: None,
             command: None,
             state_hash_before: None,
             state_hash_after: None,
@@ -183,12 +193,22 @@ mod tests {
 
     #[test]
     fn test_observation_creation() {
-        let obs = Observation::success("TOOL_TERMINAL", "build passed", vec!["src/main.rs".to_string()]);
+        let obs = Observation::success(
+            "TOOL_TERMINAL",
+            "build passed",
+            vec!["src/main.rs".to_string()],
+        );
         assert_eq!(obs.status, ObservationStatus::Success);
         assert_eq!(obs.exit_code, Some(0));
         assert!(!obs.retryable);
 
-        let err_obs = Observation::error("TOOL_TERMINAL", "exit 1", Some(1), true, Some("fix flag".to_string()));
+        let err_obs = Observation::error(
+            "TOOL_TERMINAL",
+            "exit 1",
+            Some(1),
+            true,
+            Some("fix flag".to_string()),
+        );
         assert_eq!(err_obs.status, ObservationStatus::Error);
         assert!(err_obs.retryable);
 

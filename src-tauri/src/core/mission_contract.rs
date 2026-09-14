@@ -65,15 +65,18 @@ impl MissionContract {
                 },
             ],
             acceptance_criteria: Vec::new(),
-            forbidden_actions: vec![
-                "rm -rf /".to_string(),
-                "format".to_string(),
-            ],
+            forbidden_actions: vec!["rm -rf /".to_string(), "format".to_string()],
             required_evidence: Vec::new(),
         }
     }
 
-    pub fn add_criterion(&mut self, id: &str, description: &str, verification: VerificationMethod, required: bool) {
+    pub fn add_criterion(
+        &mut self,
+        id: &str,
+        description: &str,
+        verification: VerificationMethod,
+        required: bool,
+    ) {
         self.acceptance_criteria.push(AcceptanceCriterion {
             id: id.to_string(),
             description: description.to_string(),

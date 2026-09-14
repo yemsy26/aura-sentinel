@@ -26,11 +26,25 @@ pub enum EvidenceKind {
     Lint,
     StaticAnalysis,
     RuntimeCheck,
+    SemanticVerification,
     UserConfirmation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VerifierResult {
+    pub passed: u32,
+    pub total: u32,
+    pub percentage: f32,
+    pub failed_criteria: Vec<String>,
+    pub exit_code: i32,
+    pub command: String,
+    pub cwd: String,
+    pub state_hash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StructuredFact {
+    SemanticVerificationResult(VerifierResult),
     CommandResult {
         command: String,
         cwd: String,
@@ -49,7 +63,7 @@ pub enum StructuredFact {
     Generic {
         claim: String,
         value: String,
-    }
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,49 +84,85 @@ pub struct EvidenceGraph {
 }
 
 impl EvidenceGraph {
-    pub fn new() -> Self { Self { entries: Vec::new() } }
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
 
     pub fn kind_requires_workspace_hash(kind: &EvidenceKind) -> bool {
         match kind {
-            EvidenceKind::FileHash | EvidenceKind::FileCreated | EvidenceKind::FileModified |
-            EvidenceKind::CommandExitCode | EvidenceKind::CommandOutput | EvidenceKind::Compilation |
-            EvidenceKind::Test | EvidenceKind::Lint | EvidenceKind::StaticAnalysis |
-            EvidenceKind::RuntimeCheck => true,
+            EvidenceKind::FileHash
+            | EvidenceKind::FileCreated
+            | EvidenceKind::FileModified
+            | EvidenceKind::CommandExitCode
+            | EvidenceKind::CommandOutput
+            | EvidenceKind::Compilation
+            | EvidenceKind::Test
+            | EvidenceKind::Lint
+            | EvidenceKind::StaticAnalysis
+            | EvidenceKind::RuntimeCheck
+            | EvidenceKind::SemanticVerification => true,
             EvidenceKind::UserConfirmation => false,
         }
     }
 
     pub fn record(
-        &mut self, kind: EvidenceKind, source: &str, claim: &str,
-        value: &str, reliability: f32, step: u32,
+        &mut self,
+        kind: EvidenceKind,
+        source: &str,
+        claim: &str,
+        value: &str,
+        reliability: f32,
+        step: u32,
     ) -> Result<String, String> {
         self.record_generic_with_hash(kind, source, claim, value, reliability, step, None)
     }
 
     pub fn record_with_hash(
-        &mut self, kind: EvidenceKind, source: &str, claim: &str,
-        value: &str, reliability: f32, step: u32, state_hash: Option<u64>
+        &mut self,
+        kind: EvidenceKind,
+        source: &str,
+        claim: &str,
+        value: &str,
+        reliability: f32,
+        step: u32,
+        state_hash: Option<u64>,
     ) -> Result<String, String> {
         self.record_generic_with_hash(kind, source, claim, value, reliability, step, state_hash)
     }
 
     pub fn record_generic_with_hash(
-        &mut self, kind: EvidenceKind, source: &str, claim: &str,
-        value: &str, reliability: f32, step: u32, state_hash: Option<u64>
+        &mut self,
+        kind: EvidenceKind,
+        source: &str,
+        claim: &str,
+        value: &str,
+        reliability: f32,
+        step: u32,
+        state_hash: Option<u64>,
     ) -> Result<String, String> {
         self.record_structured(
             kind,
             source,
-            StructuredFact::Generic { claim: claim.to_string(), value: value.to_string() },
+            StructuredFact::Generic {
+                claim: claim.to_string(),
+                value: value.to_string(),
+            },
             reliability,
             step,
-            state_hash
+            state_hash,
         )
     }
 
     pub fn record_structured(
-        &mut self, kind: EvidenceKind, source: &str, fact: StructuredFact,
-        reliability: f32, step: u32, state_hash: Option<u64>
+        &mut self,
+        kind: EvidenceKind,
+        source: &str,
+        fact: StructuredFact,
+        reliability: f32,
+        step: u32,
+        state_hash: Option<u64>,
     ) -> Result<String, String> {
         if Self::kind_requires_workspace_hash(&kind) {
             if state_hash.is_none() {
@@ -125,25 +175,40 @@ impl EvidenceGraph {
 
         let id = format!("ev_{:x}", self.entries.len() + 1);
         self.entries.push(Evidence {
-            id: id.clone(), kind, source: source.to_string(),
+            id: id.clone(),
+            kind,
+            source: source.to_string(),
             fact,
-            timestamp: chrono::Utc::now().to_rfc3339(), reliability, mission_step: step,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            reliability,
+            mission_step: step,
             state_hash,
         });
         Ok(id)
     }
 
-    pub fn has_valid_structured_evidence<F>(&self, min_reliability: f32, current_state_hash: u64, predicate: F) -> bool
+    pub fn has_valid_structured_evidence<F>(
+        &self,
+        min_reliability: f32,
+        current_state_hash: u64,
+        predicate: F,
+    ) -> bool
     where
         F: Fn(&StructuredFact) -> bool,
     {
         self.entries.iter().any(|e| {
-            if e.reliability < min_reliability { return false; }
+            if e.reliability < min_reliability {
+                return false;
+            }
             if Self::kind_requires_workspace_hash(&e.kind) {
-                if e.state_hash != Some(current_state_hash) { return false; }
+                if e.state_hash != Some(current_state_hash) {
+                    return false;
+                }
             } else {
                 if let Some(hash) = e.state_hash {
-                    if hash != current_state_hash { return false; }
+                    if hash != current_state_hash {
+                        return false;
+                    }
                 }
             }
             predicate(&e.fact)
@@ -154,7 +219,13 @@ impl EvidenceGraph {
         Self::kind_requires_workspace_hash(kind)
     }
 
-    pub fn has_valid_technical_evidence<F>(&self, kind: EvidenceKind, min_reliability: f32, current_state_hash: u64, predicate: F) -> bool
+    pub fn has_valid_technical_evidence<F>(
+        &self,
+        kind: EvidenceKind,
+        min_reliability: f32,
+        current_state_hash: u64,
+        predicate: F,
+    ) -> bool
     where
         F: Fn(&StructuredFact) -> bool,
     {
@@ -162,19 +233,34 @@ impl EvidenceGraph {
             return false;
         }
         self.entries.iter().any(|e| {
-            if e.kind != kind || e.reliability < min_reliability { return false; }
-            if e.state_hash != Some(current_state_hash) { return false; }
-            if matches!(e.fact, StructuredFact::Generic { .. }) { return false; }
+            if e.kind != kind || e.reliability < min_reliability {
+                return false;
+            }
+            if e.state_hash != Some(current_state_hash) {
+                return false;
+            }
+            if matches!(e.fact, StructuredFact::Generic { .. }) {
+                return false;
+            }
             predicate(&e.fact)
         })
     }
 
-    pub fn has_valid_manual_evidence_for_state(&self, claim: &str, min_reliability: f32, current_state_hash: u64) -> bool {
+    pub fn has_valid_manual_evidence_for_state(
+        &self,
+        claim: &str,
+        min_reliability: f32,
+        current_state_hash: u64,
+    ) -> bool {
         let norm_claim = normalize_cmd(claim);
         self.entries.iter().any(|e| {
-            if e.kind != EvidenceKind::UserConfirmation || e.reliability < min_reliability { return false; }
+            if e.kind != EvidenceKind::UserConfirmation || e.reliability < min_reliability {
+                return false;
+            }
             if let Some(hash) = e.state_hash {
-                if hash != current_state_hash { return false; }
+                if hash != current_state_hash {
+                    return false;
+                }
             }
             if let StructuredFact::Generic { claim: c, .. } = &e.fact {
                 normalize_cmd(c) == norm_claim
@@ -184,28 +270,43 @@ impl EvidenceGraph {
         })
     }
 
-    pub fn has_valid_evidence_for_state(&self, claim: &str, min_reliability: f32, current_state_hash: u64) -> bool {
+    pub fn has_valid_evidence_for_state(
+        &self,
+        claim: &str,
+        min_reliability: f32,
+        current_state_hash: u64,
+    ) -> bool {
         let norm_claim = normalize_cmd(claim);
         self.entries.iter().any(|e| {
-            if e.reliability < min_reliability { return false; }
+            if e.reliability < min_reliability {
+                return false;
+            }
             if Self::kind_requires_workspace_hash(&e.kind) {
-                if e.state_hash != Some(current_state_hash) { return false; }
+                if e.state_hash != Some(current_state_hash) {
+                    return false;
+                }
             } else {
                 if let Some(hash) = e.state_hash {
-                    if hash != current_state_hash { return false; }
+                    if hash != current_state_hash {
+                        return false;
+                    }
                 }
             }
             match &e.fact {
                 StructuredFact::Generic { claim: c, .. } => {
-                    // Technical evidence kinds MUST NEVER match Generic
                     !Self::kind_requires_workspace_hash(&e.kind) && normalize_cmd(c) == norm_claim
-                },
-                StructuredFact::TestResult { command, exit_code, .. } => {
-                    *exit_code == 0 && normalize_cmd(command) == norm_claim
-                },
-                StructuredFact::CommandResult { command, exit_code, .. } => {
-                    *exit_code == 0 && normalize_cmd(command) == norm_claim
-                },
+                }
+                StructuredFact::TestResult {
+                    command, exit_code, ..
+                } => *exit_code == 0 && normalize_cmd(command) == norm_claim,
+                StructuredFact::CommandResult {
+                    command, exit_code, ..
+                } => *exit_code == 0 && normalize_cmd(command) == norm_claim,
+                StructuredFact::SemanticVerificationResult(res) => {
+                    res.percentage == 100.0
+                        && res.exit_code == 0
+                        && normalize_cmd(&res.command) == norm_claim
+                }
             }
         })
     }
@@ -215,35 +316,48 @@ impl EvidenceGraph {
         kind: EvidenceKind,
         claim: &str,
         min_reliability: f32,
-        current_state_hash: u64
+        current_state_hash: u64,
     ) -> bool {
         let norm_claim = normalize_cmd(claim);
         self.entries.iter().any(|e| {
-            if e.kind != kind || e.reliability < min_reliability { return false; }
+            if e.kind != kind || e.reliability < min_reliability {
+                return false;
+            }
             if Self::kind_requires_workspace_hash(&e.kind) {
-                if e.state_hash != Some(current_state_hash) { return false; }
+                if e.state_hash != Some(current_state_hash) {
+                    return false;
+                }
             } else {
                 if let Some(hash) = e.state_hash {
-                    if hash != current_state_hash { return false; }
+                    if hash != current_state_hash {
+                        return false;
+                    }
                 }
             }
             match &e.fact {
                 StructuredFact::Generic { claim: c, .. } => {
                     !Self::kind_requires_workspace_hash(&e.kind) && normalize_cmd(c) == norm_claim
-                },
-                StructuredFact::TestResult { command, exit_code, .. } => {
-                    *exit_code == 0 && normalize_cmd(command) == norm_claim
-                },
-                StructuredFact::CommandResult { command, exit_code, .. } => {
-                    *exit_code == 0 && normalize_cmd(command) == norm_claim
-                },
+                }
+                StructuredFact::TestResult {
+                    command, exit_code, ..
+                } => *exit_code == 0 && normalize_cmd(command) == norm_claim,
+                StructuredFact::CommandResult {
+                    command, exit_code, ..
+                } => *exit_code == 0 && normalize_cmd(command) == norm_claim,
+                StructuredFact::SemanticVerificationResult(res) => {
+                    res.percentage == 100.0
+                        && res.exit_code == 0
+                        && normalize_cmd(&res.command) == norm_claim
+                }
             }
         })
     }
 
     pub fn has_valid_evidence_for(&self, claim: &str, min_reliability: f32) -> bool {
         self.entries.iter().any(|e| {
-            if e.reliability < min_reliability { return false; }
+            if e.reliability < min_reliability {
+                return false;
+            }
             if let StructuredFact::Generic { claim: c, .. } = &e.fact {
                 c == claim
             } else {
@@ -267,7 +381,15 @@ mod tests {
     #[test]
     fn test_exact_match_required() {
         let mut g = EvidenceGraph::new();
-        g.record(EvidenceKind::UserConfirmation, "user", "cargo check passes", "0", 0.9, 1).unwrap();
+        g.record(
+            EvidenceKind::UserConfirmation,
+            "user",
+            "cargo check passes",
+            "0",
+            0.9,
+            1,
+        )
+        .unwrap();
 
         // Exact match succeeds
         assert!(g.has_valid_evidence_for("cargo check passes", 0.5));
@@ -281,6 +403,16 @@ mod tests {
     #[test]
     fn test_technical_kind_rejects_generic_claim() {
         let mut g = EvidenceGraph::new();
-        assert!(g.record_with_hash(EvidenceKind::Compilation, "cargo", "cargo check passes", "0", 0.9, 1, Some(123)).is_err());
+        assert!(g
+            .record_with_hash(
+                EvidenceKind::Compilation,
+                "cargo",
+                "cargo check passes",
+                "0",
+                0.9,
+                1,
+                Some(123)
+            )
+            .is_err());
     }
 }
