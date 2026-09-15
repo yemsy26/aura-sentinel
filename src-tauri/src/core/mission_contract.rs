@@ -59,6 +59,28 @@ pub struct MissionContract {
 }
 
 impl MissionContract {
+    /// Ground explicit deliverables and the requested verifier before the first model action.
+    pub fn from_objective(objective: &str) -> Self {
+        let mut contract = Self::new(objective);
+        let pattern = regex::Regex::new(r"(?i)\b[a-z_][a-z0-9_-]*\.(?:html|css|js|ts|py|rs|json|md)\b").unwrap();
+        let mut files: Vec<String> = pattern.find_iter(objective).map(|m| m.as_str().to_string()).collect();
+        files.sort(); files.dedup();
+        for (index, file) in files.iter().enumerate() {
+            contract.add_criterion(&format!("FILE-{}", index + 1), &format!("Entregable requerido: {}", file),
+                VerificationMethod::FileExistence(file.clone()), true);
+        }
+        if let Some(verifier) = files.iter().find(|f| f.starts_with("verify_") && f.ends_with(".py")) {
+            contract.add_criterion("VERIFIER", "El verificador solicitado pasa todos sus criterios",
+                VerificationMethod::SemanticVerification { command: format!("python {}", verifier) }, true);
+        } else {
+            contract.add_criterion("AC-VALIDATION", "Validación funcional del proyecto", VerificationMethod::TestPassed, true);
+        }
+        if files.is_empty() {
+            contract.add_criterion("AC-DELIVERABLES", "Revisión de los entregables solicitados", VerificationMethod::ManualReview, true);
+        }
+        contract
+    }
+
     pub fn load_from_workspace(workspace_path: &std::path::Path) -> Option<Self> {
         let candidates = [".mission_contract.json", ".cyber_sentinel.json"];
         for candidate in candidates.iter() {

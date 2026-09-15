@@ -254,6 +254,22 @@ pub fn close_journal(
     workspace_path: &str,
 ) -> Result<(), String> {
     journal.status = status.to_string();
+    if matches!(status, "COMPLETADO" | "FINALIZADO") {
+        for phase in &mut journal.fases {
+            phase.estado = "COMPLETADA".to_string();
+        }
+        for goal in &mut journal.micro_metas {
+            goal.estado = "VERIFICADA".to_string();
+        }
+        journal.fase_actual = journal.fases.len().saturating_sub(1);
+        journal.micro_meta_actual = journal.micro_metas.len().saturating_sub(1);
+    } else if status == "FALLIDO" {
+        if let Some(phase) = journal.fases.get_mut(journal.fase_actual) {
+            if phase.estado != "COMPLETADA" {
+                phase.estado = "FALLIDA".to_string();
+            }
+        }
+    }
     journal.ultima_actualizacion = current_timestamp();
     save_journal(workspace_path, journal)
         .map_err(|e| format!("[CHECKPOINT FATAL] close_journal: {}", e))
@@ -285,6 +301,41 @@ mod tests {
             "Error must include [JOURNAL] prefix for traceability, got: {}",
             err_msg
         );
+    }
+
+    #[test]
+    fn completed_journal_cannot_keep_active_phases_or_goals() {
+        let root = std::env::temp_dir().join(format!("aura-journal-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut journal = SessionJournal::default();
+        journal.fases.push(Fase {
+            estado: "EN_PROGRESO".into(),
+            ..Fase::default()
+        });
+        journal.micro_metas.push(MicroMeta {
+            estado: "PENDIENTE".into(),
+            ..MicroMeta::default()
+        });
+        close_journal(&mut journal, "COMPLETADO", root.to_str().unwrap()).unwrap();
+        assert_eq!(journal.status, "COMPLETADO");
+        assert_eq!(journal.fases[0].estado, "COMPLETADA");
+        assert_eq!(journal.micro_metas[0].estado, "VERIFICADA");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_journal_marks_the_active_phase_failed() {
+        let root = std::env::temp_dir().join(format!("aura-journal-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut journal = SessionJournal::default();
+        journal.fases.push(Fase {
+            estado: "EN_PROGRESO".into(),
+            ..Fase::default()
+        });
+        close_journal(&mut journal, "FALLIDO", root.to_str().unwrap()).unwrap();
+        assert_eq!(journal.status, "FALLIDO");
+        assert_eq!(journal.fases[0].estado, "FALLIDA");
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 

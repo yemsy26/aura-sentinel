@@ -125,7 +125,7 @@ function renderMarkdownSafely(text) {
     if (!text) return '';
     if (window.marked) {
         try {
-            return window.marked.parse(String(text));
+            return window.DOMPurify.sanitize(window.marked.parse(String(text)), { USE_PROFILES: { html: true } });
         } catch (e) {
             console.warn("Markdown parse error, fallback to sanitized text", e);
         }
@@ -385,7 +385,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const codeHeader = document.createElement('div');
             codeHeader.className = 'code-block-header';
-            codeHeader.innerHTML = `<span>${lang}</span>`;
+            codeHeader.textContent = lang;
 
             const copyBtn = document.createElement('button');
             copyBtn.className = 'code-copy-btn';
@@ -402,68 +402,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             wrapper.appendChild(pre);
         });
 
-        // Detect and render SpectraSAT Mathematical Certificate
-        if (text.includes('SATISFACIBLE') || text.includes('SpectraSAT')) {
-            const satCard = document.createElement('div');
-            satCard.className = 'sat-cert-card';
-            satCard.innerHTML = `
-                <div class="sat-cert-header">
-                    <span>⚡ VALIDACIÓN MATEMÁTICA FORMAL (SPECTRASAT)</span>
-                    <span class="sat-cert-badge">SAT CERTIFIED ✓</span>
-                </div>
-                <div style="font-size:12px;color:#c9d1d9;margin:4px 0;">
-                    Veredicto: <strong>SATISFACIBLE (SAT)</strong> — Protocolo de 10 cláusulas y 6 variables consistente.
-                </div>
-                <div class="sat-chips-container">
-                    <span class="sat-chip">v1: 0 (False)</span>
-                    <span class="sat-chip">v2: 0 (False)</span>
-                    <span class="sat-chip">v3: 0 (False)</span>
-                    <span class="sat-chip">v4: 0 (False)</span>
-                    <span class="sat-chip">v5: 0 (False)</span>
-                    <span class="sat-chip">v6: 0 (False)</span>
-                </div>
-            `;
-            body.appendChild(satCard);
-        }
-
-        // Detect and render Unit Test Suite Results
-        if (text.includes('Ran 3 tests') || text.includes('100% Exitosas') || text.includes('tests aprobados')) {
-            const testCard = document.createElement('div');
-            testCard.className = 'test-suite-card';
-            testCard.innerHTML = `
-                <div class="test-suite-header">
-                    <span>🧪 TEST SUITE EJECUTADA AL 100%</span>
-                    <span style="color:#56d364;font-size:11px;">3/3 PASSED ✓ (0.000s)</span>
-                </div>
-                <div style="font-size:11px;color:#8b949e;margin-top:4px;">
-                    Verificación de accesos denegados, validación JSON y consistencia booleana certificada.
-                </div>
-            `;
-            body.appendChild(testCard);
-        }
-
-        // Detect generated files and render Artifact Cards
-        const fileMatches = text.match(/(auth_sentinel\.py|auditoria_seguridad\.md|logic_result\.json|test_requests\.json)/g);
-        if (fileMatches && fileMatches.length > 0) {
-            const uniqueFiles = Array.from(new Set(fileMatches));
-            uniqueFiles.forEach(fileName => {
-                const fullPath = currentWorkspace !== "Ninguno" ? `${currentWorkspace}\\${fileName}` : fileName;
-                const card = document.createElement('div');
-                card.className = 'artifact-card';
-                card.innerHTML = `
-                    <div class="artifact-info">
-                        <span class="artifact-icon">${getFileIcon(fileName)}</span>
-                        <div>
-                            <div class="artifact-title">${fileName}</div>
-                            <div class="artifact-meta">Artefacto generado por el agente · Listo</div>
-                        </div>
-                    </div>
-                    <button class="artifact-btn">👁️ Ver en Editor</button>
-                `;
-                card.querySelector('.artifact-btn').onclick = () => window.openFileInMonaco(fullPath);
-                body.appendChild(card);
-            });
-        }
+        // Verification badges require structured backend evidence, never text matching.
 
         bubble.appendChild(header);
         bubble.appendChild(body);
@@ -638,7 +577,110 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // ─── PROMPT DISPATCH WITH UNIFIED MODEL ───────────────────────────────────
-    async function dispatchPrompt(text) {
+    let missionQueue = Promise.resolve();
+    let missionStartedAt = 0;
+    let missionClock = null;
+    let missionRepairCount = 0;
+    let missionTotalPhases = 0;
+
+    function setMissionField(id, text, color) {
+        const element = document.getElementById(id);
+        if (!element) return;
+        element.textContent = text;
+        if (color) element.style.color = color;
+    }
+
+    function startMissionTelemetry() {
+        missionStartedAt = Date.now();
+        missionRepairCount = 0;
+        missionTotalPhases = 0;
+        if (missionClock) clearInterval(missionClock);
+        setMissionField('mission-stage', 'INICIANDO', '#58a6ff');
+        setMissionField('mission-step', '0');
+        setMissionField('mission-verification', 'PENDIENTE', '#8b949e');
+        setMissionField('mission-repairs', '0', '#c9d1d9');
+        setMissionField('mission-elapsed', '00:00');
+        const phasePanel = document.getElementById('phase-progress-container');
+        if (phasePanel) phasePanel.style.display = 'none';
+        missionClock = setInterval(() => {
+            const totalSeconds = Math.floor((Date.now() - missionStartedAt) / 1000);
+            const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+            const seconds = String(totalSeconds % 60).padStart(2, '0');
+            setMissionField('mission-elapsed', `${minutes}:${seconds}`);
+        }, 1000);
+    }
+
+    function updateMissionTelemetry(step, status, message) {
+        const stages = {
+            PLANNING: ['PLANIFICANDO', '#58a6ff'], DECISION: ['DECISIÓN', '#e3b341'],
+            ACTION: ['EJECUTANDO', '#bc8cff'], VALIDATING: ['VALIDANDO', '#1f6feb'],
+            SUCCESS: ['EN PROGRESO', '#3fb950'], WARNING: ['ATENCIÓN', '#d29922'],
+            ERROR: ['ERROR', '#f85149'], FATAL: ['FALLO', '#f85149'],
+            FINISH: ['COMPLETADO', '#3fb950'], PAUSED: ['PAUSADO', '#d29922'],
+            CANCELLED: ['CANCELADO', '#8b949e']
+        };
+        const stage = stages[status] || ['ACTIVO', '#79c0ff'];
+        setMissionField('mission-stage', stage[0], stage[1]);
+        setMissionField('mission-step', String(step ?? 0));
+
+        const normalized = String(message || '').toLowerCase();
+        if (normalized.startsWith('plan generado:')) {
+            missionTotalPhases = Math.max(1, (String(message).match(/Fase\s+\d+:/gi) || []).length);
+            const phasePanel = document.getElementById('phase-progress-container');
+            if (phasePanel) phasePanel.style.display = 'block';
+            setMissionField('phase-progress-text', `[FASE 1/${missionTotalPhases}] EN PROGRESO`);
+            setMissionField('phase-progress-percentage', '0%');
+            const fill = document.getElementById('phase-progress-fill');
+            if (fill) fill.style.width = '0%';
+        }
+        const completedPhase = String(message || '').match(/\[FASE\s+(\d+)\s+COMPLETADA\]/i);
+        if (completedPhase && missionTotalPhases > 0) {
+            const current = Math.min(Number(completedPhase[1]), missionTotalPhases);
+            const percentage = Math.round((current / missionTotalPhases) * 100);
+            setMissionField('phase-progress-text', `[FASE ${current}/${missionTotalPhases}] COMPLETADA`);
+            setMissionField('phase-progress-percentage', `${percentage}%`);
+            const fill = document.getElementById('phase-progress-fill');
+            if (fill) fill.style.width = `${percentage}%`;
+        }
+        if (normalized.includes('[verificador gestionado]')) {
+            setMissionField('mission-verification', 'LISTA', '#58a6ff');
+        }
+        if (normalized.includes('[semantic_verification]') && normalized.includes('fall')) {
+            missionRepairCount += 1;
+            setMissionField('mission-repairs', String(missionRepairCount), '#d29922');
+            setMissionField('mission-verification', 'REPARANDO', '#d29922');
+        }
+        if (normalized.includes('percentage') && normalized.includes('100.0')) {
+            setMissionField('mission-verification', '100% APROBADA', '#3fb950');
+        }
+        if (['FINISH', 'PAUSED', 'CANCELLED'].includes(status)) {
+            if (status === 'FINISH' && missionTotalPhases > 0) {
+                setMissionField('phase-progress-text', `[FASE ${missionTotalPhases}/${missionTotalPhases}] COMPLETADA`);
+                setMissionField('phase-progress-percentage', '100%');
+                const fill = document.getElementById('phase-progress-fill');
+                if (fill) fill.style.width = '100%';
+            }
+            if (missionClock) clearInterval(missionClock);
+            missionClock = null;
+        } else if (status === 'ERROR' || status === 'FATAL') {
+            setMissionField('mission-verification', 'NO APROBADA', '#f85149');
+        }
+    }
+
+    function dispatchPrompt(text, workspace = currentWorkspace) {
+        const next = missionQueue.then(async () => {
+            if (workspace && workspace !== "Ninguno" && workspace !== currentWorkspace) {
+                await setWorkspace(workspace);
+            }
+            if (loadWorkspaceBtn) loadWorkspaceBtn.disabled = true;
+            try { await executePrompt(text); }
+            finally { if (loadWorkspaceBtn) loadWorkspaceBtn.disabled = false; }
+        });
+        missionQueue = next.catch(error => logSystemThought(`[ERROR] ${error}`, '#f85149'));
+        return next;
+    }
+
+    async function executePrompt(text) {
         if (!text || text.trim() === '') return;
         text = text.trim();
         chatInput.value = '';
@@ -691,10 +733,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        startMissionTelemetry();
         logSystemThought("► Enviando prompt al Cerebro Agéntico...", '#58a6ff');
 
+        let unlisten;
         try {
-            const unlisten = await window.__TAURI__.event.listen('agent-step', (event) => {
+            unlisten = await window.__TAURI__.event.listen('agent-step', (event) => {
                 const { step, status, message } = event.payload;
                 let color = '#79c0ff';
                 if (status === 'DECISION') color = '#e3b341';
@@ -705,7 +749,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 else if (status === 'WARNING') color = '#d29922';
 
                 logSystemThought(`[${step}] [${status}] ${message}`, color);
-                loadingBody.innerHTML = `<span style="color:${color};font-weight:bold;font-family:var(--font-code);">[PASO ${step}]</span> <span style="color:#c9d1d9;">${message}</span>`;
+                updateMissionTelemetry(step, status, message);
+                loadingBody.textContent = `[PASO ${step}] ${message}`;
+                loadingBody.style.color = color;
 
                 if (status === 'SUCCESS' && currentWorkspace !== "Ninguno") {
                     invoke('get_workspace_tree', { path: currentWorkspace }).then(tj => renderTree(JSON.parse(tj), workspaceTree));
@@ -723,12 +769,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 programmerModel: chosenModel
             });
 
-            unlisten();
             resetInputState();
 
             try {
                 const data = JSON.parse(responseString);
-                if (data.status === 'FINISH' || data.status === 'ERROR') {
+                if (['FINISH', 'ERROR', 'PAUSED', 'CANCELLED'].includes(data.status)) {
+                    updateMissionTelemetry(
+                        document.getElementById('mission-step')?.textContent || 0,
+                        data.status,
+                        data.respuesta_conversacional || ''
+                    );
                     loadingBubble.remove();
                     appendMessageToDOM('aura', data.respuesta_conversacional || responseString);
                     await saveMessageToDisk('system', data.respuesta_conversacional || responseString);
@@ -748,8 +798,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         } catch (error) {
             resetInputState();
+            updateMissionTelemetry(
+                document.getElementById('mission-step')?.textContent || 0,
+                'ERROR',
+                String(error)
+            );
             logSystemThought(`[ERROR PIPELINE] ${error}`, '#f85149');
-            loadingBody.innerHTML = `<span style="color:#f85149;font-weight:bold;">[ERROR]</span> <span style="color:#c9d1d9;">${error}</span>`;
+            loadingBody.textContent = `[ERROR] ${error}`;
+            loadingBody.style.color = "#f85149";
+        } finally {
+            if (unlisten) unlisten();
         }
     }
 
@@ -974,8 +1032,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let pendingResumeData = null;
 
-    window.__TAURI__.event.listen('mission-resumed', (event) => {
-        const payload = event.payload;
+    function showPendingMission(payload) {
         if (!payload) return;
         pendingResumeData = payload;
 
@@ -985,21 +1042,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (resumeObj) resumeObj.textContent = payload.objective || 'Misión anterior en progreso';
         }
         logSystemThought(`[AUTO-RESUME] Misión previa detectada: "${payload.objective}"`, '#58a6ff');
-    });
+    }
+    await window.__TAURI__.event.listen('mission-resumed', event => showPendingMission(event.payload));
+    try { showPendingMission(await invoke('get_pending_mission')); }
+    catch (error) { logSystemThought(`[RESUME] ${error}`, '#d29922'); }
 
     if (resumeBtn) {
         resumeBtn.onclick = async () => {
             if (!pendingResumeData) return;
             resumeBanner.style.display = 'none';
             logSystemThought(`[RESUMING] Reanudando misión previa desde paso ${pendingResumeData.step}...`, '#3fb950');
-            const promptText = `Continúa la misión previa desde el paso ${pendingResumeData.step}: "${pendingResumeData.objective}"`;
-            await dispatchPrompt(promptText);
+            const promptText = "continua";
+            await dispatchPrompt(promptText, pendingResumeData.workspace);
             pendingResumeData = null;
         };
     }
 
     if (dismissBtn) {
-        dismissBtn.onclick = () => {
+        dismissBtn.onclick = async () => {
+            if (pendingResumeData) {
+                try { await invoke('dismiss_pending_mission', { workspacePath: pendingResumeData.workspace }); }
+                catch (error) { logSystemThought(`[RESUME] ${error}`, '#f85149'); return; }
+            }
             if (resumeBanner) resumeBanner.style.display = 'none';
             pendingResumeData = null;
             logSystemThought("[RESUME] Misión previa descartada por el usuario.", '#8b949e');
@@ -1033,7 +1097,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!task) return;
         logSystemThought(`⏰ [SCHEDULER DISPARADO] "${task.objective}" (${task.cron_expr})`, '#bc8cff');
         appendMessageToDOM('system', `⏰ Tarea programada iniciada: **${task.description || task.objective}**`);
-        await dispatchPrompt(task.objective);
+        await dispatchPrompt(task.objective, task.workspace);
     });
 
 });
@@ -1076,3 +1140,10 @@ if (customBtn) {
         if (val) submitAnswer(val);
     };
 }
+
+window.__TAURI__.event.listen('agent-ask-user-closed', event => {
+    if (currentAskUserId === event.payload.id) {
+        currentAskUserId = null;
+        document.getElementById('ask-user-modal').style.display = 'none';
+    }
+});

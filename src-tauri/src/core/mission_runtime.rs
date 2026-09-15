@@ -39,6 +39,83 @@ pub struct MissionRuntime {
 }
 
 impl MissionRuntime {
+    fn minimum_semantic_checks(&self) -> u64 {
+        let Ok(pattern) = regex::Regex::new(r"(?:^|\s)(\d+)\)") else { return 1 };
+        let mut numbers: Vec<u64> = pattern.captures_iter(&self.contract.objective)
+            .filter_map(|capture| capture.get(1)?.as_str().parse().ok())
+            .collect();
+        numbers.sort_unstable();
+        numbers.dedup();
+        let mut expected = 1u64;
+        for number in numbers {
+            if number == expected { expected += 1; }
+        }
+        (expected - 1).max(1)
+    }
+
+    fn independent_objective_failures(&self) -> Vec<String> {
+        let objective = self.contract.objective.to_lowercase();
+        let is_tactical_dashboard = objective.contains("dashboard")
+            && objective.contains("radar")
+            && objective.contains("telemetr")
+            && (objective.contains("tráfico") || objective.contains("trafico"));
+        if !is_tactical_dashboard {
+            return Vec::new();
+        }
+
+        let mut source = String::new();
+        if let Ok(entries) = std::fs::read_dir(&self.workspace_path) {
+            let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).filter(|path| {
+                path.is_file() && matches!(path.extension().and_then(|value| value.to_str()), Some("html" | "css" | "js" | "ts"))
+            }).collect();
+            paths.sort();
+            for path in paths {
+                if let Ok(text) = std::fs::read_to_string(path) {
+                    source.push_str(&text.to_lowercase());
+                    source.push('\n');
+                }
+            }
+        }
+
+        let contains_all = |tokens: &[&str]| tokens.iter().all(|token| source.contains(token));
+        let mut failures = Vec::new();
+        if !(contains_all(&["<canvas", "requestanimationframe", "math.cos", "math.sin"])
+            && (source.contains("threat") || source.contains("amenaza") || source.contains("node"))) {
+            failures.push("Radar Canvas incompleto: requiere animación, barrido y nodos en coordenadas polares".to_string());
+        }
+        let dynamic_packet_source = regex::Regex::new(
+            r"\b(?:const|let|var|function)\s+\w*(?:packet|paquete)\w*",
+        )
+        .map(|pattern| pattern.is_match(&source))
+        .unwrap_or(false);
+        if !((source.contains("packet") || source.contains("paquete"))
+            && source.contains("ip")
+            && (source.contains("protocol") || source.contains("protocolo"))
+            && source.contains("latenc")
+            && (source.contains("risk") || source.contains("riesgo"))
+            && dynamic_packet_source
+            && (source.contains("textcontent") || source.contains("innerhtml"))) {
+            failures.push("Telemetría incompleta: faltan paquetes con IP, protocolo, latencia y riesgo".to_string());
+        }
+        let canvas_count = source.matches("<canvas").count()
+            + source.matches("createelement('canvas')").count()
+            + source.matches("createelement(\"canvas\")").count();
+        if !((source.contains("traffic") || source.contains("trafico") || source.contains("tráfico"))
+            && canvas_count >= 2
+            && source.matches("getcontext").count() >= 2
+            && (source.contains("trafficctx") || source.contains("trafficcontext"))
+            && (source.contains("alert") || source.contains("alerta"))
+            && (source.contains("attack") || source.contains("ataque"))) {
+            failures.push("Visualización incompleta: faltan gráfico de tráfico y barra de alerta de ataques".to_string());
+        }
+        if !(source.contains("monospace")
+            && (source.contains("glass") || source.contains("backdrop-filter"))
+            && (source.contains("neon") || source.contains("box-shadow") || source.contains("text-shadow"))) {
+            failures.push("Diseño incompleto: faltan señales físicas de glassmorphism oscuro, tipografía monospace y neón".to_string());
+        }
+        failures
+    }
+
     pub fn new(workspace_path: &str, objective: &str, max_steps: u32) -> Self {
         let mission_id = format!(
             "m_{:x}",
@@ -311,8 +388,11 @@ impl MissionRuntime {
         if let Some(obs) = last_obs {
             self.state_anchor.last_tool = Some(obs.tool_name.clone());
             self.state_anchor.last_command = obs.command.clone();
-            self.state_anchor.last_observation = Some(if obs.payload.len() > 300 {
-                format!("{}... [truncated]", &obs.payload[..300])
+            self.state_anchor.last_observation = Some(if obs.payload.chars().count() > 300 {
+                format!(
+                    "{}... [truncated]",
+                    obs.payload.chars().take(300).collect::<String>()
+                )
             } else {
                 obs.payload.clone()
             });
@@ -405,7 +485,8 @@ impl MissionRuntime {
         let failed_arr = val.get("failed_criteria")?.as_array()?;
 
         // 5. NUMERIC RANGE
-        if total_raw == 0 || passed_raw > total_raw || total_raw > u32::MAX as u64 {
+        let numbered_requirements = self.minimum_semantic_checks();
+        if total_raw == 0 || total_raw < numbered_requirements || passed_raw > total_raw || total_raw > u32::MAX as u64 {
             return None;
         }
         let passed = passed_raw as u32;
@@ -427,6 +508,12 @@ impl MissionRuntime {
             } else {
                 return None; // Invalid schema
             }
+        }
+        if failed.len() as u32 != total - passed {
+            return None;
+        }
+        if (passed == total && exit_code != 0) || (passed < total && exit_code == 0) {
+            return None;
         }
 
         Some(crate::core::evidence::VerifierResult {
@@ -493,10 +580,7 @@ impl MissionRuntime {
                             fact,
                             0.85,
                             self.cognitive_state.mission.current_step,
-                            Some(
-                                obs.state_hash_after
-                                    .unwrap_or_else(|| self.current_world_hash()),
-                            ),
+                            obs.state_hash_after,
                         );
                     }
                 }
@@ -529,7 +613,7 @@ impl MissionRuntime {
             last_tool_used: obs.tool_name.clone(),
             last_command: obs.command.clone().unwrap_or_default(),
             last_action_identity: obs.action_identity.clone(),
-            last_verifier_result_hash: None,
+            last_verifier_result_hash: if ok { None } else { Some(format!("{:x}", _err_hash)) },
         };
         self.stall_detector.record_signature(sig);
     }
@@ -764,6 +848,31 @@ impl MissionRuntime {
             None,
         ));
 
+        // A verifier exiting 0 without results is not a successful verification.
+        let official = self.contract.acceptance_criteria.iter().find_map(|ac| {
+            if let crate::core::mission_contract::VerificationMethod::SemanticVerification { command } = &ac.verification {
+                if obs.command.as_deref().map(crate::core::evidence::normalize_command_str) == Some(crate::core::evidence::normalize_command_str(command)) { Some(command.clone()) } else { None }
+            } else { None }
+        });
+        if let Some(command) = official {
+            let minimum_checks = self.minimum_semantic_checks();
+            let parsed_verifier = self.parse_semantic_verifier_result(&obs, Some(&command));
+            if parsed_verifier.is_none() {
+                obs.status = crate::core::observation::ObservationStatus::Error;
+                obs.payload = format!("VERIFIER_PROTOCOL_ERROR: {} no produjo resultados verificables y coherentes. Se requieren al menos {} comprobaciones independientes, una por cada requisito numerado del objetivo. Debe ejecutar checks desde __main__, leer archivos reales e imprimir JSON con passed y total enteros, percentage calculado y una entrada failed_criteria por cada fallo. Exit code 0 exige passed=total; cualquier fallo exige exit code 1. Salida recibida: {}", command, minimum_checks, obs.payload);
+            } else if let Some(result) = parsed_verifier {
+                if result.passed < result.total {
+                    obs.status = crate::core::observation::ObservationStatus::Error;
+                } else {
+                    let grounding_failures = self.independent_objective_failures();
+                    if !grounding_failures.is_empty() {
+                        obs.status = crate::core::observation::ObservationStatus::Error;
+                        obs.payload = format!("VERIFIER_GROUNDING_ERROR: El verificador declaró 100%, pero la inspección independiente del workspace encontró:\n- {}", grounding_failures.join("\n- "));
+                    }
+                }
+            }
+        }
+
         // 6. Record through full circuit (StallDetector, EvidenceGraph)
         self.record_observation(&obs);
 
@@ -807,6 +916,11 @@ impl MissionRuntime {
         use crate::core::observation::ObservationStatus;
         match obs.status {
             ObservationStatus::Error => {
+                if obs.payload.starts_with("VERIFIER_PROTOCOL_ERROR:") || obs.payload.starts_with("VERIFIER_GROUNDING_ERROR:") {
+                    return Some(RecoveryDecision::RepairCriteria {
+                        criteria: vec![obs.payload.clone()], recommended_tool: "TOOL_PROGRAMMER".into(),
+                    });
+                }
                 let tool_upper = obs.tool_name.to_uppercase();
                 if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
                     let official_verifier_cmd = self.contract.acceptance_criteria.iter().find_map(|ac| {
@@ -821,8 +935,12 @@ impl MissionRuntime {
                         self.parse_semantic_verifier_result(obs, official_verifier_cmd.as_deref())
                     {
                         if verifier_result.passed < verifier_result.total {
+                            let mut criteria = verifier_result.failed_criteria;
+                            criteria.extend(self.independent_objective_failures());
+                            criteria.sort();
+                            criteria.dedup();
                             return Some(RecoveryDecision::RepairCriteria {
-                                criteria: verifier_result.failed_criteria,
+                                criteria,
                                 recommended_tool: "TOOL_PROGRAMMER".to_string(),
                             });
                         }
@@ -878,6 +996,43 @@ impl MissionRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn empty_verifier_stdout_is_repairable_error_not_success() {
+        let mut rt = MissionRuntime::new(".", "Verify", 10);
+        rt.contract.add_criterion("verify", "Checks", crate::core::mission_contract::VerificationMethod::SemanticVerification { command: "python verify_dashboard.py".into() }, true);
+        rt.tool_registry.register("TOOL_TERMINAL", std::sync::Arc::new(|_, _| Box::pin(async {
+            Ok(crate::core::tool_registry::ExecutionResult::success(""))
+        }))).unwrap();
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(), arguments: serde_json::json!({"comando":"python verify_dashboard.py"}),
+            expected_effect: "Verify".into(), risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: Some(rt.current_world_hash()),
+        };
+        let obs = rt.execute_action(&proposal).await.unwrap();
+        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error);
+        assert!(obs.payload.starts_with("VERIFIER_PROTOCOL_ERROR:"));
+        assert!(matches!(rt.handle_observation(&obs), Some(crate::core::recovery::RecoveryDecision::RepairCriteria { .. })));
+        assert!(!matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Complete));
+    }
+
+    #[tokio::test]
+    async fn verifier_cannot_claim_full_coverage_with_fewer_checks_than_requirements() {
+        let objective = "Construye: 1) radar 2) telemetria 3) grafico 4) alertas 5) verificador";
+        let mut rt = MissionRuntime::new(".", objective, 10);
+        rt.contract.add_criterion("verify", "Checks", crate::core::mission_contract::VerificationMethod::SemanticVerification { command: "python verify.py".into() }, true);
+        rt.tool_registry.register("TOOL_TERMINAL", std::sync::Arc::new(|_, _| Box::pin(async {
+            Ok(crate::core::tool_registry::ExecutionResult::success("{\"passed\":3,\"total\":3,\"percentage\":100.0,\"failed_criteria\":[]}"))
+        }))).unwrap();
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(), arguments: serde_json::json!({"comando":"python verify.py"}),
+            expected_effect: "Verify".into(), risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: Some(rt.current_world_hash()),
+        };
+        let obs = rt.execute_action(&proposal).await.unwrap();
+        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error);
+        assert!(obs.payload.starts_with("VERIFIER_PROTOCOL_ERROR:"));
+    }
 
     #[test]
     fn test_mission_runtime_init() {
@@ -976,7 +1131,7 @@ mod tests {
     #[tokio::test]
     async fn test_p0_3_action_identity_and_stale_rejection() {
         let mut rt = MissionRuntime::new(".", "Test", 10);
-        rt.tool_registry.register(
+        let _ = rt.tool_registry.register(
             "TOOL_TERMINAL",
             std::sync::Arc::new(|_ws, _cmd| {
                 Box::pin(async move {
@@ -1013,7 +1168,7 @@ mod tests {
     #[tokio::test]
     async fn test_final_integration_19_step_simulation() {
         let mut rt = MissionRuntime::new(".", "Build Dashboard", 25);
-        rt.tool_registry.register(
+        let _ = rt.tool_registry.register(
             "TOOL_THINK",
             std::sync::Arc::new(|_ws, _cmd| {
                 Box::pin(async move {
@@ -1061,7 +1216,7 @@ mod tests {
     #[tokio::test]
     async fn test_p0_5_agent_loop_recovery_abort_terminates_system() {
         let mut rt = MissionRuntime::new(".", "Test Abort", 25);
-        rt.tool_registry.register(
+        let _ = rt.tool_registry.register(
             "TOOL_TERMINAL",
             std::sync::Arc::new(|_ws, _cmd| {
                 Box::pin(async move {
@@ -1418,7 +1573,7 @@ mod tests {
         rt.tool_registry
             .register(
                 "TOOL_TERMINAL",
-                Arc::new(move |_ws, args| {
+                Arc::new(move |_ws, _args| {
                     let flag = executed_clone.clone();
                     Box::pin(async move {
                         flag.store(true, Ordering::SeqCst);
@@ -1501,7 +1656,7 @@ mod tests {
         rt.tool_registry
             .register(
                 "TOOL_TERMINAL",
-                Arc::new(move |_ws, args| {
+                Arc::new(move |_ws, _args| {
                     let flag = executed_clone.clone();
                     Box::pin(async move {
                         flag.store(true, Ordering::SeqCst);
@@ -2066,6 +2221,31 @@ mod tests {
         );
         rt.record_observation(&obs);
         assert_eq!(count_semantic(&rt), 0);
+    }
+
+    #[test]
+    fn tactical_dashboard_grounding_rejects_superficial_success() {
+        let root = std::env::temp_dir().join(format!("aura-grounding-poor-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), "<canvas id='radar'></canvas><script>requestAnimationFrame(draw); Math.cos(1); Math.sin(1); const threatNode = {};</script><style>body{font-family:monospace}</style>").unwrap();
+        let runtime = MissionRuntime::new(root.to_str().unwrap(), "Dashboard con 1) radar 2) telemetría 3) tráfico 4) glassmorphism", 10);
+        let failures = runtime.independent_objective_failures();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(failures.iter().any(|failure| failure.contains("Telemetría")));
+        assert!(failures.iter().any(|failure| failure.contains("Visualización")));
+        assert!(failures.iter().any(|failure| failure.contains("Diseño")));
+    }
+
+    #[test]
+    fn tactical_dashboard_grounding_accepts_all_physical_features() {
+        let root = std::env::temp_dir().join(format!("aura-grounding-full-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = "<canvas id='radar'></canvas><canvas id='traffic'></canvas><div id='packets'></div><script>const radarCtx=document.getElementById('radar').getContext('2d'); const trafficCtx=document.getElementById('traffic').getContext('2d'); requestAnimationFrame(draw); Math.cos(1); Math.sin(1); const threatNode = {}; const packet={ip:'1',protocol:'TCP',latency:2,risk:3}; document.getElementById('packets').textContent=packet.ip; function traffic(){trafficCtx.lineTo(1,1);alert('attack')}</script><style>body{font-family:monospace;backdrop-filter:blur(8px);box-shadow:0 0 8px cyan}</style>";
+        std::fs::write(root.join("index.html"), source).unwrap();
+        let runtime = MissionRuntime::new(root.to_str().unwrap(), "Dashboard con 1) radar 2) telemetría 3) tráfico 4) glassmorphism", 10);
+        let failures = runtime.independent_objective_failures();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(failures.is_empty(), "{:?}", failures);
     }
 }
 

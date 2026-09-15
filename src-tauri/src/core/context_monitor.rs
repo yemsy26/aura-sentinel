@@ -134,7 +134,9 @@ impl ContextMonitor {
         );
 
         if result.len() > self.max_chars {
-            result.truncate(self.max_chars);
+            let mut boundary = self.max_chars;
+            while !result.is_char_boundary(boundary) { boundary -= 1; }
+            result.truncate(boundary);
         }
 
         result

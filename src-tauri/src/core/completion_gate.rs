@@ -34,6 +34,12 @@ fn paths_match(p1: &str, p2: &str) -> bool {
     c1 == c2
 }
 
+fn semantic_result_valid(res: &super::evidence::VerifierResult, hash: u64, workspace: &str) -> bool {
+    res.exit_code == 0 && res.total > 0 && res.passed == res.total
+        && res.percentage == 100.0 && res.failed_criteria.is_empty()
+        && res.state_hash == hash && paths_match(&res.cwd, workspace)
+}
+
 pub struct CompletionGate;
 
 impl CompletionGate {
@@ -48,7 +54,7 @@ impl CompletionGate {
         // A contract with no required criteria AND no required evidence is invalid
         // for any non-trivial mission — block it explicitly.
         let has_any_requirements =
-            !contract.acceptance_criteria.is_empty() || !contract.required_evidence.is_empty();
+            contract.acceptance_criteria.iter().any(|ac| ac.required) || !contract.required_evidence.is_empty();
         if !has_any_requirements {
             return CompletionDecision::Incomplete(vec![
                 "El contrato de misión no tiene criterios de aceptación ni evidencia requerida. \
@@ -73,12 +79,10 @@ impl CompletionGate {
                     evidence.has_valid_structured_evidence(0.5, current_world_hash, |fact| {
                         match fact {
                             StructuredFact::SemanticVerificationResult(res) => {
-                                res.exit_code == 0
-                                    && res.percentage == 100.0
-                                    && res.state_hash == current_world_hash
+                                semantic_result_valid(res, current_world_hash, &ws_str)
                             }
-                            StructuredFact::TestResult { exit_code, cwd, .. } => {
-                                *exit_code == 0 && paths_match(cwd, &ws_str)
+                            StructuredFact::TestResult { exit_code, cwd, passed, failed, .. } => {
+                                *exit_code == 0 && *passed > 0 && *failed == 0 && paths_match(cwd, &ws_str)
                             }
                             StructuredFact::CommandResult {
                                 command,
@@ -91,9 +95,9 @@ impl CompletionGate {
                                     && (norm == "cargo test"
                                         || norm.starts_with("cargo test ")
                                         || norm == "npm test"
-                                        || norm.starts_with("pytest")
-                                        || norm.starts_with("python -m unittest")
-                                        || norm.starts_with("python -m pytest"))
+                                        || (norm == "pytest" || norm.starts_with("pytest "))
+                                        || (norm == "python -m unittest" || norm.starts_with("python -m unittest "))
+                                        || (norm == "python -m pytest" || norm.starts_with("python -m pytest ")))
                                     && paths_match(cwd, &ws_str)
                             }
                             _ => false,
@@ -107,8 +111,7 @@ impl CompletionGate {
                     evidence.has_valid_structured_evidence(0.5, current_world_hash, |fact| {
                         match fact {
                             StructuredFact::SemanticVerificationResult(res) => {
-                                res.exit_code == 0
-                                    && res.percentage == 100.0
+                                semantic_result_valid(res, current_world_hash, &ws_str)
                                     && normalize_command_str(&res.command) == expected_cmd
                             }
                             StructuredFact::CommandResult {
@@ -155,7 +158,7 @@ impl CompletionGate {
                     }
                 }
                 crate::core::mission_contract::VerificationMethod::ManualReview => evidence
-                    .has_valid_evidence_for_state(
+                    .has_valid_manual_evidence_for_state(
                         &format!("{} verified manually", ac.id),
                         1.0,
                         current_world_hash,
@@ -1266,4 +1269,60 @@ mod tests {
             "L: fake JSON from wrong command must NOT satisfy SemanticVerification"
         );
     }
+    #[test]
+    fn optional_only_contract_cannot_complete() {
+        let mut contract = MissionContract::new("Optional work");
+        contract.add_criterion("optional", "Optional", crate::core::mission_contract::VerificationMethod::ManualReview, false);
+        assert!(matches!(CompletionGate::evaluate(&contract, &CognitiveState::new("m", "work"), &EvidenceGraph::new(), 42, Path::new(".")), CompletionDecision::Incomplete(_)));
+    }
+
+    #[test]
+    fn ordinary_criteria_reject_invalid_semantic_results() {
+        use crate::core::mission_contract::VerificationMethod;
+        for method in [VerificationMethod::TestPassed, VerificationMethod::CommandExitZero("pytest".into())] {
+            let mut contract = MissionContract::new("Tests");
+            contract.add_criterion("tests", "Tests", method, true);
+            let state = CognitiveState::new("m", "Tests");
+            let valid = sem_result("pytest", ".", 1, 1, 100.0, vec![], 0, 42);
+            for variant in 0..5 {
+                let mut result = valid.clone();
+                match variant {
+                    0 => { result.total = 0; result.passed = 0; }
+                    1 => result.cwd = "different-workspace".into(),
+                    2 => result.state_hash = 99,
+                    3 => result.failed_criteria = vec!["failed".into()],
+                    _ => result.passed = 0,
+                }
+                let mut graph = EvidenceGraph::new();
+                record_sem(&mut graph, result, 42);
+                assert!(matches!(CompletionGate::evaluate(&contract, &state, &graph, 42, Path::new(".")), CompletionDecision::Incomplete(_)), "invalid variant {variant}");
+            }
+            let mut graph = EvidenceGraph::new();
+            record_sem(&mut graph, valid, 42);
+            assert_eq!(CompletionGate::evaluate(&contract, &state, &graph, 42, Path::new(".")), CompletionDecision::Complete);
+        }
+    }
+
+    #[test]
+    fn test_command_prefix_is_not_a_test_runner() {
+        let mut contract = MissionContract::new("Tests");
+        contract.add_criterion("tests", "Tests", crate::core::mission_contract::VerificationMethod::TestPassed, true);
+        let mut graph = EvidenceGraph::new();
+        graph.record_structured(EvidenceKind::CommandExitCode, "terminal", StructuredFact::CommandResult {
+            command: "pytest-fake".into(), cwd: ".".into(), exit_code: 0, stdout_hash: "".into(), stderr_hash: "".into(),
+        }, 1.0, 1, Some(42)).unwrap();
+        assert!(matches!(CompletionGate::evaluate(&contract, &CognitiveState::new("m", "Tests"), &graph, 42, Path::new(".")), CompletionDecision::Incomplete(_)));
+    }
+
+    #[test]
+    fn observation_without_post_action_hash_cannot_certify_a_command() {
+        let mut runtime = crate::core::mission_runtime::MissionRuntime::new(".", "Tests", 10);
+        let mut obs = crate::core::observation::Observation::success("TOOL_TERMINAL", "ok", vec![]);
+        obs.exit_code = Some(0);
+        obs.command = Some("cargo test".into());
+        obs.cwd = Some(".".into());
+        runtime.record_observation(&obs);
+        assert!(runtime.evidence_graph.entries.is_empty());
+    }
+
 }

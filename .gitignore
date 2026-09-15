@@ -65,3 +65,10 @@ data/learning/state_strategy_index.json
 data/learning/recovery_index.json
 data/learning/budget_index.json
 data/learning/learning_experiences.jsonl
+
+# Isolated audit build cache
+/target-audit/
+
+/src/vendor/
+/work/
+/.npm-audit-cache/

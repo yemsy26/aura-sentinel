@@ -62,6 +62,14 @@ impl StallDetector {
         }
         let slice = &self.signatures[self.signatures.len() - window_size..];
 
+        // Reusing a tool is productive when the physical world or criteria advance.
+        let first = &slice[0];
+        if slice.iter().skip(1).any(|s| s.state_hash != first.state_hash
+            || s.world_version != first.world_version
+            || s.criteria_satisfied > first.criteria_satisfied) {
+            return None;
+        }
+
         // RepeatedTool: same non-empty tool every step in the window
         let first_tool = &slice[0].last_tool_used;
         if !first_tool.is_empty() && slice.iter().all(|s| &s.last_tool_used == first_tool) {
@@ -149,7 +157,7 @@ mod tests {
     fn test_stall_repeated_tool() {
         let mut d = StallDetector::new(5);
         for i in 0..3 {
-            d.record_signature(sig(i, "TOOL_TERMINAL", "cargo build", 0, i, 0, 0));
+            d.record_signature(sig(i, "TOOL_TERMINAL", "cargo build", 0, 0, 0, 0));
         }
         assert_eq!(d.detect_stall(3), Some(StallType::RepeatedTool));
     }
@@ -160,7 +168,7 @@ mod tests {
         // Use different tools each step so RepeatedTool does NOT fire, only SameError
         let tools = ["TOOL_PROGRAMMER", "TOOL_TERMINAL", "TOOL_VALIDATOR"];
         for i in 0..3 {
-            d.record_signature(sig(i as u32, tools[i], "", 0xdeadbeef, i as u32, 0, 0));
+            d.record_signature(sig(i as u32, tools[i], "", 0xdeadbeef, 0, 0, 0));
         }
         assert_eq!(d.detect_stall(3), Some(StallType::SameError));
     }
@@ -182,4 +190,11 @@ mod tests {
         d.record_signature(sig(2, "TOOL_TERMINAL", "cargo test", 0, 4, 2, 9));
         assert_eq!(d.detect_stall(3), None);
     }
+    #[test]
+    fn repeated_programmer_with_physical_progress_is_not_stalled() {
+        let mut detector = StallDetector::new(6);
+        for i in 0..3 { detector.record_signature(sig(i, "TOOL_PROGRAMMER", "", 0, i, 0, 0)); }
+        assert_eq!(detector.detect_stall(3), None);
+    }
+
 }

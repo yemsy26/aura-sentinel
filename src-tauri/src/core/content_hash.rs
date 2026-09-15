@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 /// Computes a deterministic content hash for a file using SHA-256.
-/// Returns a hex string identical format used across WorldState, StateDelta, and Evidence.
+/// Returns the hexadecimal format shared by WorldState and Evidence.
 pub fn compute_content_hash(path: &Path) -> Option<String> {
     match std::fs::read(path) {
         Ok(bytes) => Some(hash_bytes(&bytes)),

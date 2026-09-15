@@ -233,6 +233,7 @@ fn check_rust_stubs(content: &str, warnings: &mut Vec<String>) {
 fn check_js_stubs(content: &str, warnings: &mut Vec<String>) {
     for (i, line) in content.lines().enumerate() {
         let trimmed = line.trim();
+        let normalized = trimmed.to_lowercase();
         if trimmed.contains("throw new Error('not implemented')")
             || trimmed.contains("throw new Error(\"not implemented\")")
         {
@@ -248,7 +249,24 @@ fn check_js_stubs(content: &str, warnings: &mut Vec<String>) {
                 trimmed
             ));
         }
-        if trimmed == "// implement here" || trimmed == "// implementar aquí" {
+        let placeholder_comment = normalized.starts_with("//")
+            && [
+                "implement here",
+                "implementation goes here",
+                "add code here",
+                "code will be added here",
+                "will be implemented later",
+                "would add",
+                "implementar aquí",
+                "implementar aqui",
+                "aquí agregaría",
+                "aqui agregaria",
+                "aquí iría",
+                "aqui iria",
+            ]
+            .iter()
+            .any(|pattern| normalized.contains(pattern));
+        if placeholder_comment {
             warnings.push(format!(
                 "Línea {}: placeholder de implementación: '{}'",
                 i + 1,
@@ -362,5 +380,22 @@ mod tests {
         let code = "fn calcular(&self) -> i32 {\n    todo!()\n}\n";
         let report = detect_stubs(code, "main.rs");
         assert!(report.has_stubs, "Debería detectar todo!()");
+    }
+
+    #[test]
+    fn test_javascript_spanish_placeholder_detected() {
+        let code = "function drawTrafficChart() {\n    // Aquí agregaría el código para dibujar el gráfico\n}\n";
+        let report = detect_stubs(code, "dashboard.js");
+        assert!(
+            report.has_stubs,
+            "Debería detectar comentarios que sustituyen una implementación JavaScript"
+        );
+    }
+
+    #[test]
+    fn test_javascript_deferred_code_placeholder_detected() {
+        let code = "// JavaScript code will be added here later\n";
+        let report = detect_stubs(code, "dashboard.js");
+        assert!(report.has_stubs, "Debería rechazar código aplazado para después");
     }
 }

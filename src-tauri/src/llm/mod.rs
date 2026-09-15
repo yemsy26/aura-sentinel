@@ -51,7 +51,9 @@ pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
         prompt,
         stream: false,
         format: serde_json::json!("json"),
-        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }),
+        // Tool routing is a small JSON decision. A 4K generation budget made 7B
+        // models slower and more likely to ramble without improving the choice.
+        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 1024, "repeat_penalty": 1.1, "temperature": 0.1 }),
     };
 
     let res = client
@@ -201,49 +203,40 @@ pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
 pub(crate) async fn delegate_to_programmer(
     task: &str,
     file_contents: &str,
+    requested_files: &[String],
+    require_patch: bool,
     model: &str,
 ) -> Result<String, String> {
+    let patch_rule = if require_patch {
+        "MODO REPARACIÓN INCREMENTAL OBLIGATORIO: 'buscar' no puede estar vacío. Copia en 'buscar' un fragmento breve y literal de ARCHIVOS ACTUALES, y en 'reemplazar' devuelve ese mismo fragmento con la corrección añadida. No devuelvas el archivo completo ni elimines funciones existentes."
+    } else {
+        "Para crear un archivo nuevo usa 'buscar' vacío. Para modificar uno existente, prefiere un fragmento literal breve en 'buscar'."
+    };
     let system_prompt = format!(
-        "Eres Aura-Sentinel, el Ingeniero Ejecutor. Tu tarea es ESCRIBIR o MODIFICAR el código real basado en la instrucción.\n\
-        Instrucción: {}\n\n\
-        Contexto del proyecto actual:\n{}\n\n\
-        === REGLAS ABSOLUTAS — LEERLAS ANTES DE GENERAR CÓDIGO ===\n\
-        \n\
-        [REGLA 1 - CÓDIGO COMPLETO]: Escribe el código COMPLETO y FUNCIONAL. CERO placeholders ('# TODO', '...', 'aquí va el código'). El archivo debe ejecutarse tal como lo escribes.\n\
-        \n\
-        [REGLA 2 - RUTAS RELATIVAS]: ÚNICAMENTE usa rutas relativas ('src/archivo.ext', 'archivo.ext'). NUNCA rutas absolutas (C:/...).\n\
-        \n\
-        [REGLA 3 - PYTHON & JSON CRÍTICO - LEE ESTO 3 VECES]:\n\
-           a) SIEMPRE añade '# -*- coding: utf-8 -*-' como PRIMERA línea de cada archivo .py.\n\
-           b) Para strings en Python usa EXCLUSIVAMENTE comillas dobles: \"texto\". JAMÁS uses comillas simples dentro de strings.\n\
-           c) ESCAPADO JSON: Si tu código Python necesita un salto de línea (ej. `f\"Hola\\n\"`) o una regex (`re.sub(r\"\\w\", \"\")`), DEBES doble-escapar la barra invertida en el JSON: usa `\\\\n` y `\\\\w`.\n\
-           d) NUNCA incluyas saltos de línea literales dentro de un string de Python. Usa triple comillas dobles para strings multilínea: \"\"\"linea1\\nlinea2\"\"\".\n\
-           e) SIEMPRE cierra TODOS los paréntesis, corchetes y llaves que abras.\n\
-           f) Ejemplo CORRECTO de regex en JSON: \"re.sub(r\\\"[^\\\\w\\\\s]\\\", \\\"\\\", texto)\"\n\
-           g) Ejemplo INCORRECTO: re.sub(r'[^\\w\\s]', '', texto)  ← PROHIBIDO (usa comillas simples y falta doble escape)\n\
-        \n\
-        [REGLA 4 - CREACIÓN DE ARCHIVO NUEVO]: Cuando crees un archivo desde cero, el campo 'buscar' debe ser \"\" (vacío).\n\
-        \n\
-        [REGLA 5 - SCRIPTS DE INSTALACIÓN (.bat / .sh)]:\n\
-           a) Si creas un script .bat o .sh para arrancar la app, SIEMPRE incluye los comandos para instalar dependencias (`pip install`, `npm install`, etc.) ANTES de ejecutar el programa principal.\n\
-           b) En archivos `.bat`, NUNCA dejes que la consola se cierre sola. PON SIEMPRE un `pause` absoluto al final del script para que el usuario pueda ver el resultado final (éxito o error). Prohibido usar pausas condicionales como `if errorlevel`.
-        \n\
-        [REGLA 6 - JSON LIMPIO]: Tu respuesta DEBE ser únicamente JSON válido. Sin texto antes ni después del JSON.\n\
-        \n\
-        === FORMATO DE RESPUESTA (JSON EXACTO) ===\n\
-        {{\n\
-          \"explicacion_tecnica\": \"Descripción breve de lo implementado\",\n\
-          \"cambios\": [\n\
-            {{\n\
-              \"archivo\": \"ruta/relativa/archivo.ext\",\n\
-              \"buscar\": \"\",\n\
-              \"reemplazar\": \"def funcion_real():\\n    return 42\"\n\
-            }}\n\
-          ]\n\
-        }}",
-        task, file_contents
+        "Eres el programador de Aura Sentinel. Implementa por completo la acción solicitada, respetando el código existente y el objetivo global.\n\nTAREA:\n{}\n\nARCHIVOS ACTUALES Y DIAGNÓSTICO:\n{}\n\n\
+        Devuelve un objeto JSON con explicacion_tecnica y cambios. Cada cambio contiene archivo (ruta relativa), buscar (texto exacto; vacío solo al crear o reemplazar por completo) y reemplazar (código que sustituye ese fragmento).\n\
+        {}\n\
+        No uses placeholders ni funciones vacías. No inventes archivos fuera de los solicitados. Devuelve como máximo UN cambio por archivo y nunca repitas el mismo valor de 'archivo'. Usa sintaxis válida del lenguaje; en Python son válidas comillas simples y dobles. Escapa las cadenas del JSON sin alterar el contenido del código.\n\
+          Para verify_*.py: usa solo json, pathlib y re de la biblioteca estándar; lee los archivos reales, comprueba CADA requisito numerado del objetivo con al menos un check independiente y ejecuta los checks bajo if __name__ == '__main__'. Busca tokens simples por separado (por ejemplo requestAnimationFrame, Math.cos, Math.sin); NUNCA incrustes una línea HTML o JavaScript completa con comillas anidadas dentro de una cadena Python. Emite exactamente una línea JSON: passed debe ser el NÚMERO ENTERO de checks aprobados (nunca booleano), total debe ser el NÚMERO ENTERO de checks ejecutados y ser al menos 5 en esta tarea, percentage debe ser 100*passed/total, y failed_criteria debe ser una lista de textos con longitud total-passed. Termina con código 1 si hay fallos. Definir funciones sin llamarlas NO es una verificación. No basta con buscar un nombre: verifica la estructura y los comportamientos solicitados. Si JavaScript está en archivos enlazados, léelos también. Evita nombres de IDs inventados: usa el HTML real que figura arriba.\n\
+        Los scripts automáticos no deben pedir input ni usar pause. No cambies código correcto por causa de un error del entorno.",
+        task, file_contents, patch_rule
     );
-    call_ollama(model, &system_prompt).await
+    let buscar_schema = if require_patch {
+        serde_json::json!({"type":"string", "minLength":1})
+    } else {
+        serde_json::json!({"type":"string"})
+    };
+    let schema = serde_json::json!({
+        "type":"object", "required":["explicacion_tecnica","cambios"], "additionalProperties":false,
+        "properties":{
+            "explicacion_tecnica":{"type":"string"},
+            "cambios":{"type":"array","minItems":1,"maxItems":requested_files.len().max(1),"items":{
+                "type":"object","required":["archivo","buscar","reemplazar"],"additionalProperties":false,
+                "properties":{"archivo":{"type":"string","enum":requested_files},"buscar":buscar_schema,"reemplazar":{"type":"string"}}
+            }}
+        }
+    });
+    call_ollama_with_schema(model, &system_prompt, schema).await
 }
 
 async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
@@ -327,7 +320,7 @@ pub fn reset_agent_cancel() {
 #[tauri::command]
 pub async fn process_user_prompt(
     mut user_message: String,
-    mut workspace_path: String,
+    workspace_path: String,
     orchestrator_model: String,
     programmer_model: String,
     app_handle: tauri::AppHandle,
@@ -354,18 +347,7 @@ pub async fn process_user_prompt(
     }
 
     let mut enriched_message = String::new();
-    let lower_user_msg = user_message.to_lowercase();
-    let is_explicit_continuation = lower_user_msg.contains("continua")
-        || lower_user_msg.contains("sigue")
-        || lower_user_msg.contains("procede")
-        || lower_user_msg.contains("resume");
-
-    if is_explicit_continuation {
-        if let Some(resume) = crate::core::mission_persist::find_pending_mission() {
-            workspace_path = resume.workspace_path;
-        }
-    }
-
+    // The selected workspace remains authoritative, including continuation requests.
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
 
     // ── Zero-latency meta-command intercept ──────────────────────────────────
@@ -383,12 +365,12 @@ pub async fn process_user_prompt(
                 return Ok(response.to_string());
             }
             crate::core::intent_router::IntentAction::Resume {
-                objetivo,
+                objetivo: _,
                 resume_msg,
             } => {
                 agent::emit_event(&app_handle, 0, &resume_msg, "INFO");
-                // Bypass translator: directly use the saved objective
-                enriched_message = objetivo;
+                // Preserve the continuation signal so the agent restores the checkpoint.
+                enriched_message = "continua".to_string();
             }
         }
     }

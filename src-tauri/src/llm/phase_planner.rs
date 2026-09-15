@@ -56,7 +56,7 @@ fn single_phase_fallback(user_message: &str) -> Vec<Fase> {
         numero: 1,
         descripcion: format!(
             "Ejecutar tarea completa: {}",
-            &user_message[..user_message.len().min(60)]
+            user_message.chars().take(60).collect::<String>()
         ),
         archivos: vec![],
         criterio_de_exito: String::new(),
@@ -99,6 +99,18 @@ fn clean_response(raw: &str) -> String {
 /// Returns a Vec<Fase> ready to store in SessionJournal.
 /// Never panics — always returns at least 1 phase.
 pub async fn generate_phase_plan(user_message: &str, model: &str) -> Vec<Fase> {
+    // Small, explicitly named deliverables do not need several speculative LLM phases.
+    let contract = crate::core::mission_contract::MissionContract::from_objective(user_message);
+    let files: Vec<String> = contract.acceptance_criteria.iter().filter_map(|criterion| {
+        if let crate::core::mission_contract::VerificationMethod::FileExistence(file) = &criterion.verification { Some(file.clone()) } else { None }
+    }).collect();
+    if !files.is_empty() && files.len() <= 3 {
+        let verifier = contract.acceptance_criteria.iter().find_map(|criterion| {
+            if let crate::core::mission_contract::VerificationMethod::SemanticVerification { command } = &criterion.verification { Some(command.clone()) } else { None }
+        }).unwrap_or_default();
+        return vec![Fase { numero: 1, descripcion: "Implementar los entregables solicitados y verificar su funcionamiento".into(), archivos: files, criterio_de_exito: verifier, estado: "PENDIENTE".into() }];
+    }
+
     let prompt = build_architect_prompt(user_message);
 
     // Call Qwen using the same infrastructure as the programmer
@@ -139,5 +151,16 @@ pub async fn generate_phase_plan(user_message: &str, model: &str) -> Vec<Fase> {
                     .collect(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn explicit_dashboard_and_verifier_use_one_grounded_phase_without_a_model_call() {
+        let phases = super::generate_phase_plan("Construye cyber_sentinel.html y verify_dashboard.py; ejecuta el verificador.", "unavailable-model").await;
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[0].archivos, vec!["cyber_sentinel.html", "verify_dashboard.py"]);
+        assert_eq!(phases[0].criterio_de_exito, "python verify_dashboard.py");
     }
 }

@@ -5,8 +5,8 @@
   "identifier": "com.tauri.dev",
   "build": {
     "frontendDist": "../src",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeDevCommand": "node scripts/prepare-frontend.cjs",
+    "beforeBuildCommand": "node scripts/prepare-frontend.cjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434 ws://localhost:*; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434 ws://localhost:*; img-src 'self' data:; font-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';"
     }
   },
   "bundle": {

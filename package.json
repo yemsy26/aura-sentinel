@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "tauri": "tauri",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node scripts/prepare-frontend.cjs && node --check src/main.js && node --test scripts/frontend.test.cjs && cargo test --manifest-path src-tauri/Cargo.toml --all-targets",
+    "prepare:frontend": "node scripts/prepare-frontend.cjs"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +15,11 @@
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/cli": "^2.11.2",
-    "@tauri-apps/plugin-dialog": "^2.7.1"
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "dompurify": "3.4.15",
+    "monaco-editor": "0.45.0"
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1"
   }
 }

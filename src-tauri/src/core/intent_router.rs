@@ -1,3 +1,10 @@
+/// Only standalone continuation requests may restore an existing mission.
+pub fn is_resume_command(message: &str) -> bool {
+    matches!(message.trim().to_lowercase().as_str(),
+        "continua" | "continúa" | "continuar" | "continue" | "sigue" | "adelante"
+        | "retoma" | "retoma la tarea" | "resume" | "donde me quede" | "donde me quedé")
+}
+
 pub enum IntentAction {
     Finish(String),
     Resume {
@@ -49,20 +56,7 @@ pub fn try_handle_meta_command(user_message: &str, workspace_path: &str) -> Opti
     }
 
     // ── Resume / continue task ───────────────────────────────────────────────
-    let is_resume = contains_any(
-        &msg,
-        &[
-            "continua",
-            "continúa",
-            "retoma",
-            "retoma la tarea",
-            "sigue",
-            "continue",
-            "resume",
-            "donde me quede",
-            "donde me quedé",
-        ],
-    );
+    let is_resume = is_resume_command(&msg);
 
     if is_resume {
         let journal = crate::core::session_journal::load_journal(workspace_path);
@@ -147,4 +141,17 @@ fn contains_any(s: &str, patterns: &[&str]) -> bool {
         }
         false
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resume_requires_an_explicit_command() {
+        assert!(is_resume_command("  Continúa  "));
+        assert!(is_resume_command("resume"));
+        assert!(!is_resume_command("implementa integración continua"));
+        assert!(!is_resume_command("resume los cambios del proyecto"));
+        assert!(!is_resume_command("arregla el siguiente error"));
+    }
 }

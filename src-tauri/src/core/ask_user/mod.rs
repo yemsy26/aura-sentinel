@@ -42,13 +42,25 @@ pub async fn ask_user_async(
         context,
     };
 
-    let _ = app.emit("agent-ask-user", event);
-
-    // Esperar respuesta (puede demorar si el usuario lee y piensa)
-    match rx.await {
-        Ok(reply) => Ok(reply),
-        Err(_) => Err("Interrumpido o timeout esperando al usuario.".to_string()),
+    if let Err(error) = app.emit("agent-ask-user", event) {
+        pending_prompts().lock().unwrap().remove(&id);
+        return Err(format!("No se pudo mostrar la pregunta: {}", error));
     }
+
+    let mut rx = rx;
+    let result = loop {
+        tokio::select! {
+            reply = &mut rx => break reply.map_err(|_| "Pregunta interrumpida".to_string()),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+                if crate::llm::is_agent_cancelled() {
+                    break Err("Misión cancelada mientras se esperaba una respuesta".to_string());
+                }
+            }
+        }
+    };
+    pending_prompts().lock().unwrap().remove(&id);
+    let _ = app.emit("agent-ask-user-closed", serde_json::json!({ "id": id }));
+    result
 }
 
 /// Comando Tauri para que el frontend envíe la respuesta.

@@ -159,7 +159,12 @@ fn detect_required_commands(workspace_path: &str) -> Vec<&'static str> {
 
 /// Realiza una auditoría ambiental rápida antes de que el agente comience a trabajar.
 /// Retorna `Ok(modelos_disponibles)` si todo está correcto, o `Err` con una lista de problemas encontrados.
-pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, Vec<String>> {
+pub struct EnvironmentReport {
+    pub models: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+pub async fn validate_environment(workspace_path: &str) -> Result<EnvironmentReport, Vec<String>> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
@@ -171,7 +176,7 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
     let workspace_specific = detect_required_commands(workspace_path);
 
     // Always check Ollama (core requirement)
-    // Always check git (useful for Git-Shield)
+    // Git-backed tools are optional, but report their availability truthfully.
     // Only check language tools if the workspace actually uses that language
 
     // Separate into "blocking" (language runtime for this project) vs "soft" (git, others)
@@ -191,7 +196,7 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
     }
 
     if !is_cmd_available("git").await {
-        warnings.push("'git' no está en el PATH. Git-Shield (rollback) no estará disponible, pero la ejecución puede continuar.".to_string());
+        warnings.push("'git' no está en el PATH. Las herramientas Git no estarán disponibles, pero la ejecución puede continuar.".to_string());
     }
 
     // 2. Write permissions in workspace
@@ -243,7 +248,7 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
     let addr: SocketAddr = "8.8.8.8:53".parse().unwrap();
     if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_err() {
         warnings.push(
-            "No hay conectividad a Internet. TOOL_WEB_SCRAPER no funcionará, pero el resto sí."
+            "La comprobación TCP de DNS externo no respondió; la conectividad HTTP no se ha verificado."
                 .to_string(),
         );
     }
@@ -286,14 +291,8 @@ pub async fn validate_environment(workspace_path: &str) -> Result<Vec<String>, V
         }
     }
 
-    // Append warnings as context (non-blocking)
-    if !warnings.is_empty() {
-        // Prepend to available_models metadata so agent gets them in context
-        available_models.insert(0, format!("[WARN] {}", warnings.join(" | ")));
-    }
-
     if errors.is_empty() {
-        Ok(available_models)
+        Ok(EnvironmentReport { models: available_models, warnings })
     } else {
         Err(errors)
     }

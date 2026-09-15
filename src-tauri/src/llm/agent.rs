@@ -1,4 +1,4 @@
-use super::{call_ollama, delegate_to_auditor, delegate_to_logic_solver, ProgrammerOutput};
+use super::{call_ollama, delegate_to_auditor, delegate_to_logic_solver};
 use crate::core::{
     command_trail::StepResult, // CommandTrail used inline via full path in the trail block
     format_system_error,
@@ -31,81 +31,272 @@ fn strip_think_tags(mut text: String) -> String {
     clean_text
 }
 
-/// Intenta recuperar código válido desde respuestas del programador cuando el JSON estricto se rompe.
-/// Busca bloques Markdown (```html, ```python, etc.) o subcadenas JSON para no descartar código funcional.
-#[allow(dead_code)]
-fn try_salvage_programmer_output(
-    raw: &str,
-    requested_files: &[String],
-) -> Option<ProgrammerOutput> {
-    // 1. Intentar encontrar subcadena JSON válida entre el primer '{' y el último '}'
-    if let (Some(first_brace), Some(last_brace)) = (raw.find('{'), raw.rfind('}')) {
-        if last_brace > first_brace {
-            let candidate = &raw[first_brace..=last_brace];
-            if let Ok(po) = serde_json::from_str::<ProgrammerOutput>(candidate) {
-                return Some(po);
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
+}
+
+fn recent_context(text: &str, max_chars: usize) -> String {
+    let char_count = text.chars().count();
+    text.chars()
+        .skip(char_count.saturating_sub(max_chars))
+        .collect()
+}
+
+fn sanitize_runtime_context(context: &str, workspace_path: &str) -> String {
+    let stale_markers = ["proxy-stack-windows", "proxy-stack", "\\proxy-", "/proxy-"];
+    let ws_clean = workspace_path.trim().replace('/', "\\");
+    context
+        .lines()
+        .filter(|line| !stale_markers.iter().any(|marker| line.contains(marker)))
+        .filter(|line| {
+            if let Some(pos) = line.find("scratch\\") {
+                let after = &line[pos + 8..];
+                let foreign_folder = after
+                    .split(&['\\', '/', ' ', '"', '\'', '`'][..])
+                    .next()
+                    .unwrap_or("");
+                return foreign_folder.is_empty()
+                    || ws_clean.contains(foreign_folder)
+                    || foreign_folder == "aura sentinel";
             }
+            true
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn official_verifier_command(
+    contract: &crate::core::mission_contract::MissionContract,
+) -> Option<String> {
+    contract.acceptance_criteria.iter().find_map(|criterion| {
+        if let crate::core::mission_contract::VerificationMethod::SemanticVerification {
+            command,
+        } = &criterion.verification
+        {
+            Some(command.clone())
+        } else {
+            None
+        }
+    })
+}
+
+fn is_managed_verifier(workspace_path: &str, file: &str) -> bool {
+    if !(file.starts_with("verify_") || file.starts_with("test_")) {
+        return false;
+    }
+    std::fs::read_to_string(std::path::Path::new(workspace_path).join(file))
+        .map(|source| source.starts_with("# AURA_MANAGED_VERIFIER_"))
+        .unwrap_or(false)
+}
+
+fn file_is_already_known(existing_files: &[String], requested: &str) -> bool {
+    let requested = requested.replace('\\', "/");
+    existing_files.iter().any(|existing| {
+        let existing = existing.replace('\\', "/");
+        existing == requested || existing.ends_with(&format!("/{requested}"))
+    })
+}
+
+fn relevant_programmer_files(
+    workspace_path: &str,
+    contract: &crate::core::mission_contract::MissionContract,
+    existing_files: &[String],
+    reason: &str,
+) -> Vec<String> {
+    let mut files: Vec<String> = contract
+        .acceptance_criteria
+        .iter()
+        .filter_map(|criterion| {
+            if let crate::core::mission_contract::VerificationMethod::FileExistence(file) =
+                &criterion.verification
+            {
+                let existing_managed_verifier = (file.starts_with("verify_")
+                    || file.starts_with("test_"))
+                    && file_is_already_known(existing_files, file);
+                if existing_managed_verifier {
+                    None
+                } else {
+                    Some(file.clone())
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+    let reason_lower = reason.to_lowercase();
+    let is_repair = ["corrig", "repara", "fall", "error", "criterio", "estancamiento"]
+        .iter()
+        .any(|token| reason_lower.contains(token));
+    if is_repair || files.is_empty() {
+        files.extend(existing_files.iter().filter_map(|file| {
+            let path = std::path::Path::new(file);
+            match path.extension().and_then(|value| value.to_str()) {
+                Some("html" | "css" | "js" | "ts" | "tsx" | "jsx" | "py" | "rs" | "json") => {
+                    Some(file.clone())
+                }
+                _ => None,
+            }
+        }));
+    }
+    if let Ok(pattern) = regex::Regex::new(
+        r"(?i)\b[a-z_][a-z0-9_./\\-]*\.(?:html|css|js|ts|tsx|jsx|py|rs|json)\b",
+    ) {
+        files.extend(pattern.find_iter(reason).filter_map(|matched| {
+            if matched.as_str().contains(".aura") {
+                return None;
+            }
+            std::path::Path::new(matched.as_str())
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .filter(|name| {
+                    name != "programmer_failure.json"
+                        && !name.eq_ignore_ascii_case("node.js")
+                })
+        }));
+    }
+    files.sort();
+    files.dedup();
+    files.retain(|file| !is_managed_verifier(workspace_path, file));
+    files
+}
+
+fn command_from_forced_reason(reason: &str, official_command: Option<&str>) -> Option<String> {
+    let lower = reason.to_lowercase();
+    if let Some(command) = official_command {
+        if reason.contains(command)
+            || ["verific", "criterio", "contrato", "prueba", "test", "repar"]
+                .iter()
+                .any(|token| lower.contains(token))
+        {
+            return Some(command.to_string());
         }
     }
-
-    // 2. Extraer bloques de código Markdown estructurados
-    let lang_tags = [
-        ("html", "html"),
-        ("htm", "html"),
-        ("python", "py"),
-        ("py", "py"),
-        ("javascript", "js"),
-        ("js", "js"),
-        ("css", "css"),
-        ("rust", "rs"),
-        ("rs", "rs"),
-        ("json", "json"),
-    ];
-
-    for (tag, ext_match) in &lang_tags {
-        let block_prefix = format!("```{}", tag);
-        if let Some(start) = raw.find(&block_prefix) {
-            let code_start = start + block_prefix.len();
-            if let Some(end) = raw[code_start..].find("```") {
-                let code = raw[code_start..code_start + end].trim();
-                if !code.is_empty() {
-                    for file in requested_files {
-                        let f_ext = file.split('.').last().unwrap_or("").to_lowercase();
-                        if f_ext == *ext_match {
-                            return Some(ProgrammerOutput {
-                                pensamiento: Some(
-                                    "Código recuperado automáticamente desde bloque Markdown"
-                                        .to_string(),
-                                ),
-                                explicacion_tecnica: format!(
-                                    "Extracción resiliente de bloque ```{}```",
-                                    tag
-                                ),
-                                cambios: vec![crate::memory::Cambio {
-                                    archivo: file.clone(),
-                                    buscar: "".to_string(),
-                                    reemplazar: code.to_string(),
-                                }],
-                            });
-                        }
-                    }
+    for prefix in ["ejecutar '", "comando='", "comando: '"] {
+        if let Some(rest) = reason.split(prefix).nth(1) {
+            if let Some(command) = rest.split('\'').next() {
+                if !command.trim().is_empty() {
+                    return Some(command.trim().to_string());
                 }
             }
         }
     }
+    let trimmed = reason.trim().trim_matches('\'').trim_matches('`');
+    let direct_prefixes = [
+        "dir", "python ", "python3 ", "node ", "cargo ", "npm ", "npx ", "git ",
+        "powershell ", "pwsh ",
+    ];
+    if direct_prefixes.iter().any(|prefix| {
+        trimmed.eq_ignore_ascii_case(prefix.trim())
+            || trimmed.to_lowercase().starts_with(prefix)
+    }) {
+        return Some(trimmed.to_string());
+    }
     None
 }
 
-/// Detecta si el workspace contiene archivos HTML (entorno web/frontend)
-fn has_html_files(workspace_path: &str) -> bool {
-    if let Ok(world) = crate::core::world_state::WorldState::capture(workspace_path) {
-        return world
-            .files
-            .keys()
-            .any(|f| f.to_lowercase().ends_with(".html") || f.to_lowercase().ends_with(".htm"));
+/// Runtime-owned transitions do not need a second LLM call merely to select a tool.
+/// The model is still used for the creative programming payload itself.
+fn deterministic_forced_decision(
+    workspace_path: &str,
+    forced: &str,
+    reason: &str,
+    contract: &crate::core::mission_contract::MissionContract,
+    existing_files: &[String],
+) -> Option<serde_json::Value> {
+    let base = |tool: &str| {
+        serde_json::json!({
+            "herramienta": tool,
+            "pensamiento": reason,
+            "comando": null,
+            "task_id": null,
+            "url_a_investigar": null,
+            "archivos_a_editar": [],
+            "ast_nodes": [],
+            "respuesta_conversacional": null
+        })
+    };
+    match forced {
+        "TOOL_PROGRAMMER" => {
+            let files = relevant_programmer_files(workspace_path, contract, existing_files, reason);
+            if files.is_empty() {
+                None
+            } else {
+                let mut value = base(forced);
+                value["archivos_a_editar"] = serde_json::json!(files);
+                Some(value)
+            }
+        }
+        "TOOL_TERMINAL" => {
+            let official = official_verifier_command(contract);
+            command_from_forced_reason(reason, official.as_deref()).map(|command| {
+                let mut value = base(forced);
+                value["comando"] = serde_json::json!(command);
+                value
+            })
+        }
+        "TOOL_FINISH" => {
+            let mut value = base(forced);
+            value["respuesta_conversacional"] = serde_json::json!(reason);
+            Some(value)
+        }
+        "TOOL_BACKGROUND_START" if !reason.trim().is_empty() => {
+            let mut value = base(forced);
+            value["comando"] = serde_json::json!(reason.trim());
+            Some(value)
+        }
+        _ => None,
     }
-    false
 }
+
+fn focused_repair_criteria(criteria: &[String], limit: usize) -> Vec<String> {
+    let mut categories = std::collections::HashSet::new();
+    let mut focused = Vec::new();
+    for criterion in criteria {
+        let lower = criterion.to_lowercase();
+        let category = if lower.contains("radar") {
+            "radar"
+        } else if lower.contains("telemetr") || lower.contains("paquete") {
+            "telemetry"
+        } else if lower.contains("tráfico")
+            || lower.contains("trafico")
+            || lower.contains("gráfico")
+            || lower.contains("grafico")
+            || lower.contains("visualiza")
+            || lower.contains("alerta")
+        {
+            "traffic"
+        } else if lower.contains("diseño")
+            || lower.contains("glass")
+            || lower.contains("monospace")
+            || lower.contains("neón")
+            || lower.contains("neon")
+        {
+            "design"
+        } else if lower.contains("html") || lower.contains("canvas") {
+            "structure"
+        } else {
+            criterion.as_str()
+        };
+        if categories.insert(category.to_string()) {
+            focused.push(criterion.clone());
+            if focused.len() == limit {
+                break;
+            }
+        }
+    }
+    focused
+}
+
+fn tactical_repair_blueprint(objective: &str) -> &'static str {
+    let lower = objective.to_lowercase();
+    if lower.contains("dashboard") && lower.contains("radar") && lower.contains("telemetr") {
+        "Implementación mínima funcional esperada: conserva un único HTML autocontenido; usa un arreglo threatNodes con angle/radius y dibuja cada nodo con Math.cos y Math.sin dentro de requestAnimationFrame; crea generatePacket/updatePackets (o nombres equivalentes que contengan packet/paquete) con campos ip, protocol, latency y risk y actualiza el panel mediante textContent/innerHTML; usa un segundo <canvas id=\"trafficCanvas\"> y un contexto separado llamado trafficCtx para el historial de tráfico, sin borrar el Canvas del radar; muestra una barra alert con texto attack/ataque; aplica backdrop-filter, monospace y box-shadow/text-shadow. No añadas solo palabras: conecta cada dato a una función visible."
+    } else {
+        ""
+    }
+}
+
+/// Detecta si el workspace contiene archivos HTML (entorno web/frontend)
 
 /// Resume y compacta salidas verbose de terminal conservando solo lo crítico (errores, advertencias, confirmaciones).
 /// Evita la saturación del contexto del LLM y acelera las inferencias.
@@ -163,7 +354,7 @@ fn digest_terminal_output(raw: &str, max_chars: usize) -> String {
     if result.len() > max_chars {
         format!(
             "{}...\n[Salida recortada para eficiencia]",
-            &result[..max_chars]
+            truncate_chars(&result, max_chars)
         )
     } else {
         result
@@ -332,11 +523,11 @@ fn classify_mission(msg: &str) -> MissionType {
         "status",
     ];
 
-    if execution.iter().any(|w| m.contains(w)) {
-        return MissionType::Execution;
-    }
     if construction.iter().any(|w| m.contains(w)) {
         return MissionType::Construction;
+    }
+    if execution.iter().any(|w| m.contains(w)) {
+        return MissionType::Execution;
     }
     if debug.iter().any(|w| m.contains(w)) {
         return MissionType::Debug;
@@ -616,8 +807,6 @@ pub fn detect_projects(workspace_path: &str) -> Vec<ProjectDescriptor> {
 }
 
 pub const DEFAULT_ORCHESTRATOR_MODEL: &str = "qwen2.5-coder:7b";
-#[allow(dead_code)]
-pub const DEFAULT_PROGRAMMER_MODEL: &str = "qwen2.5-coder:7b";
 
 /// Resuelve el modelo solicitado contra la lista de modelos de Ollama disponibles.
 /// Si el modelo solicitado coincide exactamente o por prefijo, lo usa directamente.
@@ -689,7 +878,10 @@ pub async fn run_agent_loop(
     );
     let available_models = match crate::core::env_check::validate_environment(&workspace_path).await
     {
-        Ok(models) => models,
+        Ok(report) => {
+            for warning in report.warnings { emit_event(&app_handle, 0, &format!("[ENTORNO] {}", warning), "WARNING"); }
+            report.models
+        },
         Err(env_errors) => {
             let error_msg = env_errors.join("\n");
             emit_event(
@@ -699,7 +891,7 @@ pub async fn run_agent_loop(
                 "FATAL",
             );
             let final_res = FinalResponse {
-                status: "FINISH".to_string(),
+                status: "ERROR".to_string(),
                 respuesta_conversacional: format!("[ENV_FAILURE] No puedo continuar porque el entorno no cumple con los requisitos mínimos:\n{}\n\nPor favor, soluciona esto e intenta de nuevo.", error_msg),
             };
             return Ok(serde_json::to_string(&final_res).unwrap());
@@ -823,6 +1015,11 @@ pub async fn run_agent_loop(
     let mut tester_attempts = 0;
     let mut tester_success_hits = 0;
     let mut programmer_cooldown_hits = 0;
+    let mut programmer_failures = 0u32;
+    let mut verifier_failures = 0u32;
+    let mut last_failed_verifier_world: Option<u64> = None;
+    let mut repeated_verifier_without_change = 0u32;
+    let mut verifier_diagnostic = String::new();
     let mut original_prompt_parsed =
         if let Some(idx) = user_message.find("\n\nGuía de Traducción Técnica") {
             let text = &user_message[..idx];
@@ -885,7 +1082,7 @@ pub async fn run_agent_loop(
     .unwrap();
     // ── Context Window Tiered Monitor (Devin 2.0 / OSS 2025 Pattern) ────────
     let context_monitor =
-        crate::core::context_monitor::ContextMonitor::new(6000, &original_prompt_parsed);
+        crate::core::context_monitor::ContextMonitor::new(12000, &original_prompt_parsed);
 
     // ── Multi-Agent Role State Machine ─────────────────────────────────────
     let mut current_role = AgentRole::Planner;
@@ -920,14 +1117,7 @@ pub async fn run_agent_loop(
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
 
     // ── Check if the user is sending a continuation command ──
-    let is_continuation_command = {
-        let msg_trim = user_message.trim().to_lowercase();
-        msg_trim == "continua"
-            || msg_trim == "continuar"
-            || msg_trim == "continue"
-            || msg_trim == "sigue"
-            || msg_trim == "adelante"
-    };
+    let is_continuation_command = crate::core::intent_router::is_resume_command(&user_message);
 
     // ── Fase 1: Register workspace in global index for auto-resume ────────────
     crate::core::mission_persist::register_workspace(&workspace_path);
@@ -976,25 +1166,36 @@ pub async fn run_agent_loop(
     );
 
     // Initial contract criteria: every mission must have explicit deliverables & validation
-    if runtime.contract.acceptance_criteria.is_empty() {
-        runtime.contract.add_criterion(
-            "AC-DELIVERABLES",
-            "Implementación y generación de entregables solicitados en el workspace",
-            crate::core::mission_contract::VerificationMethod::ManualReview,
-            true,
-        );
-        runtime.contract.add_criterion(
-            "AC-VALIDATION",
-            "Validación de sintaxis, consistencia y pruebas funcionales del workspace",
-            crate::core::mission_contract::VerificationMethod::TestPassed,
-            true,
-        );
+    if runtime.contract.acceptance_criteria.is_empty() && runtime.contract.required_evidence.is_empty() {
+        runtime.contract = crate::core::mission_contract::MissionContract::from_objective(&original_prompt_parsed);
+    }
+
+    match crate::core::managed_verifier::ensure_for_mission(
+        &workspace_path,
+        &original_prompt_parsed,
+        &runtime.contract,
+    ) {
+        Ok(Some(file)) => emit_event(
+            &app_handle,
+            0,
+            &format!(
+                "[VERIFICADOR GESTIONADO] Se creó '{}' con criterios físicos y mensajes descriptivos.",
+                file
+            ),
+            "SUCCESS",
+        ),
+        Ok(None) => {}
+        Err(error) => {
+            emit_event(&app_handle, 0, &error, "FATAL");
+            return Err(error);
+        }
     }
 
     // ── FINAL-6: Register all tool executors with ToolRegistry ────────────────
     // Must happen BEFORE the mission loop. ToolRegistry is now the sole dispatch
     // authority — execute_action() resolves which code runs via registry, not ad-hoc.
     register_default_tools(&mut runtime, &workspace_path, &original_prompt_parsed);
+    emit_event(&app_handle, 0, &format!("Herramientas registradas: {}. La disponibilidad de sus dependencias se comprueba al ejecutarlas.", runtime.tool_registry.registered_count()), "INFO");
 
     // ── AL-v1: Adaptive Learning Setup ───────────────────────────────────────
     let al_project_profile = crate::core::project_profile::ProjectProfile::detect(&workspace_path);
@@ -1034,7 +1235,7 @@ pub async fn run_agent_loop(
         &app_handle,
         0,
         &format!(
-            "[ADAPTIVE LEARNING] Estrategia recomendada: {:?} | Modelo: {} (confianza: {:.0}%)",
+            "[ADAPTIVE LEARNING] Recomendación no aplicada: {:?} | Modelo sugerido: {} (confianza: {:.0}%). Se conserva el modelo seleccionado.",
             al_recommendation.strategy,
             al_recommendation.model,
             al_recommendation.confidence * 100.0
@@ -1089,7 +1290,7 @@ pub async fn run_agent_loop(
             &app_handle,
             0,
             &format!(
-                "🏃 Runners internos activos en .aura/runtime/runners: {}",
+                "Scripts de ejecución preparados en .aura/runtime/runners (aún no ejecutados): {}",
                 runners_generated
                     .iter()
                     .map(|p| p.file_name().unwrap().to_string_lossy())
@@ -1144,7 +1345,7 @@ pub async fn run_agent_loop(
         emit_event(
             &app_handle,
             0,
-            &format!("ðŸ—ºï¸  Plan generado: {}", plan_desc),
+            &format!("Plan generado: {}", plan_desc),
             "SUCCESS",
         );
     }
@@ -1393,7 +1594,7 @@ pub async fn run_agent_loop(
                             "### 🛡︠ Misión Completada con Éxito\n\n\
                             Se han implementado y validado todos los componentes del proyecto:\n\
                             {}\n\n\
-                            Todos los archivos pasaron las pruebas de compilación y verificación al 100%.",
+                            La puerta de finalización confirmó evidencia vigente para todos los criterios requeridos.",
                             created_files.iter().map(|f| format!("- `{}`", f)).collect::<Vec<_>>().join("\n")
                         ),
                     };
@@ -1497,7 +1698,7 @@ pub async fn run_agent_loop(
             emit_event(&app_handle, runtime.current_step(), &pause_msg, "WARNING");
 
             let final_res = FinalResponse {
-                status: "FINISH".to_string(),
+                status: "PAUSED".to_string(),
                 respuesta_conversacional: pause_msg,
             };
             return Ok(serde_json::to_string(&final_res).unwrap());
@@ -1593,7 +1794,7 @@ pub async fn run_agent_loop(
         // ── Context Window Tiered Monitor & Intelligent Compaction (Devin 2.0 / OSS 2025 Pattern) ──
         let (fill_pct, ctx_status) = context_monitor.status(current_context.len());
         if context_monitor.should_compact(current_context.len()) {
-            emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct * 100.0), "INFO");
+            emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct.min(1.0) * 100.0), "INFO");
             let anchor_block = runtime.state_anchor.format_prompt_block();
             current_context = context_monitor.compact_context(&current_context, &anchor_block);
             emit_event(
@@ -1608,7 +1809,7 @@ pub async fn run_agent_loop(
                 runtime.current_step(),
                 &format!(
                     "[MEMORIA] Ventana al {:.0}% de capacidad — operando con normalidad.",
-                    fill_pct * 100.0
+                    fill_pct.min(1.0) * 100.0
                 ),
                 "INFO",
             );
@@ -1622,8 +1823,8 @@ pub async fn run_agent_loop(
         }
 
         let mut extra_prompt = String::new();
-        if let Some((forced, _)) = &forced_override {
-            extra_prompt = format!("\n\nREGLA ESTRICTA E INQUEBRANTABLE PARA ESTE TURNO:\nDEBES Y TIENES QUE ELEGIR '{}' COMO TU HERRAMIENTA. NO ELIJAS OTRA O EL SISTEMA FALLARÁ. Ignora cualquier otra regla y genera un JSON válido para la herramienta {}.", forced, forced);
+        if let Some((forced, reason)) = &forced_override {
+            extra_prompt = format!("\n\nACCIÓN REQUERIDA: {}. Genera los argumentos válidos para esta herramienta. Diagnóstico vigente: {}", forced, reason);
         }
 
         // 🛡️ LIVE WORKSPACE SCAN (Delegated to WorldState & MissionStateAnchor) 🛡️
@@ -1666,6 +1867,10 @@ pub async fn run_agent_loop(
             .map(|c| format!("[CONTRATO DE ACEPTACION DEL PLANIFICADOR]\n{}\n", c))
             .unwrap_or_default();
 
+        // Apply the contamination filter before constructing this turn's prompt.
+        // Filtering after prompt creation protected only the following turn.
+        current_context = sanitize_runtime_context(&current_context, &workspace_path);
+
         let json_schema = format!("Tu respuesta DEBE ser ÚNICAMENTE un objeto JSON (sin markdown, sin texto extra):\n\
             {{\n\
               \"herramienta\": \"<NOMBRE_HERRAMIENTA>\",\n\
@@ -1706,7 +1911,7 @@ pub async fn run_agent_loop(
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "{}[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). Si ningún archivo existe aún en el workspace, usa TOOL_PROGRAMMER con el nombre de los archivos a crear en 'archivos_a_editar' (NUNCA [] vacío). Si los archivos base ya existen físicamente, NO los recrees: usa TOOL_TERMINAL para ejecutarlos o probarlos, o TOOL_PROGRAMMER para crear scripts de prueba (ej. verify_*.py). Genera código modular, atómico y preferiblemente archivo por archivo para evitar respuestas gigantes. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER (eres el ejecutor: escribe código e implementa directamente).\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Valida semántica (regex o checks independientes de atributos) sin asumir orden rígido en HTML. 2) Al final del script DEBES imprimir a stdout un JSON válido en una sola línea con este formato: {{\"passed\": 2, \"total\": 2, \"percentage\": 100.0, \"failed_criteria\": []}}. Si hay fallos, el exit code debe ser > 0. 3) Si un test falla, eres 100% autónomo para auto-depurarlo con TOOL_PROGRAMMER. 4) En Python escapa comillas internas con \\\" para evitar SyntaxError.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
+                "{}[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). Si faltan entregables, usa TOOL_PROGRAMMER con todos sus nombres en 'archivos_a_editar' (NUNCA [] vacío). Si ya existen, usa TOOL_TERMINAL para probarlos o TOOL_PROGRAMMER para corregir los archivos que causan un fallo real. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER.\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Crea una comprobación independiente para CADA requisito numerado del objetivo y prueba los archivos reales, incluidos JS/CSS enlazados. 2) Usa solo json, pathlib y re; busca tokens simples por separado y nunca incrustes líneas HTML/JS completas con comillas anidadas. 3) Ejecuta los checks bajo __main__ y emite JSON en una línea con passed y total ENTEROS, percentage calculado y failed_criteria con una entrada por fallo. Ejemplo para cinco checks aprobados: {{\"passed\": 5, \"total\": 5, \"percentage\": 100.0, \"failed_criteria\": []}}. 4) Exit code 0 solo si passed=total; cualquier fallo debe devolver exit code 1. El verificador es de solo lectura.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
                 pesp_banner, user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
@@ -1718,60 +1923,36 @@ pub async fn run_agent_loop(
             ),
         };
 
-        // ── Context Sanitizer: strip any reference to foreign workspaces ────────
-        // Prevents the LLM from re-learning stale workspace paths from its own
-        // history (e.g. previous sessions or foreign directory paths).
-        current_context = {
-            let stale_markers = ["proxy-stack-windows", "proxy-stack", "\\proxy-", "/proxy-"];
-            let mut ctx = current_context.clone();
-            for marker in &stale_markers {
-                if ctx.contains(marker) {
-                    ctx = ctx
-                        .lines()
-                        .filter(|line| !line.contains(marker))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                }
-            }
-            // Strip foreign absolute paths if mentioning other scratch workspaces
-            let ws_clean = workspace_path.trim().replace('/', "\\");
-            if !ws_clean.is_empty() {
-                ctx = ctx
-                    .lines()
-                    .filter(|line| {
-                        if let Some(pos) = line.find("scratch\\") {
-                            let after = &line[pos + 8..];
-                            let foreign_folder = after
-                                .split(&['\\', '/', ' ', '"', '\'', '`'][..])
-                                .next()
-                                .unwrap_or("");
-                            if !foreign_folder.is_empty()
-                                && !ws_clean.contains(foreign_folder)
-                                && foreign_folder != "aura sentinel"
-                            {
-                                return false;
-                            }
-                        }
-                        true
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-            }
-            ctx
-        };
-
         // El modelo del orquestador respeta la selección global del usuario (ya resuelto en resolve_model_or_fallback)
         let role_label = match current_role {
             AgentRole::Planner => "🧠 PLANIFICADOR",
             AgentRole::Executor => "⚙️ EJECUTOR",
             AgentRole::Critic => "🔬 CRÍTICO",
         };
-        emit_event(
-            &app_handle,
-            runtime.current_step(),
-            &format!("[{}] Pensando con {}...", role_label, orchestrator_model),
-            "PLANNING",
-        );
+        let deterministic_decision = forced_override.as_ref().and_then(|(forced, reason)| {
+            deterministic_forced_decision(
+                &workspace_path,
+                forced,
+                reason,
+                &runtime.contract,
+                &runtime.state_anchor.existing_files,
+            )
+        });
+        if deterministic_decision.is_some() {
+            emit_event(
+                &app_handle,
+                runtime.current_step(),
+                "[RUNTIME ROUTER] Transición conocida resuelta por reglas locales.",
+                "PLANNING",
+            );
+        } else {
+            emit_event(
+                &app_handle,
+                runtime.current_step(),
+                &format!("[{}] Pensando con {}...", role_label, orchestrator_model),
+                "PLANNING",
+            );
+        }
 
         // ── Fase 5: Sanity Monitor (cada 5 pasos) ──────────────────────────────
         if runtime.current_step() % 5 == 0 {
@@ -1827,16 +2008,21 @@ pub async fn run_agent_loop(
             }
         }
 
-        let mut agent_res = match call_ollama(&orchestrator_model, &agent_prompt).await {
-            Ok(res) => res,
-            Err(e) => {
-                emit_event(
-                    &app_handle,
-                    runtime.current_step(),
-                    &format!("Error de conexión: {}", e),
-                    "ERROR",
-                );
-                return Err(e);
+        let decision_is_deterministic = deterministic_decision.is_some();
+        let mut agent_res = if let Some(value) = deterministic_decision {
+            value.to_string()
+        } else {
+            match call_ollama(&orchestrator_model, &agent_prompt).await {
+                Ok(res) => res,
+                Err(e) => {
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        &format!("Error de conexión: {}", e),
+                        "ERROR",
+                    );
+                    return Err(e);
+                }
             }
         };
 
@@ -1855,7 +2041,11 @@ pub async fn run_agent_loop(
         let clean_agent_res = strip_think_tags(agent_res.clone());
         let raw_value: serde_json::Value = match serde_json::from_str(&clean_agent_res) {
             Ok(v) => {
-                println!("LLM RAW RESPONSE: {}", agent_res);
+                if decision_is_deterministic {
+                    println!("RUNTIME ROUTER DECISION: {}", agent_res);
+                } else {
+                    println!("LLM RAW RESPONSE: {}", agent_res);
+                }
                 json_error_count = 0; // Reset error count on success
                 v
             }
@@ -2034,6 +2224,11 @@ pub async fn run_agent_loop(
                 "[VALIDACIÓN DE ESQUEMA FALLIDA]: {}\nCorrige los argumentos del objeto JSON para la herramienta '{}'.\n\n",
                 schema_err, tool
             ));
+            // Taking the override above must not silently discard it when the model
+            // returns malformed arguments for another tool.
+            if forced_override.is_some() {
+                forced_next_tool = forced_override.clone();
+            }
             continue;
         }
 
@@ -2058,10 +2253,92 @@ pub async fn run_agent_loop(
                     "WARNING",
                 );
 
-                // FIX-A1: Never give up — if model ignores the forced tool 3 times in a row,
-                // HARD-EXECUTE the forced action directly without asking the LLM again.
-                // This is the only reliable way to break a loop with a stubborn small model.
-                if intercept_consecutive >= 3 {
+                // Terminal recovery has concrete arguments and can be executed directly.
+                // Other tools need model-generated arguments; stop explicitly after three
+                // disobedient turns instead of hiding the failure in a long loop.
+                if intercept_consecutive >= 3 || (forced == "TOOL_PROGRAMMER" && intercept_consecutive >= 1) {
+                    if forced == "TOOL_PROGRAMMER" {
+                        let mut repair_files: Vec<String> = std::fs::read_dir(&workspace_path)
+                            .ok()
+                            .into_iter()
+                            .flatten()
+                            .flatten()
+                            .filter_map(|entry| {
+                                let path = entry.path();
+                                if path.is_file() && matches!(path.extension().and_then(|value| value.to_str()), Some("html" | "css" | "js" | "ts" | "py" | "rs" | "json")) {
+                                    Some(entry.file_name().to_string_lossy().to_string())
+                                } else { None }
+                            })
+                            .collect();
+                        for criterion in &runtime.contract.acceptance_criteria {
+                            if let crate::core::mission_contract::VerificationMethod::FileExistence(file) = &criterion.verification {
+                                if !repair_files.contains(file) { repair_files.push(file.clone()); }
+                            }
+                        }
+                        repair_files.sort();
+                        repair_files.dedup();
+                        let target_model = resolve_model_or_fallback(&programmer_model, &available_models);
+                        let proposal = crate::core::policy::ActionProposal {
+                            tool: "TOOL_PROGRAMMER".to_string(),
+                            arguments: serde_json::json!({
+                                "instruccion": format!("Objetivo global: {}\nReparación obligatoria: {}\nCorrige los archivos necesarios y el verificador; no repitas código sin cambios.", original_prompt_parsed, override_msg),
+                                "archivos_a_editar": repair_files,
+                                "context": format!("DIAGNÓSTICO SEMÁNTICO VIGENTE:\n{}", override_msg),
+                                "model": target_model,
+                                "repair_attempt": verifier_failures.max(programmer_failures) + 1,
+                                "semantic_repair": true
+                            }),
+                            expected_effect: override_msg.clone(),
+                            risk: crate::core::policy::RiskLevel::Safe,
+                            world_hash: Some(runtime.current_world_hash()),
+                        };
+                        emit_event(&app_handle, runtime.current_step(), "[INTERCEPT] Ejecutando la reparación requerida con argumentos determinados por el contrato.", "WARNING");
+                        match runtime.execute_action(&proposal).await {
+                            Ok(obs) if obs.status == crate::core::observation::ObservationStatus::Success => {
+                                for file in &obs.files_affected {
+                                    let full_path = std::path::Path::new(&workspace_path).join(file);
+                                    let _ = app_handle.emit("file-updated", serde_json::json!({"path": full_path.to_string_lossy()}));
+                                }
+                                current_context.push_str(&format!("[REPARACIÓN FORZADA COMPLETADA]: {}\n", obs.payload));
+                                current_role = AgentRole::Critic;
+                                intercept_consecutive = 0;
+                                if let Some(command) = runtime.contract.acceptance_criteria.iter().find_map(|criterion| {
+                                    if let crate::core::mission_contract::VerificationMethod::SemanticVerification { command } = &criterion.verification { Some(command.clone()) } else { None }
+                                }) {
+                                    forced_next_tool = Some(("TOOL_TERMINAL".to_string(), format!("ejecutar '{}'.", command)));
+                                }
+                                continue;
+                            }
+                            Ok(obs) => {
+                                let message = format!("FORCED_PROGRAMMER_FAILED: {}", obs.payload);
+                                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                                programmer_failures += 1;
+                                if programmer_failures >= 3 {
+                                    persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                    return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":format!("PROGRAMMER_REPAIR_EXHAUSTED: {} intentos reales fallidos. {}", programmer_failures, message)}).to_string());
+                                }
+                                current_context.push_str(&format!("\n{}\nEl borrador fue conservado. Corrige únicamente el archivo señalado por el diagnóstico.\n", message));
+                                forced_next_tool = Some((
+                                    "TOOL_PROGRAMMER".to_string(),
+                                    format!("Reparación {} de 3. Corrige el borrador conservado según este diagnóstico exacto: {}", programmer_failures + 1, obs.payload),
+                                ));
+                                intercept_consecutive = 0;
+                                continue;
+                            }
+                            Err(error) => {
+                                let message = format!("FORCED_PROGRAMMER_BLOCKED: {}", error);
+                                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                                persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
+                            }
+                        }
+                    }
+                    if forced != "TOOL_TERMINAL" {
+                        let message = format!("FORCED_TOOL_NOT_OBEYED: el modelo no generó una llamada válida a {} después de 3 intentos. Razón: {}", forced, override_msg);
+                        emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                        persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                        return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
+                    }
                     emit_event(&app_handle, runtime.current_step(),
                         "[INTERCEPT] Modelo ignoró la orden 3 veces. Ejecutando acción forzada directamente...", "WARNING");
 
@@ -2112,12 +2389,7 @@ pub async fn run_agent_loop(
 
                         match runtime.execute_action(&intercept_proposal).await {
                             Ok(obs) => {
-                                let out_len = obs.payload.len();
-                                let digest = if out_len > 3000 {
-                                    &obs.payload[..3000]
-                                } else {
-                                    &obs.payload[..]
-                                };
+                                let digest = truncate_chars(&obs.payload, 3000);
                                 let auto_msg = format!(
                                     "[INTERCEPTOR AUTO-EXEC] Ejecutó '{}' bajo autorización de runtime.\nResultado:\n{}\n\n",
                                     forced_cmd_to_run, digest
@@ -2306,6 +2578,57 @@ pub async fn run_agent_loop(
                     }
                 }
             }
+        }
+
+        if tool == "TOOL_PROGRAMMER" {
+            let explicit_contract_files: Vec<String> = runtime.contract.acceptance_criteria.iter().filter_map(|criterion| {
+                if let crate::core::mission_contract::VerificationMethod::FileExistence(file) = &criterion.verification {
+                    Some(file.clone())
+                } else {
+                    None
+                }
+            }).collect();
+            let missing_explicit_files: Vec<String> = explicit_contract_files
+                .iter()
+                .filter(|file| !std::path::Path::new(&workspace_path).join(file).is_file())
+                .cloned()
+                .collect();
+            let starts_explicit_small_build = !missing_explicit_files.is_empty()
+                && explicit_contract_files.len() <= 3
+                && verifier_diagnostic.is_empty();
+            if starts_explicit_small_build {
+                // The user named the deliverables. Keep a small first transaction and
+                // place CSS/JS inline when only one HTML file was requested.
+                archivos_vec = missing_explicit_files;
+            }
+            for file in explicit_contract_files {
+                if !std::path::Path::new(&workspace_path).join(&file).is_file()
+                    && !archivos_vec.contains(&file)
+                {
+                    archivos_vec.push(file);
+                }
+            }
+            if !verifier_diagnostic.is_empty() {
+                if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                    let mut related: Vec<String> = entries.flatten().filter_map(|entry| {
+                        let path = entry.path();
+                        if path.is_file() && matches!(path.extension().and_then(|v| v.to_str()), Some("html" | "css" | "js" | "ts" | "py")) {
+                            let file = entry.file_name().to_string_lossy().to_string();
+                            let is_verifier = file.starts_with("verify_") || file.starts_with("test_");
+                            if is_verifier && !verifier_diagnostic.contains(&file) {
+                                None
+                            } else {
+                                Some(file)
+                            }
+                        } else { None }
+                    }).collect();
+                    related.sort();
+                    for file in related {
+                        if !archivos_vec.contains(&file) { archivos_vec.push(file); }
+                    }
+                }
+            }
+            archivos_vec.retain(|file| !is_managed_verifier(&workspace_path, file));
         }
 
         let mut ast_nodes_vec = Vec::new();
@@ -2715,11 +3038,45 @@ pub async fn run_agent_loop(
                             recommended_tool,
                         }) = repair_decision
                         {
+                            let failed_world = runtime.current_world_hash();
+                            if last_failed_verifier_world != Some(failed_world) {
+                                verifier_failures += 1;
+                                last_failed_verifier_world = Some(failed_world);
+                                repeated_verifier_without_change = 0;
+                            } else {
+                                repeated_verifier_without_change += 1;
+                                emit_event(
+                                    &app_handle,
+                                    runtime.current_step(),
+                                    "[SEMANTIC_VERIFICATION] El workspace no cambió desde el último fallo; este reintento no consume una reparación.",
+                                    "WARNING",
+                                );
+                                if repeated_verifier_without_change >= 2 {
+                                    let message = "VERIFIER_NO_PROGRESS: dos reparaciones consecutivas no produjeron ningún cambio físico. Se detuvo la misión para evitar un bucle.".to_string();
+                                    emit_event(
+                                        &app_handle,
+                                        runtime.current_step(),
+                                        &message,
+                                        "ERROR",
+                                    );
+                                    persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                    return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
+                                }
+                            }
+                            let focused_criteria = focused_repair_criteria(&criteria, 2);
+                            verifier_diagnostic = focused_criteria.join("\n");
+                            current_context.push_str(&format!("\nVerificación fallida, diagnóstico real: {}\n", verifier_diagnostic));
+                            if verifier_failures >= 4 {
+                                let message = format!("VERIFIER_REPAIR_EXHAUSTED: La verificación inicial y tres reparaciones reales fallaron. Archivos conservados. {}", verifier_diagnostic);
+                                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                                persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
+                            }
                             emit_event(&app_handle, runtime.current_step(), &format!("[SEMANTIC_VERIFICATION] Verificador falló. Transición a {}.", recommended_tool), "WARNING");
                             current_role = AgentRole::Executor;
                             forced_next_tool = Some((
                                 recommended_tool.clone(),
-                                format!("Corrige los siguientes criterios semánticos que fallaron:\n- {}", criteria.join("\n- "))
+                                format!("Corrige los siguientes criterios semánticos que fallaron:\n- {}", focused_criteria.join("\n- "))
                             ));
                             continue; // Break the execution loop and transition instantly to repairing
                         }
@@ -2729,7 +3086,6 @@ pub async fn run_agent_loop(
                                 // execute_action() already records world snapshots before/after internally
                                 let out = observation.payload.clone();
                                 let _world_hash_before = observation.state_hash_before.unwrap_or(0);
-                                let world_hash_after = observation.state_hash_after.unwrap_or(0);
 
                                 // ── Package-install amnesia fix ──────────────────────────────────────
                                 // If the command was a package install (pip install X, npm install X),
@@ -2748,220 +3104,15 @@ pub async fn run_agent_loop(
                                     current_context.push_str("[SISTEMA: Librería instalada correctamente. Los comandos de ejecución de scripts que fallaron antes por dependencias faltantes han sido desbloqueados y pueden reintentarse ahora.]\n\n");
                                 }
                                 let digested_out = digest_terminal_output(&out, 2500);
-                                let res_msg = format!("Éxito: {}", digested_out);
                                 // ── MissionRuntime: record successful observation with real world data ──
 
-                                // ── Silent-success auto-verifier ─────────────────────────────────────
-                                // When a script runs successfully but prints nothing to stdout,
-                                // the LLM cannot confirm the task is done and loops. Fix: scan the
-                                // workspace for recently-modified output files and inject a preview.
-                                let is_script_run = {
-                                    let cl = comando.to_lowercase();
-                                    // Bug 3 fix: only trigger for python scripts or node scripts
-                                    // that are NOT browser-JS (browser JS has no require/import of node modules)
-                                    let is_node = cl.starts_with("node ")
-                                        || cl == "node app.js"
-                                        || cl == "node index.js";
-                                    let is_python =
-                                        cl.starts_with("python") || cl.starts_with("python3");
-                                    // For node, skip auto-verifier if it's a browser project (HTML files exist)
-                                    let is_browser_project = has_html_files(&workspace_path);
-                                    (is_python) || (is_node && !is_browser_project)
-                                };
-                                let output_is_empty =
-                                    out.trim().is_empty() || out.trim().len() < 20;
-                                if is_script_run && output_is_empty {
-                                    let output_extensions =
-                                        ["json", "txt", "csv", "html", "xml", "log", "md"];
-                                    let mut found_outputs: Vec<String> = Vec::new();
-                                    if let Ok(entries) = std::fs::read_dir(&workspace_path) {
-                                        for entry in entries.flatten() {
-                                            let path = entry.path();
-                                            if path.is_file() {
-                                                let ext = path
-                                                    .extension()
-                                                    .and_then(|e| e.to_str())
-                                                    .unwrap_or("")
-                                                    .to_lowercase();
-                                                if output_extensions.contains(&ext.as_str()) {
-                                                    // Only files modified in the last 60 seconds
-                                                    if let Ok(meta) = path.metadata() {
-                                                        if let Ok(modified) = meta.modified() {
-                                                            if let Ok(elapsed) = modified.elapsed()
-                                                            {
-                                                                if elapsed.as_secs() < 60 {
-                                                                    let fname = path
-                                                                        .file_name()
-                                                                        .unwrap_or_default()
-                                                                        .to_string_lossy()
-                                                                        .to_string();
-                                                                    let content =
-                                                                        std::fs::read_to_string(
-                                                                            &path,
-                                                                        )
-                                                                        .unwrap_or_default();
-                                                                    let preview = if content.len()
-                                                                        > 800
-                                                                    {
-                                                                        format!("{}... (truncado, {} bytes totales)", &content[..800], content.len())
-                                                                    } else {
-                                                                        content.clone()
-                                                                    };
-                                                                    found_outputs.push(format!(
-                                                                    "📄 ARCHIVO GENERADO: {} ({} bytes)\nContenido:\n{}", 
-                                                                    fname, content.len(), preview
-                                                                ));
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if !found_outputs.is_empty() {
-                                        let runtime_fact =
-                                            crate::core::evidence::StructuredFact::CommandResult {
-                                                command: comando.clone(),
-                                                cwd: workspace_path.clone(),
-                                                exit_code: 0,
-                                                stdout_hash: crate::core::content_hash::hash_bytes(
-                                                    out.as_bytes(),
-                                                ),
-                                                stderr_hash: String::new(),
-                                            };
-                                        let _ = runtime.evidence_graph.record_structured(
-                                            crate::core::evidence::EvidenceKind::RuntimeCheck,
-                                            "TOOL_TERMINAL",
-                                            runtime_fact,
-                                            0.95,
-                                            runtime.current_step(),
-                                            Some(world_hash_after),
-                                        );
-                                        current_context.push_str(&format!(
-                                        "Resultado: {}✅\n\n[SISTEMA: El script no imprimió salida en consola, PERO generó los siguientes archivos de salida que CONFIRMAN que la tarea fue completada exitosamente:]\n\n{}\n\n[SISTEMA: Los archivos de salida existen y tienen contenido. Tu ÚNICO PASO VàLIDO AHORA es usar 'TOOL_FINISH' para reportarle esto al usuario. ESTà PROHIBIDO volver a ejecutar el script.]\n\n",
-                                        res_msg,
-                                        found_outputs.join("\n\n")
-                                    ));
-                                        emit_event(
-                                            &app_handle,
-                                            runtime.current_step(),
-                                            &format!(
-                                                "✅ Script OK   {} archivo(s) de salida generados",
-                                                found_outputs.len()
-                                            ),
-                                            "SUCCESS",
-                                        );
-                                    } else {
-                                        let cmd_lower = comando.to_lowercase();
-                                        let stdout_lower = res_msg.to_lowercase();
-                                        let is_test_cmd = cmd_lower.contains("verify")
-                                            || cmd_lower.contains("test");
-                                        let test_passed = stdout_lower
-                                            .contains("all checks passed")
-                                            || stdout_lower.contains("100%")
-                                            || stdout_lower.contains("fully verified")
-                                            || stdout_lower.contains("verification passed")
-                                            || (stdout_lower.contains("[pass]")
-                                                && !stdout_lower.contains("[fail]"))
-                                            || ((out.contains("0 failed")
-                                                || out.contains("tests passed")
-                                                || out.contains("100%"))
-                                                && !out.contains("FAILED"));
-
-                                        if is_test_cmd && test_passed {
-                                            let test_fact =
-                                                crate::core::evidence::StructuredFact::TestResult {
-                                                    command: comando.clone(),
-                                                    cwd: workspace_path.clone(),
-                                                    exit_code: 0,
-                                                    passed: 1,
-                                                    failed: 0,
-                                                    ignored: 0,
-                                                };
-                                            let _ = runtime.evidence_graph.record_structured(
-                                                crate::core::evidence::EvidenceKind::Test,
-                                                "TOOL_TERMINAL",
-                                                test_fact,
-                                                0.99,
-                                                runtime.current_step(),
-                                                Some(world_hash_after),
-                                            );
-                                            forced_next_tool = Some((
-                                            "TOOL_FINISH".to_string(),
-                                            "La verificación pasó al 100%. Genera el reporte final y concluye la tarea.".to_string()
-                                        ));
-                                            current_context.push_str(&format!(
-                                            "Resultado: {}\n\n[SISTEMA: ✅ EL SCRIPT DE VERIFICACIÓN PASÓ AL 100%. Tu ÚNICO PASO OBLIGATORIO AHORA es usar 'TOOL_FINISH' para entregar el reporte final. ESTà PROHIBIDO volver a ejecutar el test.]\n\n",
-                                            res_msg
-                                        ));
-                                        } else {
-                                            let is_dir_cmd = {
-                                                let cl = comando.trim().to_lowercase();
-                                                cl == "dir"
-                                                    || cl == "ls"
-                                                    || cl == "dir /b"
-                                                    || cl == "ls -la"
-                                                    || cl == "ls -l"
-                                            };
-                                            if is_dir_cmd && _world_hash_before == world_hash_after
-                                            {
-                                                let no_new_info_msg = "[NO_NEW_INFORMATION]: El directorio ya fue listado y no presenta cambios físicos respecto a la inspección previa. PROHIBIDO volver a ejecutar 'dir' o 'ls'. Si los archivos requeridos ya existen, procede a verificar la solución; si faltan, créalos con TOOL_PROGRAMMER.";
-                                                current_context.push_str(&format!(
-                                                    "Resultado: {}\n\n{}\n\n",
-                                                    res_msg, no_new_info_msg
-                                                ));
-                                                emit_event(&app_handle, runtime.current_step(), "[SISTEMA] dir repetido sin cambios -> Forzando avance", "WARNING");
-                                                let has_files =
-                                                    !runtime.state_anchor.existing_files.is_empty();
-                                                if !has_files {
-                                                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "El workspace está vacío. Crea los archivos requeridos usando TOOL_PROGRAMMER.".to_string()));
-                                                } else {
-                                                    let has_test = runtime
-                                                        .state_anchor
-                                                        .existing_files
-                                                        .iter()
-                                                        .any(|f| {
-                                                            f.starts_with("verify_")
-                                                                || f.starts_with("test_")
-                                                        });
-                                                    if !has_test {
-                                                        forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Crea un script de verificación (verify_*.py) usando TOOL_PROGRAMMER.".to_string()));
-                                                    } else {
-                                                        let test_f = runtime
-                                                            .state_anchor
-                                                            .existing_files
-                                                            .iter()
-                                                            .find(|f| {
-                                                                f.starts_with("verify_")
-                                                                    || f.starts_with("test_")
-                                                            })
-                                                            .unwrap();
-                                                        forced_next_tool = Some((
-                                                            "TOOL_TERMINAL".to_string(),
-                                                            format!("python {}", test_f),
-                                                        ));
-                                                    }
-                                                }
-                                            } else {
-                                                current_context.push_str(&format!("Resultado: {}\n\n[SISTEMA: El comando en terminal se ejecutó con éxito. Analiza este resultado. Si esto completa el objetivo final del usuario, tu SIGUIENTE PASO OBLIGATORIO es usar 'TOOL_FINISH'. Si aún faltan pasos, continúa. NO uses TOOL_TESTER a menos que el usuario haya pedido pruebas automatizadas.]\n\n", res_msg));
-                                            }
-                                        }
-                                        emit_event(
-                                            &app_handle,
-                                            runtime.current_step(),
-                                            &res_msg,
-                                            "SUCCESS",
-                                        );
-                                    }
+                                current_context.push_str(&format!("\n[RESULTADO REAL DE TERMINAL] Comando: {}\nExit code: {:?}\nSalida: {}\n", comando, observation.exit_code, digested_out));
+                                emit_event(&app_handle, runtime.current_step(), &format!("[TERMINAL] {} | exit={:?} | archivos cambiados={}\n{}", comando, observation.exit_code, observation.physical_files_changed.unwrap_or(0), digested_out), "SUCCESS");
+                                if matches!(runtime.can_complete(), crate::core::completion_gate::CompletionDecision::Complete) {
+                                    current_role = AgentRole::Critic;
+                                    forced_next_tool = Some(("TOOL_FINISH".into(), "El contrato tiene evidencia vigente para todos los criterios. Evalúa el cierre sin repetir las pruebas.".into()));
                                 }
                                 last_progress_step = runtime.current_step();
-                                // Guardar los cambios hechos por la terminal en Git-Shield
-                                let _ = crate::core::create_git_backup(
-                                    &workspace_path,
-                                    "Aura-Sentinel: Git-Shield Auto-Backup (Terminal)",
-                                )
-                                .await;
                             }
                             Err(err) => {
                                 // ── Auto ENV_MANAGER: detect binary-not-found and auto-install ──────────
@@ -3335,7 +3486,7 @@ pub async fn run_agent_loop(
                     let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito intentando instalar el mismo paquete repetidamente. Abortando misión.";
                     emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
                     let final_res = FinalResponse {
-                        status: "FINISH".to_string(), // Frontend safe format
+                        status: "ERROR".to_string(),
                         respuesta_conversacional: format!("Se detectó un bucle intentando instalar múltiples veces el paquete '{}'. La instalación ya se ejecutó en este turno. Misión abortada.", comando),
                     };
                     crate::llm::router::record_model_result(
@@ -4122,6 +4273,14 @@ pub async fn run_agent_loop(
                 if is_cooldown_blocked && validate_workspace(&workspace_path).await.is_err() {
                     is_cooldown_blocked = false;
                 }
+                if is_cooldown_blocked
+                    && (!verifier_diagnostic.is_empty()
+                        || forced_override
+                            .as_ref()
+                            .is_some_and(|(forced, _)| forced == "TOOL_PROGRAMMER"))
+                {
+                    is_cooldown_blocked = false;
+                }
 
                 if is_cooldown_blocked {
                     programmer_cooldown_hits += 1;
@@ -4154,16 +4313,23 @@ pub async fn run_agent_loop(
                     // Valid programming action.
                     comandos_ejecutados_historico.clear();
 
+                    // Keep the selected local coder throughout automatic recovery.
+                    // On the audited machine, switching to 14B added about 189 seconds
+                    // to one repair and still returned an incoherent verifier.
+                    let preferred_programmer = &programmer_model;
                     let target_model = resolve_model_or_fallback(
-                        if !programmer_model.is_empty()
-                            && !programmer_model.to_lowercase().contains("embed")
+                        if !preferred_programmer.is_empty()
+                            && !preferred_programmer.to_lowercase().contains("embed")
                         {
-                            &programmer_model
+                            preferred_programmer
                         } else {
                             &orchestrator_model
                         },
                         &available_models,
                     );
+                    if target_model != programmer_model {
+                        emit_event(&app_handle, runtime.current_step(), &format!("[MODELO] Reparación escalada a {} después de un fallo real con {}.", target_model, programmer_model), "INFO");
+                    }
 
                     let mut prog_args = raw_value.clone();
                     if let Some(obj) = prog_args.as_object_mut() {
@@ -4173,7 +4339,15 @@ pub async fn run_agent_loop(
                         );
                         obj.insert(
                             "context".to_string(),
-                            serde_json::Value::String(current_context.clone()),
+                            serde_json::Value::String(if verifier_diagnostic.is_empty() {
+                                format!(
+                                    "{}\n[HISTORIAL RECIENTE]\n{}",
+                                    runtime.state_anchor.format_prompt_block(),
+                                    recent_context(&current_context, 3500)
+                                )
+                            } else {
+                                format!("DIAGNÓSTICO SEMÁNTICO VIGENTE:\n{}", verifier_diagnostic)
+                            }),
                         );
                         if !obj.contains_key("instruccion")
                             && !obj.contains_key("prompt")
@@ -4184,13 +4358,29 @@ pub async fn run_agent_loop(
                                 serde_json::Value::String(user_message.clone()),
                             );
                         }
-                        if !archivos_vec.is_empty() && !obj.contains_key("archivos_a_editar") {
+                        if !archivos_vec.is_empty() {
                             obj.insert(
                                 "archivos_a_editar".to_string(),
                                 serde_json::json!(archivos_vec),
                             );
                         }
                     }
+
+                    let file_instruction = if verifier_diagnostic.is_empty() {
+                        format!("Incluye los entregables necesarios de esta lista: {:?}.", archivos_vec)
+                    } else {
+                        format!("Puedes corregir cualquiera de estos archivos relacionados: {:?}. Devuelve únicamente los que necesiten cambios para resolver el diagnóstico real.", archivos_vec)
+                    };
+                    let pending_criteria = runtime.contract.pending_required_criteria();
+                    let repair_blueprint = tactical_repair_blueprint(&original_prompt_parsed);
+                    prog_args["instruccion"] = serde_json::json!(format!(
+                        "Objetivo global: {}\nAcción actual: {}\n{} No reescribas otros entregables.\nRequisitos obligatorios aún pendientes:\n- {}\nGuía concreta del runtime: {}\nDiagnóstico de la operación anterior: {}\nÚltima verificación fallida: {}",
+                        original_prompt_parsed, pensamiento, file_instruction,
+                        if pending_criteria.is_empty() { "ninguno".to_string() } else { pending_criteria.join("\n- ") },
+                        repair_blueprint,
+                        runtime.state_anchor.last_error.as_deref().unwrap_or("ninguno"), verifier_diagnostic));
+                    prog_args["repair_attempt"] = serde_json::json!(programmer_failures);
+                    prog_args["semantic_repair"] = serde_json::json!(!verifier_diagnostic.is_empty());
 
                     let prog_proposal = crate::core::policy::ActionProposal {
                         tool: "TOOL_PROGRAMMER".to_string(),
@@ -4348,6 +4538,8 @@ pub async fn run_agent_loop(
                                     }
                                 }
 
+                                programmer_failures = 0;
+                                runtime.recovery.record_success("TOOL_PROGRAMMER");
                                 // Sprint 2: Phase/Micrometa-gated Executor->Critic transition
                                 let all_fases_done = journal.fases.is_empty()
                                     || journal.fases.iter().all(|f| f.estado == "COMPLETADA");
@@ -4359,7 +4551,7 @@ pub async fn run_agent_loop(
                                 if all_fases_done && all_metas_done {
                                     current_role = AgentRole::Critic;
                                     critic_feedback = None;
-                                    emit_event(&app_handle, runtime.current_step(), "[FSM] EJECUTOR -> CRITICO: Todas las fases completadas. Iniciando validación final.", "INFO");
+                                    emit_event(&app_handle, runtime.current_step(), "[FSM] EJECUTOR -> CRITICO: escritura validada. Comprobando entregables y verificaciones pendientes; la misión aún no está completada.", "INFO");
                                 }
 
                                 let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos con éxito, Anti-Stub APROBADO.\n⚠️ REGLA DE ESTADO OBLIGATORIA: Los archivos ya existen físicamente en disco. NO vuelvas a crear o sobreescribir estos archivos con TOOL_PROGRAMMER salvo que un test falle. Ahora DEBES usar 'TOOL_TERMINAL' para ejecutar o probar el código (o crear un script de test verify_*.py si no existe).\n\n", written_files);
@@ -4370,13 +4562,39 @@ pub async fn run_agent_loop(
                                 emit_event(
                                     &app_handle,
                                     runtime.current_step(),
-                                    &format!(
-                                        "Programación exitosa: {} archivos afectados",
-                                        written_files.len()
-                                    ),
+                                    &if written_files.len() == 1 {
+                                        "Programación exitosa: 1 archivo afectado".to_string()
+                                    } else {
+                                        format!("Programación exitosa: {} archivos afectados", written_files.len())
+                                    },
                                     "SUCCESS",
                                 );
+                                if let Some(command) = official_verifier_command(&runtime.contract) {
+                                    current_role = AgentRole::Critic;
+                                    forced_next_tool = Some((
+                                        "TOOL_TERMINAL".to_string(),
+                                        format!("Ejecuta el verificador oficial '{}'.", command),
+                                    ));
+                                    emit_event(
+                                        &app_handle,
+                                        runtime.current_step(),
+                                        &format!(
+                                            "[RUNTIME ROUTER] Código escrito; la siguiente acción será verificar con '{}'.",
+                                            command
+                                        ),
+                                        "INFO",
+                                    );
+                                }
                             } else {
+                                programmer_failures += 1;
+                                let recovery = runtime.handle_observation(&obs);
+                                if programmer_failures >= 3 {
+                                    let message = format!("PROGRAMMER_REPAIR_EXHAUSTED: {} intentos reales fallidos. Último diagnóstico: {}. Borrador conservado en .aura/programmer_failure.json.", programmer_failures, obs.payload);
+                                    emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                                    persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                    return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
+                                }
+                                emit_event(&app_handle, runtime.current_step(), &format!("[RECUPERACIÓN] Intento {}/3. Decisión: {:?}", programmer_failures, recovery), "WARNING");
                                 runtime.state_anchor.last_error = Some(obs.payload.clone());
                                 emit_event(
                                     &app_handle,
@@ -4385,10 +4603,26 @@ pub async fn run_agent_loop(
                                     "ERROR",
                                 );
                                 current_context.push_str(&format!("Programador: Fracasó con error:\n{}\n[SISTEMA]: Corrige este error en el próximo paso con TOOL_PROGRAMMER.\n\n", obs.payload));
-                                current_role = AgentRole::Planner;
+                                current_role = AgentRole::Executor;
+                                forced_next_tool = Some((
+                                    "TOOL_PROGRAMMER".to_string(),
+                                    format!(
+                                        "Reparación {} de 3. Corrige exactamente este fallo y conserva el borrador útil: {}",
+                                        programmer_failures + 1,
+                                        obs.payload
+                                    ),
+                                ));
                             }
                         }
                         Err(e) => {
+                            programmer_failures += 1;
+                            if programmer_failures >= 3 {
+                                let message = format!("PROGRAMMER_GATE_BLOCKED: {}. La misma vía falló {} veces; ejecución detenida sin declarar éxito.", e, programmer_failures);
+                                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                                persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
+                            }
+                            runtime.state_anchor.last_error = Some(e.clone());
                             current_context.push_str(&format!(
                                 "Error ejecutando acción de programación: {}\n\n",
                                 e
@@ -4399,6 +4633,15 @@ pub async fn run_agent_loop(
                                 &format!("Error TOOL_PROGRAMMER: {}", e),
                                 "ERROR",
                             );
+                            current_role = AgentRole::Executor;
+                            forced_next_tool = Some((
+                                "TOOL_PROGRAMMER".to_string(),
+                                format!(
+                                    "Reparación {} de 3. Corrige exactamente este fallo: {}",
+                                    programmer_failures + 1,
+                                    e
+                                ),
+                            ));
                         }
                     }
                 }
@@ -4514,8 +4757,8 @@ pub async fn run_agent_loop(
                                 let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de pruebas exitosas detectado. Abortando misión.";
                                 emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
                                 let final_res = FinalResponse {
-                                    status: "FINISH".to_string(),
-                                    respuesta_conversacional: "Los tests ya pasaron con éxito, pero me quedé atascado ejecutándolos en bucle. He detenido el proceso para evitar un ciclo infinito. Misión cumplida.".to_string(),
+                                    status: "ERROR".to_string(),
+                                    respuesta_conversacional: "Los tests ya pasaron con éxito, pero me quedé atascado ejecutándolos en bucle. He detenido el proceso para evitar un ciclo infinito. El cierre de la misión no está verificado.".to_string(),
                                 };
                                 crate::llm::router::record_model_result(
                                     &orchestrator_model,
@@ -4552,11 +4795,11 @@ pub async fn run_agent_loop(
 
                             tester_attempts += 1;
                             if tester_attempts >= 3 {
-                                emit_event(&app_handle, runtime.current_step(), "[CRITICAL_FAILURE] Fallos de test superan el límite (3). Revertiendo...", "FATAL");
-                                let _ = crate::core::restore_git_backup(&workspace_path).await;
+                                emit_event(&app_handle, runtime.current_step(), "[CRITICAL_FAILURE] Los fallos de test alcanzaron el límite (3). Deteniendo la vía de pruebas.", "FATAL");
+                                emit_event(&app_handle, runtime.current_step(), "[CONSERVACIÓN] Se mantienen los archivos actuales y el diagnóstico; no se ejecuta un rollback global.", "WARNING");
                                 let final_res = FinalResponse {
-                                    status: "FINISH".to_string(),
-                                    respuesta_conversacional: "He alcanzado el límite máximo de fallos de pruebas. El código era inviable. He restaurado el proyecto a su último estado funcional (Rollback). Por favor, revisa mi código y ayuda a solucionar los tests.".to_string(),
+                                    status: "ERROR".to_string(),
+                                    respuesta_conversacional: "He alcanzado el límite máximo de fallos de pruebas. Se conservan los archivos y el diagnóstico para corregirlos; no se ha verificado la finalización.".to_string(),
                                 };
                                 crate::llm::router::record_model_result(
                                     &orchestrator_model,
@@ -4620,13 +4863,13 @@ pub async fn run_agent_loop(
                                         ));
                                     }
                                 } else {
-                                    emit_event(&app_handle, runtime.current_step(), "Tests fallaron. Revertiendo cambios y activando Auto-Debugger...", "ERROR");
-                                    let _ = crate::core::restore_git_backup(&workspace_path).await;
+                                    emit_event(&app_handle, runtime.current_step(), "Los tests fallaron. Se conservan los archivos y se activa Auto-Debugger.", "ERROR");
+                                    emit_event(&app_handle, runtime.current_step(), "[CONSERVACIÓN] Se mantienen los archivos actuales y el diagnóstico; no se ejecuta un rollback global.", "WARNING");
                                     archivos_editados_historico.clear();
                                     comandos_ejecutados_historico.clear();
                                     current_role = AgentRole::Executor;
                                     critic_feedback = Some(fail_msg.clone());
-                                    current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron:\n{}\n\nEl sistema ha restaurado el código usando Git-Shield. Debes generar una nueva solución usando TOOL_PROGRAMMER.\n", fail_msg));
+                                    current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron:\n{}\n\nLos archivos actuales siguen en disco. Debes corregirlos usando TOOL_PROGRAMMER.\n", fail_msg));
                                     forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Los tests fallaron, el sistema forzó TOOL_PROGRAMMER para corregir los errores.".to_string()));
                                 }
                             }
@@ -5033,7 +5276,7 @@ pub async fn run_agent_loop(
                                     "ERROR",
                                 );
                                 let final_res = FinalResponse {
-                                    status: "FINISH".to_string(),
+                                    status: "CANCELLED".to_string(),
                                     respuesta_conversacional: "Detenido por el usuario".to_string(),
                                 };
                                 return Ok(serde_json::to_string(&final_res).unwrap());
@@ -5060,7 +5303,7 @@ pub async fn run_agent_loop(
                                 "ERROR",
                             );
                             let final_res = FinalResponse {
-                                status: "FINISH".to_string(),
+                                status: "CANCELLED".to_string(),
                                 respuesta_conversacional: "Interrumpido".to_string(),
                             };
                             return Ok(serde_json::to_string(&final_res).unwrap());
@@ -5102,7 +5345,8 @@ pub async fn run_agent_loop(
                         journal.fase_actual + 1, journal.fases.len(), journal.fases[journal.fase_actual].descripcion
                     );
                     current_context.push_str(&format!("{}\n\n", new_phase_msg));
-                    current_role = AgentRole::Planner; // Reset role                    continue; // Do NOT terminate the agent loop
+                    current_role = AgentRole::Planner;
+                    continue; // Advance the next phase before evaluating mission completion.
                 } else if !journal.fases.is_empty()
                     && journal.fase_actual == journal.fases.len() - 1
                 {
@@ -5137,6 +5381,43 @@ pub async fn run_agent_loop(
                         continue;
                     }
                 }
+
+                // Manual criteria require an actual reply from the user, bound to this snapshot.
+                runtime.observe_world()?;
+                let review_hash = runtime.current_world_hash();
+                let mut technical_contract = runtime.contract.clone();
+                technical_contract.acceptance_criteria.retain(|ac| !matches!(ac.verification,
+                    crate::core::mission_contract::VerificationMethod::ManualReview));
+                let technical_ready = (technical_contract.acceptance_criteria.is_empty()
+                    && technical_contract.required_evidence.is_empty()) || matches!(
+                    crate::core::completion_gate::CompletionGate::evaluate(&technical_contract,
+                        &runtime.cognitive_state, &runtime.evidence_graph, review_hash,
+                        std::path::Path::new(&workspace_path)),
+                    crate::core::completion_gate::CompletionDecision::Complete);
+                let pending_reviews: Vec<_> = runtime.contract.acceptance_criteria.iter()
+                    .filter(|ac| technical_ready && ac.required && matches!(ac.verification, crate::core::mission_contract::VerificationMethod::ManualReview))
+                    .filter(|ac| !runtime.evidence_graph.has_valid_manual_evidence_for_state(
+                        &format!("{} verified manually", ac.id), 1.0, review_hash))
+                    .cloned().collect();
+                for criterion in pending_reviews {
+                    let answer = crate::core::ask_user::ask_user_async(
+                        &app_handle,
+                        format!("Revisa los entregables en {}. ¿Se cumple este criterio? {}", workspace_path, criterion.description),
+                        vec!["Aprobar criterio".into(), "Requiere correcciones".into()],
+                        format!("Misión: {}. Criterio: {}", original_prompt_parsed, criterion.id),
+                    ).await?;
+                    if answer == "Aprobar criterio" {
+                        let review_step = runtime.current_step();
+                        runtime.evidence_graph.record_with_hash(
+                            crate::core::evidence::EvidenceKind::UserConfirmation,
+                            "user", &format!("{} verified manually", criterion.id),
+                            &answer, 1.0, review_step, Some(review_hash),
+                        )?;
+                    } else {
+                        current_context.push_str(&format!("\n[REVISIÓN DEL USUARIO] {}: {}\n", criterion.id, answer));
+                    }
+                }
+                runtime.observe_world()?;
 
                 // ↀ CompletionGate delegado a MissionRuntime (fuente única de verdad) ↀ
                 let completion_decision = runtime.can_complete();
@@ -5391,7 +5672,7 @@ pub async fn run_agent_loop(
                                     runtime.current_step(),
                                     &format!(
                                         "Auto-terminal OK: {}",
-                                        &obs.payload[..obs.payload.len().min(120)]
+                                        truncate_chars(&obs.payload, 120)
                                     ),
                                     "SUCCESS",
                                 );
@@ -5521,7 +5802,7 @@ pub async fn run_agent_loop(
     };
 
     // ── Journal: mark status ──
-    journal.status = if final_status == "FINISH" { "FINALIZADO".to_string() } else { "ESPERANDO".to_string() };
+    journal.status = if final_status == "FINISH" { "COMPLETADO".to_string() } else { "ESPERANDO".to_string() };
     if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) {
         emit_event(
             &app_handle,
@@ -6456,5 +6737,105 @@ mod tests {
         assert!(!repo_map.contains("(directorio vacío)"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+    #[test]
+    fn building_and_verifying_is_a_construction_mission() {
+        assert_eq!(classify_mission("Construye cyber_sentinel.html y crea verify_dashboard.py, ejecútalo y verifica"), MissionType::Construction);
+    }
+
+    #[test]
+    fn runtime_routes_forced_programming_without_asking_the_orchestrator() {
+        let mut contract =
+            crate::core::mission_contract::MissionContract::new("Construir dashboard");
+        contract.add_criterion(
+            "file",
+            "Debe existir index.html",
+            crate::core::mission_contract::VerificationMethod::FileExistence(
+                "index.html".to_string(),
+            ),
+            true,
+        );
+        let decision = deterministic_forced_decision(
+            ".",
+            "TOOL_PROGRAMMER",
+            "Plan completado. Inicia la creación.",
+            &contract,
+            &[],
+        )
+        .expect("the contract provides an exact target");
+        assert_eq!(decision["herramienta"], "TOOL_PROGRAMMER");
+        assert_eq!(decision["archivos_a_editar"], serde_json::json!(["index.html"]));
+    }
+
+    #[test]
+    fn runtime_routes_official_verifier_without_model_round_trip() {
+        let mut contract =
+            crate::core::mission_contract::MissionContract::new("Verificar dashboard");
+        contract.add_criterion(
+            "verify",
+            "El verificador debe pasar",
+            crate::core::mission_contract::VerificationMethod::SemanticVerification {
+                command: "python verify_dashboard.py".to_string(),
+            },
+            true,
+        );
+        let decision = deterministic_forced_decision(
+            ".",
+            "TOOL_TERMINAL",
+            "Ejecuta el verificador oficial.",
+            &contract,
+            &[],
+        )
+        .expect("the semantic contract provides the exact command");
+        assert_eq!(decision["herramienta"], "TOOL_TERMINAL");
+        assert_eq!(decision["comando"], "python verify_dashboard.py");
+    }
+
+    #[test]
+    fn context_filter_runs_on_the_current_prompt_and_unicode_truncation_is_safe() {
+        let clean = sanitize_runtime_context(
+            "válido\nC:\\old\\scratch\\proxy-stack\\app.py\núltimo estado",
+            "C:\\work\\aura sentinel",
+        );
+        assert!(clean.contains("válido"));
+        assert!(clean.contains("último estado"));
+        assert!(!clean.contains("proxy-stack"));
+        assert_eq!(truncate_chars("áéíóú", 3), "áéí");
+        assert_eq!(recent_context("uno🙂dos", 4), "🙂dos");
+    }
+
+    #[test]
+    fn repair_focus_removes_duplicate_categories_for_small_models() {
+        let criteria = vec![
+            "Radar animado ausente".to_string(),
+            "Radar sin nodos de amenaza".to_string(),
+            "Telemetría de paquetes incompleta".to_string(),
+            "Diseño glassmorphism ausente".to_string(),
+        ];
+        let focused = focused_repair_criteria(&criteria, 2);
+        assert_eq!(focused.len(), 2);
+        assert_eq!(focused[0], "Radar animado ausente");
+        assert_eq!(focused[1], "Telemetría de paquetes incompleta");
+    }
+
+    #[test]
+    fn managed_verifier_is_recognized_from_absolute_state_paths() {
+        let known = vec!["C:/workspace/verify_dashboard.py".to_string()];
+        assert!(file_is_already_known(&known, "verify_dashboard.py"));
+        assert!(!file_is_already_known(&known, "dashboard.html"));
+    }
+
+}
+
+fn persist_failed_journal(
+    journal: &mut crate::core::session_journal::SessionJournal,
+    workspace_path: &str,
+    app: &AppHandle,
+    step: u32,
+) {
+    if let Err(error) =
+        crate::core::session_journal::close_journal(journal, "FALLIDO", workspace_path)
+    {
+        emit_event(app, step, &error, "FATAL");
     }
 }

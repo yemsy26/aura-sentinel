@@ -24,6 +24,8 @@ pub struct ActionIdentity {
     pub files: Vec<String>,
     pub world_hash: u64,
     pub active_criterion: Option<String>,
+    #[serde(default)]
+    pub payload_hash: String,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +73,15 @@ impl ActionProposal {
             }
         }
 
+        files.sort();
+        files.dedup();
+        let mut effective_args = self.arguments.clone();
+        if let Some(object) = effective_args.as_object_mut() {
+            object.remove("context"); // A growing log is not a new action.
+        }
+        let payload_hash = crate::core::content_hash::hash_bytes(effective_args.to_string().as_bytes());
         ActionIdentity {
+            payload_hash,
             tool: self.tool.clone(),
             command,
             cwd: cwd.to_string(),

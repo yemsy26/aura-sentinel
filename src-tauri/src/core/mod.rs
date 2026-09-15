@@ -8,6 +8,7 @@ pub mod error_classifier;
 pub mod intent_router;
 pub mod languages;
 pub mod map;
+pub mod managed_verifier;
 pub mod memory;
 pub mod runner_generator;
 pub mod security;
@@ -16,12 +17,9 @@ pub mod stub_enforcer;
 pub mod tester;
 pub mod vision; // generate_repo_map — árbol visual del workspace para contexto LLM
                 // ══ Nuevos módulos autónomos (Fase 1-5) ══════════════════════════════
-pub mod config; // Configuración centralizada del sistema
 pub mod container; // Fase 2: TOOL_CONTAINER (Docker/Podman)
 pub mod context_monitor; // Monitor de ventana de contexto y compactación determinista
 pub mod episodic_memory; // Fase 3: Memoria multi-sesión JSONL
-pub mod health;
-pub mod logging; // Logging unificado y estructurado en JSONL
 pub mod mission_persist; // Fase 1: Persistencia de misión entre reinicios
 pub mod sanity_monitor; // Fase 5: Monitor de cordura del LLM
 pub mod scheduler; // Fase 4: Scheduler autónomo (cron interno) // Health checks nativos del sistema y Ollama
@@ -29,7 +27,6 @@ pub mod scheduler; // Fase 4: Scheduler autónomo (cron interno) // Health check
 pub mod cognitive_state; // Estado cognitivo unificado (MissionState + Metrics)
 pub mod completion_gate; // Puerta determinista de finalización
 pub mod content_hash; // Función unificada de hashing de contenido SHA-256 (identidad determinista)
-pub mod envelope; // Typed Tool Envelope para retornos de herramientas
 pub mod evidence; // Grafo de evidencia verificable
 pub mod experience; // Memoria cognitiva de experiencias y consolidación
 pub mod learning;
@@ -42,7 +39,6 @@ pub mod project_profile; // Perfil unificado y detector multi-lenguaje de proyec
 pub mod recovery; // Motor determinista de recuperación de fallos y alternativas
 pub mod schema_validator; // Validación de esquemas de llamadas de herramientas
 pub mod stall_detector; // Detección de estancamiento basada en firmas de progreso
-pub mod state_delta; // Detección y hash de diferencias en archivos (FileDelta)
 pub mod step_budget; // Presupuesto de pasos con distribución 40/30/20/10
 pub mod tool_registry; // FINAL-2: Autoridad de nombres de herramientas permitidas (ToolRegistry)
 pub mod validation; // Módulos desacoplados de validación sintáctica y de compilación
@@ -306,122 +302,6 @@ pub fn extract_workspace_files_from_error(workspace_path: &str, error_text: &str
         }
     }
     found
-}
-
-/// Creates an emergency Git rollback checkpoint before executing risky code generation.
-pub async fn create_git_backup(workspace_path: &str, commit_message: &str) -> Result<(), String> {
-    let path = Path::new(workspace_path);
-
-    // ── Protect Aura-internal files from being included in rollbacks ──────────
-    // Write (or update) a .gitignore so session/memory files are never staged.
-    let gitignore_path = path.join(".gitignore");
-    let gitignore_content = "\
-# === Aura-Sentinel internal files (never roll back) ===\n\
-.aura/\n\
-.aura_session.json\n\
-.aura_command_trail.json\n\
-.aura_graph.json\n\
-.aura_logs.jsonl\n\
-.fenix_memory.json\n\
-.fenix_chat.json\n\
-.fenix_index.json\n\
-\n\
-# Node.js\n\
-node_modules/\n\
-";
-    if !gitignore_path.exists() {
-        if let Err(e) = std::fs::write(&gitignore_path, gitignore_content) {
-            eprintln!(
-                "Aura-Sentinel Warning: No se pudo escribir .gitignore - {}",
-                e
-            );
-        } else {
-            hide_file_windows_sync(&gitignore_path);
-        }
-    } else {
-        if let Ok(existing) = std::fs::read_to_string(&gitignore_path) {
-            if !existing.contains(".fenix_memory.json")
-                || !existing.contains(".aura_command_trail.json")
-            {
-                if let Err(e) = std::fs::write(
-                    &gitignore_path,
-                    format!("{}\n{}", existing.trim_end(), gitignore_content),
-                ) {
-                    eprintln!(
-                        "Aura-Sentinel Warning: No se pudo actualizar .gitignore - {}",
-                        e
-                    );
-                }
-            }
-        }
-        hide_file_windows_sync(&gitignore_path);
-    }
-
-    // Init if needed
-    if !path.join(".git").exists() {
-        let _ = Command::new(get_shell())
-            .args([get_shell_args(), "git init"])
-            .current_dir(workspace_path)
-            .stdin(Stdio::null())
-            .output()
-            .await;
-        hide_file_windows(&path.join(".git")).await;
-    }
-
-    // Add all (gitignore protects the session files)
-    let _ = Command::new(get_shell())
-        .args([get_shell_args(), "git add ."])
-        .current_dir(workspace_path)
-        .stdin(Stdio::null())
-        .output()
-        .await;
-
-    // Commit
-    let _ = Command::new(get_shell())
-        .args([
-            get_shell_args(),
-            &format!("git commit -m \"{}\"", commit_message),
-        ])
-        .current_dir(workspace_path)
-        .stdin(Stdio::null())
-        .output()
-        .await;
-
-    Ok(())
-}
-
-/// Restores the workspace to the last committed state using Git, reverting all uncommitted changes.
-/// SAFETY: Uses `git restore` for tracked files and `git clean -fd` ONLY on files added
-/// by Aura (i.e., files that appear in `git status --porcelain` as untracked '??' entries).
-/// This prevents destroying files the user had before Aura started working.
-pub async fn restore_git_backup(workspace_path: &str) -> Result<(), String> {
-    let path = Path::new(workspace_path);
-    if path.join(".git").exists() {
-        // 1. Restore all tracked files to last commit state (safe — only touches versioned files)
-        let _ = Command::new(get_shell())
-            .args([get_shell_args(), "git restore ."])
-            .current_dir(workspace_path)
-            .stdin(Stdio::null())
-            .output()
-            .await;
-
-        // 2. Safely clean only untracked files added during this run, protecting user-created files
-        let _ = Command::new(get_shell())
-            .args([get_shell_args(), "git clean -fd"])
-            .current_dir(workspace_path)
-            .stdin(Stdio::null())
-            .output()
-            .await;
-
-        // 3. Reset the index so the removed files are unstaged
-        let _ = Command::new(get_shell())
-            .args([get_shell_args(), "git reset HEAD ."])
-            .current_dir(workspace_path)
-            .stdin(Stdio::null())
-            .output()
-            .await;
-    }
-    Ok(())
 }
 
 /// Hides a file or directory specifically on Windows systems (synchronous, direct Win32 API).

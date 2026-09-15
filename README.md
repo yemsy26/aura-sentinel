@@ -1,90 +1,82 @@
-﻿# Aura-Sentinel 🚀🛡️
-**Agente Autónomo de Ingeniería de Software DevSecOps de Nivel Industrial**  
-*Desarrollado por Ramón Antonio Burgos Jerez*
+# Aura Sentinel
 
-> 🏆 **Nivel Alcanzado: Agente Autónomo Cognitivo Completo — Tier 0 (Architecture v4.0.0 - Septiembre 2026)**  
-> Arquitectura de autonomía completa, determinismo formal, contratos de misión y ejecución gobernada por puertas de finalización verificables. Estándar de la industria equiparable a Devin 2.0 y SWE-agent, **pero ejecutado 100% en local con latencia cero.**
+Agente de desarrollo de software con interfaz Tauri, núcleo Rust, editor Monaco y modelos de Ollama.
+Desarrollado por Ramón Antonio Burgos Jerez.
 
-Aura-Sentinel es un sistema de ingeniería de software autónomo de alto rendimiento. Ejerce control absoluto sobre el ciclo de vida de desarrollo de software: deducción de contratos formales, particionado de fases, generación modular de código, validación sintáctica determinista, presupuestación de pasos y auto-reparación en bucle cerrado. 
+## Ejecución
 
-**⚡ El Poder de lo Local:** Construido sobre un motor nativo ultrarrápido en **Rust (Tauri)** con **Monaco Editor**, Aura-Sentinel utiliza **Ollama** para dotar al agente de un cerebro local. Esto permite que el sistema opere a velocidades muy superiores a los agentes alojados en la nube (sin lidiar con cuotas de API, rate-limits o latencia de red), ofreciendo una **potencia industrial equivalente** mientras garantiza la soberanía y privacidad absoluta de tus datos y código fuente.
+Requisitos: Node.js 24, Rust con herramientas de compilación de Windows, WebView2 y Ollama.
+La configuración efectiva de las llamadas principales a Ollama utiliza `127.0.0.1:11434`.
 
----
+```sh
+npm install
+npm run tauri dev
+```
 
-## ✨ Novedades Arquitectura v4 (Verification Hardening)
+El paso previo de Tauri copia Monaco y DOMPurify desde `node_modules` a `src/vendor`.
+El editor y el filtro HTML quedan incluidos en la aplicación; no necesitan un CDN durante el uso.
+La instalación inicial de dependencias y las herramientas de búsqueda o descarga sí pueden necesitar internet.
+Selecciona una carpeta de trabajo y un modelo instalado en Ollama antes de iniciar una misión.
 
-En esta última versión, el sistema ha sido sometido a un riguroso *Hardening Pass* estructural que lo hace criptográficamente inmune a las alucinaciones típicas de los LLMs:
+## Verificación
 
-- 🔒 **Zero LLM Authority (CompletionGate):** El LLM ya no puede decidir cuándo ha terminado una tarea. El cierre de misión está gobernado por una puerta matemática que exige **Evidencia Técnica Real**.
-- 🧬 **State-Hash Evidence:** Cada prueba técnica (como pasar un test o compilar) está atada criptográficamente al *hash* exacto del workspace en ese milisegundo. Si el LLM rompe el código después de pasar un test, la evidencia se invalida automáticamente.
-- 🧠 **Aprendizaje Adaptativo (AL-v2.5):** Memoria episódica avanzada que indexa qué estrategias (CompileFirst, TestDriven) funcionaron para qué tipo de tareas (huellas digitales), optimizando la ejecución de futuras misiones.
-- 🛑 **Stall Recovery Activo:** Si el modelo entra en un bucle ciego de comandos en la terminal, el detector matemático de "Delta-Cero" interviene el FSM y fuerza un replanteamiento de estrategia.
-- ⚙️ **Validación Estructural Independiente:** Los chequeos sintácticos (StaticAnalysis) están estrictamente separados de la validación de compilación real. El LLM está obligado a crear los entornos (Cargo.toml, package.json) y correr los comandos reales en la terminal, sin simulaciones.
+```sh
+npm test
+```
 
----
+Este comando prepara los recursos de la interfaz, comprueba JavaScript, ejecuta las pruebas de interfaz y las pruebas Rust de todos los objetivos de la aplicación.
+Las pruebas de interfaz simulan el puente de Tauri: no sustituyen una prueba visual en WebView2 ni una misión con un modelo real.
 
-## 🛠️ Módulos y Capacidades del Core en Rust
+Si el lanzador `npm` de Windows falla buscando `npm-cli.js` en otra instalación, puede utilizarse el ejecutable existente:
 
-| Módulo / Capa Subyacente | Estado | Garantía Arquitectónica |
-|---|---|---|
-| **Contrato Formal (mission_contract)** | 🟢 Operativo | Criterios verificables exigidos antes del cierre. |
-| **Puerta de Finalización (completion_gate)** | 🟢 Operativo | Evalúa el EvidenceGraph contra el state_hash actual. Bloquea cierres falsos. |
-| **Grafo de Evidencias (evidence)** | 🟢 Operativo | Registro inmutable de operaciones (tests, builds) ligadas al hash del código. |
-| **Enrutador Cognitivo (
-outer, learning)**| 🟢 Operativo | (AL-v2.5) Decide la mejor estrategia (Compile vs Test) usando el historial local. |
-| **Presupuesto Inteligente (step_budget)** | 🟢 Operativo | Distribuye pasos (40% dev / 30% verif / 20% repair) y previene loops infinitos. |
-| **Detector Estancamiento (stall_detector)**| 🟢 Operativo | Detección de "Delta Cero". Redirige al agente hacia TOOL_THINK si se atasca. |
-| **Gestor de Terminal (TOOL_TERMINAL)** | 🟢 Operativo | Bloquea encadenamiento malicioso (&&) y exige validación paso a paso real. |
+```powershell
+node "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" test
+```
 
----
+No copies carpetas `target` entre ubicaciones del proyecto. Pueden conservar rutas absolutas de compilaciones anteriores.
 
-## 🏗️ Instalación e Integración
+## Estructura
 
-Para desplegar este potente cerebro local, necesitas preparar tu entorno:
+- `src/`: interfaz, chat y editor.
+- `scripts/`: preparación de dependencias locales y pruebas de interfaz.
+- `src-tauri/src/main.rs`: entrada de escritorio; llama a `app_lib::run()`.
+- `src-tauri/src/lib.rs`: inicialización única de Tauri, comandos y servicios.
+- `src-tauri/src/llm/`: clasificación de instrucciones y bucle del agente.
+- `src-tauri/src/core/mission_runtime.rs`: ejecución gobernada por herramientas, observaciones y presupuesto.
+- `src-tauri/src/core/completion_gate.rs`: comprobación del contrato antes del cierre del bucle.
+- `src-tauri/src/core/evidence.rs`: registro de evidencia y asociación con el estado observado.
+- `src-tauri/memory_vfs/` y `src-tauri/spectrasat/`: componentes Rust independientes.
 
-### Requisitos Previos
+## Comportamiento de las misiones
 
-1. **Ollama:** El núcleo cognitivo del agente. Instala [Ollama](https://ollama.ai/) y asegúrate de que el servicio se esté ejecutando en tu máquina (http://localhost:11434).
-2. **Modelos Locales:** Descarga el cerebro deseado. Recomendamos encarecidamente modelos orientados a código:
-   `bash
-   ollama run qwen2.5-coder:7b
-   # O alternativamente: llama3.1
-   `
-3. **Rust & Cargo:** Instalado vía [rustup](https://rustup.rs/). Necesario para compilar el backend de Tauri.
-4. **Node.js & npm/yarn:** Necesario para compilar el frontend.
+Las tareas de la interfaz se ejecutan de forma secuencial y conservan la carpeta asignada.
+La continuación explícita (`continua`, `continúa`, `retoma`, `resume`) utiliza el diario de esa carpeta.
+El botón de recuperación consulta el estado persistido al cargar la interfaz, evitando depender exclusivamente de un evento de inicio.
+Descartar una misión elimina su estado pendiente, sin marcarla como completada.
 
-### Pasos de Instalación
+El cierre exige los criterios del contrato y evidencia compatible con el estado observado.
+Si el contrato exige revisión manual, se solicita al usuario después de superar las comprobaciones técnicas.
+Una respuesta del modelo no sustituye esa revisión. Las tarjetas de certificados y tests basadas únicamente en palabras del chat se han retirado.
 
-1. **Clonar el repositorio:**
-   `bash
-   git clone https://github.com/yemsy26/aura-sentinel.git
-   cd aura-sentinel
-   `
+## Límites actuales
 
-2. **Instalar dependencias del Frontend:**
-   `bash
-   npm install
-   # o yarn install
-   `
+### Diagnóstico de una misión real
 
-3. **Ejecutar en modo de desarrollo:**
-   Aura-Sentinel se levanta mediante Tauri. En la raíz del proyecto, ejecuta:
-   `bash
-   npm run tauri dev
-   `
-   *El sistema compilará el backend en Rust (puede tardar unos minutos la primera vez) e iniciará la interfaz gráfica.*
+Compila con `cargo build --manifest-path src-tauri/Cargo.toml --bin aura-diagnostics`.
+Prepara una carpeta de prueba vacía y un JSON con `workspace` (ruta absoluta), `prompt` y `model` (nombre instalado en Ollama).
+Ejecuta `src-tauri\target\debug\aura-diagnostics.exe --diagnose-mission ruta-absoluta-al-job.json`.
+Este modo usa el motor real, ejecuta herramientas y modifica la carpeta indicada. Omite el programador de tareas y la recuperación automática de otras misiones.
+Guarda eventos con tiempos en `.aura/diagnostic-events.jsonl` y el resultado en `.aura/diagnostic-result.json` dentro de esa carpeta. El proceso termina con código 0 solo si el motor devuelve `FINISH`.
 
-4. **Configuración del Agente:**
-   En la interfaz de Aura-Sentinel, asegúrate de configurar el endpoint apuntando a tu instancia de Ollama (http://localhost:11434) y selecciona tu modelo (ej. qwen2.5-coder:7b).
+La escritura del programador valida sintaxis; no equivale a una prueba funcional. Un verificador solicitado debe imprimir una línea JSON con `passed` y `total` enteros, `percentage` calculado y `failed_criteria` como lista de textos. Debe ejecutar comprobaciones sobre los archivos reales y devolver código 1 al fallar. Una ejecución sin resultados se devuelve a reparación.
+La reparación sintáctica conserva el borrador rechazado en `.aura/programmer_failure.json` y revierte únicamente los archivos de esa propuesta. Los scripts internos preparados no se presentan como procesos en ejecución.
 
----
+### Cobertura pendiente
 
-## ⚡ ¿Por qué Aura-Sentinel frente a Agentes Cloud?
+- El programador usa UTC y necesita la aplicación abierta. La entrega de sus eventos no tiene confirmación persistente; un cierre durante el disparo puede perder una ejecución. Su interpretación de cron es parcial.
+- La recuperación conserva contexto, rol y paso, pero no serializa y restaura íntegramente el contrato y el grafo de evidencia del runtime. Las comprobaciones deben repetirse.
+- Las huellas de contenido se obtienen de SHA-256 truncado a 64 bits. No constituyen una garantía criptográfica de ausencia de errores ni de alucinaciones.
+- El rendimiento depende del modelo, hardware y herramientas. No se garantiza latencia cero ni equivalencia con servicios externos.
+- Las herramientas web pueden transmitir las consultas o los datos que se les proporcionen. El uso de un modelo local no implica que toda actividad del agente sea exclusivamente local.
 
-* **Velocidad sin Compromisos:** Al correr Ollama en tu propio hardware, Aura procesa *tokens* y toma decisiones tácticas en milisegundos, permitiéndole iterar bucles de *Dev -> Test -> Fix* mucho más rápido que los agentes limitados por peticiones REST sobre internet.
-* **Privacidad Zero-Trust:** Tu código propietario jamás abandona tu máquina. Ni una sola línea se envía a servidores de terceros para ser procesada.
-* **Disciplina Estricta:** Los agentes de la nube suelen ser verbosos y propensos a la pereza ("Ya hice el archivo, asume que compila"). El runtime estricto de Aura-Sentinel bloquea matemáticamente este comportamiento. O compila en tu máquina local, o la misión no termina.
-
----
-
-> **Aura Sentinel:** El estándar local para ingeniería de software delegada. Construido para resolver, no para alucinar.
+La revisión de septiembre de 2026 corrige conexiones y contradicciones verificadas. No certifica todas las herramientas, todos los lenguajes ni el comportamiento de cualquier modelo.
