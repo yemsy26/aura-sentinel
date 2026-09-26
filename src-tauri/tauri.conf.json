@@ -12,9 +12,11 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "AuraSentinel",
-        "width": 800,
-        "height": 600,
+        "title": "Aura Sentinel",
+        "width": 1500,
+        "height": 960,
+        "minWidth": 900,
+        "minHeight": 620,
         "resizable": true,
         "fullscreen": false
       }

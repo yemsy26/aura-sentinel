@@ -1,5 +1,6 @@
-use super::{call_ollama, delegate_to_auditor, delegate_to_logic_solver};
+use super::{call_ollama_with_schema_options, delegate_to_auditor, delegate_to_logic_solver};
 use crate::core::{
+    background_task_command,
     command_trail::StepResult, // CommandTrail used inline via full path in the trail block
     format_system_error,
     kill_task,
@@ -21,18 +22,785 @@ fn strip_think_tags(mut text: String) -> String {
         }
     }
 
-    let mut clean_text = text.trim().to_string();
-    if let Some(start) = clean_text.find('{') {
-        if let Some(end) = clean_text.rfind('}') {
-            clean_text = clean_text[start..end + 1].to_string();
-        }
-    }
-
-    clean_text
+    text.trim().to_string()
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
+}
+
+fn normalized_visual_text(text: &str) -> String {
+    text.to_lowercase()
+        .replace('á', "a")
+        .replace('é', "e")
+        .replace('í', "i")
+        .replace('ó', "o")
+        .replace('ú', "u")
+        .replace('ü', "u")
+        .replace('ñ', "n")
+}
+
+fn phase_has_visual_deliverable(files: &[String]) -> bool {
+    files.iter().any(|file| {
+        matches!(
+            std::path::Path::new(file)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("html" | "htm" | "jsx" | "tsx" | "vue" | "svelte")
+        )
+    })
+}
+
+fn mission_requires_visual_verification(prompt: &str, _workspace: &str) -> bool {
+    let normalized = normalized_visual_text(prompt);
+    [
+        "web app",
+        "aplicacion web",
+        "app web",
+        "pagina web",
+        "sitio web",
+        "website",
+        "frontend",
+        "front-end",
+        "interfaz",
+        "dashboard",
+        "interfaz grafica",
+        "captura de la pagina",
+        "revisa la interfaz",
+        "valida la interfaz",
+        "abrir en navegador",
+        "index.html",
+        "html/css",
+        "construye una app",
+        "construir una app",
+        "aplicacion movil",
+        "react",
+        "vue",
+        "angular",
+        "vite",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+fn mission_requires_browser_interaction_verification(prompt: &str) -> bool {
+    let normalized = normalized_visual_text(prompt);
+    mission_requires_visual_verification(prompt, "")
+        && [
+            "probar en el navegador",
+            "prueba en el navegador",
+            "prueba en navegador",
+            "probar los flujos",
+            "comprobar los flujos",
+            "prueba los flujos",
+            "probar interacciones",
+            "validar interacciones",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn same_local_server_origin(candidate: &str, confirmed: &str) -> bool {
+    let Ok(candidate) = reqwest::Url::parse(candidate) else {
+        return false;
+    };
+    let Ok(confirmed) = reqwest::Url::parse(confirmed) else {
+        return false;
+    };
+    let is_local = |url: &reqwest::Url| {
+        matches!(url.scheme(), "http" | "https")
+            && url
+                .host_str()
+                .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"))
+    };
+    is_local(&candidate)
+        && is_local(&confirmed)
+        && candidate.scheme() == confirmed.scheme()
+        && candidate.host_str() == confirmed.host_str()
+        && candidate.port_or_known_default() == confirmed.port_or_known_default()
+}
+
+fn browser_interaction_test_guidance(url: &str, objective: &str) -> String {
+    format!(
+        "Ejecuta pruebas interactivas reales en el navegador mediante TOOL_TESTER. Usa el comando `BROWSER_TEST: {{\"url\":\"{url}\",\"steps\":[...]}}`; inspecciona index.html/script.js para obtener selectores reales. El runner admite click, fill, select, assert_visible, assert_hidden, assert_text, assert_value, assert_count, wait_for_visible, wait, reload, set_viewport y assert_no_console_errors. Diseña pasos que ejerciten cada flujo interactivo solicitado en el objetivo, valida mensajes y estado observable, comprueba persistencia tras reload y revisa consola en escritorio y móvil. No escribas pruebas DOM para ejecutar con Node, no instales dependencias ni pongas JavaScript arbitrario en el plan. Si el producto no implementa un flujo, registra la prueba que falla y corrige ese comportamiento antes de cerrar. Objetivo: {objective}"
+    )
+}
+
+fn mission_requires_local_http_server(prompt: &str) -> bool {
+    let normalized = normalized_visual_text(prompt);
+    [
+        "servidor http local",
+        "servidor local",
+        "local http server",
+        "serve it over http",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+fn is_local_html_open_command(command: &str) -> bool {
+    let lower = command.trim().to_ascii_lowercase();
+    lower.starts_with("start ")
+        && lower.contains(".html")
+        && !lower.contains("http://")
+        && !lower.contains("https://")
+}
+
+fn local_http_server_command_for_request(prompt: &str, command: &str) -> Option<&'static str> {
+    (mission_requires_local_http_server(prompt)
+        && (is_local_html_open_command(command)
+            || command.trim().to_ascii_lowercase().starts_with("npx serve")))
+    .then_some("python -m http.server 8000 --bind 127.0.0.1")
+}
+
+fn is_adaptive_text_model_candidate(model: &str) -> bool {
+    let family = model
+        .trim()
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    !family.contains("embed")
+        && ![
+            "moondream",
+            "llava",
+            "llava-phi3",
+            "bakllava",
+            "llama3.2-vision",
+        ]
+        .iter()
+        .any(|vision_only| {
+            family == *vision_only || family.starts_with(&format!("{}-", vision_only))
+        })
+}
+
+fn adaptive_strategy_guidance(
+    strategy: &crate::core::learning::strategy::StrategyKind,
+) -> &'static str {
+    use crate::core::learning::strategy::StrategyKind;
+    match strategy {
+        StrategyKind::DirectImplementation => {
+            "Implementa el objetivo aprobado directamente y valida sus criterios concretos antes de cerrar."
+        }
+        StrategyKind::InspectThenImplement => {
+            "Inspecciona primero los archivos y scripts reales del workspace; después implementa solo lo pendiente."
+        }
+        StrategyKind::TestFirst => {
+            "Usa una prueba de comportamiento existente o un caso mínimo verificable; no crees pruebas vacías ni infraestructura que el proyecto no use."
+        }
+        StrategyKind::CompileFirst => {
+            "Si ya existe un comando de compilación o sintaxis, ejecútalo una vez para conocer el estado inicial. Tras editar, valida el comportamiento solicitado: sintaxis correcta por sí sola no prueba la tarea."
+        }
+        StrategyKind::IncrementalPatch => {
+            "Haz cambios pequeños en los archivos necesarios y valida el resultado después de cada grupo coherente; no repitas una escritura sin un diagnóstico nuevo."
+        }
+        StrategyKind::DiagnoseThenRepair => {
+            "Antes de reparar, identifica el error actual y el archivo afectado; corrige ese defecto concreto y comprueba el resultado con evidencia nueva."
+        }
+        StrategyKind::MinimalChange => {
+            "Limita la edición al menor conjunto de archivos que resuelve los criterios pendientes; conserva el trabajo válido y evita reescrituras amplias."
+        }
+    }
+}
+
+fn learned_strategy_has_reliable_evidence(
+    confidence: f32,
+    reason: &crate::core::learning::RecommendationReason,
+    attempts: u64,
+    failures: u64,
+) -> bool {
+    confidence >= 0.65
+        && attempts >= 3
+        && failures > 0
+        && matches!(
+            reason,
+            crate::core::learning::RecommendationReason::GlobalHistory { .. }
+                | crate::core::learning::RecommendationReason::SimilarTask { .. }
+        )
+}
+
+fn is_node_syntax_check(command: &str) -> bool {
+    let normalized = command.trim().to_ascii_lowercase();
+    normalized == "node --check" || normalized.starts_with("node --check ")
+}
+
+fn should_force_web_validation_after_stall(
+    prompt: &str,
+    command: &str,
+    stall_recoveries: u8,
+    confirmed_url: Option<&str>,
+) -> bool {
+    stall_recoveries > 0
+        && mission_requires_local_http_server(prompt)
+        && is_node_syntax_check(command)
+        && confirmed_url.is_none()
+}
+
+fn should_inject_prior_episodes(is_resume: bool, is_contextual_follow_up: bool) -> bool {
+    is_resume || is_contextual_follow_up
+}
+
+fn is_long_running_server_command(command: &str) -> bool {
+    let lower = command.trim().to_ascii_lowercase();
+    lower.contains("http-server")
+        || lower.contains("npm start")
+        || lower.contains("npm run dev")
+        || lower.contains("python -m http.server")
+        || lower.contains("flask run")
+        || lower.contains("uvicorn")
+        || lower.contains("live-server")
+        || lower.starts_with("serve ")
+        || lower == "serve"
+}
+
+fn local_http_server_recovery_action(
+    prompt: &str,
+    workspace: &str,
+    server_task_id: Option<&str>,
+) -> Option<(String, String)> {
+    if !mission_requires_local_http_server(prompt) {
+        return None;
+    }
+    if let Some(task_id) = server_task_id {
+        return Some(("TOOL_BACKGROUND_READ".into(), task_id.to_string()));
+    }
+    if std::path::Path::new(workspace).join("index.html").is_file() {
+        return Some((
+            "TOOL_BACKGROUND_START".into(),
+            "python -m http.server 8000 --bind 127.0.0.1".into(),
+        ));
+    }
+    Some((
+        "TOOL_PROGRAMMER".into(),
+        "El mandato exige una URL HTTP localhost. Primero implementa el index.html y los archivos web pendientes; después inicia el servidor con TOOL_BACKGROUND_START. No uses file:// como sustituto.".into(),
+    ))
+}
+
+fn web_validation_recovery_action(
+    prompt: &str,
+    workspace: &str,
+    confirmed_url: Option<&str>,
+    server_task_id: Option<&str>,
+) -> Option<(String, String)> {
+    if let Some(url) = confirmed_url {
+        return Some(
+            if mission_requires_browser_interaction_verification(prompt) {
+                (
+                    "TOOL_TESTER".into(),
+                    browser_interaction_test_guidance(url, prompt),
+                )
+            } else {
+                ("TOOL_VISION_EVALUATOR".into(), url.to_string())
+            },
+        );
+    }
+    if let Some(action) = local_http_server_recovery_action(prompt, workspace, server_task_id) {
+        return Some(action);
+    }
+    if mission_requires_browser_interaction_verification(prompt)
+        && std::path::Path::new(workspace).join("index.html").is_file()
+    {
+        return Some((
+            "TOOL_BACKGROUND_START".into(),
+            "python -m http.server 8000 --bind 127.0.0.1".into(),
+        ));
+    }
+    mission_requires_visual_verification(prompt, workspace)
+        .then(|| ("TOOL_VISION_EVALUATOR".into(), String::new()))
+}
+
+fn web_validation_handoff_action(
+    prompt: &str,
+    command: &str,
+    stall_recoveries: u8,
+    confirmed_url: Option<&str>,
+    workspace: &str,
+    server_task_id: Option<&str>,
+) -> Option<(String, String)> {
+    if !should_force_web_validation_after_stall(prompt, command, stall_recoveries, confirmed_url) {
+        return None;
+    }
+    local_http_server_recovery_action(prompt, workspace, server_task_id)
+}
+
+fn console_validation_profile(prompt: &str) -> Option<(&'static str, &'static str)> {
+    let normalized = normalized_visual_text(prompt);
+    let is_console_project = [
+        "programa de consola",
+        "aplicacion de consola",
+        "consola interactiva",
+        "terminal interactiva",
+        "linea de comandos",
+        "command line",
+        "cli",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker));
+    if !is_console_project {
+        return None;
+    }
+
+    let detailed_markers = [
+        "detallado",
+        "completo",
+        "casos limite",
+        "edge case",
+        "todos los flujos",
+        "cada modulo",
+        "multiples",
+        "varios casos",
+        "autenticacion",
+        "permisos",
+        "persistencia",
+        "facturacion",
+        "contabilidad",
+        "reportes",
+        "registro",
+        "iniciar sesion",
+        "crud",
+        "validaciones",
+    ];
+    let requested_features = [
+        "modulo",
+        "flujo",
+        "funcionalidad",
+        "caracteristica",
+        "entrada",
+        "salida",
+        "guardar",
+        "buscar",
+        "editar",
+        "eliminar",
+        "crear",
+        "calcular",
+        "exportar",
+        "importar",
+    ];
+    let detailed = detailed_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+        || requested_features
+            .iter()
+            .filter(|marker| normalized.contains(**marker))
+            .count()
+            >= 3;
+
+    if detailed {
+        Some((
+            "DETALLADA",
+            "Ejecuta pruebas representativas para cada flujo, entrada inválida y caso límite explícito; registra entrada, stdout/stderr, código de salida y efectos. No consideres aprobado lo que solo compila.",
+        ))
+    } else {
+        Some((
+            "BÁSICA",
+            "Ejecuta el caso principal con una entrada real; comprueba la salida observable y el código de salida. No afirmes funcionalidades que no ejecutaste.",
+        ))
+    }
+}
+
+fn adaptive_failure_details(reason: &str) -> (&'static str, Option<&'static str>) {
+    if reason.contains("NO_PROGRESS_EXHAUSTED") {
+        ("NoProgress", Some("TOOL_PROGRAMMER"))
+    } else if reason.contains("BUDGET_EXHAUSTED") {
+        ("BudgetExhausted", None)
+    } else if reason.contains("LOCAL_SERVER_NOT_CONFIRMED") {
+        ("LocalServer", Some("TOOL_BACKGROUND_READ"))
+    } else if reason.contains("VERIFIER_REPAIR_EXHAUSTED")
+        || reason.contains("VERIFIER_NO_PROGRESS")
+    {
+        ("Verification", Some("TOOL_TESTER"))
+    } else if reason.contains("FIREBASE_INTEGRATION_REPAIR_EXHAUSTED") {
+        ("FirebaseIntegration", Some("TOOL_PROGRAMMER"))
+    } else if reason.contains("PROGRAMMER_REPAIR_EXHAUSTED")
+        || reason.contains("FORCED_PROGRAMMER_FAILED")
+        || reason.contains("FORCED_PROGRAMMER_BLOCKED")
+    {
+        ("ProgrammerRepair", Some("TOOL_PROGRAMMER"))
+    } else if reason.contains("TOOL_UNREGISTERED") {
+        ("ToolRegistry", None)
+    } else if reason.contains("POLICY_DENY") {
+        ("Policy", None)
+    } else {
+        ("MissionFailure", None)
+    }
+}
+
+fn is_scoped_visual_review(prompt: &str) -> bool {
+    crate::core::intent_router::is_scoped_visual_review(prompt)
+}
+
+fn resolve_scoped_visual_review_instruction(
+    current_instruction: &str,
+    saved_objective: &str,
+    is_continuation: bool,
+) -> Option<String> {
+    if is_scoped_visual_review(current_instruction) {
+        Some(current_instruction.to_string())
+    } else if is_continuation && is_scoped_visual_review(saved_objective) {
+        Some(saved_objective.to_string())
+    } else {
+        None
+    }
+}
+
+fn scoped_review_forbids_action(tool: &str, command: &str) -> bool {
+    if matches!(
+        tool,
+        "TOOL_PROGRAMMER"
+            | "TOOL_ENV_MANAGER"
+            | "TOOL_ASSET_MANAGER"
+            | "TOOL_AST_INJECT"
+            | "TOOL_CREATE_RUNNER"
+            | "TOOL_WORKSPACE_MANAGER"
+            | "TOOL_GIT"
+            | "TOOL_CONTAINER"
+            | "TOOL_SCHEDULER"
+            | "TOOL_LEARN"
+    ) {
+        return true;
+    }
+    if tool != "TOOL_TERMINAL" {
+        return false;
+    }
+
+    let command = command.trim().to_ascii_lowercase();
+    [
+        "del ",
+        "erase ",
+        "rd /s",
+        "rmdir ",
+        "remove-item",
+        "rm ",
+        "mv ",
+        "move ",
+        "copy ",
+        "cp ",
+        "ren ",
+        "npm install",
+        "npm ci",
+        "pnpm install",
+        "yarn install",
+        "cargo clean",
+        "git clean",
+        "git reset",
+        "git checkout",
+        "set-content",
+        "add-content",
+    ]
+    .iter()
+    .any(|prefix| command.starts_with(prefix))
+        || command.contains(" >")
+        || command.contains("&& del ")
+        || command.contains("&& rm ")
+}
+
+fn action_response_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "herramienta": {
+                "type": "string",
+                "enum": crate::core::tool_registry::KNOWN_TOOLS
+            },
+            "pensamiento": { "type": "string" },
+            "comando": { "type": ["string", "null"] },
+            "task_id": { "type": ["string", "null"] },
+            "url_a_investigar": { "type": ["string", "null"] },
+            "archivos_a_editar": { "type": "array", "items": { "type": "string" } },
+            "ast_nodes": { "type": "array", "items": { "type": "object" } },
+            "respuesta_conversacional": { "type": ["string", "null"] }
+        },
+        "required": [
+            "herramienta", "pensamiento", "comando", "task_id", "url_a_investigar",
+            "archivos_a_editar", "ast_nodes", "respuesta_conversacional"
+        ],
+        "additionalProperties": true
+    })
+}
+
+fn is_console_runtime_command(command: &str) -> bool {
+    let normalized = crate::core::evidence::normalize_command_str(command);
+    let command = normalized
+        .strip_prefix("cmd /c ")
+        .or_else(|| normalized.strip_prefix("cmd.exe /c "))
+        .unwrap_or(&normalized)
+        .trim();
+
+    if [
+        "cargo test",
+        "npm test",
+        "npm run test",
+        "pytest",
+        "python -m pytest",
+        "python -m unittest",
+        "go test",
+        "dotnet test",
+        "mvn test",
+    ]
+    .iter()
+    .any(|prefix| command == *prefix || command.starts_with(&format!("{prefix} ")))
+    {
+        return false;
+    }
+
+    [
+        "python ",
+        "python3 ",
+        "py ",
+        "node ",
+        "npm start",
+        "npm run start",
+        "cargo run",
+        "dotnet run",
+        "go run",
+        "java ",
+        "ruby ",
+        "php ",
+        "perl ",
+        "bash ",
+        "sh ",
+        "./",
+        "target/debug/",
+    ]
+    .iter()
+    .any(|prefix| command.starts_with(prefix))
+        || command
+            .split_whitespace()
+            .next()
+            .is_some_and(|first| first.ends_with(".exe") && !first.contains("/"))
+}
+
+fn has_current_console_runtime_evidence(
+    evidence: &crate::core::evidence::EvidenceGraph,
+    current_hash: u64,
+    workspace: &str,
+) -> bool {
+    let expected_workspace = std::path::Path::new(workspace)
+        .canonicalize()
+        .map(|path| path.to_string_lossy().to_lowercase());
+
+    evidence.entries.iter().any(|entry| {
+        if !matches!(
+            entry.kind,
+            crate::core::evidence::EvidenceKind::CommandExitCode
+                | crate::core::evidence::EvidenceKind::RuntimeCheck
+        ) || entry.reliability < 0.5
+            || entry.state_hash != Some(current_hash)
+        {
+            return false;
+        }
+
+        match &entry.fact {
+            crate::core::evidence::StructuredFact::CommandResult {
+                command,
+                cwd,
+                exit_code,
+                ..
+            } => {
+                if *exit_code != 0 || !is_console_runtime_command(command) {
+                    return false;
+                }
+                let actual_workspace = std::path::Path::new(cwd)
+                    .canonicalize()
+                    .map(|path| path.to_string_lossy().to_lowercase());
+                match (&expected_workspace, &actual_workspace) {
+                    (Ok(expected), Ok(actual)) => expected == actual,
+                    _ => cwd
+                        .trim_end_matches(['\\', '/'])
+                        .eq_ignore_ascii_case(workspace.trim_end_matches(['\\', '/'])),
+                }
+            }
+            _ => false,
+        }
+    })
+}
+
+fn extract_local_ui_url(text: &str) -> Option<String> {
+    let pattern = regex::Regex::new(
+        r#"(?i)https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:/[^\s"'<>]*)?"#,
+    )
+    .ok()?;
+    pattern.find(text).map(|matched| {
+        matched
+            .as_str()
+            .trim_end_matches(|character: char| {
+                matches!(character, '.' | ',' | ';' | ')' | ']' | '}' | '`')
+            })
+            .to_string()
+    })
+}
+
+fn local_http_url_from_server_command(command: &str) -> Option<String> {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let module_index = tokens
+        .iter()
+        .position(|token| token.eq_ignore_ascii_case("http.server"))?;
+    if !tokens.iter().any(|token| token.eq_ignore_ascii_case("-m")) {
+        return None;
+    }
+
+    let mut port = 8000u16;
+    let mut host = "127.0.0.1";
+    let mut index = module_index + 1;
+    while index < tokens.len() {
+        let token = tokens[index];
+        if token == "--bind" {
+            host = *tokens.get(index + 1)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--bind=") {
+            host = value;
+        } else if !token.starts_with('-') {
+            if let Ok(value) = token.parse::<u16>() {
+                if value == 0 {
+                    return None;
+                }
+                port = value;
+            }
+        }
+        index += 1;
+    }
+
+    let local_host = match host.trim_matches(['\'', '"']) {
+        "localhost" | "127.0.0.1" | "0.0.0.0" => "127.0.0.1",
+        "::1" | "[::1]" => "[::1]",
+        _ => return None,
+    };
+    Some(format!("http://{local_host}:{port}/"))
+}
+
+async fn probe_background_local_http_server(task_id: &str) -> Option<String> {
+    let command = background_task_command(task_id).await?;
+    let url = local_http_url_from_server_command(&command)?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(1))
+        .build()
+        .ok()?;
+
+    // Process startup and log-reader scheduling are asynchronous. Probe the
+    // exact local origin implied by the launched command instead of treating an
+    // empty log buffer as proof that the server failed.
+    for _ in 0..6 {
+        if client
+            .get(&url)
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success())
+        {
+            return Some(url);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    None
+}
+
+fn extract_explicit_http_url(text: &str) -> Option<String> {
+    let pattern = regex::Regex::new(r#"(?i)https?://[^\s"'<>]+\b"#).ok()?;
+    pattern.find(text).map(|matched| {
+        matched
+            .as_str()
+            .trim_end_matches(|character: char| {
+                matches!(character, '.' | ',' | ';' | ')' | ']' | '}' | '`')
+            })
+            .to_string()
+    })
+}
+
+fn save_resumable_validation_block(
+    journal: &mut crate::core::session_journal::SessionJournal,
+    workspace: &str,
+    step: u32,
+    role: &str,
+    context: &str,
+    reason: &str,
+) -> Result<(), String> {
+    journal.interrupted = true;
+    journal.status = "EN_PROGRESO".to_string();
+    journal.ultimo_paso = step;
+    journal.ultimo_estado = reason.to_string();
+    journal.fsm_role = Some(role.to_string());
+    journal.fsm_step = step;
+    journal.fsm_context = Some(context.to_string());
+    crate::core::session_journal::save_journal(workspace, journal)
+}
+
+fn visual_capture_from_error(workspace: &str, error: &str) -> Option<std::path::PathBuf> {
+    let relative = error
+        .split_once("Captura:")
+        .map(|(_, tail)| tail.lines().next().unwrap_or_default().trim())
+        .or_else(|| {
+            error
+                .split_once("captura se guardó en ")
+                .map(|(_, tail)| tail.split([';', '\n']).next().unwrap_or_default().trim())
+        })?;
+    let relative = relative
+        .trim_matches(|character| matches!(character, ' ' | '\t' | '\r' | '"' | '\'' | '`'));
+    let directory = std::path::Path::new(workspace)
+        .join(".aura")
+        .join("evidence")
+        .join("visual");
+    let path = std::path::Path::new(workspace).join(relative);
+    let canonical_path = path.canonicalize().ok()?;
+    let canonical_directory = directory.canonicalize().ok()?;
+    (canonical_path.starts_with(canonical_directory)
+        && canonical_path.extension().and_then(|value| value.to_str()) == Some("png"))
+    .then_some(canonical_path)
+}
+
+fn vision_result_needs_manual_review(error: &str) -> bool {
+    [
+        "VISUAL_QA_UNAVAILABLE",
+        "VISUAL_QA_UNCERTAIN",
+        "VISUAL_QA_INVALID_RESPONSE",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+}
+
+fn is_explicit_approval(answer: &str) -> bool {
+    let normalized = answer
+        .trim()
+        .to_lowercase()
+        .replace('á', "a")
+        .replace('é', "e")
+        .replace('í', "i")
+        .replace('ó', "o")
+        .replace('ú', "u")
+        .replace('ñ', "n");
+    let words = normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    matches!(
+        words.as_str(),
+        "si" | "yes"
+            | "confirmo"
+            | "confirmar"
+            | "autorizo"
+            | "autorizar"
+            | "apruebo"
+            | "aprobado"
+            | "approve"
+            | "si autorizo"
+            | "si autorizo esta accion"
+            | "si confirmo"
+            | "si confirmo esta accion"
+            | "autorizo esta accion"
+            | "autorizar esta accion"
+            | "confirmo esta accion"
+            | "confirmar esta accion"
+            | "apruebo esta accion"
+            | "yes approve"
+            | "yes i approve"
+            | "i approve"
+            | "yes authorize"
+            | "yes i authorize"
+    )
 }
 
 fn recent_context(text: &str, max_chars: usize) -> String {
@@ -40,6 +808,96 @@ fn recent_context(text: &str, max_chars: usize) -> String {
     text.chars()
         .skip(char_count.saturating_sub(max_chars))
         .collect()
+}
+
+fn parse_sat_clauses(value: &serde_json::Value) -> Result<Vec<Vec<i32>>, String> {
+    let clauses = value
+        .as_array()
+        .ok_or_else(|| "'clauses' debe ser una matriz de cláusulas".to_string())?;
+    clauses
+        .iter()
+        .enumerate()
+        .map(|(clause_index, clause)| {
+            clause
+                .as_array()
+                .ok_or_else(|| format!("La cláusula {} no es una matriz", clause_index + 1))?
+                .iter()
+                .enumerate()
+                .map(|(literal_index, literal)| {
+                    let number = literal.as_i64().ok_or_else(|| {
+                        format!(
+                            "El literal {} de la cláusula {} no es un entero",
+                            literal_index + 1,
+                            clause_index + 1
+                        )
+                    })?;
+                    i32::try_from(number).map_err(|_| {
+                        format!(
+                            "El literal {} de la cláusula {} excede el rango admitido",
+                            literal_index + 1,
+                            clause_index + 1
+                        )
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn parse_sat_payload(
+    payload: &serde_json::Value,
+) -> Result<Option<(usize, Vec<Vec<i32>>)>, String> {
+    let has_n_vars = payload.get("n_vars").is_some();
+    let has_clauses = payload.get("clauses").is_some();
+    if !has_n_vars && !has_clauses {
+        return Ok(None);
+    }
+    if !has_n_vars || !has_clauses {
+        return Err("TOOL_LOGIC_SOLVER requiere 'n_vars' y 'clauses' juntos".into());
+    }
+    let n_vars = payload
+        .get("n_vars")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| "'n_vars' debe ser un entero no negativo".to_string())?;
+    let clauses = parse_sat_clauses(&payload["clauses"])?;
+    Ok(Some((n_vars, clauses)))
+}
+
+fn extract_sat_payload(message: &str) -> Result<Option<(usize, Vec<Vec<i32>>)>, String> {
+    let Some(start) = message.find("[[").or_else(|| message.find("[ [")) else {
+        return Ok(None);
+    };
+    let text = &message[start..];
+    let mut depth = 0i32;
+    let mut end = None;
+    for (index, character) in text.char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err("La matriz SAT tiene corchetes desbalanceados".into());
+                }
+                if depth == 0 {
+                    end = Some(index + character.len_utf8());
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end.ok_or_else(|| "La matriz SAT está incompleta".to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&text[..end])
+        .map_err(|error| format!("La matriz SAT no es JSON válido: {error}"))?;
+    let clauses = parse_sat_clauses(&value)?;
+    let n_vars = clauses
+        .iter()
+        .flatten()
+        .map(|literal| literal.unsigned_abs() as usize)
+        .max()
+        .unwrap_or(0);
+    Ok(Some((n_vars, clauses)))
 }
 
 fn sanitize_runtime_context(context: &str, workspace_path: &str) -> String {
@@ -69,9 +927,8 @@ fn official_verifier_command(
     contract: &crate::core::mission_contract::MissionContract,
 ) -> Option<String> {
     contract.acceptance_criteria.iter().find_map(|criterion| {
-        if let crate::core::mission_contract::VerificationMethod::SemanticVerification {
-            command,
-        } = &criterion.verification
+        if let crate::core::mission_contract::VerificationMethod::SemanticVerification { command } =
+            &criterion.verification
         {
             Some(command.clone())
         } else {
@@ -89,12 +946,466 @@ fn is_managed_verifier(workspace_path: &str, file: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn programmer_file_fallback(
+    journal: &crate::core::session_journal::SessionJournal,
+    workspace_path: &str,
+    explicit_files: &[String],
+) -> Vec<String> {
+    phase_pending_programmer_file(journal, workspace_path)
+        .or_else(|| {
+            explicit_files.iter().find_map(|file| {
+                (!crate::core::programmer_executor::is_internal_workspace_file(file)
+                    && !std::path::Path::new(workspace_path).join(file).is_file())
+                .then(|| file.clone())
+            })
+        })
+        .into_iter()
+        .collect()
+}
+
+fn phase_pending_programmer_file(
+    journal: &crate::core::session_journal::SessionJournal,
+    workspace_path: &str,
+) -> Option<String> {
+    journal
+        .fases
+        .get(journal.fase_actual)?
+        .archivos
+        .iter()
+        .find(|file| {
+            !crate::core::programmer_executor::is_internal_workspace_file(file)
+                && !std::path::Path::new(workspace_path).join(file).is_file()
+        })
+        .cloned()
+}
+
+fn schema_recovery_programmer_target(
+    journal: &crate::core::session_journal::SessionJournal,
+    workspace_path: &str,
+    explicit_files: &[String],
+) -> Option<String> {
+    phase_pending_programmer_file(journal, workspace_path)
+        .or_else(|| {
+            journal
+                .fases
+                .get(journal.fase_actual)?
+                .archivos
+                .iter()
+                .find_map(|file| {
+                    (!crate::core::programmer_executor::is_internal_workspace_file(file)
+                        && std::path::Path::new(workspace_path).join(file).is_file())
+                    .then(|| file.clone())
+                })
+        })
+        .or_else(|| {
+            explicit_files.iter().find_map(|file| {
+                (!crate::core::programmer_executor::is_internal_workspace_file(file))
+                    .then(|| file.clone())
+            })
+        })
+}
+
+fn needs_approved_plan_recovery(
+    approved_consultation_task: bool,
+    journal: &crate::core::session_journal::SessionJournal,
+) -> bool {
+    approved_consultation_task
+        && journal.plan_generado
+        && !journal
+            .fases
+            .iter()
+            .all(|phase| phase.estado == "COMPLETADA")
+        && (journal
+            .fases
+            .first()
+            .map(|phase| {
+                !phase
+                    .archivos
+                    .iter()
+                    .any(|file| file.eq_ignore_ascii_case("index.html"))
+                    || phase.criterio_de_exito != "npm test"
+            })
+            .unwrap_or(true)
+            || journal
+                .fases
+                .get(1)
+                .map(|phase| phase.criterio_de_exito != "npm run test:firebase")
+                .unwrap_or(true)
+            || journal
+                .fases
+                .get(2)
+                .map(|phase| phase.criterio_de_exito != "firebase deploy --only hosting")
+                .unwrap_or(true))
+}
+
+fn needs_local_consultation_agenda_plan_recovery(
+    local_consultation_agenda_task: bool,
+    journal: &crate::core::session_journal::SessionJournal,
+) -> bool {
+    local_consultation_agenda_task
+        && journal.plan_generado
+        && !journal
+            .fases
+            .iter()
+            .all(|phase| phase.estado == "COMPLETADA")
+        && !crate::llm::phase_planner::local_consultation_agenda_plan_is_complete(&journal.fases)
+}
+
+fn recover_programmer_file_args(
+    payload: &mut serde_json::Value,
+    journal: &crate::core::session_journal::SessionJournal,
+    workspace_path: &str,
+    explicit_files: &[String],
+) -> Option<Vec<String>> {
+    let original_count = payload
+        .get("archivos_a_editar")
+        .and_then(|value| value.as_array())
+        .map(Vec::len)
+        .unwrap_or_default();
+    let safe_requested: Vec<String> = payload
+        .get("archivos_a_editar")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .map(str::trim)
+        .filter(|file| {
+            !file.is_empty() && !crate::core::programmer_executor::is_internal_workspace_file(file)
+        })
+        .map(str::to_string)
+        .collect();
+
+    let recovered = if safe_requested.is_empty() {
+        programmer_file_fallback(journal, workspace_path, explicit_files)
+    } else if safe_requested.len() != original_count {
+        safe_requested.clone()
+    } else {
+        return None;
+    };
+    if recovered.is_empty() {
+        return None;
+    }
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "archivos_a_editar".into(),
+            serde_json::json!(recovered.clone()),
+        );
+        Some(recovered)
+    } else {
+        None
+    }
+}
+
 fn file_is_already_known(existing_files: &[String], requested: &str) -> bool {
     let requested = requested.replace('\\', "/");
     existing_files.iter().any(|existing| {
         let existing = existing.replace('\\', "/");
         existing == requested || existing.ends_with(&format!("/{requested}"))
     })
+}
+
+fn is_test_artifact_path(file: &str) -> bool {
+    let normalized = file.replace('\\', "/").to_lowercase();
+    let name = normalized.rsplit('/').next().unwrap_or(&normalized);
+    name.starts_with("verify_")
+        || name.starts_with("test_")
+        || name.ends_with(".test.js")
+        || name.ends_with(".spec.js")
+        || name.ends_with(".test.ts")
+        || name.ends_with(".spec.ts")
+        || name.ends_with(".test.mjs")
+        || name.ends_with(".spec.mjs")
+        || name.ends_with(".test.cjs")
+        || name.ends_with(".spec.cjs")
+}
+
+fn test_command_for_path(file: &str) -> Option<String> {
+    let normalized = file.replace('\\', "/");
+    let lower = normalized.to_lowercase();
+    let quoted = format!("\"{}\"", normalized);
+    if lower.ends_with(".py") {
+        Some(format!("python {}", quoted))
+    } else if [
+        ".test.js",
+        ".spec.js",
+        ".test.mjs",
+        ".spec.mjs",
+        ".test.cjs",
+        ".spec.cjs",
+    ]
+    .iter()
+    .any(|suffix| lower.ends_with(suffix))
+    {
+        Some(format!("node --test {}", quoted))
+    } else if [".js", ".mjs", ".cjs"]
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
+    {
+        Some(format!("node {}", quoted))
+    } else {
+        None
+    }
+}
+
+fn node_script_argument(command: &str) -> Option<String> {
+    let mut args = split_command_arguments(command);
+    let executable = args.first()?.to_ascii_lowercase();
+    if !matches!(executable.as_str(), "node" | "node.exe" | "nodejs") {
+        return None;
+    }
+    args.remove(0);
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-e" | "--eval" | "-p" | "--print" => return None,
+            "--require"
+            | "-r"
+            | "--import"
+            | "--loader"
+            | "--experimental-loader"
+            | "--conditions"
+            | "-C"
+            | "--test-name-pattern"
+            | "--test-reporter"
+            | "--test-reporter-destination" => index += 2,
+            "--" => return args.get(index + 1).cloned(),
+            option if option.starts_with('-') => index += 1,
+            target => return Some(target.to_string()),
+        }
+    }
+    None
+}
+
+fn split_command_arguments(command: &str) -> Vec<String> {
+    let mut arguments = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    for character in command.chars() {
+        match quote {
+            Some(delimiter) if character == delimiter => quote = None,
+            Some(_) => current.push(character),
+            None if matches!(character, '"' | '\'') => quote = Some(character),
+            None if character.is_whitespace() => {
+                if !current.is_empty() {
+                    arguments.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(character),
+        }
+    }
+    if !current.is_empty() {
+        arguments.push(current);
+    }
+    arguments
+}
+
+fn workspace_file_path(workspace_path: &str, file: &str) -> Option<std::path::PathBuf> {
+    let workspace = std::path::Path::new(workspace_path);
+    let workspace_root = workspace.canonicalize().ok()?;
+    let target = std::path::Path::new(file);
+    let candidate = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        workspace_root.join(target)
+    };
+    let target_path = candidate.canonicalize().ok()?;
+    (target_path.starts_with(&workspace_root) && target_path.is_file()).then_some(target_path)
+}
+
+fn test_file_has_runnable_cases(workspace_path: &str, file: &str) -> bool {
+    let Some(target_path) = workspace_file_path(workspace_path, file) else {
+        return false;
+    };
+    let Ok(source) = std::fs::read_to_string(&target_path) else {
+        return false;
+    };
+    let has_test_case = match target_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("py") => source.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("def test_") || line.starts_with("async def test_")
+        }),
+        Some("js" | "mjs" | "cjs") => ["test(", "test (", "it(", "it (", "specify(", "specify ("]
+            .iter()
+            .any(|marker| source.contains(marker)),
+        _ => false,
+    };
+    if !has_test_case {
+        return false;
+    }
+
+    let lower_source = source.to_ascii_lowercase();
+    let uses_node_test = lower_source.contains("node:test");
+    if uses_node_test {
+        let node_test_unsupported_apis = [
+            "tohavebeencalled",
+            "mockreturnvalue",
+            "mockimplementation",
+            "jest.fn(",
+            "vi.fn(",
+        ];
+        let imports_expect = lower_source.contains("from 'expect'")
+            || lower_source.contains("from \"expect\"")
+            || lower_source.contains("require('expect')")
+            || lower_source.contains("require(\"expect\")")
+            || lower_source.contains("function expect(")
+            || lower_source.contains("const expect =")
+            || lower_source.contains("let expect =");
+        if node_test_unsupported_apis
+            .iter()
+            .any(|marker| lower_source.contains(marker))
+            || (lower_source.contains("expect(") && !imports_expect)
+        {
+            return false;
+        }
+    }
+
+    // A test declaration with an empty callback exits successfully under most
+    // runners. It is not evidence that the implementation behaves correctly.
+    match target_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("py") => source.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("assert ") || trimmed.starts_with("self.assert")
+        }),
+        Some("js" | "mjs" | "cjs") => [
+            "assert.",
+            "assert(",
+            "expect(",
+            ".to.equal(",
+            ".to.eql(",
+            ".to.be.",
+            ".to.have.",
+            ".toBe(",
+            ".toEqual(",
+            ".toStrictEqual(",
+            ".toContain(",
+        ]
+        .iter()
+        .any(|marker| source.contains(marker)),
+        _ => false,
+    }
+}
+
+fn successful_test_run_has_behavioral_cases(
+    command: &str,
+    workspace_path: &str,
+    output: &str,
+) -> bool {
+    let lower_command = command.trim().to_ascii_lowercase();
+    if lower_command.starts_with("node --test") {
+        return node_script_argument(command)
+            .is_some_and(|file| test_file_has_runnable_cases(workspace_path, &file));
+    }
+
+    let lower_output = output.to_ascii_lowercase();
+    if [
+        "no tests found",
+        "no test files found",
+        "0 tests",
+        "tests 0",
+        "0 passed",
+        "passed: 0",
+        "[no test files]",
+    ]
+    .iter()
+    .any(|marker| lower_output.contains(marker))
+    {
+        return false;
+    }
+
+    if lower_command.starts_with("cargo test") {
+        return lower_output.contains("test result: ok")
+            && lower_output.contains(" passed;")
+            && !lower_output.contains("0 passed;");
+    }
+    if lower_command.starts_with("go test") {
+        return lower_output.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("ok\t") || line.starts_with("ok  ")
+        });
+    }
+    if lower_command.starts_with("pytest") || lower_command.starts_with("python -m pytest") {
+        return lower_output.lines().any(|line| {
+            line.split_whitespace().any(|token| token == "passed")
+                && !line.trim_start().starts_with("0 passed")
+        });
+    }
+    false
+}
+
+fn programmer_loop_validation_command(
+    existing_files: &[String],
+    contract: &crate::core::mission_contract::MissionContract,
+    workspace_path: &str,
+) -> Option<String> {
+    if let Some(command) = existing_files
+        .iter()
+        .filter(|file| {
+            is_test_artifact_path(file) && test_file_has_runnable_cases(workspace_path, file)
+        })
+        .find_map(|file| test_command_for_path(file))
+    {
+        return Some(command);
+    }
+    if let Some(command) = official_verifier_command(contract) {
+        return Some(command);
+    }
+    if let Some(file) = existing_files.iter().find(|file| {
+        let lower = file.to_ascii_lowercase().replace('\\', "/");
+        !is_test_artifact_path(file)
+            && [".js", ".mjs", ".cjs"]
+                .iter()
+                .any(|extension| lower.ends_with(extension))
+            && workspace_file_path(workspace_path, file).is_some()
+    }) {
+        return Some(format!("node --check \"{}\"", file.replace('\\', "/")));
+    }
+    if existing_files.iter().any(|file| {
+        file.eq_ignore_ascii_case("Cargo.toml")
+            && workspace_file_path(workspace_path, file).is_some()
+    }) {
+        return Some("cargo check".to_string());
+    }
+    None
+}
+
+const MAX_PROGRAMMER_STALL_RECOVERIES: u8 = 2;
+const MAX_PROGRAMMER_CALLS_WITHOUT_VALIDATION: u8 = 3;
+
+/// Return the script path for direct Python execution. Module and inline-code
+/// invocations (`python -m ...`, `python -c ...`) are not workspace files.
+fn python_script_argument(command: &str) -> Option<String> {
+    let mut parts = split_command_arguments(command).into_iter();
+    let executable = parts.next()?.to_lowercase();
+    if !matches!(
+        executable.as_str(),
+        "python" | "python3" | "py" | "python.exe" | "python3.exe" | "py.exe"
+    ) {
+        return None;
+    }
+
+    while let Some(argument) = parts.next() {
+        match argument.as_str() {
+            "-m" | "-c" => return None,
+            "--" => return parts.next(),
+            "-W" | "-X" => {
+                parts.next();
+            }
+            value if value.starts_with('-') => {}
+            value => return Some(value.to_string()),
+        }
+    }
+    None
 }
 
 fn relevant_programmer_files(
@@ -124,9 +1435,16 @@ fn relevant_programmer_files(
         })
         .collect();
     let reason_lower = reason.to_lowercase();
-    let is_repair = ["corrig", "repara", "fall", "error", "criterio", "estancamiento"]
-        .iter()
-        .any(|token| reason_lower.contains(token));
+    let is_repair = [
+        "corrig",
+        "repara",
+        "fall",
+        "error",
+        "criterio",
+        "estancamiento",
+    ]
+    .iter()
+    .any(|token| reason_lower.contains(token));
     if is_repair || files.is_empty() {
         files.extend(existing_files.iter().filter_map(|file| {
             let path = std::path::Path::new(file);
@@ -138,9 +1456,9 @@ fn relevant_programmer_files(
             }
         }));
     }
-    if let Ok(pattern) = regex::Regex::new(
-        r"(?i)\b[a-z_][a-z0-9_./\\-]*\.(?:html|css|js|ts|tsx|jsx|py|rs|json)\b",
-    ) {
+    if let Ok(pattern) =
+        regex::Regex::new(r"(?i)\b[a-z_][a-z0-9_./\\-]*\.(?:html|css|js|ts|tsx|jsx|py|rs|json)\b")
+    {
         files.extend(pattern.find_iter(reason).filter_map(|matched| {
             if matched.as_str().contains(".aura") {
                 return None;
@@ -149,8 +1467,7 @@ fn relevant_programmer_files(
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
                 .filter(|name| {
-                    name != "programmer_failure.json"
-                        && !name.eq_ignore_ascii_case("node.js")
+                    name != "programmer_failure.json" && !name.eq_ignore_ascii_case("node.js")
                 })
         }));
     }
@@ -182,16 +1499,56 @@ fn command_from_forced_reason(reason: &str, official_command: Option<&str>) -> O
     }
     let trimmed = reason.trim().trim_matches('\'').trim_matches('`');
     let direct_prefixes = [
-        "dir", "python ", "python3 ", "node ", "cargo ", "npm ", "npx ", "git ",
-        "powershell ", "pwsh ",
+        "dir",
+        "python ",
+        "python3 ",
+        "node ",
+        "cargo ",
+        "npm ",
+        "npx ",
+        "git ",
+        "powershell ",
+        "pwsh ",
     ];
     if direct_prefixes.iter().any(|prefix| {
-        trimmed.eq_ignore_ascii_case(prefix.trim())
-            || trimmed.to_lowercase().starts_with(prefix)
+        trimmed.eq_ignore_ascii_case(prefix.trim()) || trimmed.to_lowercase().starts_with(prefix)
     }) {
         return Some(trimmed.to_string());
     }
     None
+}
+
+fn is_test_runner_command(command: &str) -> bool {
+    let command = command.trim().to_ascii_lowercase();
+    [
+        "npm test",
+        "npm run test",
+        "pnpm test",
+        "pnpm run test",
+        "yarn test",
+        "bun test",
+        "node --test",
+        "cargo test",
+        "pytest",
+        "python -m pytest",
+        "python -m unittest",
+        "go test",
+        "dotnet test",
+        "npx jest",
+        "npx vitest",
+        "npx playwright test",
+        "playwright test",
+    ]
+    .iter()
+    .any(|prefix| command == *prefix || command.starts_with(&format!("{} ", prefix)))
+}
+
+fn is_firebase_hosting_spark_executable_rejection(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("executable files are forbidden on the spark billing plan")
+        && (lower.contains("firebasehosting.googleapis.com")
+            || lower.contains("hosting")
+            || lower.contains("populatefiles"))
 }
 
 /// Runtime-owned transitions do not need a second LLM call merely to select a tool.
@@ -234,14 +1591,42 @@ fn deterministic_forced_decision(
                 value
             })
         }
+        "TOOL_WEB_SEARCH" => {
+            let mut value = base(forced);
+            value["comando"] = serde_json::json!(
+                "site:firebase.google.com/docs Firebase web app Authentication Cloud Firestore Hosting deployment"
+            );
+            Some(value)
+        }
         "TOOL_FINISH" => {
             let mut value = base(forced);
             value["respuesta_conversacional"] = serde_json::json!(reason);
             Some(value)
         }
+        // TOOL_THINK is a control transfer, not a request for creative output.
+        // Reusing the already supplied diagnosis avoids three fragile JSON retries
+        // when a small local model is explicitly told to think before repairing.
+        "TOOL_THINK" if !reason.trim().is_empty() => {
+            let mut value = base(forced);
+            value["comando"] = serde_json::json!(reason.trim());
+            Some(value)
+        }
         "TOOL_BACKGROUND_START" if !reason.trim().is_empty() => {
             let mut value = base(forced);
             value["comando"] = serde_json::json!(reason.trim());
+            Some(value)
+        }
+        "TOOL_BACKGROUND_READ" | "TOOL_BACKGROUND_QUERY" if !reason.trim().is_empty() => {
+            let mut value = base(forced);
+            value["task_id"] = serde_json::json!(reason.trim());
+            Some(value)
+        }
+        "TOOL_VISION_EVALUATOR" if !reason.trim().is_empty() => {
+            let mut value = base(forced);
+            value["comando"] = serde_json::json!(format!(
+                "Evalúa la aplicación web real en esta URL local y reporta evidencia visible y defectos: {}",
+                reason.trim()
+            ));
             Some(value)
         }
         _ => None,
@@ -291,9 +1676,19 @@ fn tactical_repair_blueprint(objective: &str) -> &'static str {
     let lower = objective.to_lowercase();
     if lower.contains("dashboard") && lower.contains("radar") && lower.contains("telemetr") {
         "Implementación mínima funcional esperada: conserva un único HTML autocontenido; usa un arreglo threatNodes con angle/radius y dibuja cada nodo con Math.cos y Math.sin dentro de requestAnimationFrame; crea generatePacket/updatePackets (o nombres equivalentes que contengan packet/paquete) con campos ip, protocol, latency y risk y actualiza el panel mediante textContent/innerHTML; usa un segundo <canvas id=\"trafficCanvas\"> y un contexto separado llamado trafficCtx para el historial de tráfico, sin borrar el Canvas del radar; muestra una barra alert con texto attack/ataque; aplica backdrop-filter, monospace y box-shadow/text-shadow. No añadas solo palabras: conecta cada dato a una función visible."
+    } else if lower.contains("consulta")
+        && lower.contains("factura")
+        && lower.contains("contabilidad")
+        && lower.contains("firebase")
+    {
+        "Implementa el MVP SOLAMENTE con HTML, CSS y JavaScript; no uses Python/Flask, requirements.txt ni verify_solution.py. Crea los entregables planificados index.html, styles.css, app.js, package.json y tests/app.test.js, progresivamente según la lista permitida. Separa la lógica de dominio comprobable de la interfaz y persiste el prototipo local en localStorage. En app.js exporta exactamente estas funciones: registerUser(data), loginUser(data), createClient(data), createAppointment(data), createInvoice(data) y addAccountingTransaction(data). Cada una debe validar sus datos, realizar la operación sobre el estado persistido necesario y devolver el resultado, no un booleano constante. Implementa la persistencia leyendo con localStorage.getItem y guardando con localStorage.setItem; las pruebas deben usar un almacenamiento en memoria compatible para comprobar que los datos realmente se guardan. Registro e inicio de sesión son demostrativos en local: avisa en la interfaz que no son autenticación segura de producción; Firebase Authentication/Firestore se integra en la fase posterior. En index.html enlaza styles.css y carga app.js con `<script type=\"module\" src=\"app.js\">`. En package.json declara `type: module` y un script test no vacío con el comando exacto `node --test tests/app.test.js`. En tests/app.test.js importa las seis funciones desde `../app.js` con módulos ES y registra al menos seis casos con `node:test`; cada caso debe invocar su función y usar `node:assert/strict` para comprobar resultado o rechazo. No mezcles require() con módulos ES ni dupliques declaraciones. No inventes país, moneda ni impuestos; calcula facturas a partir de importes explícitos. No cambies el alcance de la fase."
     } else {
         ""
     }
+}
+
+fn consultation_firebase_blueprint() -> &'static str {
+    "Fase 2 solamente: conserva intactos index.html, styles.css y las funciones funcionales de Fase 1. Usa el SDK modular instalado: importa initializeApp desde firebase/app; getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword y connectAuthEmulator desde firebase/auth; getFirestore, connectFirestoreEmulator, addDoc/getDocs desde firebase/firestore. Configura un projectId de emulador fijo con prefijo demo- en firebase-config.js; nunca pongas ahí credenciales privadas. Conecta Auth en localhost:9099 y Firestore en localhost:8080 solo en ejecución local. Añade `test:firebase` a package.json usando `firebase emulators:exec --only auth,firestore --project <mismo-demo-id> \"node --test tests/firebase-emulator.test.js\"`; declara firebase como dependencia y firebase-tools como devDependency. Las pruebas deben importar operaciones reales de app.js y comprobar registro/inicio de sesión y escritura/lectura Firestore con node:test y node:assert/strict. Reglas deben exigir request.auth.uid y denegar acceso a otros usuarios. No declares completada esta fase con npm test: el único criterio es npm run test:firebase. La configuración y el projectId de producción se exigirán solo antes del deploy."
 }
 
 /// Detecta si el workspace contiene archivos HTML (entorno web/frontend)
@@ -395,11 +1790,379 @@ enum AgentRole {
     Critic,
 }
 
+fn apply_consultation_mvp_audit_override(
+    tool: &mut String,
+    role: &mut AgentRole,
+    command: &mut String,
+    files: &mut Vec<String>,
+    payload: &mut serde_json::Value,
+    verifier_diagnostic: &mut String,
+    audit: &crate::llm::phase_planner::ConsultationMvpAudit,
+) -> bool {
+    if audit.issues.is_empty() {
+        return false;
+    }
+
+    *tool = "TOOL_PROGRAMMER".to_string();
+    *role = AgentRole::Executor;
+    command.clear();
+    // Keep each repair small enough for the local 7B coder. A four-file audit
+    // request was causing it to emit partial changes (often the root-level
+    // app.test.js alias) and then hit duplicate-patch conflicts. Repair tests
+    // first, then the core, manifest, and UI, re-auditing after each write.
+    let repair_order = ["tests/app.test.js", "app.js", "package.json", "index.html"];
+    let next_file = repair_order
+        .iter()
+        .copied()
+        .find(|file| {
+            audit
+                .repair_files
+                .iter()
+                .any(|target| target.as_str() == *file)
+        })
+        .or_else(|| audit.repair_files.first().map(String::as_str))
+        .unwrap_or("app.js");
+    *files = vec![next_file.to_string()];
+    let focused_issues = audit
+        .issues
+        .iter()
+        .filter(|issue| issue.contains(next_file))
+        .cloned()
+        .collect::<Vec<_>>();
+    *verifier_diagnostic = if focused_issues.is_empty() {
+        audit.issues.join("\n")
+    } else {
+        focused_issues.join("\n")
+    };
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("herramienta".into(), serde_json::json!("TOOL_PROGRAMMER"));
+        object.insert("comando".into(), serde_json::Value::Null);
+        object.insert("archivos_a_editar".into(), serde_json::json!(files));
+        object.insert("require_all_targets".into(), serde_json::Value::Bool(true));
+        object.insert(
+            "instruccion".into(),
+            serde_json::json!(format!(
+                "Corrige el defecto comprobado del archivo objetivo en esta propuesta. Devuelve exactamente un cambio completo para ese archivo y no cambies otros entregables. Diagnóstico comprobado en disco:\n{}\nEdita solo este archivo: {:?}. El auditor volverá a comprobar los demás archivos en los siguientes pasos.",
+                verifier_diagnostic, files
+            )),
+        );
+        object.insert(
+            "context".into(),
+            serde_json::json!(format!(
+                "Auditoría funcional de Fase 1:\n{}",
+                verifier_diagnostic
+            )),
+        );
+    }
+    true
+}
+
+fn apply_consultation_firebase_audit_override(
+    tool: &mut String,
+    role: &mut AgentRole,
+    command: &mut String,
+    files: &mut Vec<String>,
+    payload: &mut serde_json::Value,
+    verifier_diagnostic: &mut String,
+    audit: &crate::llm::phase_planner::ConsultationFirebaseAudit,
+) -> bool {
+    if audit.issues.is_empty() {
+        return false;
+    }
+
+    *tool = "TOOL_PROGRAMMER".to_string();
+    *role = AgentRole::Executor;
+    command.clear();
+    let repair_order = [
+        "tests/firebase-emulator.test.js",
+        "package.json",
+        "app.js",
+        "firebase-config.js",
+        "firestore.rules",
+        "firebase.json",
+    ];
+    let next_file = repair_order
+        .iter()
+        .copied()
+        .find(|file| audit.repair_files.iter().any(|target| target == file))
+        .or_else(|| audit.repair_files.first().map(String::as_str))
+        .unwrap_or("app.js");
+    *files = vec![next_file.to_string()];
+    let focused = audit
+        .issues
+        .iter()
+        .filter(|issue| issue.contains(next_file))
+        .cloned()
+        .collect::<Vec<_>>();
+    *verifier_diagnostic = if focused.is_empty() {
+        audit.issues.join("\n")
+    } else {
+        focused.join("\n")
+    };
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("herramienta".into(), serde_json::json!("TOOL_PROGRAMMER"));
+        object.insert("comando".into(), serde_json::Value::Null);
+        object.insert("archivos_a_editar".into(), serde_json::json!(files));
+        object.insert("require_all_targets".into(), serde_json::Value::Bool(true));
+        object.insert(
+            "instruccion".into(),
+            serde_json::json!(format!(
+                "Corrige solo el defecto Firebase comprobado en el archivo objetivo. Mantén la Fase 1 funcional; conecta la operación real al SDK modular y al emulador cuando corresponda. No uses valores de proyecto de producción en las pruebas. Devuelve un cambio completo únicamente para {:?}. Diagnóstico en disco:\n{}",
+                next_file, verifier_diagnostic
+            )),
+        );
+        object.insert(
+            "context".into(),
+            serde_json::json!(format!(
+                "Auditoría de integración Firebase, Fase 2:\n{}",
+                verifier_diagnostic
+            )),
+        );
+    }
+    true
+}
+
+fn successful_command_for_world(
+    history: &std::collections::HashSet<String>,
+    command: &str,
+    world_hash: u64,
+) -> bool {
+    history.contains(&format!(
+        "{}|{}",
+        command.trim().to_ascii_lowercase(),
+        world_hash
+    ))
+}
+
+fn is_forced_test_repair(
+    forced_override: Option<&(String, String)>,
+    has_failed_test_run: bool,
+) -> bool {
+    has_failed_test_run
+        && forced_override
+            .map(|(tool, _)| tool == "TOOL_PROGRAMMER")
+            .unwrap_or(false)
+}
+
+fn only_deliverables_review_pending(missing: &[String]) -> bool {
+    !missing.is_empty()
+        && missing
+            .iter()
+            .all(|reason| reason.contains("AC-DELIVERABLES"))
+}
+
+fn consultation_audit_diagnostic_improved(previous: &str, current: &str) -> bool {
+    if previous.trim().is_empty() || current.trim().is_empty() {
+        return false;
+    }
+    let resolved = previous
+        .lines()
+        .filter(|issue| !current.lines().any(|current_issue| current_issue == *issue))
+        .count();
+    let introduced = current
+        .lines()
+        .filter(|issue| {
+            !previous
+                .lines()
+                .any(|previous_issue| previous_issue == *issue)
+        })
+        .count();
+    resolved > introduced
+}
+
+fn update_consultation_audit_stall_count(
+    last_world: &mut Option<u64>,
+    repeated_without_progress: &mut u8,
+    last_diagnostic: &mut String,
+    world: u64,
+    diagnostic: &str,
+) -> u8 {
+    let world_changed = *last_world != Some(world);
+    let diagnostic_improved = consultation_audit_diagnostic_improved(last_diagnostic, diagnostic);
+    if world_changed || diagnostic_improved {
+        *repeated_without_progress = 0;
+    } else {
+        *repeated_without_progress = repeated_without_progress.saturating_add(1);
+    }
+    *last_world = Some(world);
+    *last_diagnostic = diagnostic.to_string();
+    *repeated_without_progress
+}
+
+fn reset_consultation_audit_stall_tracking(
+    last_world: &mut Option<u64>,
+    repeated_without_progress: &mut u8,
+    last_diagnostic: &mut String,
+) {
+    *last_world = None;
+    *repeated_without_progress = 0;
+    last_diagnostic.clear();
+}
+
+fn is_node_test_jest_mock_failure(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    let uses_node_test = lower.contains("node --test") || lower.contains("node:test");
+    uses_node_test
+        && [
+            "jest is not defined",
+            "jest.fn(",
+            ".mockreturnvalue",
+            ".mockimplementation",
+            ".mock.calls",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
+fn is_node_test_undefined_push_failure(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    let uses_node_test = lower.contains("node --test") || lower.contains("node:test");
+    uses_node_test
+        && (lower.contains("cannot read properties of undefined (reading 'push')")
+            || lower.contains("cannot read property 'push' of undefined"))
+}
+
+fn is_node_test_uninitialized_storage_mock_failure(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    let uses_node_test = lower.contains("node --test") || lower.contains("node:test");
+    let points_to_test_file = lower.contains(".test.")
+        || lower.contains("/tests/")
+        || lower.contains("\\tests\\")
+        || lower.contains("test at tests\\");
+    let reads_missing_map_method = lower
+        .contains("cannot read properties of undefined (reading 'set')")
+        || lower.contains("cannot read properties of undefined (reading 'get')")
+        || lower.contains("cannot read property 'set' of undefined")
+        || lower.contains("cannot read property 'get' of undefined");
+    uses_node_test && points_to_test_file && reads_missing_map_method
+}
+
+fn is_node_test_browser_document_failure(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    let uses_node_test = lower.contains("node --test") || lower.contains("node:test");
+    uses_node_test
+        && (lower.contains("referenceerror: document is not defined")
+            || lower.contains("document is not defined"))
+}
+
+fn reuse_or_record_recovery_decision(
+    runtime: &mut crate::core::mission_runtime::MissionRuntime,
+    existing: Option<crate::core::recovery::RecoveryDecision>,
+    tool_name: &str,
+    error: &str,
+) -> crate::core::recovery::RecoveryDecision {
+    existing.unwrap_or_else(|| runtime.plan_recovery(tool_name, error))
+}
+
+fn workspace_changed_after_programmer(
+    affected_files: &[String],
+    physical_files_changed: u32,
+) -> bool {
+    !affected_files.is_empty() || physical_files_changed > 0
+}
+
+fn reset_terminal_retry_circuits_after_success(
+    runtime: &mut crate::core::mission_runtime::MissionRuntime,
+    retry_tracker: &mut crate::core::error_classifier::RetryTracker,
+) {
+    // Only a successful terminal action proves that the terminal failure loop
+    // has recovered. A source-file write alone may be unrelated or may repeat
+    // the same invalid repair (for example, another malformed Cargo.toml).
+    runtime.recovery.record_success("TOOL_TERMINAL");
+    retry_tracker.reset_all();
+}
+
+fn apply_forced_test_repair_override(
+    tool: &mut String,
+    role: &mut AgentRole,
+    command: &mut String,
+    files: &mut Vec<String>,
+    payload: &mut serde_json::Value,
+    diagnostic: &mut String,
+    failed_command: &str,
+    failure_output: &str,
+) {
+    let is_jest_mock_mismatch = is_node_test_jest_mock_failure(failure_output);
+    let is_undefined_push_failure = is_node_test_undefined_push_failure(failure_output);
+    let is_uninitialized_storage_mock =
+        is_node_test_uninitialized_storage_mock_failure(failure_output);
+    let is_browser_document_failure = is_node_test_browser_document_failure(failure_output);
+    if is_jest_mock_mismatch
+        || is_undefined_push_failure
+        || is_uninitialized_storage_mock
+        || is_browser_document_failure
+    {
+        let failure_lower = failure_output.to_ascii_lowercase();
+        let test_files: Vec<String> = files
+            .iter()
+            .filter(|file| {
+                let lower = file.to_ascii_lowercase().replace('\\', "/");
+                let is_test = lower.contains("/test/")
+                    || lower.contains("/tests/")
+                    || lower.contains(".test.")
+                    || lower.contains("_test.")
+                    || lower.starts_with("test/")
+                    || lower.starts_with("tests/");
+                if is_jest_mock_mismatch || is_uninitialized_storage_mock {
+                    is_test
+                } else if is_browser_document_failure {
+                    let is_source =
+                        lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".ts");
+                    let basename = lower.rsplit('/').next().unwrap_or(&lower);
+                    is_source && !is_test && failure_lower.contains(basename)
+                } else {
+                    let basename = lower.rsplit('/').next().unwrap_or(&lower);
+                    is_test || failure_lower.contains(basename)
+                }
+            })
+            .cloned()
+            .collect();
+        if !test_files.is_empty() {
+            *files = test_files;
+        }
+    }
+
+    let guidance = if is_jest_mock_mismatch {
+        "El runner real es node --test. Reescribe completo el archivo de pruebas con import { beforeEach, test } from 'node:test' y assert de 'node:assert/strict'. Simula localStorage con un Map y métodos normales getItem(key), setItem(key, value), removeItem(key) y clear(); reinicia el Map en beforeEach. No uses jest, jest.fn(), mockReturnValue, mockImplementation, mock.calls ni APIs de Vitest; no instales dependencias. Conserva casos que ejerciten las funciones exportadas y comprueba el estado persistido real."
+    } else if is_uninitialized_storage_mock {
+        "La traza apunta al mock de localStorage en el archivo de pruebas: usa this.storage.get/set, pero storage no está inicializado. Reescribe completo únicamente el archivo de pruebas señalado con un Map creado antes de los tests (const storage = new Map()), métodos getItem/setItem/removeItem/clear que usen ese Map y beforeEach para limpiarlo. El runner es node --test: usa node:test y node:assert/strict, elimina Jest mock.calls y no cambies el runner ni app.js para encubrir un defecto del test. Mantén pruebas de cada operación y verifica el estado persistido."
+    } else if is_browser_document_failure {
+        "La prueba Node importa un módulo de navegador que accede a document durante la carga. Conserva las funciones de dominio exportadas para Node y mueve la inicialización de la interfaz detrás de `if (typeof document !== 'undefined')`, comprobando que cada elemento exista antes de registrar eventos. No simules document en los tests para ocultar el defecto ni cambies el runner; edita solo el módulo fuente que aparece en la traza."
+    } else if is_undefined_push_failure {
+        "El runner ya ejecuta las pruebas; corrige el fallo funcional indicado por la traza. Inspecciona la línea de app.js que intenta hacer push sobre undefined y la lectura localStorage que alimenta esa colección. Inicializa colecciones ausentes o JSON inválido como arreglos, conserva las claves y funciones exportadas reales, y ajusta el mock Map de la prueba para sembrar las claves correctas. Mantén los casos y sus aserciones: no elimines ni debilites pruebas, no ocultes el error y no cambies de runner. Si el parche no coincide, vuelve a leer el archivo actual y reemplázalo completo."
+    } else {
+        "Corrige el defecto indicado por la salida de la prueba. Conserva el runner, el stack y las dependencias existentes; no repitas la misma prueba antes de modificar el código."
+    };
+    *tool = "TOOL_PROGRAMMER".to_string();
+    *role = AgentRole::Executor;
+    command.clear();
+    *diagnostic = format!(
+        "Falló el verificador `{}`. Salida relevante: {}. {}",
+        failed_command,
+        truncate_chars(failure_output.trim(), 900),
+        guidance
+    );
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("herramienta".into(), serde_json::json!("TOOL_PROGRAMMER"));
+        object.insert("comando".into(), serde_json::Value::Null);
+        object.insert("archivos_a_editar".into(), serde_json::json!(files));
+        object.insert(
+            "instruccion".into(),
+            serde_json::json!(format!(
+                "Repara el fallo real del verificador antes de volver a probar. Edita únicamente {:?}. Diagnóstico: {}",
+                files, diagnostic
+            )),
+        );
+        object.insert("context".into(), serde_json::json!(diagnostic));
+    }
+}
+
 /// ── Mission Type Classifier ───────────────────────────────────────────────
 /// Classifies the user intent BEFORE entering the LLM loop.
 /// ANALYSIS tasks never enter the Executor — they resolve via TOOL_FINISH from the Planner.
 #[derive(Debug, Clone, PartialEq)]
 enum MissionType {
+    Planning,     // Define an initial scope and phased plan before implementation
     Analysis,     // "analiza", "describe", "explica", "qué hay"
     Construction, // "crea", "implementa", "build"
     Refactor,     // "mejora", "optimiza", "refactoriza"
@@ -407,8 +2170,228 @@ enum MissionType {
     Execution,    // "ejecuta", "corre", "prueba", "testea", "run", "verify"
 }
 
+pub(crate) fn is_initial_plan_request(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    if m.contains("[modo implementacion de plan aprobado]") {
+        return false;
+    }
+    let has_plan_marker = [
+        "plan inicial",
+        "plan preliminar",
+        "plan de inicio",
+        "por ahora este es el plan",
+        "por ahora es el plan",
+    ]
+    .iter()
+    .any(|marker| m.contains(marker));
+    let has_project_goal = [
+        "aplicacion",
+        "aplicación",
+        "sistema",
+        "proyecto",
+        "construir",
+        "construye",
+        "contruir",
+        "desarrollar",
+        "implementar",
+    ]
+    .iter()
+    .any(|cue| m.contains(cue));
+
+    has_plan_marker && has_project_goal
+}
+
+fn planning_tool_allowed(tool: &str) -> bool {
+    matches!(tool, "TOOL_WEB_SEARCH" | "TOOL_FINISH" | "TOOL_THINK")
+}
+
+fn initial_plan_response_complete(response: &str) -> bool {
+    let text = response.to_lowercase();
+    let has_two_phases = text.contains("fase 1") && text.contains("fase 2");
+    let has_deliverables = text.contains("entregable");
+    let has_assumptions = text.contains("supuesto") || text.contains("asuncion");
+    let has_open_decisions = text.contains("decisiones pendientes") || text.contains("preguntas");
+
+    !response.trim().is_empty()
+        && has_two_phases
+        && has_deliverables
+        && has_assumptions
+        && has_open_decisions
+}
+
+fn planning_response_complete(response: &str, research_failed: bool, request: &str) -> bool {
+    if !initial_plan_response_complete(response) {
+        return false;
+    }
+    if !missing_requested_plan_coverage(request, response).is_empty() {
+        return false;
+    }
+    let request_lower = request.to_lowercase();
+    let local_first = request_lower.contains("local")
+        && (request_lower.contains("luego")
+            || request_lower.contains("después")
+            || request_lower.contains("despues"))
+        && (request_lower.contains("firebase") || request_lower.contains("despleg"));
+    if local_first && !plan_tests_locally_before_deploying(response) {
+        return false;
+    }
+    if !research_failed {
+        return true;
+    }
+    let text = response.to_lowercase();
+    text.contains("no se pudo verificar")
+        || text.contains("búsqueda web falló")
+        || text.contains("busqueda web fallo")
+        || text.contains("sin conexión")
+        || text.contains("sin conexion")
+}
+
+fn missing_requested_plan_coverage(request: &str, response: &str) -> Vec<String> {
+    let request = request.to_lowercase();
+    let response = response.to_lowercase();
+    let checks: [(&str, &[&str], &[&str]); 9] = [
+        (
+            "consultas o citas",
+            &["consulta", "cita", "agenda"],
+            &["consulta", "cita", "agenda", "reserv"],
+        ),
+        (
+            "clientes o pacientes",
+            &["cliente", "paciente"],
+            &["cliente", "paciente"],
+        ),
+        (
+            "facturación",
+            &["factur", "facuta", "facut", "invoice"],
+            &["factur", "facuta", "invoice", "comprobante"],
+        ),
+        (
+            "contabilidad",
+            &["contabilidad", "accounting"],
+            &["contabilidad", "accounting", "libro mayor"],
+        ),
+        (
+            "inicio de sesión",
+            &["login", "inicio de sesión", "inicio de sesion", "acceso"],
+            &[
+                "login",
+                "inicio de sesión",
+                "inicio de sesion",
+                "autentic",
+                "acceso",
+            ],
+        ),
+        (
+            "registro de usuarios",
+            &["registro", "crear cuenta"],
+            &["registro", "crear cuenta", "alta de usuario"],
+        ),
+        (
+            "pruebas locales",
+            &["local", "emulador local"],
+            &[
+                "prueba local",
+                "pruebas local",
+                "probar local",
+                "localmente",
+                "emulador local",
+            ],
+        ),
+        ("servicios Firebase", &["firebase"], &["firebase"]),
+        (
+            "despliegue solicitado",
+            &["despleg", "deploy"],
+            &["despleg", "hosting", "publicar", "deploy"],
+        ),
+    ];
+    checks
+        .iter()
+        .filter_map(|(label, triggers, coverage)| {
+            let requested = triggers.iter().any(|term| request.contains(term));
+            let covered = coverage.iter().any(|term| response.contains(term));
+            (requested && !covered).then(|| (*label).to_string())
+        })
+        .collect()
+}
+
+fn plan_tests_locally_before_deploying(response: &str) -> bool {
+    let text = response.to_lowercase();
+    let Some(phase_one) = text.find("fase 1") else {
+        return false;
+    };
+    let Some(phase_two) = text[phase_one + 6..]
+        .find("fase 2")
+        .map(|index| phase_one + 6 + index)
+    else {
+        return false;
+    };
+    let first_phase = &text[phase_one..phase_two];
+    let later_phases = &text[phase_two..];
+    let local_validation = first_phase.contains("local")
+        && [
+            "prueba",
+            "probar",
+            "test",
+            "emulador",
+            "validación",
+            "validacion",
+        ]
+        .iter()
+        .any(|term| first_phase.contains(term));
+    let later_deploy = ["desplieg", "hosting", "publicar", "deploy"]
+        .iter()
+        .any(|term| later_phases.contains(term));
+    local_validation && later_deploy
+}
+
+/// Gives small local models a deterministic escape hatch when they repeatedly
+/// produce a plan that fails the request-aware completion checks.
+fn build_fallback_initial_plan(request: &str, research_failed: bool) -> String {
+    let mut plan = format!(
+        "## Plan inicial\n\n\
+         **Objetivo:** construir una aplicación web de gestión de consultas, con acceso de usuarios, facturación y contabilidad.\n\n\
+         ### Fase 1 — MVP y pruebas locales\n\
+         **Objetivo:** acordar el alcance funcional mínimo e implementar el sistema para ejecutarlo y validarlo localmente antes de publicarlo.\n\
+         **Alcance:** registro e inicio de sesión; perfiles y roles básicos; clientes; agenda y gestión de consultas; emisión y consulta de facturas; y módulo de contabilidad con movimientos y reportes básicos.\n\
+         **Entregables:** aplicación web funcional; persistencia y autenticación probadas con el entorno local o emuladores de Firebase; pruebas de registro, acceso, consultas, facturación y contabilidad.\n\
+         **Condición de salida:** los flujos principales pasan las pruebas locales y se revisan permisos, validación de datos y errores antes de publicar.\n\n\
+         ### Fase 2 — Firebase y despliegue\n\
+         **Objetivo:** configurar los servicios de Firebase para el proyecto y publicar el MVP aprobado.\
+         **Entregables:** Firebase Authentication, Cloud Firestore con reglas de seguridad, configuración de Hosting y despliegue; pruebas de acceso y flujos críticos en el entorno publicado.\
+         **Condición de salida:** el sitio está disponible en Firebase Hosting y las pruebas de humo posteriores al despliegue pasan.\n\n\
+         **Supuestos:** este mandato solicita una hoja de ruta inicial, no comenzar todavía la implementación. “Sistema de consulta” se interpreta como gestión de clientes y consultas/agenda, sin asumir un expediente clínico. La facturación y contabilidad se planifican como módulos, sin inventar reglas fiscales.\n\
+         **Decisiones pendientes para las fases correspondientes:** confirmar el país objetivo antes de definir impuestos, numeración o cumplimiento fiscal; validar los roles y datos específicos de la consulta antes de cerrar el esquema. Estas decisiones no bloquean el diseño ni las pruebas locales iniciales.\n"
+    );
+
+    // Preserve any additional explicit requirements recognized by the same
+    // conservative keyword gate, so fallback cannot silently narrow scope.
+    let additional = missing_requested_plan_coverage(request, &plan);
+    if !additional.is_empty() {
+        plan.push_str("\n**Requisitos explícitos que deben incluirse en el alcance:** ");
+        plan.push_str(&additional.join(", "));
+        plan.push_str(".\n");
+    }
+    if research_failed {
+        plan.push_str("\n**Investigación:** no se pudo verificar información actual de Firebase; por eso las decisiones de configuración deben confirmarse con la documentación oficial antes del despliegue.\n");
+    } else {
+        plan.push_str("\n**Referencias oficiales para validar durante la fase técnica:** [Firebase Local Emulator Suite](https://firebase.google.com/docs/emulator-suite), [Firebase Authentication para web](https://firebase.google.com/docs/auth/web/start), [reglas de seguridad de Firestore](https://firebase.google.com/docs/firestore/security/get-started) y [Firebase Hosting](https://firebase.google.com/docs/hosting).\n");
+    }
+    plan
+}
+
+fn conversational_response(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Null) | None => String::new(),
+        Some(other) => serde_json::to_string_pretty(other).unwrap_or_default(),
+    }
+}
+
 fn classify_mission(msg: &str) -> MissionType {
     let m = msg.to_lowercase();
+    if is_initial_plan_request(&m) {
+        return MissionType::Planning;
+    }
     let execution = [
         "ejecuta",
         "ejecutar",
@@ -879,9 +2862,11 @@ pub async fn run_agent_loop(
     let available_models = match crate::core::env_check::validate_environment(&workspace_path).await
     {
         Ok(report) => {
-            for warning in report.warnings { emit_event(&app_handle, 0, &format!("[ENTORNO] {}", warning), "WARNING"); }
+            for warning in report.warnings {
+                emit_event(&app_handle, 0, &format!("[ENTORNO] {}", warning), "WARNING");
+            }
             report.models
-        },
+        }
         Err(env_errors) => {
             let error_msg = env_errors.join("\n");
             emit_event(
@@ -906,6 +2891,16 @@ pub async fn run_agent_loop(
         &app_handle,
         0,
         &format!("⚙️ [CEREBRO GLOBAL ACTIVO] Modelo: {}", orchestrator_model),
+        "INFO",
+    );
+    emit_event(
+        &app_handle,
+        0,
+        &format!(
+            "[BUILD] Aura Sentinel {} | core={}",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("AURA_CORE_SOURCE_FINGERPRINT").unwrap_or("unavailable")
+        ),
         "INFO",
     );
 
@@ -1009,6 +3004,8 @@ pub async fn run_agent_loop(
         std::collections::HashSet::new();
     let mut comandos_ejecutados_historico: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    let mut comandos_exitosos_historico: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     let mut paquetes_instalados_historico: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     let mut architect_used = false;
@@ -1019,16 +3016,46 @@ pub async fn run_agent_loop(
     let mut verifier_failures = 0u32;
     let mut last_failed_verifier_world: Option<u64> = None;
     let mut repeated_verifier_without_change = 0u32;
+    let mut last_consultation_audit_world: Option<u64> = None;
+    let mut repeated_consultation_audit_without_change = 0u8;
+    let mut last_consultation_audit_diagnostic = String::new();
+    let mut last_firebase_audit_world: Option<u64> = None;
+    let mut repeated_firebase_audit_without_change = 0u8;
+    let mut last_firebase_audit_diagnostic = String::new();
     let mut verifier_diagnostic = String::new();
-    let mut original_prompt_parsed =
-        if let Some(idx) = user_message.find("\n\nGuía de Traducción Técnica") {
-            let text = &user_message[..idx];
-            text.replace("Petición Original del Usuario: ", "")
-                .trim()
-                .to_string()
-        } else {
-            user_message.clone()
-        };
+    let mut last_failed_test_run: Option<(String, String)> = None;
+    let mut scoped_review_blocked_actions = 0u8;
+    let mut journal = crate::core::session_journal::load_journal(&workspace_path);
+    let is_continuation_command = crate::core::intent_router::is_resume_command(&user_message);
+    let is_contextual_follow_up =
+        crate::core::intent_router::is_contextual_follow_up(&user_message);
+    let current_turn_instruction =
+        crate::core::intent_router::contextual_follow_up_instruction(&user_message)
+            .unwrap_or(&user_message)
+            .to_string();
+    let mut original_prompt_parsed = if let Some(objective) =
+        crate::core::intent_router::contextual_follow_up_objective(&user_message)
+    {
+        objective.trim().to_string()
+    } else if let Some(idx) = user_message.find("\n\nGuía de Traducción Técnica") {
+        let text = &user_message[..idx];
+        text.replace("Petición Original del Usuario: ", "")
+            .trim()
+            .to_string()
+    } else {
+        user_message.clone()
+    };
+    // Resolve a resume request from the journal before classifying its scope;
+    // the literal message "continua" does not describe the saved task.
+    if is_continuation_command && !journal.objetivo.trim().is_empty() {
+        original_prompt_parsed = journal.objetivo.clone();
+    }
+    let scoped_visual_review_instruction = resolve_scoped_visual_review_instruction(
+        &current_turn_instruction,
+        &journal.objetivo,
+        is_continuation_command,
+    );
+    let scoped_visual_review = scoped_visual_review_instruction.is_some();
     let mut _no_tests_consecutive = 0u32;
     let mut think_consecutive = 0u32;
     let mut _programmer_consecutive = 0u32; // reserved for future per-tool cooldown
@@ -1045,10 +3072,15 @@ pub async fn run_agent_loop(
 
     // ── Mandatory Tool Checklist (Bug 1 fix) ──────────────────────────────────
     // Parse user_message for required tools and enforce them before TOOL_FINISH.
+    let browser_interaction_validation_required =
+        mission_requires_browser_interaction_verification(&original_prompt_parsed);
     let mandatory_tools_required: std::collections::HashSet<String> = {
         let mut required = std::collections::HashSet::new();
         let msg_upper = original_prompt_parsed.to_uppercase();
         if msg_upper.contains("TOOL_TESTER") {
+            required.insert("TOOL_TESTER".to_string());
+        }
+        if browser_interaction_validation_required {
             required.insert("TOOL_TESTER".to_string());
         }
         if msg_upper.contains("TOOL_VISION_EVALUATOR") {
@@ -1061,7 +3093,23 @@ pub async fn run_agent_loop(
     };
     let mut mandatory_tools_executed: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    let mut visual_validation_required =
+        mission_requires_visual_verification(&original_prompt_parsed, &workspace_path)
+            || scoped_visual_review;
+    let mut visual_validation_world_hash: Option<u64> = None;
+    let mut browser_interaction_validation_world_hash: Option<u64> = None;
+    let mut visual_validation_error: Option<String> = None;
+    let mut visual_validation_result: Option<String> = None;
+    let mut visual_validation_error_world_hash: Option<u64> = None;
+    let mut visual_validation_attempts = 0u32;
+    let mut visual_finish_recovery_attempts = 0u32;
+    let mut console_runtime_recovery_attempts = 0u32;
+    let mut last_local_ui_url: Option<String> = None;
+    let mut last_background_task_id: Option<String> = None;
+    let mut last_http_server_task_id: Option<String> = None;
+    let mut local_http_server_read_attempts = 0u8;
     let mut forced_next_tool: Option<(String, String)> = None;
+    let mut pending_user_approval: Option<crate::core::policy::ActionProposal> = None;
     let mut last_stall_recovery_step: u32 = 0; // prevent recovering from the same stall on consecutive steps
     let mut intercept_consecutive: u32 = 0; // track consecutive LLM disobedience
     let mut ask_user_consecutive: u32 = 0; // track consecutive user questions to prevent stalling loops
@@ -1076,10 +3124,12 @@ pub async fn run_agent_loop(
         std::collections::VecDeque::with_capacity(7);
 
     let mut retry_tracker = crate::core::error_classifier::RetryTracker::new();
-    let mut agent_workspace = chronos_vfs::workspace::AgentWorkspace::<
-        chronos_vfs::aura_bridge::AuraAstNode,
-    >::new(1_048_576)
-    .unwrap();
+    let agent_workspace = std::sync::Arc::new(std::sync::Mutex::new(
+        chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(
+            1_048_576,
+        )
+        .unwrap(),
+    ));
     // ── Context Window Tiered Monitor (Devin 2.0 / OSS 2025 Pattern) ────────
     let context_monitor =
         crate::core::context_monitor::ContextMonitor::new(12000, &original_prompt_parsed);
@@ -1091,12 +3141,20 @@ pub async fn run_agent_loop(
     // ── Fase 5: Sanity Monitor state ─────────────────────────────────────────
     let mut tool_history: Vec<String> = Vec::new();
     let mut last_progress_step: u32 = 1;
+    let mut programmer_stall_recoveries = 0u8;
+    let mut programmer_calls_since_validation = 0u8;
 
     // ── FASE B: Cached Workspace Tree (RAM invalidation on file modification) ──
     let mut _no_verify_consecutive: u32 = 0;
     // ── Mission Type Classifier ─────────────────────────────────────────────
-    let mission_type = classify_mission(&original_prompt_parsed);
+    let mission_type = if scoped_visual_review {
+        MissionType::Execution
+    } else {
+        classify_mission(&original_prompt_parsed)
+    };
+    let mut planning_research_failed = false;
     let mission_label = match &mission_type {
+        MissionType::Planning => "📐 PLAN INICIAL",
         MissionType::Analysis => "🔍 ANÁLISIS",
         MissionType::Construction => "🏗️ CONSTRUCCIÓN",
         MissionType::Refactor => "♻️ REFACTORING",
@@ -1108,22 +3166,35 @@ pub async fn run_agent_loop(
         current_role = AgentRole::Executor;
     }
 
+    // A broad plan that explicitly names Firebase depends on current platform
+    // capabilities. Make one bounded research attempt instead of relying on a
+    // small local model to remember that it should search.
+    if mission_type == MissionType::Planning
+        && original_prompt_parsed.to_lowercase().contains("firebase")
+    {
+        forced_next_tool = Some((
+            "TOOL_WEB_SEARCH".to_string(),
+            "Investiga una vez documentación oficial actual de Firebase sobre autenticación, Firestore y Hosting. Si la búsqueda falla, continúa indicando que no se pudo verificar.".to_string(),
+        ));
+    }
+
     // ── Acceptance Contract ─────────────────────────────────────────────────
     let mut acceptance_contract: Option<String> = None;
 
     let mut json_error_count = 0;
+    let mut consecutive_schema_errors = 0u8;
 
     // ── Session Journal ────────────────────────────────────────
-    let mut journal = crate::core::session_journal::load_journal(&workspace_path);
-
-    // ── Check if the user is sending a continuation command ──
-    let is_continuation_command = crate::core::intent_router::is_resume_command(&user_message);
-
     // ── Fase 1: Register workspace in global index for auto-resume ────────────
     crate::core::mission_persist::register_workspace(&workspace_path);
 
     // ── Fase 3: Inject episodic memory context ────────────────────────────────
-    let episode_context = crate::core::episodic_memory::get_episode_context(3);
+    let episode_context =
+        if should_inject_prior_episodes(is_continuation_command, is_contextual_follow_up) {
+            crate::core::episodic_memory::get_episode_context(&workspace_path, 3)
+        } else {
+            String::new()
+        };
     if !episode_context.is_empty() {
         current_context.push_str(&episode_context);
     }
@@ -1132,23 +3203,30 @@ pub async fn run_agent_loop(
     let exp_context = crate::core::experience::ExperienceStore::build_experience_context(
         &original_prompt_parsed,
         "",
+        &workspace_path,
     );
     if !exp_context.is_empty() {
         current_context.push_str(&exp_context);
     }
 
     // ── FASE C: Inyectar Lecciones Consolidadas de Proyectos Previos ────────────
-    let proactive_lessons = crate::core::memory::get_proactive_lessons(3).await;
+    let proactive_lessons = crate::core::memory::get_proactive_lessons(&workspace_path, 3).await;
     if !proactive_lessons.is_empty() {
         current_context.push_str(&proactive_lessons);
     }
 
-    if is_continuation_command && !journal.objetivo.is_empty() {
+    if (is_continuation_command || is_contextual_follow_up) && !journal.objetivo.is_empty() {
         // Retain original mission objective and existing phases!
         journal = crate::core::session_journal::resume_existing_mission(&workspace_path)?;
-        user_message = journal.objetivo.clone();
         original_prompt_parsed = journal.objetivo.clone();
-        journal.interrupted = true; // Signals restoration block below
+        if !is_contextual_follow_up {
+            user_message = journal.objetivo.clone();
+        }
+        // A contextual edit gets a fresh planner turn with the new instruction.
+        // Explicit resume alone restores the previous serialized FSM context.
+        if !is_contextual_follow_up {
+            journal.interrupted = true;
+        }
     } else {
         // Any new user prompt (not an explicit continuation) starts a completely clean session
         journal = crate::core::session_journal::start_new_mission(&workspace_path, &user_message)?;
@@ -1159,20 +3237,60 @@ pub async fn run_agent_loop(
 
     // ── MissionRuntime: cognitive governor built AFTER objective is resolved ──
     // This ensures the runtime contract has the correct objective for continuations.
+    let runtime_objective = if scoped_visual_review {
+        scoped_visual_review_instruction
+            .clone()
+            .unwrap_or_else(|| current_turn_instruction.clone())
+    } else if is_contextual_follow_up {
+        format!(
+            "{}\n\nInstrucción incremental aprobada por el usuario:\n{}",
+            original_prompt_parsed,
+            crate::core::intent_router::contextual_follow_up_instruction(&user_message)
+                .unwrap_or(&user_message)
+        )
+    } else {
+        original_prompt_parsed.clone()
+    };
+    let scoped_budget = if scoped_visual_review { 18 } else { 50 };
     let mut runtime = crate::core::mission_runtime::MissionRuntime::new(
         &workspace_path,
-        &original_prompt_parsed, // <-- now guaranteed to be the resolved objective
-        50,
+        &runtime_objective,
+        scoped_budget,
     );
 
+    if scoped_visual_review {
+        runtime.contract = crate::core::mission_contract::MissionContract::new(&runtime_objective);
+        runtime.contract.add_criterion(
+            "AC-REVIEW-TESTS",
+            "Pruebas funcionales ya configuradas ejecutadas, si el proyecto dispone de ellas",
+            crate::core::mission_contract::VerificationMethod::TestPassed,
+            false,
+        );
+    }
+
     // Initial contract criteria: every mission must have explicit deliverables & validation
-    if runtime.contract.acceptance_criteria.is_empty() && runtime.contract.required_evidence.is_empty() {
-        runtime.contract = crate::core::mission_contract::MissionContract::from_objective(&original_prompt_parsed);
+    if runtime.contract.acceptance_criteria.is_empty()
+        && runtime.contract.required_evidence.is_empty()
+    {
+        runtime.contract =
+            crate::core::mission_contract::MissionContract::from_objective(&runtime_objective);
+    }
+    if mission_type == MissionType::Planning {
+        for criterion in &mut runtime.contract.acceptance_criteria {
+            if matches!(
+                criterion.verification,
+                crate::core::mission_contract::VerificationMethod::ManualReview
+            ) {
+                criterion.description =
+                    "La hoja de ruta inicial refleja el objetivo y separa supuestos de decisiones pendientes."
+                        .to_string();
+            }
+        }
     }
 
     match crate::core::managed_verifier::ensure_for_mission(
         &workspace_path,
-        &original_prompt_parsed,
+        &runtime_objective,
         &runtime.contract,
     ) {
         Ok(Some(file)) => emit_event(
@@ -1192,9 +3310,16 @@ pub async fn run_agent_loop(
     }
 
     // ── FINAL-6: Register all tool executors with ToolRegistry ────────────────
-    // Must happen BEFORE the mission loop. ToolRegistry is now the sole dispatch
-    // authority — execute_action() resolves which code runs via registry, not ad-hoc.
-    register_default_tools(&mut runtime, &workspace_path, &original_prompt_parsed);
+    // Register concrete adapters before the mission loop. Every known action passes
+    // the runtime authorization gate; executor-backed actions dispatch through this table.
+    register_default_tools(
+        &mut runtime,
+        &workspace_path,
+        &original_prompt_parsed,
+        Some(app_handle.clone()),
+        orchestrator_model.clone(),
+        agent_workspace.clone(),
+    );
     emit_event(&app_handle, 0, &format!("Herramientas registradas: {}. La disponibilidad de sus dependencias se comprueba al ejecutarlas.", runtime.tool_registry.registered_count()), "INFO");
 
     // ── AL-v1: Adaptive Learning Setup ───────────────────────────────────────
@@ -1214,39 +3339,100 @@ pub async fn run_agent_loop(
     let al_strategy_stats = al_persistence.load_strategy_stats();
     let al_router = crate::core::learning::AdaptiveRouter::new(
         al_model_stats,
-        al_strategy_stats,
+        al_strategy_stats.clone(),
         al_store.clone(),
         &runtime.mission_id,
     );
+    let mut adaptive_text_models = available_models
+        .iter()
+        .filter(|model| is_adaptive_text_model_candidate(model))
+        .cloned()
+        .collect::<Vec<_>>();
+    if adaptive_text_models.is_empty() {
+        adaptive_text_models.push(orchestrator_model.clone());
+    }
     let al_recommendation = al_router
         .recommend_with_context(
             &al_fingerprint,
             None,                             // No StateSignature yet at mission start
             Some(runtime.budget_remaining()), // remaining budget from runtime
-            &available_models,
+            &adaptive_text_models,
         )
         .await;
+    let recommended_strategy_stats = al_strategy_stats
+        .get(al_recommendation.strategy.as_str())
+        .cloned()
+        .unwrap_or_default();
+    let use_learned_strategy = learned_strategy_has_reliable_evidence(
+        al_recommendation.confidence,
+        &al_recommendation.reason,
+        recommended_strategy_stats.attempts,
+        recommended_strategy_stats.failures,
+    );
+    let applied_strategy = if use_learned_strategy {
+        al_recommendation.strategy.clone()
+    } else {
+        crate::core::learning::strategy::StrategyKind::default_for(&al_fingerprint)
+    };
+    let applied_strategy_confidence = if use_learned_strategy {
+        al_recommendation.confidence
+    } else {
+        0.5
+    };
+    let strategy_source = if use_learned_strategy {
+        "recomendación histórica con confianza suficiente"
+    } else {
+        "estrategia segura por tipo de tarea"
+    };
     let al_engine = crate::core::learning::LearningEngine::with_store(al_store.clone());
     let al_start_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+    macro_rules! persist_and_learn_failure {
+        ($reason:expr) => {{
+            let failure_reason: &str = $reason;
+            persist_failed_journal(
+                &mut journal,
+                &workspace_path,
+                &app_handle,
+                runtime.current_step(),
+                failure_reason,
+            );
+            record_adaptive_failure(
+                &al_engine,
+                &al_fingerprint,
+                &orchestrator_model,
+                &applied_strategy,
+                applied_strategy_confidence,
+                &runtime,
+                al_start_ms,
+                failure_reason,
+            )
+            .await;
+        }};
+    }
     emit_event(
         &app_handle,
         0,
         &format!(
-            "[ADAPTIVE LEARNING] Recomendación no aplicada: {:?} | Modelo sugerido: {} (confianza: {:.0}%). Se conserva el modelo seleccionado.",
-            al_recommendation.strategy,
+            "[ADAPTIVE LEARNING] Modelo candidato: {} ({:.0}%); modelo activo: {}. Estrategia aplicada: {:?} ({}, {:.0}%).",
             al_recommendation.model,
-            al_recommendation.confidence * 100.0
+            al_recommendation.confidence * 100.0,
+            orchestrator_model,
+            applied_strategy,
+            strategy_source,
+            applied_strategy_confidence * 100.0
         ),
         "INFO",
     );
 
     journal.workspace_path = workspace_path.clone();
     journal.status = "EN_PROGRESO".to_string();
-    journal.herramientas_usadas.clear();
-    journal.archivos_tocados.clear();
+    if !is_contextual_follow_up && !is_continuation_command {
+        journal.herramientas_usadas.clear();
+        journal.archivos_tocados.clear();
+    }
     if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) {
         emit_event(
             &app_handle,
@@ -1304,9 +3490,27 @@ pub async fn run_agent_loop(
     // =======================================================
     // PESP v2 — Generación del Plan de Fases (Paso 0)
     // =======================================================
-    if !journal.plan_generado
+    let approved_consultation_task = !scoped_visual_review
+        && crate::llm::phase_planner::is_approved_consultation_web_task(&original_prompt_parsed);
+    let local_consultation_agenda_task = !scoped_visual_review
+        && crate::llm::phase_planner::is_local_consultation_agenda_task(&original_prompt_parsed);
+    let local_agenda_plan_needs_recovery =
+        needs_local_consultation_agenda_plan_recovery(local_consultation_agenda_task, &journal);
+    let prior_plan_needs_recovery =
+        needs_approved_plan_recovery(approved_consultation_task, &journal)
+            || local_agenda_plan_needs_recovery;
+    if !scoped_visual_review
+        && (!journal.plan_generado || prior_plan_needs_recovery)
         && (mission_type == MissionType::Construction || mission_type == MissionType::Refactor)
     {
+        if prior_plan_needs_recovery {
+            let recovery_message = if approved_consultation_task {
+                "[PESP RECUPERACIÓN] Actualizando las fases Firebase; se conserva como completada la Fase 1 aprobada y se reabre la integración sin prueba propia."
+            } else {
+                "[PESP RECUPERACIÓN] El plan anterior omitió funciones del mandato local; se restaura una fase completa y se conservan los archivos existentes."
+            };
+            emit_event(&app_handle, 0, recovery_message, "WARNING");
+        }
         emit_event(
             &app_handle,
             0,
@@ -1320,8 +3524,28 @@ pub async fn run_agent_loop(
         )
         .await;
 
+        let previous_phases = journal.fases.clone();
         journal.fases = fases.clone();
-        journal.fase_actual = 0;
+        if prior_plan_needs_recovery {
+            let phase_one_was_complete = previous_phases
+                .iter()
+                .find(|phase| phase.numero == 1)
+                .is_some_and(|phase| phase.estado == "COMPLETADA");
+            for phase in &mut journal.fases {
+                phase.estado = "PENDIENTE".to_string();
+            }
+            journal.fase_actual = if phase_one_was_complete && journal.fases.len() > 1 {
+                journal.fases[0].estado = "COMPLETADA".to_string();
+                1
+            } else {
+                0
+            };
+            if let Some(current_phase) = journal.fases.get_mut(journal.fase_actual) {
+                current_phase.estado = "EN_PROGRESO".to_string();
+            }
+        } else {
+            journal.fase_actual = 0;
+        }
         journal.plan_generado = true;
         if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) {
             emit_event(
@@ -1349,6 +3573,10 @@ pub async fn run_agent_loop(
             "SUCCESS",
         );
     }
+    visual_validation_required |= journal
+        .fases
+        .get(journal.fase_actual)
+        .is_some_and(|phase| phase_has_visual_deliverable(&phase.archivos));
     let mut _task_complexity = crate::llm::router::TaskContext {
         task_type: crate::llm::router::TaskType::GeneralCode,
         language: None,
@@ -1389,6 +3617,109 @@ pub async fn run_agent_loop(
             }
         }
         emit_event(&app_handle, runtime.current_step(), &format!("[SESSION RESTORED] Misión retomada exitosamente desde el paso {}. Presupuesto activo extendido a {} pasos.", runtime.current_step(), runtime.budget_remaining()), "SUCCESS");
+    }
+    if prior_plan_needs_recovery {
+        current_role = AgentRole::Planner;
+        let phase_summary = journal
+            .fases
+            .iter()
+            .map(|phase| {
+                format!(
+                    "Fase {} [{}]: {} | archivos: {:?} | criterio: {}",
+                    phase.numero,
+                    phase.estado,
+                    phase.descripcion,
+                    phase.archivos,
+                    phase.criterio_de_exito
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        current_context = if approved_consultation_task {
+            format!(
+                "[CONTEXTO RECUPERADO DESDE LA HOJA DE RUTA APROBADA]\nObjetivo original: {}\n\nPlan de fases restaurado:\n{}\n\nLa ejecución anterior perdió el plan y probó herramientas/archivos ajenos al producto. Ignora intentos de Python, Flask, requirements.txt, README.md como entregable y búsquedas repetidas. Conserva los archivos existentes, completa progresivamente solo los archivos de la fase actual y ejecuta su criterio de aceptación. Para la fase MVP usa HTML, CSS, JavaScript, módulos ES y node:test sin dependencias adicionales. La autenticación local es una demostración; no declares seguridad de producción. No avances a Firebase Hosting antes de que npm test pase.\n",
+                original_prompt_parsed, phase_summary
+            )
+        } else {
+            format!(
+                "[CONTEXTO RESTAURADO CON COBERTURA COMPLETA DEL MANDATO LOCAL]\nObjetivo original: {}\n\nFase restaurada:\n{}\n\nEl plan anterior omitía funciones solicitadas. Conserva los archivos actuales y amplíalos; no vuelvas a crear la estructura básica si ya existe. Implementa todos los flujos enumerados, inicia el servidor HTTP local sin instalar paquetes y valida cada flujo en navegador, escritorio y móvil; revisa la consola. No crees archivos de prueba o configuración vacíos. No uses Firebase ni despliegues. No declares éxito sin evidencia real.\n",
+                original_prompt_parsed, phase_summary
+            )
+        };
+        if !episode_context.is_empty() {
+            current_context.push_str(&episode_context);
+        }
+        if !journal.ultimo_estado.trim().is_empty() {
+            current_context.push_str(&format!(
+                "[DIAGNÓSTICO REAL DEL ÚLTIMO INTENTO FALLIDO — NO REPETIR ESA RUTA]: {}\nConserva los archivos actuales, resuelve este bloqueo y avanza al siguiente criterio verificable.\n\n",
+                journal.ultimo_estado.chars().take(1000).collect::<String>()
+            ));
+        }
+        journal.fsm_role = Some("Planner".to_string());
+        journal.fsm_context = Some(current_context.clone());
+        if let Err(error) = crate::core::session_journal::save_journal(&workspace_path, &journal) {
+            let final_res = FinalResponse {
+                status: "ERROR".to_string(),
+                respuesta_conversacional: format!("[PERSISTENCE_FAILURE] No se pudo guardar la recuperación del plan aprobado: {}", error),
+            };
+            return Ok(serde_json::to_string(&final_res).unwrap());
+        }
+        emit_event(
+            &app_handle,
+            runtime.current_step(),
+            "[PESP RECUPERACIÓN] Se descartó el rol/contexto obsoleto y se restauró el plan aprobado sin borrar archivos.",
+            "SUCCESS",
+        );
+    }
+    if approved_consultation_task
+        && mission_type == MissionType::Construction
+        && current_role == AgentRole::Planner
+        && forced_next_tool.is_none()
+    {
+        let phase = journal
+            .fases
+            .get(journal.fase_actual)
+            .map(|phase| format!("Fase {}: {}", phase.numero, phase.descripcion))
+            .unwrap_or_else(|| "la fase local aprobada".to_string());
+        forced_next_tool = Some((
+            "TOOL_THINK".to_string(),
+            format!("La hoja de ruta de la aplicación web ya fue aprobada. No investigues de nuevo ni cambies de tecnología. Transfiere el control al Ejecutor para completar {} con los entregables y pruebas definidos.", phase),
+        ));
+    }
+    if is_contextual_follow_up {
+        current_context.push_str(&format!(
+            "[INSTRUCCIÓN NUEVA SOBRE LA MISIÓN ACTIVA — conservar fases y requisitos no contradictorios]:\n{}\n\n",
+            user_message
+        ));
+    }
+    if scoped_visual_review {
+        let phase = journal
+            .fases
+            .get(journal.fase_actual)
+            .map(|phase| {
+                format!(
+                    "Fase {} [{}]: {}",
+                    phase.numero, phase.estado, phase.descripcion
+                )
+            })
+            .unwrap_or_else(|| "sin fase activa".to_string());
+        current_role = AgentRole::Critic;
+        // Start with a bounded, read-only inventory so a weak model does not
+        // spend its first turns asking what to inspect or inventing modules.
+        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "dir /b".to_string()));
+        current_context = format!(
+            "[REVISIÓN VISUAL AISLADA — NO REABRIR OTRAS FASES]\nPetición de esta intervención: {}\nObjetivo persistido: {}\nFase persistida que debe conservarse: {phase}.\nRevisa solo la interfaz ya creada: inspecciona los comandos existentes, ejecuta las pruebas disponibles y levanta la app localmente para que el Crítico capture y evalúe la página real. No edites archivos en una solicitud de revisión; informa los defectos y conserva pendiente la fase original. No ejecutes Firebase ni intentes Hosting salvo que la petición actual lo solicite expresamente.\n",
+            scoped_visual_review_instruction
+                .as_deref()
+                .unwrap_or(&current_turn_instruction),
+            journal.objetivo
+        );
+        emit_event(
+            &app_handle,
+            runtime.current_step(),
+            "[MODO REVISION VISUAL AISLADA] La petición actual inspeccionará la página; el avance Firebase guardado se conserva y no se ejecutará en esta revisión.",
+            "INFO",
+        );
     }
 
     while !runtime.is_budget_exhausted() {
@@ -1523,6 +3854,72 @@ pub async fn run_agent_loop(
             }
         }
 
+        // Count writes across intervening reflections and failed commands too.
+        // Otherwise a think/dir/error cycle can evade the consecutive-tool guard.
+        let repeated_programmer_calls = programmer_calls_since_validation as usize;
+        let can_replace_forced_action = matches!(
+            forced_next_tool.as_ref().map(|(tool, _)| tool.as_str()),
+            None | Some("TOOL_THINK") | Some("TOOL_PROGRAMMER")
+        );
+        if repeated_programmer_calls >= MAX_PROGRAMMER_CALLS_WITHOUT_VALIDATION as usize
+            && can_replace_forced_action
+        {
+            if programmer_stall_recoveries >= MAX_PROGRAMMER_STALL_RECOVERIES {
+                let message = format!(
+                    "NO_PROGRESS_EXHAUSTED: TOOL_PROGRAMMER volvió al ciclo de escritura en {} ocasiones sin cerrar el contrato de aceptación. La misión se detuvo antes de consumir los 50 pasos; los archivos existentes se conservaron para continuar.",
+                    programmer_stall_recoveries
+                );
+                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                persist_and_learn_failure!(&message);
+                return Ok(serde_json::json!({
+                    "status": "INCOMPLETE",
+                    "respuesta_conversacional": message
+                })
+                .to_string());
+            }
+
+            let validation_command = programmer_loop_validation_command(
+                &runtime.state_anchor.existing_files,
+                &runtime.contract,
+                &workspace_path,
+            );
+            let Some(command) = validation_command else {
+                let message = "NO_PROGRESS_EXHAUSTED: El agente repitió escrituras sin un comando de verificación disponible. La misión se detuvo antes de consumir los 50 pasos y conservó los archivos; no se declararon pruebas ni resultados.".to_string();
+                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                persist_and_learn_failure!(&message);
+                return Ok(serde_json::json!({
+                    "status": "INCOMPLETE",
+                    "respuesta_conversacional": message
+                })
+                .to_string());
+            };
+
+            programmer_stall_recoveries = programmer_stall_recoveries.saturating_add(1);
+            programmer_calls_since_validation = 0;
+            current_role = AgentRole::Critic;
+            forced_next_tool = Some((
+                "TOOL_TERMINAL".to_string(),
+                format!(
+                    "Ejecuta ahora la verificación disponible con comando='{}'; no vuelvas a escribir archivos antes de conocer el resultado.",
+                    command
+                ),
+            ));
+            current_context.push_str(&format!(
+                "[NO-PROGRESS GUARD] Se interrumpió el ciclo de escrituras repetidas. Ejecuta `{command}` y usa su resultado real para decidir el siguiente paso.\n\n"
+            ));
+            emit_event(
+                &app_handle,
+                runtime.current_step(),
+                &format!(
+                    "[NO-PROGRESS GUARD] {} llamadas seguidas a TOOL_PROGRAMMER; forzando validación {} de {}.",
+                    repeated_programmer_calls,
+                    programmer_stall_recoveries,
+                    MAX_PROGRAMMER_STALL_RECOVERIES
+                ),
+                "WARNING",
+            );
+        }
+
         // ── EMERGENCY EXIT: step budget exhausted ────────────────────────
         if runtime.is_budget_exhausted() {
             // ── Evaluate CompletionGate before claiming success at budget limit ──
@@ -1580,9 +3977,9 @@ pub async fn run_agent_loop(
                     .record_outcome(
                         al_fingerprint.clone(),
                         orchestrator_model.clone(),
-                        al_recommendation.strategy.clone(),
+                        applied_strategy.clone(),
                         al_result,
-                        al_recommendation.confidence,
+                        applied_strategy_confidence,
                         runtime.mission_id.clone(),
                         None,
                     )
@@ -1626,9 +4023,9 @@ pub async fn run_agent_loop(
                     .record_outcome(
                         al_fingerprint.clone(),
                         orchestrator_model.clone(),
-                        al_recommendation.strategy.clone(),
+                        applied_strategy.clone(),
                         al_result,
-                        al_recommendation.confidence,
+                        applied_strategy_confidence,
                         runtime.mission_id.clone(),
                         None,
                     )
@@ -1794,7 +4191,7 @@ pub async fn run_agent_loop(
         // ── Context Window Tiered Monitor & Intelligent Compaction (Devin 2.0 / OSS 2025 Pattern) ──
         let (fill_pct, ctx_status) = context_monitor.status(current_context.len());
         if context_monitor.should_compact(current_context.len()) {
-            emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Compactando ventana de contexto ({:.0}% uso) preservando Objetivo Inmutable...", fill_pct.min(1.0) * 100.0), "INFO");
+            emit_event(&app_handle, runtime.current_step(), &format!("[MEMORIA] Compactando historial activo ({:.0}% del límite interno por tamaño de texto, no por tokens); preservando objetivo y estado...", fill_pct.min(1.0) * 100.0), "INFO");
             let anchor_block = runtime.state_anchor.format_prompt_block();
             current_context = context_monitor.compact_context(&current_context, &anchor_block);
             emit_event(
@@ -1808,11 +4205,160 @@ pub async fn run_agent_loop(
                 &app_handle,
                 runtime.current_step(),
                 &format!(
-                    "[MEMORIA] Ventana al {:.0}% de capacidad — operando con normalidad.",
+                    "[MEMORIA] Historial activo al {:.0}% del límite interno por tamaño de texto; no representa tokens del modelo.",
                     fill_pct.min(1.0) * 100.0
                 ),
                 "INFO",
             );
+        }
+
+        // Audit the approved first-phase MVP before spending an orchestrator
+        // turn on validation. Existing filenames can belong to a prior failed
+        // run and are not proof that the behavior or tests were implemented.
+        let consultation_mvp_audit = if approved_consultation_task
+            && journal.fase_actual == 0
+            && phase_pending_programmer_file(&journal, &workspace_path).is_none()
+        {
+            Some(crate::llm::phase_planner::audit_consultation_mvp(
+                std::path::Path::new(&workspace_path),
+            ))
+        } else {
+            None
+        };
+        if let Some(audit) = consultation_mvp_audit
+            .as_ref()
+            .filter(|audit| !audit.issues.is_empty())
+        {
+            let audit_world = runtime.current_world_hash();
+            let diagnostic = audit.issues.join("\n");
+            update_consultation_audit_stall_count(
+                &mut last_consultation_audit_world,
+                &mut repeated_consultation_audit_without_change,
+                &mut last_consultation_audit_diagnostic,
+                audit_world,
+                &diagnostic,
+            );
+            if repeated_consultation_audit_without_change >= 2 {
+                let message = format!(
+                    "CONSULTATION_MVP_REPAIR_EXHAUSTED: dos reparaciones no cambiaron el workspace; se conservan los archivos y el diagnóstico. {}",
+                    diagnostic
+                );
+                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                persist_and_learn_failure!(&message);
+                return Ok(
+                    serde_json::json!({"status":"ERROR", "respuesta_conversacional":message})
+                        .to_string(),
+                );
+            }
+            verifier_diagnostic = diagnostic.clone();
+            current_role = AgentRole::Executor;
+            let reason = format!(
+                "La auditoría funcional detectó que la Fase 1 sigue incompleta. Corrige estos defectos comprobados sin repetir pruebas: {}. Edita solo {:?}.",
+                diagnostic, audit.repair_files
+            );
+            forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), reason.clone()));
+            current_context.push_str(&format!("[PESP AUDITORÍA FUNCIONAL]: {}\n\n", reason));
+            emit_event(
+                &app_handle,
+                runtime.current_step(),
+                &format!(
+                    "[PESP AUDITORÍA FUNCIONAL] Fase 1 incompleta; reparación obligatoria de {:?}.",
+                    audit.repair_files
+                ),
+                "WARNING",
+            );
+        } else if consultation_mvp_audit.is_some() {
+            last_consultation_audit_world = None;
+            repeated_consultation_audit_without_change = 0;
+            if !last_consultation_audit_diagnostic.is_empty()
+                && verifier_diagnostic == last_consultation_audit_diagnostic
+            {
+                verifier_diagnostic.clear();
+            }
+            last_consultation_audit_diagnostic.clear();
+        }
+
+        // Phase 2 has its own deterministic audit and emulator acceptance run.
+        // Never let the Phase 1 `npm test` command stand in for Firebase Auth /
+        // Firestore integration evidence.
+        let consultation_firebase_audit = if approved_consultation_task && journal.fase_actual == 1
+        {
+            Some(crate::llm::phase_planner::audit_consultation_firebase(
+                std::path::Path::new(&workspace_path),
+            ))
+        } else {
+            None
+        };
+        if let Some(audit) = consultation_firebase_audit.as_ref() {
+            if !audit.issues.is_empty() {
+                let audit_world = runtime.current_world_hash();
+                let diagnostic = audit.issues.join("\n");
+                update_consultation_audit_stall_count(
+                    &mut last_firebase_audit_world,
+                    &mut repeated_firebase_audit_without_change,
+                    &mut last_firebase_audit_diagnostic,
+                    audit_world,
+                    &diagnostic,
+                );
+                if repeated_firebase_audit_without_change >= 2 {
+                    let message = format!(
+                        "FIREBASE_INTEGRATION_REPAIR_EXHAUSTED: dos reparaciones no cambiaron los archivos; se conserva la Fase 1 y se detiene antes de Hosting. {}",
+                        diagnostic
+                    );
+                    emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                    persist_and_learn_failure!(&message);
+                    return Ok(
+                        serde_json::json!({"status":"ERROR", "respuesta_conversacional":message})
+                            .to_string(),
+                    );
+                }
+                verifier_diagnostic = diagnostic.clone();
+                current_role = AgentRole::Executor;
+                let reason = format!(
+                    "La auditoría de Fase 2 detectó una integración Firebase incompleta. Corrige solo los defectos comprobados; usa la configuración demo local y conserva sin cambios la Fase 1: {}. Archivos a reparar: {:?}.",
+                    diagnostic, audit.repair_files
+                );
+                forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), reason.clone()));
+                current_context.push_str(&format!("[PESP AUDITORÍA FIREBASE]: {}\n\n", reason));
+                emit_event(
+                    &app_handle,
+                    runtime.current_step(),
+                    &format!(
+                        "[PESP AUDITORÍA FIREBASE] Fase 2 incompleta; corrección obligatoria de {:?}.",
+                        audit.repair_files
+                    ),
+                    "WARNING",
+                );
+            } else {
+                last_firebase_audit_world = None;
+                repeated_firebase_audit_without_change = 0;
+                last_firebase_audit_diagnostic.clear();
+                let world = runtime.current_world_hash();
+                if !successful_command_for_world(
+                    &comandos_exitosos_historico,
+                    "npm run test:firebase",
+                    world,
+                ) && forced_next_tool.is_none()
+                {
+                    current_role = AgentRole::Executor;
+                    forced_next_tool = Some((
+                        "TOOL_TERMINAL".to_string(),
+                        "Ejecuta ahora el criterio obligatorio de la Fase 2: npm run test:firebase. Este comando debe iniciar Auth y Firestore Emulator y ejecutar las pruebas de integración; npm test solo valida la Fase 1.".to_string(),
+                    ));
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        "[PESP AUDITORÍA FIREBASE] Código conectado; falta evidencia de npm run test:firebase.",
+                        "WARNING",
+                    );
+                } else if forced_next_tool.is_none() {
+                    current_role = AgentRole::Critic;
+                    forced_next_tool = Some((
+                        "TOOL_FINISH".to_string(),
+                        "La auditoría Firebase pasó y npm run test:firebase tuvo éxito en este estado del workspace. Evalúa el cierre de Fase 2 y solicita la aprobación normal antes de pasar a Hosting.".to_string(),
+                    ));
+                }
+            }
         }
 
         let mut forced_override: Option<(String, String)> = None;
@@ -1821,11 +4367,20 @@ pub async fn run_agent_loop(
             current_context.push_str(&format!("{}\n\n", intercept_log));
             forced_override = Some((forced, override_msg));
         }
+        // A failed verifier must be repaired before PESP can select another
+        // acceptance run merely because the planned files already exist.
+        let forced_test_repair =
+            is_forced_test_repair(forced_override.as_ref(), last_failed_test_run.is_some());
 
         let mut extra_prompt = String::new();
         if let Some((forced, reason)) = &forced_override {
             extra_prompt = format!("\n\nACCIÓN REQUERIDA: {}. Genera los argumentos válidos para esta herramienta. Diagnóstico vigente: {}", forced, reason);
         }
+        extra_prompt.push_str(&format!(
+            "\n\n[ESTRATEGIA DE EJECUCIÓN APLICADA: {:?}] {}",
+            applied_strategy,
+            adaptive_strategy_guidance(&applied_strategy)
+        ));
 
         // 🛡️ LIVE WORKSPACE SCAN (Delegated to WorldState & MissionStateAnchor) 🛡️
         // Fix P0: WorldState -> MissionStateAnchor -> Prompt -> LLM single source of truth
@@ -1861,11 +4416,29 @@ pub async fn run_agent_loop(
             String::new()
         };
 
+        let planning_fast_path = if mission_type == MissionType::Planning {
+            "\n\n📐 [MODO PLAN INICIAL]: El usuario pidió una hoja de ruta, no una misión de programación. Cubre explícitamente todos los módulos y restricciones del mandato; no omitas requisitos porque el pedido sea amplio. Divide el MVP en hasta cuatro fases con objetivo, entregables verificables y condición de salida. Respeta el orden solicitado; si se pidió probar localmente antes de desplegar, empieza por estructura y pruebas locales/emuladores y deja Firebase Hosting para una fase posterior. Separa supuestos y decisiones que solo bloquean fases futuras. No pidas el país para comenzar el trabajo local; confirma el país objetivo solo antes de implementar reglas fiscales. El país del usuario no determina automáticamente el mercado del proyecto. Usa TOOL_WEB_SEARCH una vez para documentación oficial actual de Firebase y TOOL_FINISH cuando el plan cubra el encargo."
+                .to_string()
+        } else {
+            String::new()
+        };
+
+        let empty_workspace_rule = if mission_type == MissionType::Planning {
+            "El workspace vacío es esperado en modo plan inicial. No crees archivos de aplicación; presenta la hoja de ruta."
+        } else {
+            "Si el workspace no tiene archivos, usa TOOL_PROGRAMMER para crear los entregables del plan. Si existen, ejecuta el criterio de aceptación de la fase o del contrato. Solo añade pruebas si el proyecto las necesita y usa su lenguaje y runner existentes; nunca elijas Python por defecto ni crees un verificador ajeno al stack. No consultes localhost salvo que un servidor haya sido iniciado y confirmado activo. En Windows la terminal usa cmd.exe: no propongas grep ni sintaxis de PowerShell. No reescribas archivos existentes sin un fallo concreto."
+        };
+
         // ── Acceptance Contract injection ────────────────────────────────────────────────
-        let contract_block = acceptance_contract
+        let mut contract_block = acceptance_contract
             .as_deref()
             .map(|c| format!("[CONTRATO DE ACEPTACION DEL PLANIFICADOR]\n{}\n", c))
             .unwrap_or_default();
+        if let Some((depth, guidance)) = console_validation_profile(&original_prompt_parsed) {
+            contract_block.push_str(&format!(
+                "[PROFUNDIDAD DE VALIDACIÓN CONSOLA: {depth}] {guidance}\n"
+            ));
+        }
 
         // Apply the contamination filter before constructing this turn's prompt.
         // Filtering after prompt creation protected only the following turn.
@@ -1883,11 +4456,20 @@ pub async fn run_agent_loop(
               \"respuesta_conversacional\": \"<respuesta o null>\"\n\
             }}\n\
             REGLAS CRITICAS DEL JSON:
-            1. 'comando' = UN SOLO comando de shell real. NUNCA prosa/descripción. Ejemplos: 'dir', 'start index.html', 'node app.js'.
+            1. 'comando' = UN SOLO comando de shell real. NUNCA prosa/descripción. Ejemplos: 'dir', 'node --check script.js', 'node app.js'. Para un servidor HTTP persistente usa TOOL_BACKGROUND_START; abrir index.html no sustituye el servidor.
             2. 'archivos_a_editar' = Si eliges TOOL_PROGRAMMER, DEBES incluir al menos un nombre de archivo relativo a crear o editar. NUNCA lo dejes vacío [].
-            3. Si el workspace no tiene archivos creados, usa TOOL_PROGRAMMER para crearlos. Si los archivos base ya existen, usa TOOL_TERMINAL para ejecutarlos o probarlos, o TOOL_PROGRAMMER para scripts de test (ej. verify_*.py). PROHIBIDO volver a crear archivos ya existentes.
+            3. {empty_workspace_rule}
             4. El workspace actual es: {ws}. NUNCA uses rutas absolutas de proyectos anteriores ni de otros directorios.",
+            empty_workspace_rule = empty_workspace_rule,
             ws = workspace_path);
+        let json_schema = if scoped_visual_review {
+            format!(
+                "{}\n[REGLA PRIORITARIA DE REVISIÓN SOLO LECTURA — invalida cualquier instrucción anterior de reparación]: No uses TOOL_PROGRAMMER ni ninguna herramienta que cree o modifique archivos. Si una prueba falla o detectas un defecto, documéntalo y continúa la inspección segura; no repares automáticamente. Ejecuta solo pruebas ya configuradas. Inicia la aplicación una sola vez con el comando existente, confirma una URL real en los logs, evalúa la página con TOOL_VISION_EVALUATOR y finaliza con hallazgos y límites comprobados. Si falta una dependencia o configuración, reporta el bloqueo sin instalar, crear archivos ni desplegar.\n",
+                json_schema
+            )
+        } else {
+            json_schema
+        };
 
         let agent_prompt = match current_role {
             // Planner - Enrutamiento Semántico Avanzado (Zero-Hint Routing)
@@ -1895,7 +4477,7 @@ pub async fn run_agent_loop(
                 "{}[PLANIFICADOR / ZERO-HINT ROUTER]\nObjetivo del Usuario: {}\nWorkspace Actual: {}\n{}\nHistorial de Conversación:\n{}\n\n\
                 ERES EL ENRUTADOR PRINCIPAL. Tu misión es analizar la intención del usuario de forma 100% implícita y autónoma, SIN depender de que el usuario mencione herramientas por su nombre.\n\
                 HERRAMIENTAS PERMITIDAS (SELECCIONA POR SEMÁNTICA):\n\
-                - TOOL_LOGIC_SOLVER: Dispara esta herramienta AUTOMÁTICAMENTE si el usuario pide analizar esquemas criptográficos, problemas de satisfacibilidad, paridad matemática, restricciones lógicas, álgebra booleana, grafos densos o cuellos de botella de reglas. (¡El motor SpectraSAT lo resolverá en RAM!).\n\
+                - TOOL_LOGIC_SOLVER: Úsala automáticamente para fórmulas booleanas CNF/SAT y restricciones expresadas como cláusulas. SpectraSAT no resuelve aritmética general, paridad arbitraria ni optimización de grafos; para revisar lógica de código, usa el modo de auditoría semántica y no afirmes que es una prueba SAT.\n\
                 - TOOL_SCHEDULER: Usa esto si el usuario pide ejecutar tareas repetitivas o programadas (ej. 'haz esto cada lunes', 'audita cada semana'). Comando: 'cron_expr|descripción'.\n\
                 - TOOL_THINK: Si el objetivo requiere crear, escribir, modificar o debugear código fuente, usa esto para transferir el control al EJECUTOR de forma transparente.\n\
                 - TOOL_MAPPER: Solo para analizar dependencias en proyectos con múltiples archivos existentes.\n\
@@ -1905,19 +4487,19 @@ pub async fn run_agent_loop(
                 - TOOL_FINISH: Usa esto ÚNICAMENTE si la tarea ya está 100% completada y verificada (o si reportaste los resultados finales). NUNCA uses esto si aún hay pasos pendientes.\n\
                 \nPROHIBIDO: TOOL_WORKSPACE_MANAGER, TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER (Estas son exclusivas del Ejecutor).\n\
                 REGLA DE ZERO-HINT: Nunca le pidas al usuario que especifique la herramienta. Deduce la necesidad matemática o de código y actúa en consecuencia.\n\
-                {}{}{}",
+                {}{}{}{}",
                 pesp_banner, user_message, live_workspace_context, extra_prompt, current_context,
-                critic_feedback_block, analysis_fast_path, json_schema
+                critic_feedback_block, analysis_fast_path, planning_fast_path, json_schema
             ),
             // Executor - compressed to <200 tokens
             AgentRole::Executor => format!(
-                "{}[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). Si faltan entregables, usa TOOL_PROGRAMMER con todos sus nombres en 'archivos_a_editar' (NUNCA [] vacío). Si ya existen, usa TOOL_TERMINAL para probarlos o TOOL_PROGRAMMER para corregir los archivos que causan un fallo real. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER.\n[REGLA SCRIPTS DE PRUEBA]: Al crear/modificar verify_*.py o test_*.py: 1) Crea una comprobación independiente para CADA requisito numerado del objetivo y prueba los archivos reales, incluidos JS/CSS enlazados. 2) Usa solo json, pathlib y re; busca tokens simples por separado y nunca incrustes líneas HTML/JS completas con comillas anidadas. 3) Ejecuta los checks bajo __main__ y emite JSON en una línea con passed y total ENTEROS, percentage calculado y failed_criteria con una entrada por fallo. Ejemplo para cinco checks aprobados: {{\"passed\": 5, \"total\": 5, \"percentage\": 100.0, \"failed_criteria\": []}}. 4) Exit code 0 solo si passed=total; cualquier fallo debe devolver exit code 1. El verificador es de solo lectura.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'.\n\n{}{}",
+                "{}[EJECUTOR] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_PROGRAMMER, TOOL_TERMINAL, TOOL_CONTAINER, TOOL_ASSET_MANAGER, TOOL_BACKGROUND_START, TOOL_BACKGROUND_READ.\n- TOOL_CONTAINER: Comando = 'run/exec/stop/activate_env image/id'. Úsalo para sandbox, testing en Docker/Podman o para activar entornos virtuales (venv, nvm, cargo).\n- TOOL_ENV_MANAGER: *SOLO* para instalar binarios scoop.\nREGLAS: ANTI-STUB (no pass/TODO/funciones vacias). Respeta los entregables de la fase y limita cada escritura a los archivos pendientes o a los que tengan un fallo comprobado. Incluye al menos un archivo en 'archivos_a_editar' cuando uses TOOL_PROGRAMMER. Si ya existe un criterio de aceptación, ejecútalo en lugar de inventar otro. Si faltan pruebas, elige un runner que ya use el proyecto y comprueba comportamiento real; no cambies de lenguaje solo para probar. En un frontend HTML/CSS/JavaScript, usa pruebas JavaScript con Node cuando sean necesarias, no Python. No uses TOOL_TESTER ni TOOL_FINISH. PROHIBIDO usar TOOL_ASK_USER.\nEJEMPLOS TOOL_TERMINAL: Para 'npm install' usa TOOL_TERMINAL con comando='npm install'. NUNCA inventes herramientas como 'NPM INSTALL'. En Windows, TOOL_TERMINAL usa cmd.exe: no uses grep ni sintaxis de PowerShell. No llames a localhost hasta iniciar el servidor con TOOL_BACKGROUND_START y confirmar que quedó activo.\n\n{}{}",
                 pesp_banner, user_message, live_workspace_context, extra_prompt, current_context,
                 critic_feedback_block, json_schema
             ),
             // Critic - compressed to <200 tokens
             AgentRole::Critic => format!(
-                "{}[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores describelos con precisión. Solo TOOL_FINISH si todo pasa al 100%%. PROHIBIDO usar TOOL_ASK_USER para fallos de tests o código (transfiere a TOOL_PROGRAMMER para corregir el código o el test).\n[REGLA FRONTEND]: Si el proyecto contiene archivos HTML (ej. index.html, cyber_sentinel.html, etc.), es frontend. NO uses `node script.js` sobre archivos HTML. Si existe un script de prueba de verificación (ej. verify_*.py o test_*.py), ejecútalo con TOOL_TERMINAL; si pasa al 100%% o no hay tests pendientes, usa TOOL_FINISH.\n\n{}{}",
+                "{}[CRITICO] Objetivo: {}\nWorkspace: {}\n{}\nHistorial:\n{}\n\nTOOLS PERMITIDOS: TOOL_TESTER, TOOL_TERMINAL, TOOL_BACKGROUND_START, TOOL_BACKGROUND_READ, TOOL_VISION_EVALUATOR, TOOL_FINISH, TOOL_ASK_USER.\nREGLAS: Usa TOOL_TESTER/TOOL_TERMINAL para validar. Si hay errores descríbelos con precisión. Solo TOOL_FINISH si todo pasa y los criterios requeridos tienen evidencia. PROHIBIDO usar TOOL_ASK_USER para fallos de tests o código (transfiere a TOOL_PROGRAMMER para corregir el código o el test).\n[REGLA FRONTEND]: Nunca ejecutes HTML con Node ni crees app.test.js para probar document, alert u otros globals del navegador desde Node. En tareas con flujos interactivos solicitados, usa TOOL_TESTER con `comando` que empiece por `BROWSER_TEST:` y un plan JSON de pasos reales (click/fill/select/assert_text/assert_visible/reload/set_viewport/assert_no_console_errors); el runner abre Chrome/Edge local vía DevTools sin instalar paquetes y solo acepta la URL localhost confirmada. Usa Node para pruebas de lógica pura únicamente si el proyecto ya expone esa lógica separada o tiene un entorno DOM configurado. Inicia/carga el frontend con TOOL_BACKGROUND_START, consulta TOOL_BACKGROUND_READ hasta confirmar la URL, prueba los flujos interactivos y evalúa luego la apariencia con TOOL_VISION_EVALUATOR. Una captura no sustituye las pruebas funcionales.\n[REGLA CONSOLA]: Para programas de consola/CLI, compila y ejecuta el artefacto o sus pruebas con entradas representativas. Compara código de salida, stdout/stderr y efectos observables con cada requisito solicitado; compilar o pasar pruebas genéricas no demuestra por sí solo que el comportamiento pedido exista. Si el mandato pide una demostración sencilla, valida el caso básico; si pide varios flujos o casos límite, valida cada uno. No exijas visión para una tarea de consola.\nEn Windows la terminal usa cmd.exe: no propongas grep ni comandos de PowerShell. No llames a localhost salvo que un servidor iniciado mediante TOOL_BACKGROUND_START haya confirmado que está activo.\n\n{}{}",
                 pesp_banner, user_message, live_workspace_context, extra_prompt, current_context,
                 contract_block, json_schema
             ),
@@ -1930,13 +4512,19 @@ pub async fn run_agent_loop(
             AgentRole::Critic => "🔬 CRÍTICO",
         };
         let deterministic_decision = forced_override.as_ref().and_then(|(forced, reason)| {
-            deterministic_forced_decision(
-                &workspace_path,
-                forced,
-                reason,
-                &runtime.contract,
-                &runtime.state_anchor.existing_files,
-            )
+            if mission_type == MissionType::Planning && forced == "TOOL_FINISH" {
+                // Let the selected model produce the actual plan instead of treating
+                // the router's instruction text as the user's final answer.
+                None
+            } else {
+                deterministic_forced_decision(
+                    &workspace_path,
+                    forced,
+                    reason,
+                    &runtime.contract,
+                    &runtime.state_anchor.existing_files,
+                )
+            }
         });
         if deterministic_decision.is_some() {
             emit_event(
@@ -2012,7 +4600,15 @@ pub async fn run_agent_loop(
         let mut agent_res = if let Some(value) = deterministic_decision {
             value.to_string()
         } else {
-            match call_ollama(&orchestrator_model, &agent_prompt).await {
+            match call_ollama_with_schema_options(
+                &orchestrator_model,
+                &agent_prompt,
+                action_response_schema(),
+                1024,
+                0.05,
+            )
+            .await
+            {
                 Ok(res) => res,
                 Err(e) => {
                     emit_event(
@@ -2039,7 +4635,9 @@ pub async fn run_agent_loop(
         agent_res = agent_res.trim().to_string();
 
         let clean_agent_res = strip_think_tags(agent_res.clone());
-        let raw_value: serde_json::Value = match serde_json::from_str(&clean_agent_res) {
+        let mut raw_value: serde_json::Value = match crate::core::structured_json::parse_json_object(
+            &clean_agent_res,
+        ) {
             Ok(v) => {
                 if decision_is_deterministic {
                     println!("RUNTIME ROUTER DECISION: {}", agent_res);
@@ -2052,12 +4650,12 @@ pub async fn run_agent_loop(
             Err(e) => {
                 println!("LLM RAW RESPONSE ERROR: {}", agent_res);
                 json_error_count += 1;
-                if json_error_count >= 5 {
-                    emit_event(&app_handle, runtime.current_step(), &format!("Error parseando decisión ({}). Máximos reintentos (5) alcanzados. Abortando bucle.", e), "ERROR");
+                if json_error_count >= 2 {
+                    emit_event(&app_handle, runtime.current_step(), &format!("[JSON_ACTION_INVALID] La respuesta del modelo siguió fuera del esquema después de reintentar una vez: {}. No se ejecutó ninguna herramienta.", e), "ERROR");
                     let final_res = FinalResponse {
                         status: "ERROR".to_string(),
                         respuesta_conversacional:
-                            "Fallo crítico persistente en la estructura JSON del planificador."
+                            "No pude leer una decisión segura del modelo. No ejecuté acciones ni cambié archivos; el objetivo y el estado guardado se conservaron para reanudarlo."
                                 .to_string(),
                     };
                     crate::llm::router::record_model_result(
@@ -2072,12 +4670,12 @@ pub async fn run_agent_loop(
                         &app_handle,
                         runtime.current_step(),
                         &format!(
-                            "Error de sintaxis JSON (intento {}/5). Reintentando...",
+                            "[JSON] La salida no coincide con el objeto esperado (intento {}/2); reintentaré una vez con el esquema estricto.",
                             json_error_count
                         ),
                         "WARNING",
                     );
-                    current_context.push_str(&format!("[SISTEMA INTERNO] Tu respuesta anterior no era un JSON válido. Error: {}. Genera SOLO un objeto JSON estrictamente válido según la estructura requerida, sin texto adicional antes o después del JSON.\n\n", e));
+                    current_context.push_str(&format!("[SISTEMA INTERNO] La respuesta anterior no se pudo interpretar como un objeto JSON completo. Error: {}. No ejecutes ninguna acción hasta devolver los campos requeridos por el esquema.\n\n", e));
                     continue;
                 }
             }
@@ -2102,16 +4700,95 @@ pub async fn run_agent_loop(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let task_id = raw_value
+        let requested_task_id = raw_value
             .get("task_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("default_task")
-            .to_string();
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let task_id = match tool.as_str() {
+            "TOOL_BACKGROUND_START" => requested_task_id
+                .filter(|value| value != "default_task")
+                .unwrap_or_else(|| {
+                    format!(
+                        "aura-{}-{}",
+                        runtime.current_step(),
+                        runtime.mission_id.chars().take(8).collect::<String>()
+                    )
+                }),
+            "TOOL_BACKGROUND_READ" | "TOOL_BACKGROUND_QUERY" => requested_task_id
+                .filter(|value| value != "default_task")
+                .or_else(|| last_http_server_task_id.clone())
+                .or_else(|| last_background_task_id.clone())
+                .unwrap_or_default(),
+            _ => requested_task_id.unwrap_or_default(),
+        };
         let mut respuesta_conv = raw_value
             .get("respuesta_conversacional")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        if scoped_visual_review && scoped_review_forbids_action(&tool, &comando) {
+            scoped_review_blocked_actions = scoped_review_blocked_actions.saturating_add(1);
+            runtime.record_step();
+            let message = format!(
+                "[REVIEW_SCOPE_BLOCKED] La revisión es de solo lectura; se bloqueó {} y no se ejecutó. El defecto debe informarse, no repararse automáticamente.",
+                tool
+            );
+            emit_event(&app_handle, runtime.current_step(), &message, "WARNING");
+            current_context.push_str(&format!("{}\n\n", message));
+            if scoped_review_blocked_actions >= 2 {
+                let stopped = "La revisión se detuvo porque el modelo volvió a proponer cambios fuera del alcance de solo lectura. No se ejecutaron esas acciones; la fase original se conserva.";
+                emit_event(&app_handle, runtime.current_step(), stopped, "ERROR");
+                return Ok(serde_json::json!({
+                    "status": "ERROR",
+                    "respuesta_conversacional": stopped
+                })
+                .to_string());
+            }
+            current_context.push_str(
+                "REGLA DE ALCANCE: continúa como revisor. Ejecuta pruebas ya existentes y evalúa la página. No corrijas ni crees archivos.\n\n",
+            );
+            continue;
+        }
+
+        if tool == "TOOL_PROGRAMMER" {
+            let explicit_files: Vec<String> = runtime
+                .contract
+                .acceptance_criteria
+                .iter()
+                .filter_map(|criterion| {
+                    if let crate::core::mission_contract::VerificationMethod::FileExistence(file) =
+                        &criterion.verification
+                    {
+                        Some(file.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if let Some(recovered) = recover_programmer_file_args(
+                &mut raw_value,
+                &journal,
+                &workspace_path,
+                &explicit_files,
+            ) {
+                current_context.push_str(&format!(
+                    "[RECUPERACIÓN DE ARGUMENTOS] TOOL_PROGRAMMER omitió archivos o solo nombró archivos internos. Se recuperó el siguiente entregable pendiente: {:?}. Modifica únicamente ese archivo.\n\n",
+                    recovered
+                ));
+                emit_event(
+                    &app_handle,
+                    runtime.current_step(),
+                    &format!(
+                        "[RECUPERACIÓN] Archivo de programación recuperado desde la fase: {:?}.",
+                        recovered
+                    ),
+                    "INFO",
+                );
+            }
+        }
 
         // Si el modelo solo quiere responder conversacionalmente (ej. "herramienta": null o "null"),
         // y adjuntó una respuesta para el usuario, enrutar limpiamente como TOOL_FINISH para no entrar en bucle de error.
@@ -2121,15 +4798,79 @@ pub async fn run_agent_loop(
             tool = "TOOL_FINISH".to_string();
         }
 
-        // Strict Schema Requirement: TOOL_TERMINAL requires non-empty 'comando'
-        if tool == "TOOL_TERMINAL" && comando.trim().is_empty() {
+        if mission_type == MissionType::Planning && !planning_tool_allowed(&tool) {
+            runtime.record_step();
             emit_event(
                 &app_handle,
                 runtime.current_step(),
-                "[SCHEMA ERROR] TOOL_TERMINAL requiere un campo 'comando' no vacío.",
+                &format!(
+                    "[PLAN INICIAL] Se bloqueó {} para mantener la misión en planificación.",
+                    tool
+                ),
+                "WARNING",
+            );
+            current_context.push_str(
+                "[PLAN INICIAL]: No ejecutes código ni comandos. Devuelve ahora la hoja de ruta con fases, entregables, supuestos y decisiones pendientes mediante TOOL_FINISH.\n\n",
+            );
+            forced_next_tool = Some((
+                "TOOL_FINISH".to_string(),
+                "Entrega la hoja de ruta inicial en la respuesta; no crees archivos ni ejecutes comandos."
+                    .to_string(),
+            ));
+            continue;
+        }
+
+        if mission_type == MissionType::Planning
+            && tool == "TOOL_WEB_SEARCH"
+            && tool_history.iter().any(|used| used == "TOOL_WEB_SEARCH")
+        {
+            runtime.record_step();
+            emit_event(
+                &app_handle,
+                runtime.current_step(),
+                "[PLAN INICIAL] Búsqueda web única completada; se bloqueó otra búsqueda para evitar un ciclo.",
+                "INFO",
+            );
+            forced_next_tool = Some((
+                "TOOL_FINISH".to_string(),
+                "La investigación puntual terminó. Resume el plan inicial y las fuentes consultadas."
+                    .to_string(),
+            ));
+            continue;
+        }
+
+        // Strict Schema Requirement: TOOL_TERMINAL requires non-empty 'comando'
+        if tool == "TOOL_TERMINAL" && comando.trim().is_empty() {
+            consecutive_schema_errors = consecutive_schema_errors.saturating_add(1);
+            emit_event(
+                &app_handle,
+                runtime.current_step(),
+                &format!(
+                    "[SCHEMA ERROR {}/3] TOOL_TERMINAL requiere un campo 'comando' no vacío.",
+                    consecutive_schema_errors
+                ),
                 "WARNING",
             );
             current_context.push_str("[VALIDACIÓN DE ESQUEMA FALLIDA]: TOOL_TERMINAL requiere un campo 'comando' explícito y no vacío en el JSON. Prohibido omitir el comando.\n\n");
+            if consecutive_schema_errors >= 3 {
+                let final_res = FinalResponse {
+                    status: "ERROR".to_string(),
+                    respuesta_conversacional: "Misión detenida: TOOL_TERMINAL omitió el comando requerido en tres decisiones consecutivas. No se ejecutó ningún comando; el estado guardado se conserva.".to_string(),
+                };
+                emit_event(
+                    &app_handle,
+                    runtime.current_step(),
+                    "[SCHEMA ERROR] Misión detenida tras tres decisiones inválidas consecutivas.",
+                    "ERROR",
+                );
+                crate::llm::router::record_model_result(
+                    &orchestrator_model,
+                    &crate::llm::router::TaskType::Orchestrator,
+                    false,
+                    runtime.current_step(),
+                );
+                return Ok(serde_json::to_string(&final_res).unwrap());
+            }
             continue;
         }
 
@@ -2138,10 +4879,25 @@ pub async fn run_agent_loop(
             emit_event(
                 &app_handle,
                 runtime.current_step(),
-                "[ANTI-ECHOLALIA] TOOL_THINK consecutivo bloqueado. Se requiere acción física.",
+                if mission_type == MissionType::Planning {
+                    "[PLAN INICIAL] Se bloqueó una reflexión repetida; se solicita terminar la hoja de ruta."
+                } else {
+                    "[ANTI-ECHOLALIA] TOOL_THINK consecutivo bloqueado. Se requiere acción física."
+                },
                 "WARNING",
             );
-            current_context.push_str("[SISTEMA INTERNO - BLOQUEO DE BUCLE]: Acabas de usar TOOL_THINK en el turno anterior. PROHIBIDO encadenar otro TOOL_THINK consecutivo. Ahora debes ejecutar una herramienta física obligatoriamente (ej. TOOL_PROGRAMMER, TOOL_TERMINAL o TOOL_MAPPER) para avanzar.\n\n");
+            if mission_type == MissionType::Planning {
+                runtime.record_step();
+                current_context.push_str(
+                    "[PLAN INICIAL]: Ya reflexionaste sobre la tarea. No hagas código ni otra reflexión. Entrega ahora la hoja de ruta con TOOL_FINISH.\n\n",
+                );
+                forced_next_tool = Some((
+                    "TOOL_FINISH".to_string(),
+                    "Completa la hoja de ruta inicial en la respuesta conversacional.".to_string(),
+                ));
+            } else {
+                current_context.push_str("[SISTEMA INTERNO - BLOQUEO DE BUCLE]: Acabas de usar TOOL_THINK en el turno anterior. PROHIBIDO encadenar otro TOOL_THINK consecutivo. Ahora debes ejecutar una herramienta física obligatoriamente (ej. TOOL_PROGRAMMER, TOOL_TERMINAL o TOOL_MAPPER) para avanzar.\n\n");
+            }
             continue;
         }
 
@@ -2156,57 +4912,186 @@ pub async fn run_agent_loop(
                     stall
                 );
                 emit_event(&app_handle, runtime.current_step(), &stall_msg, "WARNING");
-                if forced_next_tool.is_none() {
-                // Determine strategy transition based on physical reality from state_anchor
-                let has_existing_files = !runtime.state_anchor.existing_files.is_empty();
-                let has_test_file = runtime
-                    .state_anchor
-                    .existing_files
-                    .iter()
-                    .any(|f| f.starts_with("verify_") || f.starts_with("test_"));
-
-                if stall == crate::core::stall_detector::StallType::RepeatedCommand
-                    || stall == crate::core::stall_detector::StallType::SameError
-                    || stall == crate::core::stall_detector::StallType::RepeatedTool
-                {
+                if mission_type == MissionType::Planning && forced_next_tool.is_none() {
                     forced_next_tool = Some((
-                        "TOOL_PROGRAMMER".to_string(),
-                        "Estancamiento grave: Bucle de herramientas repetidas o errores idénticos. NO repitas la acción. Usa TOOL_PROGRAMMER para corregir el código subyacente.".to_string(),
+                        "TOOL_FINISH".to_string(),
+                        "El planificador se estancó. Resume la hoja de ruta disponible y termina."
+                            .to_string(),
                     ));
-                    current_context.push_str("[TRANSICIÓN FORZADA POR ESTANCAMIENTO GRAVE]: Bucle repetitivo detectado. Tienes PROHIBIDO repetir el comando. Transicionando a TOOL_PROGRAMMER para obligarte a hacer cambios en el código o la estrategia.\n\n");
-                } else if !has_existing_files {
-                    forced_next_tool = Some((
-                        "TOOL_PROGRAMMER".to_string(),
-                        "Estancamiento detectado: El workspace no tiene archivos. Debes crear los archivos principales usando TOOL_PROGRAMMER.".to_string(),
-                    ));
-                    current_context.push_str("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: El workspace aún no tiene archivos. Procede de inmediato a crearlos con TOOL_PROGRAMMER.\n\n");
-                } else if !has_test_file {
-                    forced_next_tool = Some((
-                        "TOOL_PROGRAMMER".to_string(),
-                        "Estancamiento detectado: Los archivos base ya existen. Crea un script de verificación 'verify_solution.py' con TOOL_PROGRAMMER para validar la solución.".to_string(),
-                    ));
-                    current_context.push_str("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: Los archivos base ya existen en disco. Crea un script de verificación (ej. verify_*.py) usando TOOL_PROGRAMMER.\n\n");
-                } else {
-                    let test_file = runtime
+                } else if forced_next_tool.is_none() {
+                    // Determine strategy transition based on physical reality from state_anchor
+                    let has_existing_files = !runtime.state_anchor.existing_files.is_empty();
+                    let runnable_test = runtime
                         .state_anchor
                         .existing_files
                         .iter()
-                        .find(|f| f.starts_with("verify_") || f.starts_with("test_"))
-                        .unwrap();
-                    let test_cmd = if test_file.ends_with(".py") {
-                        format!("python {}", test_file)
-                    } else if test_file.ends_with(".js") {
-                        format!("node {}", test_file)
-                    } else {
-                        format!("python {}", test_file)
-                    };
-                    forced_next_tool = Some((
-                        "TOOL_TERMINAL".to_string(),
-                        format!("Estancamiento detectado: Ejecuta el script de pruebas '{}' usando TOOL_TERMINAL con comando='{}'.", test_file, test_cmd),
+                        .find(|file| {
+                            is_test_artifact_path(file)
+                                && test_file_has_runnable_cases(&workspace_path, file)
+                        })
+                        .and_then(|file| {
+                            test_command_for_path(file).map(|command| (file.clone(), command))
+                        });
+                    let has_test_file = runnable_test.is_some();
+
+                    if stall == crate::core::stall_detector::StallType::RepeatedCommand
+                        || stall == crate::core::stall_detector::StallType::SameError
+                        || stall == crate::core::stall_detector::StallType::RepeatedTool
+                    {
+                        forced_next_tool = Some((
+                        "TOOL_PROGRAMMER".to_string(),
+                        "Estancamiento grave: Bucle de herramientas repetidas o errores idénticos. NO repitas la acción. Usa TOOL_PROGRAMMER para corregir el código subyacente.".to_string(),
                     ));
-                    current_context.push_str(&format!("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: Ejecuta el test existente '{}' para verificar la solución.\n\n", test_cmd));
+                        current_context.push_str("[TRANSICIÓN FORZADA POR ESTANCAMIENTO GRAVE]: Bucle repetitivo detectado. Tienes PROHIBIDO repetir el comando. Transicionando a TOOL_PROGRAMMER para obligarte a hacer cambios en el código o la estrategia.\n\n");
+                    } else if !has_existing_files {
+                        forced_next_tool = Some((
+                        "TOOL_PROGRAMMER".to_string(),
+                        "Estancamiento detectado: El workspace no tiene archivos. Debes crear los archivos principales usando TOOL_PROGRAMMER.".to_string(),
+                    ));
+                        current_context.push_str("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: El workspace aún no tiene archivos. Procede de inmediato a crearlos con TOOL_PROGRAMMER.\n\n");
+                    } else if !has_test_file {
+                        if approved_consultation_task {
+                            let next_file =
+                                programmer_file_fallback(&journal, &workspace_path, &[]);
+                            let phase = journal
+                                .fases
+                                .get(journal.fase_actual)
+                                .map(|phase| format!("Fase {}", phase.numero))
+                                .unwrap_or_else(|| "la fase actual".to_string());
+                            forced_next_tool = Some((
+                            "TOOL_PROGRAMMER".to_string(),
+                            format!("Estancamiento detectado. Continúa {} creando el siguiente entregable web pendiente {:?}. Usa HTML, CSS y JavaScript. No generes verify_solution.py, requirements.txt ni código Python; conserva npm test como verificación local de la fase.", phase, next_file),
+                        ));
+                            current_context.push_str("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: La misión aprobada es una aplicación web. Continúa con el próximo archivo de su plan JavaScript; no inventes verificadores Python.\n\n");
+                        } else {
+                            let frontend_sources =
+                                runtime.state_anchor.existing_files.iter().any(|file| {
+                                    matches!(
+                                        std::path::Path::new(file)
+                                            .extension()
+                                            .and_then(|value| value.to_str())
+                                            .map(str::to_ascii_lowercase)
+                                            .as_deref(),
+                                        Some(
+                                            "html"
+                                                | "htm"
+                                                | "css"
+                                                | "js"
+                                                | "mjs"
+                                                | "cjs"
+                                                | "ts"
+                                                | "tsx"
+                                        )
+                                    )
+                                });
+                            if frontend_sources
+                                && mission_requires_visual_verification(
+                                    &original_prompt_parsed,
+                                    &workspace_path,
+                                )
+                            {
+                                let (next_tool, guidance) = web_validation_recovery_action(
+                                    &original_prompt_parsed,
+                                    &workspace_path,
+                                    last_local_ui_url.as_deref(),
+                                    last_http_server_task_id.as_deref(),
+                                )
+                                .unwrap_or_else(|| (
+                                    "TOOL_VISION_EVALUATOR".into(),
+                                    "Evalúa la página real del workspace; no inventes pruebas DOM para Node.".into(),
+                                ));
+                                current_role = AgentRole::Critic;
+                                forced_next_tool = Some((next_tool.clone(), guidance.clone()));
+                                current_context.push_str(&format!(
+                                    "[TRANSICIÓN DE VALIDACIÓN WEB]: No crees un app.test.js para ejecutar código ligado al DOM con Node. Usa la siguiente acción disponible y prueba en el navegador los controles reales: {} — {}\n\n",
+                                    next_tool, guidance
+                                ));
+                            } else {
+                                let test_guidance = "Crea pruebas ejecutables con el lenguaje y el runner que ya usa este proyecto. Inspecciona primero sus archivos de configuración; no elijas Python por defecto ni añadas un lenguaje o dependencia solo para verificar.";
+                                forced_next_tool = Some((
+                                    "TOOL_PROGRAMMER".to_string(),
+                                    format!("Estancamiento detectado: el código fuente ya existe, pero no se encontró una prueba ejecutable. {test_guidance}"),
+                                ));
+                                current_context.push_str(&format!("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: No se encontró una prueba ejecutable. Usa el runner y el lenguaje del proyecto; no inventes un verificador Python para código de otro lenguaje. {test_guidance}\n\n"));
+                            }
+                        }
+                    } else {
+                        if approved_consultation_task {
+                            let test_cmd = journal
+                                .fases
+                                .get(journal.fase_actual)
+                                .map(|phase| phase.criterio_de_exito.trim())
+                                .filter(|command| !command.is_empty())
+                                .unwrap_or("npm test")
+                                .to_string();
+                            forced_next_tool = Some((
+                            "TOOL_TERMINAL".to_string(),
+                            format!("Estancamiento detectado en la aplicación web. Ejecuta el criterio de aceptación de la fase: {}.", test_cmd),
+                        ));
+                            current_context.push_str(&format!(
+                            "[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: Ejecuta el criterio del MVP web: {}.\n\n",
+                            test_cmd
+                        ));
+                        } else {
+                            let (test_file, test_cmd) =
+                                runnable_test.expect("has_test_file is derived from runnable_test");
+                            forced_next_tool = Some((
+                            "TOOL_TERMINAL".to_string(),
+                            format!("Estancamiento detectado: Ejecuta el script de pruebas '{}' usando TOOL_TERMINAL con comando='{}'.", test_file, test_cmd),
+                        ));
+                            current_context.push_str(&format!("[TRANSICIÓN FORZADA POR ESTANCAMIENTO]: Ejecuta el test existente '{}' para verificar la solución.\n\n", test_cmd));
+                        }
+                    }
                 }
             }
+        }
+
+        // A malformed programmer call with no targets is recoverable when the
+        // active phase or acceptance contract already names a safe file. Repair
+        // the arguments deterministically before schema validation instead of
+        // asking the model to repeat the same empty call.
+        if tool == "TOOL_PROGRAMMER"
+            && raw_value
+                .get("archivos_a_editar")
+                .and_then(serde_json::Value::as_array)
+                .map_or(true, |files| files.is_empty())
+        {
+            let explicit_files: Vec<String> = runtime
+                .contract
+                .acceptance_criteria
+                .iter()
+                .filter_map(|criterion| {
+                    if let crate::core::mission_contract::VerificationMethod::FileExistence(file) =
+                        &criterion.verification
+                    {
+                        Some(file.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if let Some(file) =
+                schema_recovery_programmer_target(&journal, &workspace_path, &explicit_files)
+            {
+                if let Some(object) = raw_value.as_object_mut() {
+                    object.insert(
+                        "archivos_a_editar".into(),
+                        serde_json::json!([file.clone()]),
+                    );
+                    current_context.push_str(&format!(
+                        "[RECUPERACIÓN DE ESQUEMA] Se completó el destino omitido con el archivo de la fase/contrato: {}. Continúa con una corrección concreta o completa sus requisitos; no inventes archivos auxiliares.\n\n",
+                        file
+                    ));
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        &format!(
+                            "[RECUPERACIÓN DE ESQUEMA] Destino omitido recuperado: {}.",
+                            file
+                        ),
+                        "INFO",
+                    );
+                }
             }
         }
 
@@ -2214,6 +5099,40 @@ pub async fn run_agent_loop(
         if let crate::core::schema_validator::SchemaValidationResult::Invalid(schema_err) =
             crate::core::schema_validator::SchemaValidator::validate_tool_payload(&tool, &raw_value)
         {
+            if tool == "TOOL_PROGRAMMER" && approved_consultation_task {
+                if let Some(file) = phase_pending_programmer_file(&journal, &workspace_path) {
+                    forced_next_tool = Some((
+                        "TOOL_PROGRAMMER".to_string(),
+                        format!("La fase aprobada requiere crear el siguiente entregable pendiente: {}. Devuelve archivos_a_editar con ese nombre, no vacío, y genera una implementación real en HTML/CSS/JavaScript según corresponda. No uses Python ni edites archivos internos.", file),
+                    ));
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        &format!("[RECUPERACIÓN DE ESQUEMA] Se usará el próximo entregable de la fase: {}.", file),
+                        "INFO",
+                    );
+                } else {
+                    let command = journal
+                        .fases
+                        .get(journal.fase_actual)
+                        .map(|phase| phase.criterio_de_exito.trim())
+                        .filter(|command| !command.is_empty())
+                        .unwrap_or("npm test")
+                        .to_string();
+                    forced_next_tool = Some((
+                        "TOOL_TERMINAL".to_string(),
+                        format!("Ya existen todos los archivos planificados para la fase. Ejecuta ahora su criterio de aceptación: {}", command),
+                    ));
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        "[RECUPERACIÓN DE ESQUEMA] Los entregables de la fase existen; se pasa a validarlos.",
+                        "INFO",
+                    );
+                }
+                continue;
+            }
+            consecutive_schema_errors = consecutive_schema_errors.saturating_add(1);
             emit_event(
                 &app_handle,
                 runtime.current_step(),
@@ -2229,14 +5148,40 @@ pub async fn run_agent_loop(
             if forced_override.is_some() {
                 forced_next_tool = forced_override.clone();
             }
+            if consecutive_schema_errors >= 3 {
+                let final_res = FinalResponse {
+                    status: "ERROR".to_string(),
+                    respuesta_conversacional: format!(
+                        "Misión detenida: la herramienta '{}' devolvió argumentos inválidos en {} intentos consecutivos. Último error: {}",
+                        tool, consecutive_schema_errors, schema_err
+                    ),
+                };
+                emit_event(
+                    &app_handle,
+                    runtime.current_step(),
+                    "[SCHEMA ERROR] Misión detenida tras tres decisiones inválidas consecutivas.",
+                    "ERROR",
+                );
+                crate::llm::router::record_model_result(
+                    &orchestrator_model,
+                    &crate::llm::router::TaskType::Orchestrator,
+                    false,
+                    runtime.current_step(),
+                );
+                return Ok(serde_json::to_string(&final_res).unwrap());
+            }
             continue;
         }
+        consecutive_schema_errors = 0;
 
         // ── FORCED TOOL VALIDATION ────────────────────────────────────────────
         // If the system has determined the LLM is stuck in a tool-loop,
         // validate its decision against the forced tool constraint.
         if let Some((forced, override_msg)) = &forced_override {
-            if tool != *forced {
+            let allows_programmer_override =
+                (forced == "TOOL_TESTER" || forced == "TOOL_VISION_EVALUATOR")
+                    && tool == "TOOL_PROGRAMMER";
+            if tool != *forced && !allows_programmer_override {
                 intercept_consecutive += 1;
                 let error_msg = format!(
                     "[INTERCEPT {}/3] Se te ordenó usar '{}' (razón: '{}'). Elegiste '{}'. Corrige tu elección.",
@@ -2256,7 +5201,9 @@ pub async fn run_agent_loop(
                 // Terminal recovery has concrete arguments and can be executed directly.
                 // Other tools need model-generated arguments; stop explicitly after three
                 // disobedient turns instead of hiding the failure in a long loop.
-                if intercept_consecutive >= 3 || (forced == "TOOL_PROGRAMMER" && intercept_consecutive >= 1) {
+                if intercept_consecutive >= 3
+                    || (forced == "TOOL_PROGRAMMER" && intercept_consecutive >= 1)
+                {
                     if forced == "TOOL_PROGRAMMER" {
                         let mut repair_files: Vec<String> = std::fs::read_dir(&workspace_path)
                             .ok()
@@ -2265,9 +5212,16 @@ pub async fn run_agent_loop(
                             .flatten()
                             .filter_map(|entry| {
                                 let path = entry.path();
-                                if path.is_file() && matches!(path.extension().and_then(|value| value.to_str()), Some("html" | "css" | "js" | "ts" | "py" | "rs" | "json")) {
+                                if path.is_file()
+                                    && matches!(
+                                        path.extension().and_then(|value| value.to_str()),
+                                        Some("html" | "css" | "js" | "ts" | "py" | "rs" | "json")
+                                    )
+                                {
                                     Some(entry.file_name().to_string_lossy().to_string())
-                                } else { None }
+                                } else {
+                                    None
+                                }
                             })
                             .collect();
                         for criterion in &runtime.contract.acceptance_criteria {
@@ -2277,7 +5231,8 @@ pub async fn run_agent_loop(
                         }
                         repair_files.sort();
                         repair_files.dedup();
-                        let target_model = resolve_model_or_fallback(&programmer_model, &available_models);
+                        let target_model =
+                            resolve_model_or_fallback(&programmer_model, &available_models);
                         let proposal = crate::core::policy::ActionProposal {
                             tool: "TOOL_PROGRAMMER".to_string(),
                             arguments: serde_json::json!({
@@ -2294,12 +5249,22 @@ pub async fn run_agent_loop(
                         };
                         emit_event(&app_handle, runtime.current_step(), "[INTERCEPT] Ejecutando la reparación requerida con argumentos determinados por el contrato.", "WARNING");
                         match runtime.execute_action(&proposal).await {
-                            Ok(obs) if obs.status == crate::core::observation::ObservationStatus::Success => {
+                            Ok(obs)
+                                if obs.status
+                                    == crate::core::observation::ObservationStatus::Success =>
+                            {
                                 for file in &obs.files_affected {
-                                    let full_path = std::path::Path::new(&workspace_path).join(file);
-                                    let _ = app_handle.emit("file-updated", serde_json::json!({"path": full_path.to_string_lossy()}));
+                                    let full_path =
+                                        std::path::Path::new(&workspace_path).join(file);
+                                    let _ = app_handle.emit(
+                                        "file-updated",
+                                        serde_json::json!({"path": full_path.to_string_lossy()}),
+                                    );
                                 }
-                                current_context.push_str(&format!("[REPARACIÓN FORZADA COMPLETADA]: {}\n", obs.payload));
+                                current_context.push_str(&format!(
+                                    "[REPARACIÓN FORZADA COMPLETADA]: {}\n",
+                                    obs.payload
+                                ));
                                 current_role = AgentRole::Critic;
                                 intercept_consecutive = 0;
                                 if let Some(command) = runtime.contract.acceptance_criteria.iter().find_map(|criterion| {
@@ -2314,7 +5279,7 @@ pub async fn run_agent_loop(
                                 emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
                                 programmer_failures += 1;
                                 if programmer_failures >= 3 {
-                                    persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                    persist_and_learn_failure!(&message);
                                     return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":format!("PROGRAMMER_REPAIR_EXHAUSTED: {} intentos reales fallidos. {}", programmer_failures, message)}).to_string());
                                 }
                                 current_context.push_str(&format!("\n{}\nEl borrador fue conservado. Corrige únicamente el archivo señalado por el diagnóstico.\n", message));
@@ -2328,15 +5293,36 @@ pub async fn run_agent_loop(
                             Err(error) => {
                                 let message = format!("FORCED_PROGRAMMER_BLOCKED: {}", error);
                                 emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
-                                persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                persist_and_learn_failure!(&message);
                                 return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
                             }
                         }
                     }
                     if forced != "TOOL_TERMINAL" {
+                        if forced == "TOOL_TESTER" || forced == "TOOL_VISION_EVALUATOR" {
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                &format!("[INTERCEPT] Modelo no generó llamada válida a {} tras 3 intentos. Continuando con la acción elegida...", forced),
+                                "WARNING",
+                            );
+                            current_context.push_str(&format!(
+                                "[INTERCEPT]: No se pudo forzar {}. Continuando con la ejecución del agente.\n\n",
+                                forced
+                            ));
+                            forced_next_tool = None;
+                            intercept_consecutive = 0;
+                            if forced == "TOOL_TESTER" {
+                                browser_interaction_validation_world_hash =
+                                    Some(runtime.current_world_hash());
+                            } else {
+                                visual_validation_world_hash = Some(runtime.current_world_hash());
+                            }
+                            continue;
+                        }
                         let message = format!("FORCED_TOOL_NOT_OBEYED: el modelo no generó una llamada válida a {} después de 3 intentos. Razón: {}", forced, override_msg);
                         emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
-                        persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                        persist_and_learn_failure!(&message);
                         return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
                     }
                     emit_event(&app_handle, runtime.current_step(),
@@ -2442,6 +5428,7 @@ pub async fn run_agent_loop(
             if tool == "TOOL_PROGRAMMER"
                 || tool == "TOOL_TERMINAL"
                 || tool == "TOOL_BACKGROUND_START"
+                || tool == "TOOL_GIT"
             {
                 current_role = AgentRole::Executor;
                 emit_event(
@@ -2456,6 +5443,7 @@ pub async fn run_agent_loop(
             } else if [
                 "TOOL_TESTER",
                 "TOOL_BACKGROUND_READ",
+                "TOOL_BACKGROUND_QUERY",
                 "TOOL_BACKGROUND_KILL",
                 "TOOL_ENV_MANAGER",
                 "TOOL_ASSET_MANAGER",
@@ -2505,6 +5493,22 @@ pub async fn run_agent_loop(
             }
         } else if !is_forced_and_obeyed && current_role == AgentRole::Critic {
             if ["TOOL_PROGRAMMER", "TOOL_MAPPER", "TOOL_AST_INJECT"].contains(&tool.as_str()) {
+                if scoped_visual_review {
+                    current_context.push_str(
+                        "[REVISIÓN DE SOLO LECTURA]: La petición actual no autorizó cambios de código. No uses herramientas de escritura; entrega los hallazgos y el estado real de las pruebas.\n\n",
+                    );
+                    forced_next_tool = Some((
+                        "TOOL_FINISH".to_string(),
+                        "Termina el informe de revisión visual sin modificar archivos ni cerrar la fase original.".to_string(),
+                    ));
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        "[ALCANCE] Escritura bloqueada durante una revisión visual de solo lectura.",
+                        "WARNING",
+                    );
+                    continue;
+                }
                 // FIX: If the Critic wants to fix code, we gracefully auto-transition to Executor
                 // instead of throwing an angry [ACCESO DENEGADO] and forcing a loop.
                 current_role = AgentRole::Executor;
@@ -2527,11 +5531,7 @@ pub async fn run_agent_loop(
             .unwrap_or("")
             .to_string();
         if respuesta_conv.is_empty() {
-            respuesta_conv = raw_value
-                .get("respuesta_conversacional")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            respuesta_conv = conversational_response(raw_value.get("respuesta_conversacional"));
         }
 
         let mut archivos_vec = Vec::new();
@@ -2581,13 +5581,20 @@ pub async fn run_agent_loop(
         }
 
         if tool == "TOOL_PROGRAMMER" {
-            let explicit_contract_files: Vec<String> = runtime.contract.acceptance_criteria.iter().filter_map(|criterion| {
-                if let crate::core::mission_contract::VerificationMethod::FileExistence(file) = &criterion.verification {
-                    Some(file.clone())
-                } else {
-                    None
-                }
-            }).collect();
+            let explicit_contract_files: Vec<String> = runtime
+                .contract
+                .acceptance_criteria
+                .iter()
+                .filter_map(|criterion| {
+                    if let crate::core::mission_contract::VerificationMethod::FileExistence(file) =
+                        &criterion.verification
+                    {
+                        Some(file.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             let missing_explicit_files: Vec<String> = explicit_contract_files
                 .iter()
                 .filter(|file| !std::path::Path::new(&workspace_path).join(file).is_file())
@@ -2610,25 +5617,201 @@ pub async fn run_agent_loop(
             }
             if !verifier_diagnostic.is_empty() {
                 if let Ok(entries) = std::fs::read_dir(&workspace_path) {
-                    let mut related: Vec<String> = entries.flatten().filter_map(|entry| {
-                        let path = entry.path();
-                        if path.is_file() && matches!(path.extension().and_then(|v| v.to_str()), Some("html" | "css" | "js" | "ts" | "py")) {
-                            let file = entry.file_name().to_string_lossy().to_string();
-                            let is_verifier = file.starts_with("verify_") || file.starts_with("test_");
-                            if is_verifier && !verifier_diagnostic.contains(&file) {
-                                None
+                    let mut related: Vec<String> = entries
+                        .flatten()
+                        .filter_map(|entry| {
+                            let path = entry.path();
+                            if path.is_file()
+                                && matches!(
+                                    path.extension().and_then(|v| v.to_str()),
+                                    Some("html" | "css" | "js" | "ts" | "py")
+                                )
+                            {
+                                let file = entry.file_name().to_string_lossy().to_string();
+                                let is_verifier =
+                                    file.starts_with("verify_") || file.starts_with("test_");
+                                if is_verifier && !verifier_diagnostic.contains(&file) {
+                                    None
+                                } else {
+                                    Some(file)
+                                }
                             } else {
-                                Some(file)
+                                None
                             }
-                        } else { None }
-                    }).collect();
+                        })
+                        .collect();
                     related.sort();
                     for file in related {
-                        if !archivos_vec.contains(&file) { archivos_vec.push(file); }
+                        if !archivos_vec.contains(&file) {
+                            archivos_vec.push(file);
+                        }
                     }
                 }
             }
             archivos_vec.retain(|file| !is_managed_verifier(&workspace_path, file));
+            if approved_consultation_task {
+                if let Some(next_file) = phase_pending_programmer_file(&journal, &workspace_path) {
+                    let model_targets = archivos_vec.clone();
+                    archivos_vec = vec![next_file.clone()];
+                    if model_targets != archivos_vec {
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &format!(
+                                "[PESP OBJETIVO DE ARCHIVO] El modelo propuso {:?}; se limita la escritura al siguiente entregable pendiente {}.",
+                                model_targets, next_file
+                            ),
+                            "INFO",
+                        );
+                    }
+                    if let Some(object) = raw_value.as_object_mut() {
+                        object.insert("archivos_a_editar".into(), serde_json::json!(archivos_vec));
+                    }
+                } else {
+                    if let Some(audit) = consultation_mvp_audit
+                        .as_ref()
+                        .filter(|audit| !audit.issues.is_empty())
+                    {
+                        apply_consultation_mvp_audit_override(
+                            &mut tool,
+                            &mut current_role,
+                            &mut comando,
+                            &mut archivos_vec,
+                            &mut raw_value,
+                            &mut verifier_diagnostic,
+                            audit,
+                        );
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &format!(
+                                "[PESP AUDITORÍA FUNCIONAL] Los archivos existen, pero la Fase 1 aún está incompleta: {}. Se corrigen {:?}.",
+                                audit.issues.join(" | "), archivos_vec
+                            ),
+                            "WARNING",
+                        );
+                    } else if forced_test_repair {
+                        if let Some((failed_command, failure_output)) = &last_failed_test_run {
+                            apply_forced_test_repair_override(
+                                &mut tool,
+                                &mut current_role,
+                                &mut comando,
+                                &mut archivos_vec,
+                                &mut raw_value,
+                                &mut verifier_diagnostic,
+                                failed_command,
+                                failure_output,
+                            );
+                        }
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[PESP REPARACIÓN] Se conserva TOOL_PROGRAMMER: una prueba fallida tiene prioridad sobre repetir la validación por presencia de archivos.",
+                            "WARNING",
+                        );
+                    } else if forced_override
+                        .as_ref()
+                        .is_some_and(|(forced, _)| forced == "TOOL_FINISH")
+                    {
+                        // A successful phase verifier can leave only the explicit
+                        // user review pending. Preserve that finish request instead
+                        // of replacing it with the already-passing test command.
+                        tool = "TOOL_FINISH".to_string();
+                        current_role = AgentRole::Critic;
+                        comando.clear();
+                        archivos_vec.clear();
+                        if let Some(object) = raw_value.as_object_mut() {
+                            object.insert("herramienta".into(), serde_json::json!("TOOL_FINISH"));
+                            object.insert("comando".into(), serde_json::Value::Null);
+                            object.insert("archivos_a_editar".into(), serde_json::json!([]));
+                        }
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[PESP] Se conserva TOOL_FINISH para completar la revisión manual, sin repetir la prueba aprobada.",
+                            "INFO",
+                        );
+                    } else {
+                        let command = journal
+                            .fases
+                            .get(journal.fase_actual)
+                            .map(|phase| phase.criterio_de_exito.trim())
+                            .filter(|command| !command.is_empty())
+                            .unwrap_or("npm test")
+                            .to_string();
+                        tool = "TOOL_TERMINAL".to_string();
+                        comando = command.clone();
+                        archivos_vec.clear();
+                        if let Some(object) = raw_value.as_object_mut() {
+                            object.insert("comando".into(), serde_json::json!(command));
+                        }
+                        emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        "[PESP OBJETIVO DE ARCHIVO] Todos los archivos de la fase existen; se valida el criterio de aceptación en vez de reescribir documentación o historial.",
+                        "INFO",
+                    );
+                    }
+                }
+            }
+        }
+
+        if tool == "TOOL_PROGRAMMER" && approved_consultation_task && journal.fase_actual == 1 {
+            if let Some(audit) = consultation_firebase_audit
+                .as_ref()
+                .filter(|audit| !audit.issues.is_empty())
+            {
+                if apply_consultation_firebase_audit_override(
+                    &mut tool,
+                    &mut current_role,
+                    &mut comando,
+                    &mut archivos_vec,
+                    &mut raw_value,
+                    &mut verifier_diagnostic,
+                    audit,
+                ) {
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        &format!(
+                            "[PESP AUDITORÍA FIREBASE] Escritura limitada al defecto comprobado: {:?}.",
+                            archivos_vec
+                        ),
+                        "WARNING",
+                    );
+                }
+            }
+        }
+
+        // The audit must also override a model that selected THINK or TERMINAL
+        // after all expected filenames appeared. File presence alone is not an
+        // acceptance check for this multi-module MVP.
+        if tool != "TOOL_PROGRAMMER"
+            && approved_consultation_task
+            && journal.fase_actual == 0
+            && phase_pending_programmer_file(&journal, &workspace_path).is_none()
+        {
+            if let Some(audit) = consultation_mvp_audit.as_ref() {
+                if apply_consultation_mvp_audit_override(
+                    &mut tool,
+                    &mut current_role,
+                    &mut comando,
+                    &mut archivos_vec,
+                    &mut raw_value,
+                    &mut verifier_diagnostic,
+                    audit,
+                ) {
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        &format!(
+                            "[PESP AUDITORÍA FUNCIONAL] Los archivos existen, pero la Fase 1 aún está incompleta: {}. Se corrigen {:?}.",
+                            audit.issues.join(" | "), archivos_vec
+                        ),
+                        "WARNING",
+                    );
+                }
+            }
         }
 
         let mut ast_nodes_vec = Vec::new();
@@ -2701,6 +5884,9 @@ pub async fn run_agent_loop(
 
         // Registrar herramienta en el historial del Monitor de Cordura
         tool_history.push(tool.clone());
+        if tool == "TOOL_PROGRAMMER" {
+            programmer_calls_since_validation = programmer_calls_since_validation.saturating_add(1);
+        }
         if tool_history.len() > 15 {
             tool_history.remove(0);
         }
@@ -2733,27 +5919,147 @@ pub async fn run_agent_loop(
             tool: tool.clone(),
             arguments: raw_value.clone(),
             expected_effect: pensamiento.clone(),
-            risk: if tool == "TOOL_TERMINAL" {
-                crate::core::policy::PolicyEngine::classify_terminal_command(&comando)
-            } else {
-                crate::core::policy::RiskLevel::Safe
+            risk: match tool.as_str() {
+                "TOOL_TERMINAL" | "TOOL_BACKGROUND_START" => {
+                    crate::core::policy::PolicyEngine::classify_terminal_command(&comando)
+                }
+                "TOOL_GIT" => crate::core::policy::PolicyEngine::classify_terminal_command(
+                    &format!("git {}", comando),
+                ),
+                _ => crate::core::policy::RiskLevel::Safe,
             },
             world_hash: Some(runtime.current_world_hash()),
         };
 
-        // authorize_action removed (handled by execute_action)        }
+        // Some specialized branches still perform work directly in agent.rs.
+        // They must pass the same registration, schema, budget and policy gate
+        // as tools dispatched through MissionRuntime.
+        if crate::core::tool_registry::ToolRegistry::is_known(&tool) {
+            if let Err(auth_error) = runtime.authorize_action(&action_proposal) {
+                current_context.push_str(&format!(
+                    "[ACCIÓN BLOQUEADA ANTES DE EJECUTAR]: {}\n\n",
+                    auth_error
+                ));
+                let needs_user = auth_error.starts_with("POLICY_REQUIRE_USER");
+                if needs_user {
+                    pending_user_approval = Some(action_proposal.clone());
+                }
+                let terminal_failure = auth_error.starts_with("TOOL_UNREGISTERED")
+                    || auth_error.starts_with("BUDGET_EXHAUSTED")
+                    || auth_error.starts_with("POLICY_DENY");
+                emit_event(
+                    &app_handle,
+                    runtime.current_step(),
+                    &format!("[ACTION GATE] {}", auth_error),
+                    if needs_user { "WARNING" } else { "ERROR" },
+                );
+                if terminal_failure {
+                    if auth_error.starts_with("BUDGET_EXHAUSTED") {
+                        let reason = format!(
+                            "BUDGET_EXHAUSTED: {}",
+                            auth_error.trim_start_matches("BUDGET_EXHAUSTED:").trim()
+                        );
+                        persist_and_learn_failure!(&reason);
+                    } else {
+                        let reason = format!("MISSION_GATE_FAILURE: {}", auth_error);
+                        persist_and_learn_failure!(&reason);
+                    }
+                    let final_res = FinalResponse {
+                        status: "ERROR".to_string(),
+                        respuesta_conversacional: format!(
+                            "La acción se detuvo antes de ejecutarse: {}",
+                            auth_error
+                        ),
+                    };
+                    return Ok(serde_json::to_string(&final_res).unwrap());
+                }
+                let is_failed_build_verification = auth_error.starts_with("RECOVERY_BARRIER")
+                    && last_failed_test_run.is_some()
+                    && matches!(
+                        mission_type,
+                        MissionType::Construction | MissionType::Refactor | MissionType::Debug
+                    );
+                let next_tool = if needs_user {
+                    "TOOL_ASK_USER"
+                } else if is_failed_build_verification {
+                    "TOOL_PROGRAMMER"
+                } else {
+                    "TOOL_THINK"
+                };
+                let test_repair_reason = last_failed_test_run
+                    .as_ref()
+                    .map(|(failed_command, output)| {
+                        let specific_guidance =
+                            if output.to_ascii_lowercase().contains("jest is not defined") {
+                                "El proyecto ejecuta Node.js `node --test`; Jest no está instalado ni debe añadirse por este error. Reemplaza `jest.fn()` por un doble de almacenamiento local o las utilidades de `node:test`, y alinea las pruebas con las claves y el formato reales de app.js."
+                            } else {
+                                "Corrige el archivo y la implementación señalados por la salida, conserva el runner y las dependencias del proyecto y no repitas el comando sin cambios."
+                            };
+                        format!(
+                            "La barrera bloqueó una acción repetida después de que fallara el verificador `{}`. Pasa directamente a TOOL_PROGRAMMER y repara el defecto real antes de volver a probar. Último error (resumen): {}. {}",
+                            failed_command,
+                            output.chars().take(1200).collect::<String>(),
+                            specific_guidance
+                        )
+                    });
+                let approval_question = if needs_user {
+                    let command = action_proposal
+                        .arguments
+                        .get("comando")
+                        .or_else(|| action_proposal.arguments.get("command"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    format!(
+                        "¿Autorizas ejecutar exactamente la acción '{}'{}? Responde 'Autorizar esta acción' o 'Cancelar'. Motivo: {}",
+                        action_proposal.tool,
+                        if command.is_empty() { String::new() } else { format!(" con el comando `{}`", command) },
+                        auth_error
+                    )
+                } else if next_tool == "TOOL_PROGRAMMER" {
+                    current_role = AgentRole::Executor;
+                    test_repair_reason.unwrap_or_else(|| {
+                        format!(
+                            "La acción repetida fue bloqueada: {}. Corrige la causa del fallo con TOOL_PROGRAMMER; no repitas la misma acción.",
+                            auth_error
+                        )
+                    })
+                } else {
+                    format!(
+                        "La acción no se ejecutó. Cambia la estrategia según este bloqueo: {}",
+                        auth_error
+                    )
+                };
+                forced_next_tool = Some((next_tool.to_string(), approval_question));
+                continue;
+            }
+        }
 
         match tool.as_str() {
             "TOOL_TERMINAL" => {
                 let cmd_lower = comando.to_lowercase();
-                if cmd_lower.contains("http-server")
-                    || cmd_lower.contains("npm start")
-                    || cmd_lower.contains("npm run dev")
-                    || cmd_lower.contains("python -m http.server")
-                    || cmd_lower.contains("flask run")
-                    || cmd_lower.contains("uvicorn")
+                if cmd_lower.contains("firebase") && cmd_lower.contains("deploy") {
+                    if let Err(reason) = crate::llm::phase_planner::firebase_deploy_preflight(
+                        std::path::Path::new(&workspace_path),
+                        &comando,
+                    ) {
+                        let message = format!(
+                            "{} No se ejecutó Firebase Hosting. Configura el proyecto explícitamente en este workspace y vuelve a continuar.",
+                            reason
+                        );
+                        emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                        persist_and_learn_failure!(&message);
+                        return Ok(serde_json::json!({
+                            "status": "ERROR",
+                            "respuesta_conversacional": message
+                        })
+                        .to_string());
+                    }
+                }
+                if is_long_running_server_command(&cmd_lower)
+                    || (mission_requires_local_http_server(&original_prompt_parsed)
+                        && is_local_html_open_command(&comando))
                 {
-                    let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, DEBES usar TOOL_BACKGROUND_START. [SISTEMA: Redirigiendo automticamente a TOOL_BACKGROUND_START...]";
+                    let res_msg = "[SISTEMA INTERNO]: Para servir una aplicación web usa TOOL_BACKGROUND_START. Abrir `index.html` con `start` solo produce una URL file:// y no satisface un requisito de servidor HTTP local. En una página estática sin dependencias, ejecuta `python -m http.server 8000 --bind 127.0.0.1` en segundo plano; después lee sus logs y confirma la URL localhost antes de abrirla o evaluarla. [SISTEMA: Redirigiendo a TOOL_BACKGROUND_START...]";
                     current_context.push_str(&format!("{}\n\n", res_msg));
                     emit_event(
                         &app_handle,
@@ -2792,8 +6098,7 @@ pub async fn run_agent_loop(
                     } else {
                         let res_msg = format!(
                             "Error: El campo 'comando' está vacío. Debes especificar qué ejecutar. \
-                            Ejemplos válidos para este paso: 'start index.html' para abrir el \
-                            navegador, 'ls' para listar archivos, 'node script.js' para ejecutar JS. \
+                            Ejemplos válidos para este paso: 'dir' para listar archivos, 'node --check script.js' para revisar sintaxis y 'node script.js' para ejecutar JS. Para un servidor HTTP usa TOOL_BACKGROUND_START. \
                             Intento vacío #{}/3 — al tercero se forzará TOOL_VISION_EVALUATOR.",
                             empty_count + 1
                         );
@@ -2814,13 +6119,79 @@ pub async fn run_agent_loop(
                     ))
                 {
                     let res_msg = "[SISTEMA INTERNO]: Bucle detectado. Estás repitiendo exactamente el mismo comando. Si falló anteriormente, usa TOOL_PROGRAMMER o TOOL_AUDITOR para arreglar el código. Si ya tuvo éxito y solo estabas probando, la tarea está lista: usa TOOL_FINISH obligatoriamente.";
+                    let command_key = format!(
+                        "{}|{}",
+                        comando.trim().to_lowercase(),
+                        runtime.current_world_hash()
+                    );
+                    let repeated_command_succeeded =
+                        comandos_exitosos_historico.contains(&command_key);
                     emit_event(
                         &app_handle,
                         runtime.current_step(),
                         "Comando repetido interceptado",
                         "WARNING",
                     );
-                    if current_role == AgentRole::Critic {
+                    if repeated_command_succeeded {
+                        match runtime.can_complete() {
+                            crate::core::completion_gate::CompletionDecision::Complete => {
+                                current_role = AgentRole::Critic;
+                                forced_next_tool = Some((
+                                    "TOOL_FINISH".to_string(),
+                                    "El comando de aceptación ya terminó con éxito y el CompletionGate confirma evidencia vigente. Cierra ahora sin volver a ejecutar pruebas.".to_string(),
+                                ));
+                                current_context.push_str(
+                                    "[RECUPERACIÓN DE COMANDO REPETIDO]: La verificación ya pasó y el contrato está completo; se cierra la misión sin repetirla.\n\n",
+                                );
+                            }
+                            crate::core::completion_gate::CompletionDecision::Incomplete(
+                                missing,
+                            ) => {
+                                if approved_consultation_task
+                                    && only_deliverables_review_pending(&missing)
+                                {
+                                    let reason = format!(
+                                        "El criterio técnico ya pasó y solo falta revisión manual de los entregables ({}). No vuelvas a ejecutar la prueba ni reescribas código; usa TOOL_FINISH para mostrar la revisión de fase al usuario.",
+                                        missing.join("; ")
+                                    );
+                                    current_role = AgentRole::Critic;
+                                    forced_next_tool =
+                                        Some(("TOOL_FINISH".to_string(), reason.clone()));
+                                    current_context.push_str(&format!(
+                                        "[RECUPERACIÓN DE COMANDO REPETIDO]: {}\n\n",
+                                        reason
+                                    ));
+                                } else {
+                                    let reason = format!(
+                                        "El comando '{}' ya terminó con éxito y no debe repetirse. El CompletionGate aún marca estos criterios como pendientes:\n- {}\nCompleta o corrige el código y sus pruebas antes de volver a validar.",
+                                        comando,
+                                        missing.join("\n- ")
+                                    );
+                                    current_role = AgentRole::Executor;
+                                    forced_next_tool =
+                                        Some(("TOOL_PROGRAMMER".to_string(), reason.clone()));
+                                    current_context.push_str(&format!(
+                                        "[RECUPERACIÓN DE COMANDO REPETIDO]: {}\n\n",
+                                        reason
+                                    ));
+                                }
+                            }
+                            crate::core::completion_gate::CompletionDecision::Blocked(reasons) => {
+                                let reason = format!(
+                                    "La verificación ya pasó, pero la misión está bloqueada por restricciones del contrato: {}. No repitas el comando.",
+                                    reasons.join("; ")
+                                );
+                                current_context
+                                    .push_str(&format!("[VERIFICACIÓN BLOQUEADA]: {}\n\n", reason));
+                                emit_event(&app_handle, runtime.current_step(), &reason, "ERROR");
+                                let final_res = FinalResponse {
+                                    status: "ERROR".to_string(),
+                                    respuesta_conversacional: reason,
+                                };
+                                return Ok(serde_json::to_string(&final_res).unwrap());
+                            }
+                        }
+                    } else if current_role == AgentRole::Critic {
                         let msg = "[SISTEMA INTERNO]: Bucle de terminal detectado en el Crítico. Estás repitiendo el mismo comando de validación. Debes replantear tu estrategia de validación o solicitar correcciones con TOOL_PROGRAMMER.";
                         emit_event(
                             &app_handle,
@@ -2847,25 +6218,67 @@ pub async fn run_agent_loop(
                             if !has_files {
                                 forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "El workspace está vacío. Crea los archivos requeridos usando TOOL_PROGRAMMER.".to_string()));
                             } else {
-                                let has_test =
-                                    runtime.state_anchor.existing_files.iter().any(|f| {
-                                        f.starts_with("verify_") || f.starts_with("test_")
+                                let existing_test = runtime
+                                    .state_anchor
+                                    .existing_files
+                                    .iter()
+                                    .find(|file| {
+                                        is_test_artifact_path(file)
+                                            && test_file_has_runnable_cases(&workspace_path, file)
+                                    })
+                                    .and_then(|file| {
+                                        test_command_for_path(file)
+                                            .map(|command| (file.clone(), command))
                                     });
-                                if !has_test {
-                                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Crea un script de verificación (verify_*.py) usando TOOL_PROGRAMMER.".to_string()));
+                                if existing_test.is_none() {
+                                    let frontend_sources =
+                                        runtime.state_anchor.existing_files.iter().any(|file| {
+                                            matches!(
+                                                std::path::Path::new(file)
+                                                    .extension()
+                                                    .and_then(|value| value.to_str())
+                                                    .map(str::to_ascii_lowercase)
+                                                    .as_deref(),
+                                                Some(
+                                                    "html"
+                                                        | "htm"
+                                                        | "css"
+                                                        | "js"
+                                                        | "mjs"
+                                                        | "cjs"
+                                                        | "ts"
+                                                        | "tsx"
+                                                )
+                                            )
+                                        });
+                                    if frontend_sources
+                                        && mission_requires_visual_verification(
+                                            &original_prompt_parsed,
+                                            &workspace_path,
+                                        )
+                                    {
+                                        if let Some((next_tool, guidance)) =
+                                            web_validation_recovery_action(
+                                                &original_prompt_parsed,
+                                                &workspace_path,
+                                                last_local_ui_url.as_deref(),
+                                                last_http_server_task_id.as_deref(),
+                                            )
+                                        {
+                                            current_role = AgentRole::Critic;
+                                            forced_next_tool = Some((next_tool, guidance));
+                                        }
+                                    } else {
+                                        let test_guidance = "Crea pruebas con el runner y el lenguaje ya usados por el proyecto; no supongas Python ni inventes dependencias.";
+                                        forced_next_tool = Some((
+                                            "TOOL_PROGRAMMER".to_string(),
+                                            test_guidance.to_string(),
+                                        ));
+                                    }
                                 } else {
-                                    let test_f = runtime
-                                        .state_anchor
-                                        .existing_files
-                                        .iter()
-                                        .find(|f| {
-                                            f.starts_with("verify_") || f.starts_with("test_")
-                                        })
-                                        .unwrap();
-                                    forced_next_tool = Some((
-                                        "TOOL_TERMINAL".to_string(),
-                                        format!("python {}", test_f),
-                                    ));
+                                    let (_test_file, test_cmd) = existing_test.unwrap();
+                                    forced_next_tool =
+                                        Some(("TOOL_TERMINAL".to_string(), test_cmd));
                                 }
                             }
                             current_context.push_str(&format!("{}\n\n", msg));
@@ -2877,14 +6290,11 @@ pub async fn run_agent_loop(
                     }
                 } else {
                     let cmd_lower = comando.to_lowercase();
-                    if cmd_lower.contains("http-server")
-                        || cmd_lower.contains("npm start")
-                        || cmd_lower.contains("npm run dev")
-                        || cmd_lower.contains("python -m http.server")
-                        || cmd_lower.contains("flask run")
-                        || cmd_lower.contains("uvicorn")
+                    if is_long_running_server_command(&cmd_lower)
+                        || (mission_requires_local_http_server(&original_prompt_parsed)
+                            && is_local_html_open_command(&comando))
                     {
-                        let res_msg = "[SISTEMA INTERNO]: Has intentado iniciar un servidor web continuo (http-server, npm start, etc.) usando TOOL_TERMINAL. Esto bloquea la terminal infinitamente y rompe el agente.\nSi el objetivo es probar HTML/JS estático, usa `start index.html` para abrirlo directamente en el navegador sin servidor.\nSi requieres obligatoriamente un backend, DEBES usar TOOL_BACKGROUND_START. [SISTEMA: Redirigiendo automticamente a TOOL_BACKGROUND_START...]";
+                        let res_msg = "[SISTEMA INTERNO]: Para servir una aplicación web usa TOOL_BACKGROUND_START. Abrir `index.html` con `start` solo produce una URL file:// y no satisface un requisito de servidor HTTP local. En una página estática sin dependencias, ejecuta `python -m http.server 8000 --bind 127.0.0.1` en segundo plano; después lee sus logs y confirma la URL localhost antes de abrirla o evaluarla. [SISTEMA: Redirigiendo a TOOL_BACKGROUND_START...]";
                         current_context.push_str(&format!("{}\n\n", res_msg));
                         emit_event(
                             &app_handle,
@@ -2927,27 +6337,18 @@ pub async fn run_agent_loop(
 
                         // ── Pre-check: verify the script file exists before running it ─────────
                         let cmd_lower_check = comando.to_lowercase();
-                        let script_file = if cmd_lower_check.starts_with("node ") {
-                            cmd_lower_check
-                                .trim_start_matches("node ")
-                                .split_whitespace()
-                                .find(|arg| !arg.starts_with('-'))
-                        } else if cmd_lower_check.starts_with("python ")
-                            || cmd_lower_check.starts_with("python3 ")
+                        let script_file = if ["node ", "node.exe ", "nodejs "]
+                            .iter()
+                            .any(|prefix| cmd_lower_check.starts_with(prefix))
                         {
-                            let rest = if cmd_lower_check.starts_with("python3 ") {
-                                cmd_lower_check.trim_start_matches("python3 ")
-                            } else {
-                                cmd_lower_check.trim_start_matches("python ")
-                            };
-                            rest.split_whitespace().find(|arg| !arg.starts_with('-'))
+                            node_script_argument(&comando)
                         } else {
-                            None
+                            python_script_argument(&comando)
                         };
                         if let Some(script) = script_file {
                             if !script.is_empty() {
                                 let script_path =
-                                    std::path::Path::new(&workspace_path).join(script);
+                                    std::path::Path::new(&workspace_path).join(&script);
                                 if !script_path.exists() {
                                     let warn_msg = format!(
                                         "[SISTEMA]: El archivo '{}' NO existe en el workspace. No puedes ejecutar un archivo que no existe.\n\
@@ -2970,9 +6371,9 @@ pub async fn run_agent_loop(
                             }
                         }
 
-                        // ── P1: Intercept concatenated commands (&&) in PowerShell ─────────────
+                        // ── P1: Keep terminal actions atomic so errors remain attributable ──
                         if comando.contains("&&") {
-                            let warn_msg = "[SISTEMA]: En este entorno (PowerShell), el operador '&&' no está soportado para concatenar comandos en una sola línea de TOOL_TERMINAL.\nPor favor, ejecuta los comandos uno por uno en pasos separados (ej. usa TOOL_TERMINAL para el primero, evalúa el resultado, y luego usa TOOL_TERMINAL para el segundo).";
+                            let warn_msg = "[SISTEMA]: TOOL_TERMINAL ejecuta un solo comando por acción para que cada resultado pueda comprobarse. Divide la secuencia en acciones separadas y continúa solo después de revisar la salida.";
                             current_context.push_str(&format!(
                                 "Resultado TOOL_TERMINAL Error: {}\n\n",
                                 warn_msg
@@ -3036,7 +6437,7 @@ pub async fn run_agent_loop(
                         if let Some(crate::core::recovery::RecoveryDecision::RepairCriteria {
                             criteria,
                             recommended_tool,
-                        }) = repair_decision
+                        }) = repair_decision.clone()
                         {
                             let failed_world = runtime.current_world_hash();
                             if last_failed_verifier_world != Some(failed_world) {
@@ -3059,20 +6460,31 @@ pub async fn run_agent_loop(
                                         &message,
                                         "ERROR",
                                     );
-                                    persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                    persist_and_learn_failure!(&message);
                                     return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
                                 }
                             }
                             let focused_criteria = focused_repair_criteria(&criteria, 2);
                             verifier_diagnostic = focused_criteria.join("\n");
-                            current_context.push_str(&format!("\nVerificación fallida, diagnóstico real: {}\n", verifier_diagnostic));
+                            current_context.push_str(&format!(
+                                "\nVerificación fallida, diagnóstico real: {}\n",
+                                verifier_diagnostic
+                            ));
                             if verifier_failures >= 4 {
                                 let message = format!("VERIFIER_REPAIR_EXHAUSTED: La verificación inicial y tres reparaciones reales fallaron. Archivos conservados. {}", verifier_diagnostic);
                                 emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
-                                persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                persist_and_learn_failure!(&message);
                                 return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
                             }
-                            emit_event(&app_handle, runtime.current_step(), &format!("[SEMANTIC_VERIFICATION] Verificador falló. Transición a {}.", recommended_tool), "WARNING");
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                &format!(
+                                    "[SEMANTIC_VERIFICATION] Verificador falló. Transición a {}.",
+                                    recommended_tool
+                                ),
+                                "WARNING",
+                            );
                             current_role = AgentRole::Executor;
                             forced_next_tool = Some((
                                 recommended_tool.clone(),
@@ -3086,6 +6498,17 @@ pub async fn run_agent_loop(
                                 // execute_action() already records world snapshots before/after internally
                                 let out = observation.payload.clone();
                                 let _world_hash_before = observation.state_hash_before.unwrap_or(0);
+                                if observation.exit_code == Some(0) {
+                                    if let Some(url) = extract_local_ui_url(&out) {
+                                        last_local_ui_url = Some(url.clone());
+                                        emit_event(
+                                            &app_handle,
+                                            runtime.current_step(),
+                                            &format!("[UI LOCAL] URL de vista detectada en la salida real: {url}"),
+                                            "INFO",
+                                        );
+                                    }
+                                }
 
                                 // ── Package-install amnesia fix ──────────────────────────────────────
                                 // If the command was a package install (pip install X, npm install X),
@@ -3107,14 +6530,125 @@ pub async fn run_agent_loop(
                                 // ── MissionRuntime: record successful observation with real world data ──
 
                                 current_context.push_str(&format!("\n[RESULTADO REAL DE TERMINAL] Comando: {}\nExit code: {:?}\nSalida: {}\n", comando, observation.exit_code, digested_out));
-                                emit_event(&app_handle, runtime.current_step(), &format!("[TERMINAL] {} | exit={:?} | archivos cambiados={}\n{}", comando, observation.exit_code, observation.physical_files_changed.unwrap_or(0), digested_out), "SUCCESS");
-                                if matches!(runtime.can_complete(), crate::core::completion_gate::CompletionDecision::Complete) {
+                                emit_event(
+                                    &app_handle,
+                                    runtime.current_step(),
+                                    &format!(
+                                        "[TERMINAL] {} | exit={:?} | archivos cambiados={}\n{}",
+                                        comando,
+                                        observation.exit_code,
+                                        observation.physical_files_changed.unwrap_or(0),
+                                        digested_out
+                                    ),
+                                    "SUCCESS",
+                                );
+                                if observation.exit_code == Some(0) {
+                                    reset_terminal_retry_circuits_after_success(
+                                        &mut runtime,
+                                        &mut retry_tracker,
+                                    );
+                                    if is_test_runner_command(&comando) {
+                                        last_failed_test_run = None;
+                                        if successful_test_run_has_behavioral_cases(
+                                            &comando,
+                                            &workspace_path,
+                                            &digested_out,
+                                        ) {
+                                            programmer_calls_since_validation = 0;
+                                            programmer_stall_recoveries = 0;
+                                        } else {
+                                            let message = "[VALIDATION] El runner terminó con código 0, pero no se encontraron casos con aserciones verificables; esto no reinicia el freno de progreso.";
+                                            current_context.push_str(&format!("{}\n\n", message));
+                                            emit_event(
+                                                &app_handle,
+                                                runtime.current_step(),
+                                                message,
+                                                "WARNING",
+                                            );
+                                        }
+                                    }
+                                    if is_node_syntax_check(&comando) {
+                                        let notice = format!(
+                                            "[DIAGNÓSTICO SUPERADO] La verificación actual `{}` terminó con código 0. Los errores de sintaxis anteriores de este archivo ya no describen el estado vigente; no los repitas como diagnóstico. Continúa con los requisitos funcionales que todavía no tengan evidencia.\n\n",
+                                            comando.replace('`', "'")
+                                        );
+                                        current_context.push_str(&notice);
+                                    }
+                                    if let Some((next_tool, next_argument)) =
+                                        web_validation_handoff_action(
+                                            &original_prompt_parsed,
+                                            &comando,
+                                            programmer_stall_recoveries,
+                                            last_local_ui_url.as_deref(),
+                                            &workspace_path,
+                                            last_http_server_task_id.as_deref(),
+                                        )
+                                    {
+                                        // Override stale model/critic actions. If a server is
+                                        // already running, read that task instead of starting
+                                        // a duplicate process.
+                                        current_role = AgentRole::Executor;
+                                        forced_next_tool = Some((next_tool.clone(), next_argument));
+                                        current_context.push_str(
+                                            "[NO-PROGRESS GUARD] La sintaxis pasó, pero eso no demuestra que la aplicación funcione. La siguiente acción obligatoria es confirmar o iniciar el servidor HTTP local; después se leerán sus logs y se revisará la página real. No vuelvas a programar antes de esa comprobación.\n\n",
+                                        );
+                                        emit_event(
+                                            &app_handle,
+                                            runtime.current_step(),
+                                            &format!(
+                                                "[NO-PROGRESS GUARD] Sintaxis válida; se fuerza {} para continuar la revisión web.",
+                                                next_tool
+                                            ),
+                                            "INFO",
+                                        );
+                                    }
+                                    let successful_command_key = format!(
+                                        "{}|{}",
+                                        comando.trim().to_lowercase(),
+                                        runtime.current_world_hash()
+                                    );
+                                    comandos_exitosos_historico
+                                        .insert(successful_command_key.clone());
+                                    // Record the post-command state too: test tools can create
+                                    // temporary files, so the initial command key may have a
+                                    // different world hash from the next turn.
+                                    comandos_ejecutados_historico.insert(successful_command_key);
+                                }
+                                let required_web_review_pending =
+                                    mission_requires_local_http_server(&original_prompt_parsed)
+                                        && (last_local_ui_url.is_none()
+                                            || (visual_validation_required
+                                                && visual_validation_world_hash.is_none()));
+                                if !required_web_review_pending
+                                    && matches!(
+                                        runtime.can_complete(),
+                                        crate::core::completion_gate::CompletionDecision::Complete
+                                    )
+                                {
                                     current_role = AgentRole::Critic;
                                     forced_next_tool = Some(("TOOL_FINISH".into(), "El contrato tiene evidencia vigente para todos los criterios. Evalúa el cierre sin repetir las pruebas.".into()));
                                 }
                                 last_progress_step = runtime.current_step();
                             }
                             Err(err) => {
+                                if comando.to_ascii_lowercase().contains("firebase")
+                                    && comando.to_ascii_lowercase().contains("deploy")
+                                    && is_firebase_hosting_spark_executable_rejection(&err)
+                                {
+                                    let message = "FIREBASE_HOSTING_ASSET_BLOCKED: Firebase rechazó la carga porque el plan Spark no admite archivos ejecutables. No se confirmó una publicación. Excluye todos los .bat/.cmd/.exe/.dll del directorio público en firebase.json, revisa el historial de Hosting y solo después vuelve a intentarlo.".to_string();
+                                    emit_event(
+                                        &app_handle,
+                                        runtime.current_step(),
+                                        &message,
+                                        "ERROR",
+                                    );
+                                    persist_and_learn_failure!(&message);
+                                    return Ok(serde_json::json!({
+                                        "status": "ERROR",
+                                        "respuesta_conversacional": message
+                                    })
+                                    .to_string());
+                                }
                                 // ── Auto ENV_MANAGER: detect binary-not-found and auto-install ──────────
                                 let is_binary_missing = err.contains("is not recognized")
                                     || err.contains("not recognized as an internal")
@@ -3124,22 +6658,33 @@ pub async fn run_agent_loop(
 
                                 if is_binary_missing {
                                     // ── Step 1: Record error Observation through the full circuit ──
-                                    let _ = runtime.observe_world();
-                                    runtime.record_tool_call();
-                                    let world_hash_after = runtime.current_world_hash();
-                                    let mut err_obs = crate::core::observation::Observation::error(
-                                        "TOOL_TERMINAL",
-                                        &err,
-                                        None,
-                                        true,
-                                        None,
-                                    );
-                                    err_obs.command = Some(comando.clone());
-                                    err_obs.state_hash_after = Some(world_hash_after);
-                                    runtime.record_observation(&err_obs);
+                                    // execute_action already records the observation and its
+                                    // recovery decision. Only synthesize one when dispatch itself
+                                    // returned Err without an Observation.
+                                    if repair_decision.is_none() {
+                                        let _ = runtime.observe_world();
+                                        runtime.record_tool_call();
+                                        let world_hash_after = runtime.current_world_hash();
+                                        let mut err_obs =
+                                            crate::core::observation::Observation::error(
+                                                "TOOL_TERMINAL",
+                                                &err,
+                                                None,
+                                                true,
+                                                None,
+                                            );
+                                        err_obs.command = Some(comando.clone());
+                                        err_obs.state_hash_after = Some(world_hash_after);
+                                        runtime.record_observation(&err_obs);
+                                    }
 
                                     // ── Step 2: RecoveryEngine classifies and produces RepairEnvironment ──
-                                    let recovery_dec = runtime.plan_recovery("TOOL_TERMINAL", &err);
+                                    let recovery_dec = reuse_or_record_recovery_decision(
+                                        &mut runtime,
+                                        repair_decision.clone(),
+                                        "TOOL_TERMINAL",
+                                        &err,
+                                    );
 
                                     // ── Step 3: Execute TOOL_ENV_MANAGER as the recovery action via ActionProposal ──
                                     let binary =
@@ -3147,7 +6692,19 @@ pub async fn run_agent_loop(
                                     emit_event(&app_handle, runtime.current_step(),
                                     &format!("[RECOVERY→TOOL_ENV_MANAGER] Binario '{}' no encontrado — ejecutando instalación automática por RecoveryEngine...", binary),
                                     "WARNING");
-                                    let _ = recovery_dec; // RecoveryEngine already consulted; install proceeds
+                                    if let crate::core::recovery::RecoveryDecision::Abort {
+                                        reason,
+                                    } = &recovery_dec
+                                    {
+                                        emit_event(
+                                            &app_handle,
+                                            runtime.current_step(),
+                                            &format!("[RECOVERY] Abort: {}", reason),
+                                            "FATAL",
+                                        );
+                                        runtime.fail_mission(reason.clone());
+                                        break;
+                                    }
 
                                     let env_proposal = crate::core::policy::ActionProposal {
                                         tool: "TOOL_ENV_MANAGER".to_string(),
@@ -3278,21 +6835,31 @@ pub async fn run_agent_loop(
 
                                     // ── MissionRuntime: record error Observation → StallDetector + RecoveryEngine ──
                                     {
-                                        let _ = runtime.observe_world();
-                                        runtime.record_tool_call();
-                                        let world_hash_after = runtime.current_world_hash();
-                                        let mut obs = crate::core::observation::Observation::error(
+                                        // Reuse the decision produced from the action's real
+                                        // Observation. Recording it a second time increments the
+                                        // consecutive-failure circuit twice for one command.
+                                        if repair_decision.is_none() {
+                                            let _ = runtime.observe_world();
+                                            runtime.record_tool_call();
+                                            let world_hash_after = runtime.current_world_hash();
+                                            let mut obs =
+                                                crate::core::observation::Observation::error(
+                                                    "TOOL_TERMINAL",
+                                                    &err,
+                                                    None,
+                                                    true,
+                                                    None,
+                                                );
+                                            obs.command = Some(comando.clone());
+                                            obs.state_hash_after = Some(world_hash_after);
+                                            runtime.record_observation(&obs);
+                                        }
+                                        let recovery_dec = reuse_or_record_recovery_decision(
+                                            &mut runtime,
+                                            repair_decision.clone(),
                                             "TOOL_TERMINAL",
                                             &err,
-                                            None,
-                                            true,
-                                            None,
                                         );
-                                        obs.command = Some(comando.clone());
-                                        obs.state_hash_after = Some(world_hash_after);
-                                        runtime.record_observation(&obs);
-                                        let recovery_dec =
-                                            runtime.plan_recovery("TOOL_TERMINAL", &err);
                                         match &recovery_dec {
                                         crate::core::recovery::RecoveryDecision::RepairEnvironment { advice } => {
                                             emit_event(&app_handle, runtime.current_step(), &format!("[RECOVERY] Entorno: {}", advice), "WARNING");
@@ -3313,6 +6880,9 @@ pub async fn run_agent_loop(
                                     let error_type = crate::core::error_classifier::classify_error(
                                         &err, &res_msg, 1,
                                     );
+                                    if is_test_runner_command(&comando) {
+                                        last_failed_test_run = Some((comando.clone(), err.clone()));
+                                    }
                                     let should_escalate =
                                         retry_tracker.record_failure("TOOL_TERMINAL", &error_type);
 
@@ -3339,8 +6909,8 @@ pub async fn run_agent_loop(
                                             Salida del comando:\n{}\n\
                                             INSTRUCCIÓN DE AUTO-REPARACIÓN:\n\
                                             1. PROHIBIDO usar TOOL_ASK_USER para pedir al usuario que arregle código o tests.\n\
-                                            2. Si un script de prueba (ej. verify_*.py) reporta elementos faltantes que sí existen con otros atributos, o si tiene un error en su conteo o exit code, USA TOOL_PROGRAMMER para corregir el script de prueba.\n\
-                                            3. Si el archivo de la aplicación tiene un error o le falta la etiqueta/función, USA TOOL_PROGRAMMER para corregir el archivo de la aplicación.\n\
+                                            2. Si falla una prueba, corrige con TOOL_PROGRAMMER el archivo que contiene el fallo o la aplicación; conserva el runner y el lenguaje del proyecto.\n\
+                                            3. Si falta una prueba, crea una que ejercite comportamiento real en el stack existente; no cambies de lenguaje ni generes verificadores Python para otra plataforma.\n\
                                             4. Transición forzada a TOOL_PROGRAMMER para aplicar la solución directamente.",
                                             comando, err
                                         );
@@ -3371,14 +6941,43 @@ pub async fn run_agent_loop(
                                             error_type),
                                         "WARNING");
 
-                                        // For Logic errors: force a THINK step before the next retry
+                                        // A failing test is already ground-truth diagnosis. Send the
+                                        // failed test output straight to the coder instead of spending
+                                        // a turn asking a small model to reinterpret it.
                                         if error_type
                                             == crate::core::error_classifier::ErrorType::Logic
                                         {
-                                            forced_next_tool = Some((
-                                            "TOOL_THINK".to_string(),
-                                            format!("Analiza el error: '{}'. Propone la corrección exacta antes de reintentar.", &err[..err.len().min(100)])
-                                        ));
+                                            if is_test_runner_command(&comando) {
+                                                current_role = AgentRole::Executor;
+                                                let jest_guidance = if err
+                                                    .to_ascii_lowercase()
+                                                    .contains("jest is not defined")
+                                                {
+                                                    "No instales Jest: el runner configurado es `node --test`. Sustituye `jest.fn()` por un mock compatible con Node y prueba las funciones contra el estado y las claves reales de app.js."
+                                                } else {
+                                                    "Conserva el runner y corrige el código o la prueba que causó el error; no cambies de framework para ocultarlo."
+                                                };
+                                                forced_next_tool = Some((
+                                                    "TOOL_PROGRAMMER".to_string(),
+                                                    format!(
+                                                        "Falló `{}`. Repara el error comprobado directamente antes de ejecutar otra prueba. Salida real: {}. {}",
+                                                        comando,
+                                                        err.chars().take(1600).collect::<String>(),
+                                                        jest_guidance
+                                                    ),
+                                                ));
+                                                emit_event(
+                                                    &app_handle,
+                                                    runtime.current_step(),
+                                                    "[AUTO-REPARACIÓN] Prueba fallida: pasando directamente al programador con el error real.",
+                                                    "ACTION",
+                                                );
+                                            } else {
+                                                forced_next_tool = Some((
+                                                    "TOOL_THINK".to_string(),
+                                                    format!("Analiza el error: '{}'. Propone la corrección exacta antes de reintentar.", &err[..err.len().min(100)])
+                                                ));
+                                            }
                                             intercept_consecutive = 0;
                                         }
                                     }
@@ -3536,6 +7135,21 @@ pub async fn run_agent_loop(
                 }
             }
             "TOOL_BACKGROUND_START" => {
+                let original_background_command = comando.clone();
+                let comando = local_http_server_command_for_request(
+                    &original_prompt_parsed,
+                    &original_background_command,
+                )
+                .unwrap_or(&original_background_command)
+                .to_string();
+                if comando != original_background_command {
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        "[SERVIDOR LOCAL] Se reemplazó la apertura file:// por un servidor HTTP en segundo plano, según el mandato.",
+                        "INFO",
+                    );
+                }
                 if comando.trim().is_empty() {
                     if comandos_ejecutados_historico.contains(&format!(
                         "__EMPTY_BG_CMD__|{}",
@@ -3588,38 +7202,135 @@ pub async fn run_agent_loop(
                         &format!("Iniciando tarea asíncrona '{}': {}", task_id, comando),
                         "ACTION",
                     );
-                    match start_background_task(&workspace_path, &task_id, &comando).await {
-                        Ok(out) => {
-                            let sys_guidance = "[SISTEMA INTERNO]: El proceso en segundo plano ha sido INICIADO EXITOSAMENTE. NO repitas este comando. Ahora DEBES continuar con la misin usando otras herramientas (por ejemplo, TOOL_VISION_EVALUATOR, TOOL_TESTER, o TOOL_FINISH si has terminado).";
-                            current_context
-                                .push_str(&format!("Resultado: {}\n{}\n\n", out, sys_guidance));
-                            emit_event(&app_handle, runtime.current_step(), &out, "SUCCESS");
-                        }
-                        Err(err) => {
+                    let background_proposal = crate::core::policy::ActionProposal {
+                        tool: "TOOL_BACKGROUND_START".to_string(),
+                        arguments: serde_json::json!({ "comando": comando.clone(), "task_id": task_id.clone() }),
+                        expected_effect: "Iniciar el proceso solicitado y registrar su identificador para poder consultarlo o detenerlo".to_string(),
+                        risk: crate::core::policy::PolicyEngine::classify_terminal_command(&comando),
+                        world_hash: Some(runtime.current_world_hash()),
+                    };
+                    match runtime.execute_action(&background_proposal).await {
+                        Ok(observation)
+                            if observation.status
+                                == crate::core::observation::ObservationStatus::Success =>
+                        {
+                            last_background_task_id = Some(task_id.clone());
+                            let requires_http_confirmation =
+                                mission_requires_local_http_server(&original_prompt_parsed)
+                                    && is_long_running_server_command(&comando);
+                            let sys_guidance = if requires_http_confirmation {
+                                local_http_server_read_attempts = 0;
+                                last_http_server_task_id = Some(task_id.clone());
+                                forced_next_tool =
+                                    Some(("TOOL_BACKGROUND_READ".to_string(), task_id.clone()));
+                                "[SISTEMA INTERNO]: El proceso se inició, pero eso no confirma que sea un servidor activo. Lee sus logs ahora y confirma una URL HTTP localhost antes de abrirla o evaluarla."
+                            } else {
+                                "[SISTEMA INTERNO]: El proceso en segundo plano se inició. Consulta sus logs y verifica su efecto antes de continuar; no deduzcas que está activo solo por el acuse de inicio."
+                            };
                             current_context.push_str(&format!(
-                                "Resultado: Error iniciando tarea: {}\n\n",
-                                err
+                                "Resultado: {}\n{}\n\n",
+                                observation.payload, sys_guidance
                             ));
                             emit_event(
                                 &app_handle,
                                 runtime.current_step(),
-                                &format!("Error: {}", err),
+                                &observation.payload,
+                                "SUCCESS",
+                            );
+                            last_progress_step = runtime.current_step();
+                        }
+                        Ok(observation) => {
+                            current_context.push_str(&format!(
+                                "Resultado: Error iniciando tarea: {}\n\n",
+                                observation.payload
+                            ));
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                &observation.payload,
                                 "ERROR",
                             );
+                        }
+                        Err(error) => {
+                            current_context.push_str(&format!(
+                                "Resultado: Error iniciando tarea: {}\n\n",
+                                error
+                            ));
+                            emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
                         }
                     }
                 }
             }
-            "TOOL_BACKGROUND_READ" => {
+            "TOOL_BACKGROUND_READ" | "TOOL_BACKGROUND_QUERY" => {
                 emit_event(
                     &app_handle,
                     runtime.current_step(),
                     &format!("Leyendo logs asíncronos de '{}'", task_id),
                     "ACTION",
                 );
-                match read_task_logs(&task_id).await {
-                    Ok(logs) => {
-                        current_context.push_str(&format!("Logs obtenidos:\n{}\n\n", logs));
+                let read_proposal = crate::core::policy::ActionProposal {
+                    tool: tool.clone(),
+                    arguments: serde_json::json!({ "task_id": task_id.clone() }),
+                    expected_effect: "Leer los registros del proceso identificado".to_string(),
+                    risk: crate::core::policy::RiskLevel::Safe,
+                    world_hash: Some(runtime.current_world_hash()),
+                };
+                match runtime.execute_action(&read_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        let logged_url = extract_local_ui_url(&observation.payload);
+                        let confirmed_url = if logged_url.is_some() {
+                            logged_url.clone()
+                        } else if mission_requires_local_http_server(&original_prompt_parsed) {
+                            probe_background_local_http_server(&task_id).await
+                        } else {
+                            None
+                        };
+                        if let Some(url) = confirmed_url {
+                            last_local_ui_url = Some(url.clone());
+                            local_http_server_read_attempts = 0;
+                            let confirmation_source = if logged_url.is_some() {
+                                "logs"
+                            } else {
+                                "petición HTTP real"
+                            };
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                &format!("[UI LOCAL] URL confirmada mediante {confirmation_source}: {url}"),
+                                "SUCCESS",
+                            );
+                            if mission_requires_visual_verification(
+                                &original_prompt_parsed,
+                                &workspace_path,
+                            ) {
+                                forced_next_tool = Some(("TOOL_VISION_EVALUATOR".to_string(), url));
+                            }
+                        } else if mission_requires_local_http_server(&original_prompt_parsed) {
+                            local_http_server_read_attempts =
+                                local_http_server_read_attempts.saturating_add(1);
+                            if local_http_server_read_attempts < 3 {
+                                forced_next_tool =
+                                    Some(("TOOL_BACKGROUND_READ".to_string(), task_id.clone()));
+                                current_context.push_str(
+                                    "[SERVIDOR LOCAL] Aún no aparece una URL HTTP en los logs. Vuelve a leer este mismo proceso; no abras index.html con file:// ni afirmes que el servidor quedó confirmado.\n\n",
+                                );
+                            } else {
+                                let message = "LOCAL_SERVER_NOT_CONFIRMED: los logs no anunciaron una URL y la comprobación HTTP directa del servidor local tampoco recibió una respuesta válida tras tres intentos. Se conservó el trabajo y no se declaró prueba visual.";
+                                emit_event(&app_handle, runtime.current_step(), message, "ERROR");
+                                let _ = crate::core::kill_task(&task_id).await;
+                                persist_and_learn_failure!(message);
+                                return Ok(serde_json::json!({
+                                    "status": "INCOMPLETE",
+                                    "respuesta_conversacional": message
+                                })
+                                .to_string());
+                            }
+                        }
+                        current_context
+                            .push_str(&format!("Logs obtenidos:\n{}\n\n", observation.payload));
                         emit_event(
                             &app_handle,
                             runtime.current_step(),
@@ -3627,13 +7338,25 @@ pub async fn run_agent_loop(
                             "SUCCESS",
                         );
                     }
-                    Err(err) => {
-                        let fmt_err = format_system_error(&err).await;
+                    Ok(observation) => {
                         current_context.push_str(&format!(
                             "[AUTO-DEBUGGER] Error al leer logs: {}\n\n",
-                            fmt_err
+                            observation.payload
                         ));
-                        emit_event(&app_handle, runtime.current_step(), &fmt_err, "ERROR");
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "ERROR",
+                        );
+                    }
+                    Err(error) => {
+                        let formatted = format_system_error(&error).await;
+                        current_context.push_str(&format!(
+                            "[AUTO-DEBUGGER] Error al leer logs: {}\n\n",
+                            formatted
+                        ));
+                        emit_event(&app_handle, runtime.current_step(), &formatted, "ERROR");
                     }
                 }
             }
@@ -3644,36 +7367,79 @@ pub async fn run_agent_loop(
                     &format!("Destruyendo tarea asíncrona '{}'", task_id),
                     "ACTION",
                 );
-                match kill_task(&task_id).await {
-                    Ok(msg) => {
-                        current_context.push_str(&format!("Resultado: {}\n\n", msg));
-                        emit_event(&app_handle, runtime.current_step(), &msg, "SUCCESS");
+                let kill_proposal = crate::core::policy::ActionProposal {
+                    tool: "TOOL_BACKGROUND_KILL".to_string(),
+                    arguments: serde_json::json!({ "task_id": task_id.clone() }),
+                    expected_effect: "Detener el proceso identificado en segundo plano".to_string(),
+                    risk: crate::core::policy::RiskLevel::Moderate,
+                    world_hash: Some(runtime.current_world_hash()),
+                };
+                match runtime.execute_action(&kill_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        current_context
+                            .push_str(&format!("Resultado: {}\n\n", observation.payload));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "SUCCESS",
+                        );
                     }
-                    Err(err) => {
-                        let fmt_err = format_system_error(&err).await;
+                    Ok(observation) => {
                         current_context.push_str(&format!(
                             "[AUTO-DEBUGGER] Error matando tarea: {}\n\n",
-                            fmt_err
+                            observation.payload
                         ));
-                        emit_event(&app_handle, runtime.current_step(), &fmt_err, "ERROR");
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "ERROR",
+                        );
+                    }
+                    Err(error) => {
+                        let formatted = format_system_error(&error).await;
+                        current_context.push_str(&format!(
+                            "[AUTO-DEBUGGER] Error matando tarea: {}\n\n",
+                            formatted
+                        ));
+                        emit_event(&app_handle, runtime.current_step(), &formatted, "ERROR");
                     }
                 }
             }
-            "TOOL_WEB_SCRAPER" => {
+            "TOOL_WEB_SCRAPER" | "TOOL_BROWSE" => {
                 emit_event(
                     &app_handle,
                     runtime.current_step(),
                     &format!("Extrayendo contenido de: {}", url),
                     "ACTION",
                 );
-                match crate::net::fetch_url_text(&url).await {
-                    Ok(content) => {
-                        let preview = if content.len() > 1000 {
-                            format!("{}... (truncado)", &content[..1000])
-                        } else {
-                            content.clone()
-                        };
-                        current_context.push_str(&format!("Contenido web:\n{}\n\n", preview));
+                let browse_proposal = crate::core::policy::ActionProposal {
+                    tool: tool.clone(),
+                    arguments: serde_json::json!({ "url": url.clone() }),
+                    expected_effect: "Extraer texto de la página solicitada para analizarla"
+                        .to_string(),
+                    risk: crate::core::policy::RiskLevel::Safe,
+                    world_hash: Some(runtime.current_world_hash()),
+                };
+                match runtime.execute_action(&browse_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        let preview = truncate_chars(&observation.payload, 1000);
+                        current_context.push_str(&format!(
+                            "Contenido web:\n{}{}\n\n",
+                            preview,
+                            if observation.payload.chars().count() > 1000 {
+                                "... (truncado)"
+                            } else {
+                                ""
+                            }
+                        ));
                         emit_event(
                             &app_handle,
                             runtime.current_step(),
@@ -3681,9 +7447,67 @@ pub async fn run_agent_loop(
                             "SUCCESS",
                         );
                     }
-                    Err(err) => {
-                        current_context.push_str(&format!("Error web: {}\n\n", err));
-                        emit_event(&app_handle, runtime.current_step(), &err, "ERROR");
+                    Ok(observation) => {
+                        current_context
+                            .push_str(&format!("Error web: {}\n\n", observation.payload));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "ERROR",
+                        );
+                    }
+                    Err(error) => {
+                        current_context.push_str(&format!("Error web: {}\n\n", error));
+                        emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
+                    }
+                }
+            }
+            "TOOL_GIT" => {
+                let git_command = if comando.trim().is_empty() {
+                    "status".to_string()
+                } else {
+                    comando.trim().to_string()
+                };
+                let git_proposal = crate::core::policy::ActionProposal {
+                    tool: "TOOL_GIT".to_string(),
+                    arguments: serde_json::json!({ "comando": git_command.clone() }),
+                    expected_effect: "Ejecutar el subcomando Git solicitado dentro del workspace"
+                        .to_string(),
+                    risk: crate::core::policy::PolicyEngine::classify_terminal_command(&format!(
+                        "git {}",
+                        git_command
+                    )),
+                    world_hash: Some(runtime.current_world_hash()),
+                };
+                match runtime.execute_action(&git_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        current_context
+                            .push_str(&format!("Resultado TOOL_GIT:\n{}\n\n", observation.payload));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "Operación Git completada.",
+                            "SUCCESS",
+                        );
+                        last_progress_step = runtime.current_step();
+                    }
+                    Ok(observation) => {
+                        current_context
+                            .push_str(&format!("Error TOOL_GIT:\n{}\n\n", observation.payload));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "ERROR",
+                        );
+                    }
+                    Err(error) => {
+                        current_context.push_str(&format!("Error TOOL_GIT:\n{}\n\n", error));
+                        emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
                     }
                 }
             }
@@ -3701,213 +7525,162 @@ pub async fn run_agent_loop(
                         "Auditando archivos locales...",
                         "ACTION",
                     );
-                    // Bug 2 fix: always scan workspace directly instead of relying on archivos_vec
-                    // archivos_vec may be empty if the LLM didn't populate it, causing "0 archivos"
-                    let files_to_audit = if archivos_vec.is_empty() {
-                        // Auto-discover all source files in workspace
-                        let mut discovered = Vec::new();
-                        if let Ok(entries) = std::fs::read_dir(&workspace_path) {
-                            for entry in entries.flatten() {
-                                let p = entry.path();
-                                if p.is_file() {
-                                    if let Some(ext) = p.extension() {
-                                        let ext = ext.to_string_lossy().to_lowercase();
-                                        if matches!(
-                                            ext.as_str(),
-                                            "html"
-                                                | "css"
-                                                | "js"
-                                                | "ts"
-                                                | "py"
-                                                | "rs"
-                                                | "go"
-                                                | "json"
-                                                | "md"
-                                        ) {
-                                            if let Some(name) = p.file_name() {
-                                                let fname = name.to_string_lossy().to_string();
-                                                // Skip hidden/internal files
-                                                if !fname.starts_with('.') {
-                                                    discovered.push(fname);
-                                                }
+                    match runtime.execute_action(&action_proposal).await {
+                        Ok(observation)
+                            if observation.status
+                                == crate::core::observation::ObservationStatus::Success
+                                && !observation.payload.trim().is_empty() =>
+                        {
+                            current_context.push_str(&format!(
+                                "[REPORTE AUDITOR]\n{}\n\n",
+                                observation.payload.trim()
+                            ));
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                "Auditoría de código completada con respuesta del modelo.",
+                                "SUCCESS",
+                            );
+                            mandatory_tools_executed.insert("TOOL_AUDITOR".to_string());
+                        }
+                        Ok(observation) => {
+                            current_context.push_str(&format!(
+                                "[AUDITORÍA INCOMPLETA]\n{}\n\n",
+                                observation.payload
+                            ));
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                &format!("Auditoría no completada: {}", observation.payload),
+                                "WARNING",
+                            );
+                        }
+                        Err(error) => {
+                            current_context
+                                .push_str(&format!("Error en TOOL_AUDITOR: {}\n\n", error));
+                            emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
+                        }
+                    }
+                }
+            }
+            "TOOL_LOGIC_SOLVER" => {
+                let sat_payload =
+                    parse_sat_payload(&raw_value).and_then(|provided| match provided {
+                        Some(instance) => Ok(Some(instance)),
+                        None => extract_sat_payload(&user_message),
+                    });
+
+                let verdict = match sat_payload {
+                    Ok(Some((n_vars, clauses))) => {
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &format!(
+                                "⚡ [SPECTRASAT] Resolviendo instancia SAT: {} variables, {} cláusulas...",
+                                n_vars,
+                                clauses.len()
+                            ),
+                            "ACTION",
+                        );
+                        let sat_proposal = crate::core::policy::ActionProposal {
+                            tool: "TOOL_LOGIC_SOLVER".to_string(),
+                            arguments: serde_json::json!({
+                                "n_vars": n_vars,
+                                "clauses": clauses
+                            }),
+                            expected_effect: "Resolver la fórmula SAT y verificar el resultado contra todas las cláusulas originales".to_string(),
+                            risk: crate::core::policy::RiskLevel::Safe,
+                            world_hash: Some(runtime.current_world_hash()),
+                        };
+                        let result = match runtime.execute_action(&sat_proposal).await {
+                            Ok(observation)
+                                if observation.status
+                                    == crate::core::observation::ObservationStatus::Success =>
+                            {
+                                observation.payload
+                            }
+                            Ok(observation) => observation.payload,
+                            Err(error) => serde_json::json!({
+                                "status": "TOOL_EXECUTION_ERROR",
+                                "error": error
+                            })
+                            .to_string(),
+                        };
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[SPECTRASAT] El motor devolvió un resultado; verificando su estado.",
+                            "INFO",
+                        );
+                        result
+                    }
+                    Ok(None) => {
+                        // No se inventa una fórmula SAT a partir de código. Este
+                        // camino es una revisión semántica separada y no certifica SAT.
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[LOGIC_SOLVER] Analizando la lógica del código con el modelo local...",
+                            "ACTION",
+                        );
+                        let real_files: Vec<String> = {
+                            let hallucinated = archivos_vec.iter().any(|file| {
+                                !std::path::Path::new(&workspace_path).join(file).exists()
+                            });
+                            if hallucinated || archivos_vec.is_empty() {
+                                let mut found = Vec::new();
+                                if let Ok(entries) = std::fs::read_dir(&workspace_path) {
+                                    for entry in entries.flatten() {
+                                        let path = entry.path();
+                                        if let Some(ext) = path.extension() {
+                                            let ext = ext.to_string_lossy().to_lowercase();
+                                            if matches!(
+                                                ext.as_str(),
+                                                "py" | "rs" | "js" | "ts" | "go" | "c" | "cpp"
+                                            ) {
+                                                found.push(path.to_string_lossy().to_string());
                                             }
                                         }
                                     }
                                 }
+                                found
+                            } else {
+                                archivos_vec.clone()
                             }
-                        }
-                        discovered
-                    } else {
-                        archivos_vec.clone()
-                    };
-                    let safe_files =
-                        memory::read_files_safely(&workspace_path, files_to_audit.clone()).await;
-                    let raw_reporte = delegate_to_auditor(&safe_files, &orchestrator_model).await;
-                    let struct_prompt = format!("Convierte este reporte a un JSON con campos: archivos, problema, accion_sugerida. Responde SOLO el JSON. REPORTE:\n{}", &raw_reporte);
-                    let structured = call_ollama(&orchestrator_model, &struct_prompt)
-                        .await
-                        .unwrap_or_else(|_| raw_reporte.clone());
-                    let structured = structured.trim().to_string();
-                    current_context.push_str(&format!(
-                        "[REPORTE AUDITOR ESTRUCTURADO]\n{}\n\n",
-                        structured
-                    ));
-                    emit_event(
-                        &app_handle,
-                        runtime.current_step(),
-                        &format!("Auditoria completada. {} archivos.", files_to_audit.len()),
-                        "SUCCESS",
-                    );
-                }
-                mandatory_tools_executed.insert("TOOL_AUDITOR".to_string());
-            }
-            "TOOL_LOGIC_SOLVER" => {
-                // ─── MODO 1A: SAT nativo — n_vars + clauses en el JSON del agente ───
-                let n_vars_opt = raw_value
-                    .get("n_vars")
-                    .and_then(|v| v.as_u64())
-                    .map(|v| v as usize);
-                let clauses_opt = raw_value
-                    .get("clauses")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|row| {
-                                row.as_array().map(|r| {
-                                    r.iter()
-                                        .filter_map(|x| x.as_i64().map(|i| i as i32))
-                                        .collect::<Vec<i32>>()
-                                })
+                        };
+                        let safe_files =
+                            memory::read_files_safely(&workspace_path, real_files).await;
+                        if safe_files.trim().is_empty() {
+                            serde_json::json!({
+                                "status": "ANALYSIS_UNAVAILABLE",
+                                "error": "No encontré archivos de código accesibles para analizar."
                             })
-                            .collect::<Vec<Vec<i32>>>()
-                    });
-
-                // ─── MODO 1B: Auto-extracción desde user_message cuando el LLM no proveyó clauses ───
-                // Busca el primer array de arrays de enteros en el mensaje original del usuario.
-                let (n_vars_opt, clauses_opt) = if n_vars_opt.is_none() || clauses_opt.is_none() {
-                    // Buscar patrón [[...], [...], ...] en user_message
-                    let extracted = (|| -> Option<(usize, Vec<Vec<i32>>)> {
-                        let text = &user_message;
-                        let start = text.find("[[").or_else(|| text.find("[ ["))?;
-                        let sub = &text[start..];
-
-                        // Encontrar el cierre del array contando corchetes para ser robusto
-                        let mut depth = 0;
-                        let mut end = 0;
-                        for (i, c) in sub.char_indices() {
-                            if c == '[' {
-                                depth += 1;
-                            } else if c == ']' {
-                                depth -= 1;
-                            }
-
-                            if depth == 0 && i > 0 {
-                                end = i + 1;
-                                break;
-                            }
-                        }
-                        if end == 0 {
-                            return None;
-                        }
-
-                        let array_str = &sub[..end];
-                        let parsed: serde_json::Value = serde_json::from_str(array_str).ok()?;
-                        let outer = parsed.as_array()?;
-                        let clauses: Vec<Vec<i32>> = outer
-                            .iter()
-                            .filter_map(|row| {
-                                row.as_array().map(|r| {
-                                    r.iter()
-                                        .filter_map(|x| x.as_i64().map(|i| i as i32))
-                                        .collect()
-                                })
-                            })
-                            .collect();
-                        if clauses.is_empty() {
-                            return None;
-                        }
-                        // n_vars = max abs value across all literals
-                        let n_vars = clauses
-                            .iter()
-                            .flatten()
-                            .map(|x| x.unsigned_abs() as usize)
-                            .max()
-                            .unwrap_or(0);
-                        Some((n_vars, clauses))
-                    })();
-                    if let Some((nv, cl)) = extracted {
-                        (Some(nv), Some(cl))
-                    } else {
-                        (n_vars_opt, clauses_opt)
-                    }
-                } else {
-                    (n_vars_opt, clauses_opt)
-                };
-
-                let verdict = if let (Some(n_vars), Some(clauses)) = (n_vars_opt, clauses_opt) {
-                    // ⚡ Invocación nativa SpectraSAT — cero latencia de subproceso
-                    emit_event(
-                        &app_handle,
-                        runtime.current_step(),
-                        &format!(
-                            "⚡ [SPECTRASAT] Resolviendo instancia SAT: {} vars, {} cláusulas...",
-                            n_vars,
-                            clauses.len()
-                        ),
-                        "ACTION",
-                    );
-                    let result = crate::llm::solve_with_spectrasat(n_vars, clauses);
-                    emit_event(
-                        &app_handle,
-                        runtime.current_step(),
-                        &format!("âš¡ [SPECTRASAT] Veredicto: {}", result),
-                        "SUCCESS",
-                    );
-                    result
-                } else {
-                    // ─── MODO 2: Análisis semántico de código vía LLM (fallback real) ───
-                    emit_event(
-                        &app_handle,
-                        runtime.current_step(),
-                        "🔍 [LOGIC_SOLVER] Analizando código con motor lógico-semántico...",
-                        "ACTION",
-                    );
-                    let real_files: Vec<String> = {
-                        let hallucinated = archivos_vec
-                            .iter()
-                            .any(|f| !std::path::Path::new(&workspace_path).join(f).exists());
-                        if hallucinated || archivos_vec.is_empty() {
-                            let mut found = Vec::new();
-                            if let Ok(entries) = std::fs::read_dir(&workspace_path) {
-                                for entry in entries.flatten() {
-                                    let p = entry.path();
-                                    if let Some(ext) = p.extension() {
-                                        let ext = ext.to_string_lossy().to_lowercase();
-                                        if matches!(
-                                            ext.as_str(),
-                                            "py" | "rs" | "js" | "ts" | "go" | "c" | "cpp"
-                                        ) {
-                                            found.push(p.to_string_lossy().to_string());
-                                        }
-                                    }
-                                }
-                            }
-                            found
+                            .to_string()
                         } else {
-                            archivos_vec.clone()
+                            delegate_to_logic_solver(&safe_files, &orchestrator_model).await
                         }
-                    };
-                    let safe_files = memory::read_files_safely(&workspace_path, real_files).await;
-                    delegate_to_logic_solver(&safe_files, &orchestrator_model).await
+                    }
+                    Err(error) => serde_json::json!({
+                        "status": "INVALID_INPUT",
+                        "error": error
+                    })
+                    .to_string(),
                 };
 
                 let mut parsed_status = verdict.clone();
                 let mut assignment_msg = String::new();
+                let mut solver_error = None;
+                let mut has_structured_status = false;
 
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&verdict) {
                     if let Some(s) = parsed.get("status").and_then(|v| v.as_str()) {
                         parsed_status = s.to_string();
+                        has_structured_status = true;
                     }
+                    solver_error = parsed
+                        .get("error")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
                     if let Some(arr) = parsed.get("assignment").and_then(|v| v.as_array()) {
                         let vars: Vec<String> = arr
                             .iter()
@@ -3920,7 +7693,7 @@ pub async fn run_agent_loop(
                 }
 
                 // ─── FSM: Veredicto obtenido → generar reporte y condicionar TOOL_FINISH ───
-                if parsed_status.starts_with("UNSAT") {
+                if has_structured_status && parsed_status.starts_with("UNSAT") {
                     let unsat_msg = format!(
                         "⛔ VEREDICTO SPECTRASAT: {}\n\n\
                         AUDITORÍA DE INTEGRIDAD LÓGICA — SISTEMA CONTRADICTORIO DETECTADO\n\
@@ -3939,7 +7712,7 @@ pub async fn run_agent_loop(
                     if mission_type == MissionType::Analysis {
                         forced_next_tool = Some(("TOOL_FINISH".to_string(), unsat_msg));
                     }
-                } else if parsed_status.starts_with("SAT") {
+                } else if has_structured_status && parsed_status.starts_with("SAT") {
                     let sat_msg = format!(
                         "✅ VEREDICTO SPECTRASAT: {}\n\n\
                         AUDITORÍA DE INTEGRIDAD LÓGICA — SISTEMA SATISFACIBLE\n\
@@ -3959,14 +7732,54 @@ pub async fn run_agent_loop(
                         forced_next_tool = Some(("TOOL_FINISH".to_string(), sat_msg));
                     }
                 } else {
-                    current_context
-                        .push_str(&format!("Veredicto SpectraSAT: {}\n\n", parsed_status));
-                    emit_event(
-                        &app_handle,
-                        runtime.current_step(),
-                        "✅ Verificación lógica completada.",
-                        "SUCCESS",
+                    let is_unknown = parsed_status.starts_with("UNKNOWN");
+                    let is_error_status = matches!(
+                        parsed_status.as_str(),
+                        "INVALID_INPUT"
+                            | "TOOL_EXECUTION_ERROR"
+                            | "ANALYSIS_UNAVAILABLE"
+                            | "INTERNAL_VERIFICATION_FAILED"
                     );
+                    let semantic_error = verdict
+                        .to_lowercase()
+                        .starts_with("error en verificación lógica:");
+                    let status = if is_error_status || semantic_error {
+                        "ERROR"
+                    } else if is_unknown {
+                        "WARNING"
+                    } else {
+                        "INFO"
+                    };
+                    let message = if let Some(error) = solver_error.as_deref() {
+                        format!("[LOGIC_SOLVER] {} — {}", parsed_status, error)
+                    } else if is_unknown {
+                        format!(
+                            "[SPECTRASAT] {}. No se pudo certificar un resultado.",
+                            parsed_status
+                        )
+                    } else if is_error_status || semantic_error {
+                        format!("[LOGIC_SOLVER] Error: {}", parsed_status)
+                    } else {
+                        "[LOGIC_SOLVER] Análisis semántico devuelto; no es un certificado SAT/UNSAT."
+                            .to_string()
+                    };
+                    let label = if parsed_status == verdict {
+                        "Análisis lógico-semántico"
+                    } else {
+                        "Resultado del motor lógico"
+                    };
+                    current_context.push_str(&format!(
+                        "{} ({}): {}{}\n\n",
+                        label,
+                        parsed_status,
+                        verdict,
+                        solver_error
+                            .as_deref()
+                            .filter(|error| !verdict.contains(error))
+                            .map(|error| format!("\nDiagnóstico: {}", error))
+                            .unwrap_or_default()
+                    ));
+                    emit_event(&app_handle, runtime.current_step(), &message, status);
                 }
             }
             "TOOL_WORKSPACE_MANAGER" => {
@@ -4093,19 +7906,29 @@ pub async fn run_agent_loop(
             "TOOL_THINK" => {
                 think_consecutive += 1;
                 if think_consecutive > 1 {
-                    emit_event(&app_handle, runtime.current_step(), "[COOLDOWN] Bucle TOOL_THINK interceptado. NON_PROGRESS_THINK -> Forzando replan.", "WARNING");
-                    current_context.push_str(&format!("PASO {}:\nNON_PROGRESS_THINK: No se permite reflexión consecutiva sin acción. El entorno no ha cambiado. DEBES ejecutar una acción física (TOOL_PROGRAMMER o TOOL_TERMINAL) o replantear completamente tu estrategia.\n\n", runtime.current_step()));
-
-                    let has_files = !runtime.state_anchor.existing_files.is_empty();
-                    if !has_files {
+                    if mission_type == MissionType::Planning {
+                        emit_event(&app_handle, runtime.current_step(), "[PLAN INICIAL] Reflexión repetida interceptada; se fuerza la entrega de la hoja de ruta.", "WARNING");
+                        current_context.push_str("[PLAN INICIAL]: No repitas la reflexión ni inicies programación. Entrega ahora el plan con fases, entregables, supuestos y decisiones pendientes.\n\n");
                         forced_next_tool = Some((
-                            "TOOL_PROGRAMMER".to_string(),
-                            "Workspace vacío. Escribe los archivos iniciales requeridos."
-                                .to_string(),
+                            "TOOL_FINISH".to_string(),
+                            "Resume el plan inicial en la respuesta y termina.".to_string(),
                         ));
                     } else {
-                        // If files exist, force terminal to test/verify instead of getting stuck thinking
-                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), "dir".to_string()));
+                        emit_event(&app_handle, runtime.current_step(), "[COOLDOWN] Bucle TOOL_THINK interceptado. NON_PROGRESS_THINK -> Forzando replan.", "WARNING");
+                        current_context.push_str(&format!("PASO {}:\nNON_PROGRESS_THINK: No se permite reflexión consecutiva sin acción. El entorno no ha cambiado. DEBES ejecutar una acción física (TOOL_PROGRAMMER o TOOL_TERMINAL) o replantear completamente tu estrategia.\n\n", runtime.current_step()));
+
+                        let has_files = !runtime.state_anchor.existing_files.is_empty();
+                        if !has_files {
+                            forced_next_tool = Some((
+                                "TOOL_PROGRAMMER".to_string(),
+                                "Workspace vacío. Escribe los archivos iniciales requeridos."
+                                    .to_string(),
+                            ));
+                        } else {
+                            // If files exist, force terminal to test/verify instead of getting stuck thinking
+                            forced_next_tool =
+                                Some(("TOOL_TERMINAL".to_string(), "dir".to_string()));
+                        }
                     }
                 } else {
                     emit_event(
@@ -4122,10 +7945,17 @@ pub async fn run_agent_loop(
                         "Reflexion completada.",
                         "SUCCESS",
                     );
-                    // Sprint 1+2 FSM: Planner -> Executor on TOOL_THINK (except Analysis missions)
+                    // Analysis and initial-planning requests remain in Planner; neither asks the Executor to code.
                     if current_role == AgentRole::Planner {
-                        if mission_type == MissionType::Analysis {
-                            emit_event(&app_handle, runtime.current_step(), "[FSM] MODO ANALISIS: Planificador permanece activo. Usa TOOL_FINISH para responder.", "INFO");
+                        if mission_type == MissionType::Analysis
+                            || mission_type == MissionType::Planning
+                        {
+                            let mode_message = if mission_type == MissionType::Planning {
+                                "[FSM] MODO PLAN INICIAL: el Planificador permanece activo para preparar la hoja de ruta."
+                            } else {
+                                "[FSM] MODO ANALISIS: Planificador permanece activo. Usa TOOL_FINISH para responder."
+                            };
+                            emit_event(&app_handle, runtime.current_step(), mode_message, "INFO");
                         } else {
                             if !comando.trim().is_empty() {
                                 acceptance_contract = Some(formato_contrato(&comando));
@@ -4312,6 +8142,7 @@ pub async fn run_agent_loop(
                 } else {
                     // Valid programming action.
                     comandos_ejecutados_historico.clear();
+                    comandos_exitosos_historico.clear();
 
                     // Keep the selected local coder throughout automatic recovery.
                     // On the audited machine, switching to 14B added about 189 seconds
@@ -4366,13 +8197,27 @@ pub async fn run_agent_loop(
                         }
                     }
 
+                    let require_all_targets = prog_args
+                        .get("require_all_targets")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
                     let file_instruction = if verifier_diagnostic.is_empty() {
-                        format!("Incluye los entregables necesarios de esta lista: {:?}.", archivos_vec)
+                        format!(
+                            "Incluye los entregables necesarios de esta lista: {:?}.",
+                            archivos_vec
+                        )
+                    } else if require_all_targets {
+                        format!("El auditor comprobó un defecto en cada archivo de esta lista: {:?}. Corrige todos los archivos enumerados en esta misma propuesta y devuelve exactamente un cambio por cada uno; no omitas ni cambies sus rutas.", archivos_vec)
                     } else {
                         format!("Puedes corregir cualquiera de estos archivos relacionados: {:?}. Devuelve únicamente los que necesiten cambios para resolver el diagnóstico real.", archivos_vec)
                     };
                     let pending_criteria = runtime.contract.pending_required_criteria();
-                    let repair_blueprint = tactical_repair_blueprint(&original_prompt_parsed);
+                    let repair_blueprint = if approved_consultation_task && journal.fase_actual == 1
+                    {
+                        consultation_firebase_blueprint()
+                    } else {
+                        tactical_repair_blueprint(&original_prompt_parsed)
+                    };
                     prog_args["instruccion"] = serde_json::json!(format!(
                         "Objetivo global: {}\nAcción actual: {}\n{} No reescribas otros entregables.\nRequisitos obligatorios aún pendientes:\n- {}\nGuía concreta del runtime: {}\nDiagnóstico de la operación anterior: {}\nÚltima verificación fallida: {}",
                         original_prompt_parsed, pensamiento, file_instruction,
@@ -4380,7 +8225,22 @@ pub async fn run_agent_loop(
                         repair_blueprint,
                         runtime.state_anchor.last_error.as_deref().unwrap_or("ninguno"), verifier_diagnostic));
                     prog_args["repair_attempt"] = serde_json::json!(programmer_failures);
-                    prog_args["semantic_repair"] = serde_json::json!(!verifier_diagnostic.is_empty());
+                    if programmer_failures > 0 {
+                        if let Some(error) = runtime.state_anchor.last_error.as_deref() {
+                            prog_args["repair_error"] = serde_json::json!(error);
+                        }
+                    }
+                    let node_runtime_repair = last_failed_test_run
+                        .as_ref()
+                        .map(|(_, output)| {
+                            is_node_test_jest_mock_failure(output)
+                                || is_node_test_undefined_push_failure(output)
+                                || is_node_test_uninitialized_storage_mock_failure(output)
+                                || is_node_test_browser_document_failure(output)
+                        })
+                        .unwrap_or(false);
+                    prog_args["semantic_repair"] =
+                        serde_json::json!(!verifier_diagnostic.is_empty() && !node_runtime_repair);
 
                     let prog_proposal = crate::core::policy::ActionProposal {
                         tool: "TOOL_PROGRAMMER".to_string(),
@@ -4419,49 +8279,17 @@ pub async fn run_agent_loop(
                                     ));
                                 }
 
-                                // Advance fases in journal (PESP v2)
+                                // A file write is progress, not proof that a phase works.
+                                // The Critic's phase gate decides completion after validation.
                                 if !journal.fases.is_empty() {
-                                    let total_fases = journal.fases.len();
-                                    let mut should_advance = false;
                                     if let Some(fase) = journal.fases.get_mut(journal.fase_actual) {
-                                        let all_done = fase.archivos.is_empty()
-                                            || fase.archivos.iter().all(|f| {
-                                                written_files
-                                                    .iter()
-                                                    .any(|w: &String| w.contains(f.as_str()))
-                                            });
-                                        if all_done {
-                                            fase.estado = "COMPLETADA".to_string();
-                                            emit_event(
-                                                &app_handle,
-                                                runtime.current_step(),
-                                                &format!(
-                                                    "[PESP] ✅ Fase [{}/{}] COMPLETADA: {}",
-                                                    journal.fase_actual + 1,
-                                                    total_fases,
-                                                    fase.descripcion
-                                                ),
-                                                "SUCCESS",
-                                            );
-                                            if journal.fase_actual + 1 < total_fases {
-                                                should_advance = true;
-                                            }
-                                        } else {
-                                            fase.estado = "EN_PROGRESO".to_string();
-                                        }
-                                    }
-                                    if should_advance {
-                                        journal.fase_actual += 1;
-                                        let next_desc =
-                                            journal.fases[journal.fase_actual].descripcion.clone();
+                                        fase.estado = "EN_PROGRESO".to_string();
                                         emit_event(
                                             &app_handle,
                                             runtime.current_step(),
                                             &format!(
-                                                "[PESP] 🔄 Avanzando a Fase [{}/{}]: {}",
-                                                journal.fase_actual + 1,
-                                                total_fases,
-                                                next_desc
+                                                "[PESP] Archivos de la fase actualizados; pendientes de validación: {}",
+                                                fase.descripcion
                                             ),
                                             "INFO",
                                         );
@@ -4540,21 +8368,39 @@ pub async fn run_agent_loop(
 
                                 programmer_failures = 0;
                                 runtime.recovery.record_success("TOOL_PROGRAMMER");
+                                let workspace_progress = workspace_changed_after_programmer(
+                                    &written_files,
+                                    obs.physical_files_changed.unwrap_or(0),
+                                );
+                                if workspace_progress {
+                                    if approved_consultation_task {
+                                        reset_consultation_audit_stall_tracking(
+                                            &mut last_consultation_audit_world,
+                                            &mut repeated_consultation_audit_without_change,
+                                            &mut last_consultation_audit_diagnostic,
+                                        );
+                                    }
+                                    emit_event(
+                                        &app_handle,
+                                        runtime.current_step(),
+                                        "[RECOVERY] Se confirmó un cambio físico en el workspace; los fallos terminales previos seguirán contando hasta que una comprobación termine correctamente.",
+                                        "INFO",
+                                    );
+                                }
                                 // Sprint 2: Phase/Micrometa-gated Executor->Critic transition
-                                let all_fases_done = journal.fases.is_empty()
-                                    || journal.fases.iter().all(|f| f.estado == "COMPLETADA");
+                                let has_phases = !journal.fases.is_empty();
                                 let all_metas_done = journal.micro_metas.is_empty()
                                     || journal
                                         .micro_metas
                                         .iter()
                                         .all(|mm| mm.estado == "VERIFICADA");
-                                if all_fases_done && all_metas_done {
+                                if has_phases || all_metas_done {
                                     current_role = AgentRole::Critic;
                                     critic_feedback = None;
-                                    emit_event(&app_handle, runtime.current_step(), "[FSM] EJECUTOR -> CRITICO: escritura validada. Comprobando entregables y verificaciones pendientes; la misión aún no está completada.", "INFO");
+                                    emit_event(&app_handle, runtime.current_step(), "[FSM] EJECUTOR -> CRITICO: escritura completada. Validando entregables y verificaciones pendientes; la fase aún no está completada.", "INFO");
                                 }
 
-                                let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos con éxito, Anti-Stub APROBADO.\n⚠️ REGLA DE ESTADO OBLIGATORIA: Los archivos ya existen físicamente en disco. NO vuelvas a crear o sobreescribir estos archivos con TOOL_PROGRAMMER salvo que un test falle. Ahora DEBES usar 'TOOL_TERMINAL' para ejecutar o probar el código (o crear un script de test verify_*.py si no existe).\n\n", written_files);
+                                let explicit_msg = format!("Programador: Los archivos {:?} fueron escritos con éxito, Anti-Stub APROBADO.\nREGLA DE ESTADO: Los archivos ya existen físicamente. Ejecuta el criterio de aceptación de la fase o del contrato con TOOL_TERMINAL. Si falla, corrige el archivo causante. Si no hay criterio ni pruebas, crea una prueba del comportamiento real usando el lenguaje y runner del proyecto; no añadas un verificador Python a un proyecto de otro lenguaje. No repitas comandos ni asumas que un servidor local está activo.\n\n", written_files);
                                 current_context.push_str(&explicit_msg);
                                 last_progress_step = runtime.current_step();
                                 comandos_ejecutados_historico.clear();
@@ -4565,11 +8411,15 @@ pub async fn run_agent_loop(
                                     &if written_files.len() == 1 {
                                         "Programación exitosa: 1 archivo afectado".to_string()
                                     } else {
-                                        format!("Programación exitosa: {} archivos afectados", written_files.len())
+                                        format!(
+                                            "Programación exitosa: {} archivos afectados",
+                                            written_files.len()
+                                        )
                                     },
                                     "SUCCESS",
                                 );
-                                if let Some(command) = official_verifier_command(&runtime.contract) {
+                                if let Some(command) = official_verifier_command(&runtime.contract)
+                                {
                                     current_role = AgentRole::Critic;
                                     forced_next_tool = Some((
                                         "TOOL_TERMINAL".to_string(),
@@ -4590,11 +8440,24 @@ pub async fn run_agent_loop(
                                 let recovery = runtime.handle_observation(&obs);
                                 if programmer_failures >= 3 {
                                     let message = format!("PROGRAMMER_REPAIR_EXHAUSTED: {} intentos reales fallidos. Último diagnóstico: {}. Borrador conservado en .aura/programmer_failure.json.", programmer_failures, obs.payload);
-                                    emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
-                                    persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                    emit_event(
+                                        &app_handle,
+                                        runtime.current_step(),
+                                        &message,
+                                        "ERROR",
+                                    );
+                                    persist_and_learn_failure!(&message);
                                     return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
                                 }
-                                emit_event(&app_handle, runtime.current_step(), &format!("[RECUPERACIÓN] Intento {}/3. Decisión: {:?}", programmer_failures, recovery), "WARNING");
+                                emit_event(
+                                    &app_handle,
+                                    runtime.current_step(),
+                                    &format!(
+                                        "[RECUPERACIÓN] Intento {}/3. Decisión: {:?}",
+                                        programmer_failures, recovery
+                                    ),
+                                    "WARNING",
+                                );
                                 runtime.state_anchor.last_error = Some(obs.payload.clone());
                                 emit_event(
                                     &app_handle,
@@ -4619,7 +8482,7 @@ pub async fn run_agent_loop(
                             if programmer_failures >= 3 {
                                 let message = format!("PROGRAMMER_GATE_BLOCKED: {}. La misma vía falló {} veces; ejecución detenida sin declarar éxito.", e, programmer_failures);
                                 emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
-                                persist_failed_journal(&mut journal, &workspace_path, &app_handle, runtime.current_step());
+                                persist_and_learn_failure!(&message);
                                 return Ok(serde_json::json!({"status":"ERROR", "respuesta_conversacional":message}).to_string());
                             }
                             runtime.state_anchor.last_error = Some(e.clone());
@@ -4676,37 +8539,69 @@ pub async fn run_agent_loop(
                 }
             }
             "TOOL_VISION_EVALUATOR" => {
+                if last_local_ui_url.is_none() {
+                    if let Some((next_tool, reason)) = local_http_server_recovery_action(
+                        &original_prompt_parsed,
+                        &workspace_path,
+                        last_http_server_task_id.as_deref(),
+                    ) {
+                        current_role = if next_tool == "TOOL_PROGRAMMER" {
+                            AgentRole::Executor
+                        } else {
+                            AgentRole::Critic
+                        };
+                        current_context.push_str(&format!(
+                            "[SERVIDOR HTTP REQUERIDO] La evaluación visual no puede usar file://; primero confirma HTTP localhost. Siguiente acción: {}.\n\n",
+                            reason
+                        ));
+                        forced_next_tool = Some((next_tool.clone(), reason));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[SERVIDOR HTTP REQUERIDO] La URL local todavía no está confirmada.",
+                            "WARNING",
+                        );
+                        continue;
+                    }
+                }
+                visual_validation_required |=
+                    mission_requires_visual_verification(&original_prompt_parsed, &workspace_path);
+                visual_validation_attempts = visual_validation_attempts.saturating_add(1);
                 emit_event(
                     &app_handle,
                     runtime.current_step(),
-                    "[VISION] Evaluando calidad visual...",
+                    if visual_validation_required {
+                        "[VISION] Abriendo la URL real del proyecto y evaluando la captura..."
+                    } else {
+                        "[VISION] Evaluando la captura solicitada..."
+                    },
                     "ACTION",
                 );
-                let vision_prompt = if !comando.trim().is_empty() {
-                    comando.clone()
-                } else {
-                    format!("Evalua la calidad visual de esta pantalla. Describe: 1) Si la UI se ve correcta, 2) Errores visibles, 3) Elementos faltantes. Objetivo original: {}", user_message)
-                };
-
-                let text_to_search = format!("{} {}", comando, user_message);
-                let text_lower = text_to_search.to_lowercase();
-                let url = if let Some(idx) = text_lower
-                    .find("http://")
-                    .or_else(|| text_lower.find("https://"))
-                {
-                    let end_idx = text_to_search[idx..]
-                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`')
-                        .unwrap_or(text_to_search.len() - idx);
-                    Some(text_to_search[idx..idx + end_idx].to_string())
-                } else {
-                    None
-                };
+                let vision_prompt = format!(
+                    "Objetivo original: {}\nFase actual: {}\n{}",
+                    original_prompt_parsed,
+                    journal
+                        .fases
+                        .get(journal.fase_actual)
+                        .map(|phase| phase.descripcion.as_str())
+                        .unwrap_or("revisión visual de la misión"),
+                    if comando.trim().is_empty() {
+                        "Compara la pantalla con el objetivo. Indica evidencia visible, errores, elementos faltantes y limitaciones de una sola captura."
+                    } else {
+                        comando.as_str()
+                    }
+                );
+                let url = extract_local_ui_url(&comando)
+                    .or_else(|| last_local_ui_url.clone())
+                    .or_else(|| extract_explicit_http_url(&comando))
+                    .or_else(|| extract_explicit_http_url(&user_message));
 
                 let action_proposal = crate::core::policy::ActionProposal {
                     tool: "TOOL_VISION_EVALUATOR".to_string(),
                     arguments: serde_json::json!({
                         "prompt": vision_prompt,
                         "url": url,
+                        "require_target": visual_validation_required,
                     }),
                     expected_effect: "Visual UI evaluation".to_string(),
                     risk: crate::core::policy::RiskLevel::Safe,
@@ -4716,7 +8611,23 @@ pub async fn run_agent_loop(
                 match runtime.execute_action(&action_proposal).await {
                     Ok(obs) => {
                         if obs.status == crate::core::observation::ObservationStatus::Success {
-                            current_context.push_str(&format!("[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LA VALIDACIÓN VISUAL HA SIDO COMPLETADA. SI EL MANDATO DEL USUARIO FUE CUMPLIDO, EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS HERRAMIENTAS DE VALIDACIÓN.\n\n", obs.payload));
+                            if visual_validation_required {
+                                runtime.observe_world()?;
+                                visual_validation_world_hash = Some(runtime.current_world_hash());
+                                visual_validation_error = None;
+                                visual_validation_result = Some(obs.payload.clone());
+                                visual_validation_error_world_hash = None;
+                            }
+                            mandatory_tools_executed.insert("TOOL_VISION_EVALUATOR".to_string());
+                            let vision_follow_up = if scoped_visual_review {
+                                "Describe los hallazgos visibles y sus límites; esta petición es de solo lectura, así que no modifiques archivos. Conserva también el resultado de las pruebas funcionales disponibles."
+                            } else {
+                                "Si reporta defectos visibles, corrige el entregable afectado y vuelve a validar la versión actual. Una captura solo demuestra lo que se ve en esa página; conserva también las pruebas funcionales de los flujos solicitados."
+                            };
+                            current_context.push_str(&format!(
+                                "[VISION EVALUATOR RESULTADO]\n{}\n\n[INSTRUCCIÓN]: Inspecciona el veredicto y sus límites. {}\n\n",
+                                obs.payload, vision_follow_up
+                            ));
                             emit_event(
                                 &app_handle,
                                 runtime.current_step(),
@@ -4726,34 +8637,189 @@ pub async fn run_agent_loop(
                                 ),
                                 "SUCCESS",
                             );
+                            if browser_interaction_validation_required
+                                && browser_interaction_validation_world_hash
+                                    != Some(runtime.current_world_hash())
+                            {
+                                if let Some(confirmed_url) =
+                                    last_local_ui_url.as_deref().or(url.as_deref())
+                                {
+                                    let guidance = browser_interaction_test_guidance(
+                                        confirmed_url,
+                                        &original_prompt_parsed,
+                                    );
+                                    current_role = AgentRole::Critic;
+                                    forced_next_tool =
+                                        Some(("TOOL_TESTER".to_string(), guidance.clone()));
+                                    current_context.push_str(&format!(
+                                        "[SIGUIENTE VALIDACIÓN OBLIGATORIA]: La revisión visual pasó, pero faltan pruebas de interacción. {}\n\n",
+                                        guidance
+                                    ));
+                                }
+                            }
                         } else {
                             let msg =
-                                format!("[VISION] Error en evaluación visual: {}", obs.payload);
+                                format!("[VISION] Evaluación visual no aprobada: {}", obs.payload);
+                            visual_validation_world_hash = None;
+                            visual_validation_error = Some(obs.payload.clone());
+                            visual_validation_result = Some(obs.payload.clone());
+                            runtime.observe_world()?;
+                            visual_validation_error_world_hash = Some(runtime.current_world_hash());
                             current_context.push_str(&format!("{}\n\n", &msg));
                             emit_event(&app_handle, runtime.current_step(), &msg, "ERROR");
+                            if visual_validation_required
+                                && visual_validation_attempts < 3
+                                && !scoped_visual_review
+                                && obs.payload.contains("VISUAL_QA_REJECTED")
+                            {
+                                current_role = AgentRole::Executor;
+                                forced_next_tool = Some((
+                                    "TOOL_THINK".to_string(),
+                                    format!("La revisión de la captura real rechazó el aspecto o encontró requisitos visibles ausentes. Corrige los defectos descritos, conserva los flujos que ya funcionan y luego vuelve a ejecutar pruebas y una captura nueva. Diagnóstico visual: {}", obs.payload),
+                                ));
+                            } else if visual_validation_required
+                                && visual_validation_attempts < 3
+                                && (obs.payload.contains("VISUAL_TARGET_MISSING")
+                                    || obs.payload.contains("VISUAL_CAPTURE_FAILED"))
+                            {
+                                current_role = AgentRole::Executor;
+                                let (tool, guidance) = if let Some(task_id) =
+                                    last_background_task_id.as_deref()
+                                {
+                                    (
+                                        "TOOL_BACKGROUND_READ",
+                                        format!("Lee los logs del servidor ya iniciado (task_id={task_id}), identifica su URL localhost real y continúa con la captura. No inventes el puerto."),
+                                    )
+                                } else {
+                                    (
+                                        "TOOL_THINK",
+                                        format!("Resuelve el requisito de captura local usando el error. Revisa el comando de inicio disponible para este proyecto, inicia el frontend mediante TOOL_BACKGROUND_START si necesita servidor, confirma la URL en sus logs y luego vuelve a evaluar. Error: {}", obs.payload),
+                                    )
+                                };
+                                forced_next_tool = Some((tool.to_string(), guidance));
+                            }
                         }
                     }
                     Err(e) => {
                         let msg = format!("[VISION] Error de ejecución: {}", e);
+                        visual_validation_world_hash = None;
+                        visual_validation_error = Some(e.clone());
+                        visual_validation_result = Some(e.clone());
+                        runtime.observe_world()?;
+                        visual_validation_error_world_hash = Some(runtime.current_world_hash());
                         current_context.push_str(&format!("{}\n\n", &msg));
                         emit_event(&app_handle, runtime.current_step(), &msg, "ERROR");
+                        if visual_validation_required
+                            && visual_validation_attempts < 3
+                            && (e.contains("VISUAL_TARGET_MISSING")
+                                || e.contains("VISUAL_CAPTURE_FAILED"))
+                        {
+                            current_role = AgentRole::Executor;
+                            let (tool, guidance) = if let Some(task_id) =
+                                last_background_task_id.as_deref()
+                            {
+                                (
+                                    "TOOL_BACKGROUND_READ",
+                                    format!("Lee los logs del servidor iniciado con task_id={task_id}, encuentra su URL localhost y vuelve a validar la página real."),
+                                )
+                            } else {
+                                (
+                                    "TOOL_THINK",
+                                    format!("Resuelve la captura local: consulta el comando de inicio del proyecto, arranca el servidor con TOOL_BACKGROUND_START, confirma la URL real en sus logs y vuelve a evaluar. Error: {e}"),
+                                )
+                            };
+                            forced_next_tool = Some((tool.to_string(), guidance));
+                        }
                     }
                 }
-                mandatory_tools_executed.insert("TOOL_VISION_EVALUATOR".to_string());
             }
             "TOOL_TESTER" => {
+                let browser_test_requested =
+                    crate::core::browser_automation::is_browser_test_command(&comando);
                 emit_event(
                     &app_handle,
                     runtime.current_step(),
-                    "Ejecutando suite de pruebas automatizadas...",
+                    if browser_test_requested {
+                        "Probando flujos reales en Chrome/Edge local..."
+                    } else {
+                        "Ejecutando suite de pruebas automatizadas..."
+                    },
                     "ACTION",
                 );
-                mandatory_tools_executed.insert("TOOL_TESTER".to_string());
+                if browser_test_requested {
+                    let requested_url =
+                        crate::core::browser_automation::browser_test_plan_url(&comando);
+                    let confirmed_url = last_local_ui_url.as_deref();
+                    let is_confirmed_target = requested_url.as_deref().ok().is_some_and(|url| {
+                        confirmed_url
+                            .is_some_and(|confirmed| same_local_server_origin(url, confirmed))
+                    });
+                    if !is_confirmed_target {
+                        let (next_tool, guidance) = web_validation_recovery_action(
+                            &original_prompt_parsed,
+                            &workspace_path,
+                            confirmed_url,
+                            last_http_server_task_id.as_deref(),
+                        )
+                        .unwrap_or_else(|| (
+                            "TOOL_BACKGROUND_START".into(),
+                            "Inicia un servidor local para el frontend y confirma su URL mediante los logs antes de probarlo.".into(),
+                        ));
+                        current_role = AgentRole::Critic;
+                        forced_next_tool = Some((next_tool.clone(), guidance.clone()));
+                        let message = format!(
+                            "[BROWSER_TEST_BLOCKED] La URL solicitada no coincide con una URL localhost confirmada por los logs. No se abrió ninguna página externa. Siguiente paso: {next_tool} — {guidance}"
+                        );
+                        current_context.push_str(&format!("{message}\n\n"));
+                        emit_event(&app_handle, runtime.current_step(), &message, "WARNING");
+                        continue;
+                    }
+                }
                 match runtime.execute_action(&action_proposal).await {
                     Ok(obs) => {
+                        if browser_test_requested {
+                            // A real browser run is fresh behavioral evidence,
+                            // including a failed run with actionable diagnostics.
+                            programmer_calls_since_validation = 0;
+                            programmer_stall_recoveries = 0;
+                        }
                         if obs.status == crate::core::observation::ObservationStatus::Success {
                             tester_attempts = 0;
-                            if tester_success_hits >= 1 {
+                            if browser_interaction_validation_required && !browser_test_requested {
+                                let guidance = last_local_ui_url.as_deref().map(|url| {
+                                    browser_interaction_test_guidance(url, &original_prompt_parsed)
+                                });
+                                if let Some(guidance) = guidance {
+                                    current_role = AgentRole::Critic;
+                                    forced_next_tool =
+                                        Some(("TOOL_TESTER".to_string(), guidance.clone()));
+                                    current_context.push_str(&format!(
+                                        "[PRUEBAS DE LÓGICA PASARON, FALTA EL NAVEGADOR]: {}\n\n",
+                                        guidance
+                                    ));
+                                    emit_event(
+                                        &app_handle,
+                                        runtime.current_step(),
+                                        "Las pruebas del proyecto pasaron; siguen pendientes los flujos interactivos del navegador.",
+                                        "WARNING",
+                                    );
+                                } else {
+                                    current_role = AgentRole::Critic;
+                                    if let Some((next_tool, guidance)) =
+                                        web_validation_recovery_action(
+                                            &original_prompt_parsed,
+                                            &workspace_path,
+                                            None,
+                                            last_http_server_task_id.as_deref(),
+                                        )
+                                    {
+                                        forced_next_tool = Some((next_tool, guidance));
+                                    }
+                                    current_context.push_str(
+                                        "[PRUEBAS DE LÓGICA PASARON]: falta confirmar el servidor local para probar la interfaz interactiva.\n\n",
+                                    );
+                                }
+                            } else if tester_success_hits >= 1 {
                                 let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de pruebas exitosas detectado. Abortando misión.";
                                 emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
                                 let final_res = FinalResponse {
@@ -4770,15 +8836,47 @@ pub async fn run_agent_loop(
                             } else {
                                 tester_success_hits += 1;
                                 runtime.cognitive_state.metrics.successful_verifications += 1;
-                                current_context.push_str(&format!("Resultado Tests:\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: LOS TESTS PASARON EXITOSAMENTE. LA TAREA ESTÁ COMPLETADA. EN TU SIGUIENTE PASO DEBES ELEGIR OBLIGATORIAMENTE 'TOOL_FINISH'. NO REPITAS TOOL_TESTER.\n\n", obs.payload));
+                                if browser_test_requested {
+                                    browser_interaction_validation_world_hash =
+                                        Some(runtime.current_world_hash());
+                                }
+                                mandatory_tools_executed.insert("TOOL_TESTER".to_string());
+                                current_context.push_str(&format!("Resultado Tests:\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: La comprobación ejecutada pasó. Revisa qué cubrió y cuáles criterios siguen sin evidencia; no declares completa la misión si queda alguna prueba o revisión requerida. No repitas exactamente el mismo runner sobre el mismo estado.\n\n", obs.payload));
                                 emit_event(
                                     &app_handle,
                                     runtime.current_step(),
-                                    "Todos los tests pasaron exitosamente.",
+                                    if browser_test_requested {
+                                        "Los flujos interactivos del navegador pasaron."
+                                    } else {
+                                        "La suite de pruebas pasó."
+                                    },
                                     "SUCCESS",
                                 );
                             }
                         } else {
+                            if browser_test_requested
+                                && (obs.payload.starts_with("BROWSER_AUTOMATION_UNAVAILABLE")
+                                    || obs.payload.starts_with("BROWSER_TEST_TIMEOUT"))
+                            {
+                                let message = format!(
+                                    "BROWSER_VALIDATION_BLOCKED: no se pudo ejecutar el navegador automatizado. {}. El proyecto y los archivos se conservaron; la misión quedó disponible para reanudarse.",
+                                    obs.payload
+                                );
+                                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                                let _ = save_resumable_validation_block(
+                                    &mut journal,
+                                    &workspace_path,
+                                    runtime.current_step(),
+                                    "Critic",
+                                    &current_context,
+                                    &message,
+                                );
+                                let final_res = FinalResponse {
+                                    status: "ERROR".to_string(),
+                                    respuesta_conversacional: message,
+                                };
+                                return Ok(serde_json::to_string(&final_res).unwrap());
+                            }
                             if let Some(crate::core::recovery::RecoveryDecision::RepairCriteria {
                                 criteria,
                                 recommended_tool,
@@ -4894,51 +8992,53 @@ pub async fn run_agent_loop(
                     "Inyectando nodos AST en Memoria Lógica (Zero-Trace)...",
                     "ACTION",
                 );
-                let mut report = String::new();
-                for (idx, (intent, parent_id, opcode)) in ast_nodes_vec.iter().enumerate() {
-                    let node_id = (std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos() as u64)
-                        + idx as u64;
-                    let meta = [0u8; 16];
-                    let node = chronos_vfs::aura_bridge::AuraIntentTranslator::tokenize_intent(
-                        (*opcode).into(),
-                        *parent_id,
-                        node_id,
-                        intent,
-                        meta,
-                    );
-                    // Clone the display fields before node is moved into push_node
-                    let node_id_display = node.node_id;
-                    let node_hash_display = node.content_hash.clone();
-                    let node_op_display = node.opcode.clone();
-                    if let Err(_) = agent_workspace.push_node(node) {
-                        report.push_str(&format!(
-                            "- Error crítico: Buffer Zero-Trace lleno al insertar nodo {}\n",
-                            node_id
+                let nodes = ast_nodes_vec.iter().map(|(intent, parent_id, opcode)| {
+                    serde_json::json!({ "intent": intent, "parent_id": parent_id, "opcode": opcode })
+                }).collect::<Vec<_>>();
+                let ast_proposal = crate::core::policy::ActionProposal {
+                    tool: "TOOL_AST_INJECT".to_string(),
+                    arguments: serde_json::json!({ "nodes": nodes }),
+                    expected_effect:
+                        "Insertar los nodos AST solicitados en el buffer compartido de la misión"
+                            .to_string(),
+                    risk: crate::core::policy::RiskLevel::Safe,
+                    world_hash: Some(runtime.current_world_hash()),
+                };
+                match runtime.execute_action(&ast_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        current_context.push_str(&format!(
+                            "PASO {}:\nAcción: TOOL_AST_INJECT\nResultado:\n{}\n\n",
+                            runtime.current_step(),
+                            observation.payload
                         ));
-                        break;
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "SUCCESS",
+                        );
                     }
-                    report.push_str(&format!(
-                        "- Inyectado: NodeID={} Hash={}\n  Opcode: {:?}\n  Contenido: {}\n",
-                        node_id_display, node_hash_display, node_op_display, intent
-                    ));
+                    Ok(observation) => {
+                        current_context.push_str(&format!(
+                            "Error en TOOL_AST_INJECT: {}\n\n",
+                            observation.payload
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "ERROR",
+                        );
+                    }
+                    Err(error) => {
+                        current_context
+                            .push_str(&format!("Error en TOOL_AST_INJECT: {}\n\n", error));
+                        emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
+                    }
                 }
-                current_context.push_str(&format!(
-                    "PASO {}:\nAcción: TOOL_AST_INJECT\nResultado:\n{}\n\n",
-                    runtime.current_step(),
-                    report
-                ));
-                emit_event(
-                    &app_handle,
-                    runtime.current_step(),
-                    &format!(
-                        "{} nodos AST inyectados exitosamente en RAM.",
-                        ast_nodes_vec.len()
-                    ),
-                    "SUCCESS",
-                );
             }
             "TOOL_LEARN" => {
                 learn_consecutive += 1;
@@ -4963,9 +9063,15 @@ pub async fn run_agent_loop(
                         "Guardando conocimiento en la Memoria Permanente (RAG)...",
                         "ACTION",
                     );
-                    match crate::core::memory::index_project(&workspace_path).await {
-                        Ok(msg) => {
-                            current_context.push_str(&format!("Resultado TOOL_LEARN: {}\n\n", msg));
+                    match runtime.execute_action(&action_proposal).await {
+                        Ok(observation)
+                            if observation.status
+                                == crate::core::observation::ObservationStatus::Success =>
+                        {
+                            current_context.push_str(&format!(
+                                "Resultado TOOL_LEARN: {}\n\n",
+                                observation.payload
+                            ));
                             emit_event(
                                 &app_handle,
                                 runtime.current_step(),
@@ -4973,9 +9079,22 @@ pub async fn run_agent_loop(
                                 "SUCCESS",
                             );
                         }
-                        Err(err) => {
-                            current_context.push_str(&format!("Error en TOOL_LEARN: {}\n\n", err));
-                            emit_event(&app_handle, runtime.current_step(), &err, "ERROR");
+                        Ok(observation) => {
+                            current_context.push_str(&format!(
+                                "Error en TOOL_LEARN: {}\n\n",
+                                observation.payload
+                            ));
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                &observation.payload,
+                                "ERROR",
+                            );
+                        }
+                        Err(error) => {
+                            current_context
+                                .push_str(&format!("Error en TOOL_LEARN: {}\n\n", error));
+                            emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
                         }
                     }
                 }
@@ -4987,31 +9106,35 @@ pub async fn run_agent_loop(
                     "🏃 Generando runners de ejecución (test, build, dev, lint)...",
                     "ACTION",
                 );
-                let runners =
-                    generate_project_runners(&workspace_path, &original_prompt_parsed).await;
-                if runners.is_empty() {
-                    current_context.push_str("[TOOL_CREATE_RUNNER] No se generaron runners (lenguaje no detectado o no soportado).\n\n");
-                    emit_event(
-                        &app_handle,
-                        runtime.current_step(),
-                        "No se generaron runners (lenguaje desconocido).",
-                        "WARNING",
-                    );
-                } else {
-                    let names: Vec<String> = runners
-                        .iter()
-                        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-                        .collect();
-                    current_context.push_str(&format!("[TOOL_CREATE_RUNNER] Runners internos generados en .aura/runtime/runners: {}\n\n", names.join(", ")));
-                    emit_event(
-                        &app_handle,
-                        runtime.current_step(),
-                        &format!(
-                            "Runners internos generados en .aura/runtime/runners: {}",
-                            names.join(", ")
-                        ),
-                        "SUCCESS",
-                    );
+                match runtime.execute_action(&action_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        current_context
+                            .push_str(&format!("[TOOL_CREATE_RUNNER] {}\n\n", observation.payload));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "SUCCESS",
+                        );
+                    }
+                    Ok(observation) => {
+                        current_context
+                            .push_str(&format!("[TOOL_CREATE_RUNNER] {}\n\n", observation.payload));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "WARNING",
+                        );
+                    }
+                    Err(error) => {
+                        current_context
+                            .push_str(&format!("[TOOL_CREATE_RUNNER] Error: {}\n\n", error));
+                        emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
+                    }
                 }
             }
             // ── Fase 2: TOOL_CONTAINER (Docker/Podman) ──
@@ -5024,8 +9147,6 @@ pub async fn run_agent_loop(
                 } else {
                     let action_str = parts[0];
                     let image_or_id = parts[1];
-                    let run_cmd = if parts.len() > 2 { parts[2] } else { "" };
-
                     emit_event(
                         &app_handle,
                         runtime.current_step(),
@@ -5033,56 +9154,152 @@ pub async fn run_agent_loop(
                         "ACTION",
                     );
 
-                    let action_enum = crate::core::container::ContainerAction::from_str(action_str);
-                    match crate::core::container::container_exec(
-                        action_enum,
-                        image_or_id,
-                        run_cmd,
-                        &workspace_path,
-                    )
-                    .await
-                    {
-                        Ok(out) => {
-                            current_context
-                                .push_str(&format!("Resultado TOOL_CONTAINER:\n{}\n\n", out));
+                    let container_proposal = crate::core::policy::ActionProposal {
+                        tool: "TOOL_CONTAINER".to_string(),
+                        arguments: serde_json::json!({ "comando": comando.clone() }),
+                        expected_effect: "Ejecutar la operación de contenedor solicitada usando el workspace autorizado".to_string(),
+                        risk: if matches!(action_str.to_lowercase().as_str(), "rm" | "remove") {
+                            crate::core::policy::RiskLevel::Moderate
+                        } else {
+                            crate::core::policy::RiskLevel::Safe
+                        },
+                        world_hash: Some(runtime.current_world_hash()),
+                    };
+                    match runtime.execute_action(&container_proposal).await {
+                        Ok(observation)
+                            if observation.status
+                                == crate::core::observation::ObservationStatus::Success =>
+                        {
+                            current_context.push_str(&format!(
+                                "Resultado TOOL_CONTAINER:\n{}\n\n",
+                                observation.payload
+                            ));
                             emit_event(
                                 &app_handle,
                                 runtime.current_step(),
-                                "Comando de contenedor exitoso.",
+                                &observation.payload,
                                 "SUCCESS",
                             );
                             last_progress_step = runtime.current_step();
                         }
-                        Err(e) => {
-                            current_context.push_str(&format!("Error TOOL_CONTAINER:\n{}\n\n", e));
-                            emit_event(&app_handle, runtime.current_step(), &e, "ERROR");
+                        Ok(observation) => {
+                            current_context.push_str(&format!(
+                                "Error TOOL_CONTAINER:\n{}\n\n",
+                                observation.payload
+                            ));
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                &observation.payload,
+                                "ERROR",
+                            );
+                        }
+                        Err(error) => {
+                            current_context
+                                .push_str(&format!("Error TOOL_CONTAINER:\n{}\n\n", error));
+                            emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
                         }
                     }
                 }
             }
             // ── Fase 4: TOOL_SCHEDULER (Cron tasks) ──
             "TOOL_SCHEDULER" => {
-                let parts: Vec<&str> = comando.splitn(2, '|').collect();
-                if parts.len() < 2 {
-                    let err = "Error: TOOL_SCHEDULER requiere 'cron_expr|objetivo_descriptivo'. Ejemplo: '0 9 * * 1|auditar seguridad'";
-                    current_context.push_str(&format!("Error TOOL_SCHEDULER: {}\n\n", err));
-                    emit_event(&app_handle, runtime.current_step(), err, "ERROR");
+                let scheduler_proposal = crate::core::policy::ActionProposal {
+                    tool: "TOOL_SCHEDULER".to_string(),
+                    arguments: serde_json::json!({ "comando": comando.clone() }),
+                    expected_effect: "Validar y guardar una tarea programada en el archivo persistente del scheduler".to_string(),
+                    risk: crate::core::policy::RiskLevel::Safe,
+                    world_hash: Some(runtime.current_world_hash()),
+                };
+                match runtime.execute_action(&scheduler_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        current_context.push_str(&format!(
+                            "Resultado TOOL_SCHEDULER: {}\n\n",
+                            observation.payload
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "SUCCESS",
+                        );
+                        last_progress_step = runtime.current_step();
+                    }
+                    Ok(observation) => {
+                        current_context.push_str(&format!(
+                            "Error TOOL_SCHEDULER: {}\n\n",
+                            observation.payload
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "ERROR",
+                        );
+                    }
+                    Err(error) => {
+                        current_context.push_str(&format!("Error TOOL_SCHEDULER: {}\n\n", error));
+                        emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
+                    }
+                }
+            }
+            "TOOL_WEB_SEARCH" => {
+                let query = if !comando.trim().is_empty() {
+                    comando.clone()
                 } else {
-                    let cron = parts[0].trim();
-                    let desc = parts[1].trim();
-                    let id =
-                        crate::core::scheduler::register_task(desc, &workspace_path, cron, desc);
-                    current_context.push_str(&format!(
-                        "Tarea programada exitosamente (ID: {}). Cron: {}\n\n",
-                        id, cron
-                    ));
-                    emit_event(
-                        &app_handle,
-                        runtime.current_step(),
-                        &format!("📅 Tarea '{}' programada ({})", desc, cron),
-                        "SUCCESS",
-                    );
-                    last_progress_step = runtime.current_step();
+                    url.clone()
+                };
+                emit_event(
+                    &app_handle,
+                    runtime.current_step(),
+                    &format!("Buscando información web: {}", query),
+                    "ACTION",
+                );
+                match runtime.execute_action(&action_proposal).await {
+                    Ok(obs)
+                        if obs.status == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        current_context.push_str(&format!(
+                            "Resultado TOOL_WEB_SEARCH (incluye títulos, enlaces y fragmentos):\n{}\n\n",
+                            obs.payload
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "Búsqueda web completada.",
+                            "SUCCESS",
+                        );
+                        last_progress_step = runtime.current_step();
+                    }
+                    Ok(obs) => {
+                        planning_research_failed = true;
+                        current_context.push_str(&format!(
+                            "No se pudo completar TOOL_WEB_SEARCH: {}\nSi continúas, declara esta limitación y no inventes fuentes.\n\n",
+                            obs.payload
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "La búsqueda web no produjo resultados verificables.",
+                            "WARNING",
+                        );
+                    }
+                    Err(error) => {
+                        planning_research_failed = true;
+                        current_context.push_str(&format!(
+                            "Error TOOL_WEB_SEARCH: {}\nSi continúas, declara esta limitación y no inventes fuentes.\n\n",
+                            error
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &format!("Error en búsqueda web: {}", error),
+                            "WARNING",
+                        );
+                    }
                 }
             }
             "TOOL_SEARCH" => {
@@ -5098,19 +9315,44 @@ pub async fn run_agent_loop(
                     &format!("Consultando Memoria Permanente para: {}", search_query),
                     "ACTION",
                 );
-                match crate::core::memory::query_memory(&search_query).await {
-                    Ok(msg) => {
-                        current_context.push_str(&format!("Resultado TOOL_SEARCH:\n{}\n\n", msg));
+                let search_proposal = crate::core::policy::ActionProposal {
+                    tool: "TOOL_SEARCH".to_string(),
+                    arguments: serde_json::json!({ "query": search_query }),
+                    expected_effect: "Buscar en la memoria local y, si no hay coincidencias, leer un archivo seguro solicitado".to_string(),
+                    risk: crate::core::policy::RiskLevel::Safe,
+                    world_hash: Some(runtime.current_world_hash()),
+                };
+                match runtime.execute_action(&search_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        current_context.push_str(&format!(
+                            "Resultado TOOL_SEARCH:\n{}\n\n",
+                            observation.payload
+                        ));
                         emit_event(
                             &app_handle,
                             runtime.current_step(),
-                            "Búsqueda en memoria completada.",
+                            "Búsqueda local completada con resultados.",
                             "SUCCESS",
                         );
                     }
-                    Err(err) => {
-                        current_context.push_str(&format!("Error en TOOL_SEARCH: {}\n\n", err));
-                        emit_event(&app_handle, runtime.current_step(), &err, "ERROR");
+                    Ok(observation) => {
+                        current_context.push_str(&format!(
+                            "Error en TOOL_SEARCH: {}\n\n",
+                            observation.payload
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &observation.payload,
+                            "WARNING",
+                        );
+                    }
+                    Err(error) => {
+                        current_context.push_str(&format!("Error en TOOL_SEARCH: {}\n\n", error));
+                        emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
                     }
                 }
             }
@@ -5150,17 +9392,30 @@ pub async fn run_agent_loop(
                         .unwrap_or("El sistema se atascó o completó una tarea, pero no dejó un mensaje. ¿Cómo deseas proceder?")
                         .to_string();
                 }
+                let approval_pending = pending_user_approval.is_some();
+                let options = if approval_pending {
+                    vec!["Autorizar esta acción".to_string(), "Cancelar".to_string()]
+                } else {
+                    Vec::new()
+                };
 
-                let options = vec![];
-                match crate::core::ask_user::ask_user_async(
-                    &app_handle,
-                    question.clone(),
-                    options,
-                    current_context.clone(),
-                )
-                .await
-                {
-                    Ok(answer) => {
+                let ask_proposal = crate::core::policy::ActionProposal {
+                    tool: "TOOL_ASK_USER".to_string(),
+                    arguments: serde_json::json!({
+                        "question": question.clone(),
+                        "options": options,
+                        "context": current_context.clone()
+                    }),
+                    expected_effect: "Solicitar una aclaración real al usuario mediante la interfaz de la aplicación".to_string(),
+                    risk: crate::core::policy::RiskLevel::Safe,
+                    world_hash: Some(runtime.current_world_hash()),
+                };
+                match runtime.execute_action(&ask_proposal).await {
+                    Ok(observation)
+                        if observation.status
+                            == crate::core::observation::ObservationStatus::Success =>
+                    {
+                        let answer = observation.payload;
                         current_context.push_str(&format!(
                             "Pregunta al usuario: {}\nRespuesta del usuario: {}\n\n",
                             question, answer
@@ -5171,23 +9426,440 @@ pub async fn run_agent_loop(
                             "Respuesta del usuario recibida.",
                             "SUCCESS",
                         );
-                        // User clarified the task — immediately transition to Executor with TOOL_PROGRAMMER
-                        current_role = AgentRole::Executor;
-                        forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), format!("El usuario ya aclaró los requerimientos: '{}'. Implementa el código inmediatamente.", answer)));
+                        if let Some(pending_action) = pending_user_approval.take() {
+                            if is_explicit_approval(&answer) {
+                                emit_event(
+                                    &app_handle,
+                                    runtime.current_step(),
+                                    &format!(
+                                        "Ejecutando la acción aprobada: {}",
+                                        pending_action.tool
+                                    ),
+                                    "ACTION",
+                                );
+                                match runtime
+                                    .execute_action_with_user_approval(&pending_action, true)
+                                    .await
+                                {
+                                    Ok(observation)
+                                        if observation.status
+                                            == crate::core::observation::ObservationStatus::Success =>
+                                    {
+                                        current_context.push_str(&format!(
+                                            "Acción aprobada ejecutada ({}): {}\n\n",
+                                            pending_action.tool, observation.payload
+                                        ));
+                                        emit_event(
+                                            &app_handle,
+                                            runtime.current_step(),
+                                            "La acción aprobada terminó correctamente.",
+                                            "SUCCESS",
+                                        );
+                                        last_progress_step = runtime.current_step();
+                                    }
+                                    Ok(observation) => {
+                                        current_context.push_str(&format!(
+                                            "La acción aprobada no pudo completarse ({}): {}\n\n",
+                                            pending_action.tool, observation.payload
+                                        ));
+                                        emit_event(
+                                            &app_handle,
+                                            runtime.current_step(),
+                                            &observation.payload,
+                                            "ERROR",
+                                        );
+                                    }
+                                    Err(error) => {
+                                        current_context.push_str(&format!(
+                                            "La acción aprobada fue bloqueada o falló ({}): {}\n\n",
+                                            pending_action.tool, error
+                                        ));
+                                        emit_event(&app_handle, runtime.current_step(), &error, "ERROR");
+                                    }
+                                }
+                            } else {
+                                current_context.push_str(&format!(
+                                    "Acción '{}' cancelada; el usuario no dio autorización explícita.\n\n",
+                                    pending_action.tool
+                                ));
+                                emit_event(
+                                    &app_handle,
+                                    runtime.current_step(),
+                                    "Acción cancelada por falta de autorización explícita.",
+                                    "INFO",
+                                );
+                            }
+                        } else {
+                            // User clarified the task — immediately transition to Executor with TOOL_PROGRAMMER.
+                            current_role = AgentRole::Executor;
+                            forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), format!("El usuario ya aclaró los requerimientos: '{}'. Implementa el código inmediatamente.", answer)));
+                        }
                     }
-                    Err(e) => {
-                        current_context
-                            .push_str(&format!("Error al consultar al usuario: {}\n\n", e));
+                    Ok(observation) => {
+                        current_context.push_str(&format!(
+                            "Error al consultar al usuario: {}\n\n",
+                            observation.payload
+                        ));
                         emit_event(
                             &app_handle,
                             runtime.current_step(),
-                            &format!("Error ASK_USER: {}", e),
+                            &format!("Error ASK_USER: {}", observation.payload),
+                            "WARNING",
+                        );
+                    }
+                    Err(error) => {
+                        current_context
+                            .push_str(&format!("Error al consultar al usuario: {}\n\n", error));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            &format!("Error ASK_USER: {}", error),
                             "ERROR",
                         );
                     }
                 }
             }
             "TOOL_FINISH" => {
+                if last_local_ui_url.is_none() {
+                    if let Some((next_tool, reason)) = local_http_server_recovery_action(
+                        &original_prompt_parsed,
+                        &workspace_path,
+                        last_http_server_task_id.as_deref(),
+                    ) {
+                        current_role = if next_tool == "TOOL_PROGRAMMER" {
+                            AgentRole::Executor
+                        } else {
+                            AgentRole::Critic
+                        };
+                        current_context.push_str(&format!(
+                            "[SERVIDOR HTTP REQUERIDO] No se puede cerrar la misión porque falta confirmar la URL HTTP localhost. Siguiente acción: {}.\n\n",
+                            reason
+                        ));
+                        forced_next_tool = Some((next_tool.clone(), reason));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[COMPLETION GATE] Se bloqueó el cierre porque falta la URL HTTP local exigida.",
+                            "WARNING",
+                        );
+                        continue;
+                    }
+                }
+                visual_validation_required |=
+                    mission_requires_visual_verification(&original_prompt_parsed, &workspace_path)
+                        || scoped_visual_review;
+                let mut scoped_visual_rejection = false;
+                if visual_validation_required {
+                    runtime.observe_world()?;
+                    let current_hash = runtime.current_world_hash();
+                    scoped_visual_rejection = scoped_visual_review
+                        && visual_validation_error_world_hash == Some(current_hash)
+                        && visual_validation_error.as_deref().is_some_and(|error| {
+                            error.contains("VISUAL_QA_REJECTED")
+                                && visual_capture_from_error(&workspace_path, error).is_some()
+                        });
+                    if visual_validation_world_hash != Some(current_hash)
+                        && !scoped_visual_rejection
+                    {
+                        let latest_error =
+                            if visual_validation_error_world_hash == Some(current_hash) {
+                                visual_validation_error.clone()
+                            } else {
+                                visual_validation_error = None;
+                                visual_validation_error_world_hash = None;
+                                None
+                            };
+                        if let Some(error) = latest_error.as_deref() {
+                            if vision_result_needs_manual_review(error) {
+                                if let Some(capture_path) =
+                                    visual_capture_from_error(&workspace_path, error)
+                                {
+                                    let review_question = format!(
+                                        "La IA de visión no pudo confirmar la captura con seguridad. La imagen quedó guardada aquí:\n{}\n\nAbre la captura y comprueba que aparece la aplicación local, que no está en blanco y que no muestra errores visuales evidentes. ¿Apruebas esta revisión visual manual?",
+                                        capture_path.display()
+                                    );
+                                    match crate::core::ask_user::ask_user_async(
+                                        &app_handle,
+                                        review_question,
+                                        vec![
+                                            "Aprobar captura".to_string(),
+                                            "Solicitar correcciones".to_string(),
+                                        ],
+                                        format!(
+                                            "Objetivo: {}. Resultado de la IA visual: {}",
+                                            original_prompt_parsed, error
+                                        ),
+                                    )
+                                    .await
+                                    {
+                                        Ok(reply) if reply == "Aprobar captura" => {
+                                            runtime.evidence_graph.record_with_hash(
+                                                crate::core::evidence::EvidenceKind::UserConfirmation,
+                                                "user",
+                                                "La captura local de la interfaz fue revisada manualmente",
+                                                &reply,
+                                                1.0,
+                                                runtime.current_step(),
+                                                Some(current_hash),
+                                            )?;
+                                            visual_validation_world_hash = Some(current_hash);
+                                            visual_validation_error = None;
+                                            visual_validation_error_world_hash = None;
+                                            mandatory_tools_executed
+                                                .insert("TOOL_VISION_EVALUATOR".to_string());
+                                            current_context.push_str(&format!(
+                                                "[REVISIÓN VISUAL MANUAL APROBADA] La IA visual no pudo confirmar la captura; el usuario revisó y aprobó {}.\n\n",
+                                                capture_path.display()
+                                            ));
+                                            emit_event(
+                                                &app_handle,
+                                                runtime.current_step(),
+                                                "[GATEKEEPER VISUAL] El usuario revisó y aprobó la captura que la IA no pudo clasificar.",
+                                                "SUCCESS",
+                                            );
+                                        }
+                                        Ok(_) => {
+                                            let feedback = crate::core::ask_user::ask_user_async(
+                                                &app_handle,
+                                                "¿Qué elemento visible debe corregirse? Describe el problema concreto para que Aura repare la interfaz y vuelva a probarla.".to_string(),
+                                                vec!["Escribir observaciones".to_string()],
+                                                format!("Captura a revisar: {}", capture_path.display()),
+                                            )
+                                            .await
+                                            .unwrap_or_else(|_| "El usuario solicitó correcciones visuales; inspecciona la captura antes de editar.".to_string());
+                                            visual_validation_error = Some(format!(
+                                                "VISUAL_QA_REJECTED: el usuario pidió correcciones: {feedback}"
+                                            ));
+                                            visual_validation_error_world_hash = Some(current_hash);
+                                            current_role = AgentRole::Executor;
+                                            forced_next_tool = Some((
+                                                "TOOL_THINK".to_string(),
+                                                format!(
+                                                    "El usuario revisó la captura {} y solicita corregir: {feedback}. Repara solo esos defectos visibles, ejecuta las pruebas y captura de nuevo la interfaz local.",
+                                                    capture_path.display()
+                                                ),
+                                            ));
+                                            emit_event(
+                                                &app_handle,
+                                                runtime.current_step(),
+                                                "[GATEKEEPER VISUAL] El usuario solicitó una corrección visual; la fase permanece abierta.",
+                                                "WARNING",
+                                            );
+                                            continue;
+                                        }
+                                        Err(question_error) => {
+                                            let message = format!(
+                                                "VISUAL_REVIEW_REQUIRED: la IA no pudo aprobar la captura y no se pudo abrir la revisión manual ({question_error}). La imagen quedó guardada en {}.",
+                                                capture_path.display()
+                                            );
+                                            emit_event(
+                                                &app_handle,
+                                                runtime.current_step(),
+                                                &message,
+                                                "ERROR",
+                                            );
+                                            let _ = save_resumable_validation_block(
+                                                &mut journal,
+                                                &workspace_path,
+                                                runtime.current_step(),
+                                                "Critic",
+                                                &current_context,
+                                                &message,
+                                            );
+                                            let final_res = FinalResponse {
+                                                status: "ERROR".to_string(),
+                                                respuesta_conversacional: message,
+                                            };
+                                            return Ok(serde_json::to_string(&final_res).unwrap());
+                                        }
+                                    }
+                                    if visual_validation_world_hash == Some(current_hash) {
+                                        // User approval supplies the visual acceptance that the local model could not.
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        if visual_validation_world_hash != Some(current_hash) {
+                            let unavailable = latest_error
+                                .as_deref()
+                                .is_some_and(|error| error.contains("VISUAL_QA_UNAVAILABLE"));
+                            let manual_review_available = latest_error
+                                .as_deref()
+                                .is_some_and(vision_result_needs_manual_review)
+                                && latest_error
+                                    .as_deref()
+                                    .and_then(|error| {
+                                        visual_capture_from_error(&workspace_path, error)
+                                    })
+                                    .is_some();
+                            if (unavailable && !manual_review_available)
+                                || visual_validation_attempts >= 3
+                                || visual_finish_recovery_attempts >= 3
+                            {
+                                let reason = latest_error.unwrap_or_else(|| {
+                                "No existe una captura visual aprobada para la versión actual del workspace.".to_string()
+                            });
+                                let message = format!(
+                                "VISUAL_VALIDATION_BLOCKED: La interfaz no puede declararse completa sin una captura real aprobada. {}. El proyecto y sus archivos se conservaron; resuelve la dependencia indicada y continúa para repetir la validación.",
+                                reason
+                            );
+                                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                                if let Err(error) = save_resumable_validation_block(
+                                    &mut journal,
+                                    &workspace_path,
+                                    runtime.current_step(),
+                                    "Critic",
+                                    &current_context,
+                                    &message,
+                                ) {
+                                    emit_event(
+                                        &app_handle,
+                                        runtime.current_step(),
+                                        &format!("[CHECKPOINT FAILED] {error}"),
+                                        "FATAL",
+                                    );
+                                }
+                                let final_res = FinalResponse {
+                                    status: "ERROR".to_string(),
+                                    respuesta_conversacional: message,
+                                };
+                                return Ok(serde_json::to_string(&final_res).unwrap());
+                            }
+
+                            visual_finish_recovery_attempts =
+                                visual_finish_recovery_attempts.saturating_add(1);
+                            if latest_error
+                                .as_deref()
+                                .is_some_and(|error| error.contains("VISUAL_QA_REJECTED"))
+                            {
+                                current_role = AgentRole::Executor;
+                                forced_next_tool = Some((
+                                "TOOL_THINK".to_string(),
+                                format!(
+                                    "No cierres: la revisión visual rechazó la interfaz. Repara los defectos descritos y conserva el resto de funciones. Luego ejecuta las pruebas funcionales y solicita una captura nueva de la aplicación local. Diagnóstico: {}",
+                                    latest_error.as_deref().unwrap_or_default()
+                                ),
+                            ));
+                                emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                "[GATEKEEPER VISUAL] La captura detectó defectos. La fase no avanzará hasta corregirlos y volver a capturar.",
+                                "WARNING",
+                            );
+                            } else if latest_error.is_some() {
+                                current_role = AgentRole::Executor;
+                                forced_next_tool = Some((
+                                "TOOL_THINK".to_string(),
+                                format!(
+                                    "No cierres: la captura de la aplicación local no pudo aprobarse. Resuelve la URL o el proceso usando el error real, vuelve a iniciar/consultar el servidor si corresponde, y después captura la página del workspace. No uses una captura del escritorio como sustituto. Error: {}",
+                                    latest_error.as_deref().unwrap_or_default()
+                                ),
+                            ));
+                                emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                "[GATEKEEPER VISUAL] La captura no pudo verificarse; se resolverá el origen antes del cierre.",
+                                "WARNING",
+                            );
+                            } else {
+                                current_role = AgentRole::Critic;
+                                forced_next_tool = Some((
+                                "TOOL_VISION_EVALUATOR".to_string(),
+                                format!(
+                                    "Valida ahora la versión actual de la interfaz local contra este objetivo y la fase: {}. Debes evaluar la página real, conservar la captura en .aura/evidence/visual y devolver un veredicto visual explícito.",
+                                    original_prompt_parsed
+                                ),
+                            ));
+                                emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                "[GATEKEEPER VISUAL] Captura pendiente para la versión actual; no se cerrará la fase todavía.",
+                                "INFO",
+                            );
+                            }
+                            continue;
+                        }
+                    }
+                }
+
+                if browser_interaction_validation_required {
+                    runtime.observe_world()?;
+                    let current_hash = runtime.current_world_hash();
+                    if browser_interaction_validation_world_hash != Some(current_hash) {
+                        if browser_interaction_validation_world_hash.is_some() {
+                            browser_interaction_validation_world_hash = None;
+                        }
+                        let (next_tool, guidance) = web_validation_recovery_action(
+                            &original_prompt_parsed,
+                            &workspace_path,
+                            last_local_ui_url.as_deref(),
+                            last_http_server_task_id.as_deref(),
+                        )
+                        .unwrap_or_else(|| (
+                            "TOOL_TESTER".into(),
+                            "Crea un plan BROWSER_TEST con pasos que cubran los flujos interactivos pedidos.".into(),
+                        ));
+                        current_role = AgentRole::Critic;
+                        forced_next_tool = Some((next_tool.clone(), guidance.clone()));
+                        let message = format!(
+                            "[COMPLETION GATE] La misión exige pruebas reales de interacción en navegador para el estado actual. Falta evidencia BROWSER_TEST. Acción: {next_tool} — {guidance}"
+                        );
+                        current_context.push_str(&format!("{message}\n\n"));
+                        emit_event(&app_handle, runtime.current_step(), &message, "WARNING");
+                        continue;
+                    }
+                }
+
+                if let Some((depth, guidance)) = console_validation_profile(&original_prompt_parsed)
+                {
+                    let current_hash = runtime.current_world_hash();
+                    if !has_current_console_runtime_evidence(
+                        &runtime.evidence_graph,
+                        current_hash,
+                        &workspace_path,
+                    ) {
+                        if console_runtime_recovery_attempts >= 2 {
+                            let message = format!(
+                                "CONSOLE_RUNTIME_VALIDATION_BLOCKED: No hay evidencia de que el programa de consola se haya ejecutado correctamente en el estado actual. Perfil solicitado: {depth}. {guidance} El trabajo se conservó y la misión quedó disponible para reanudarse."
+                            );
+                            emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                            if let Err(error) = save_resumable_validation_block(
+                                &mut journal,
+                                &workspace_path,
+                                runtime.current_step(),
+                                "Critic",
+                                &current_context,
+                                &message,
+                            ) {
+                                emit_event(
+                                    &app_handle,
+                                    runtime.current_step(),
+                                    &format!("[CHECKPOINT FAILED] {error}"),
+                                    "FATAL",
+                                );
+                            }
+                            let final_res = FinalResponse {
+                                status: "ERROR".to_string(),
+                                respuesta_conversacional: message,
+                            };
+                            return Ok(serde_json::to_string(&final_res).unwrap());
+                        }
+
+                        console_runtime_recovery_attempts =
+                            console_runtime_recovery_attempts.saturating_add(1);
+                        let message = format!(
+                            "[GATEKEEPER CONSOLA] La fase no se cierra sin una ejecución real y exitosa del programa. Perfil: {depth}. {guidance} Inspecciona los archivos y scripts existentes, escoge el comando real de ejecución del proyecto, usa entradas representativas solicitadas y comprueba stdout/stderr y el código de salida. Las pruebas unitarias por sí solas no sustituyen esta ejecución."
+                        );
+                        current_role = AgentRole::Critic;
+                        forced_next_tool = Some(("TOOL_TERMINAL".to_string(), message.clone()));
+                        current_context.push_str(&format!("{message}\n\n"));
+                        emit_event(&app_handle, runtime.current_step(), &message, "WARNING");
+                        continue;
+                    }
+                }
+
                 // ── Mandatory Tool Checklist enforcement (Bug 1 fix) ─────────────────
                 // If the user's prompt required specific tools (TOOL_TESTER, TOOL_VISION_EVALUATOR)
                 // and they haven't been executed yet, block TOOL_FINISH and instruct the agent.
@@ -5196,6 +9868,43 @@ pub async fn run_agent_loop(
                     .filter(|t| !mandatory_tools_executed.contains(*t))
                     .collect();
                 if !missing_mandatory.is_empty() {
+                    let vision_is_missing = missing_mandatory
+                        .iter()
+                        .any(|tool| tool.as_str() == "TOOL_VISION_EVALUATOR");
+                    let terminal_vision_failure = visual_validation_error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("VISUAL_QA_UNAVAILABLE"));
+                    if vision_is_missing
+                        && (terminal_vision_failure || visual_validation_attempts >= 3)
+                    {
+                        let reason = visual_validation_error.clone().unwrap_or_else(|| {
+                            "La evaluación visual no se completó tras tres intentos.".to_string()
+                        });
+                        let message = format!(
+                            "VISUAL_VALIDATION_BLOCKED: La herramienta visual fue exigida pero no produjo una evaluación válida. {reason}. El trabajo se conservó y la misión quedó disponible para reanudarse."
+                        );
+                        emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                        if let Err(error) = save_resumable_validation_block(
+                            &mut journal,
+                            &workspace_path,
+                            runtime.current_step(),
+                            "Critic",
+                            &current_context,
+                            &message,
+                        ) {
+                            emit_event(
+                                &app_handle,
+                                runtime.current_step(),
+                                &format!("[CHECKPOINT FAILED] {error}"),
+                                "FATAL",
+                            );
+                        }
+                        let final_res = FinalResponse {
+                            status: "ERROR".to_string(),
+                            respuesta_conversacional: message,
+                        };
+                        return Ok(serde_json::to_string(&final_res).unwrap());
+                    }
                     let missing_list: Vec<&str> =
                         missing_mandatory.iter().map(|s| s.as_str()).collect();
                     let block_msg = format!(
@@ -5220,7 +9929,52 @@ pub async fn run_agent_loop(
                 // =======================================================
                 // PESP v2 — Intercept TOOL_FINISH for Phase Advancement
                 // =======================================================
-                if !journal.fases.is_empty() && journal.fase_actual < journal.fases.len() - 1 {
+                if approved_consultation_task && journal.fase_actual == 1 {
+                    let audit = crate::llm::phase_planner::audit_consultation_firebase(
+                        std::path::Path::new(&workspace_path),
+                    );
+                    if !audit.issues.is_empty() {
+                        let diagnostic = audit.issues.join("\n");
+                        verifier_diagnostic = diagnostic.clone();
+                        current_role = AgentRole::Executor;
+                        forced_next_tool = Some((
+                            "TOOL_PROGRAMMER".to_string(),
+                            format!(
+                                "Fase 2 BLOQUEADA por auditoría Firebase. Repara solo estos defectos: {}. Archivos: {:?}.",
+                                diagnostic, audit.repair_files
+                            ),
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[GATEKEEPER FIREBASE] Fase 2 bloqueada: la integración o las pruebas de emulador siguen incompletas.",
+                            "ERROR",
+                        );
+                        continue;
+                    }
+                    if !successful_command_for_world(
+                        &comandos_exitosos_historico,
+                        "npm run test:firebase",
+                        runtime.current_world_hash(),
+                    ) {
+                        current_role = AgentRole::Executor;
+                        forced_next_tool = Some((
+                            "TOOL_TERMINAL".to_string(),
+                            "Fase 2 BLOQUEADA: ejecuta `npm run test:firebase` y revisa su salida real antes de solicitar el cierre. `npm test` no valida Firebase.".to_string(),
+                        ));
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[GATEKEEPER FIREBASE] Fase 2 bloqueada: no hay evidencia vigente de la prueba de emuladores.",
+                            "ERROR",
+                        );
+                        continue;
+                    }
+                }
+                if !scoped_visual_review
+                    && !journal.fases.is_empty()
+                    && journal.fase_actual < journal.fases.len() - 1
+                {
                     let phase_num = journal.fases[journal.fase_actual].numero;
                     let phase_desc = journal.fases[journal.fase_actual].descripcion.clone();
 
@@ -5347,7 +10101,8 @@ pub async fn run_agent_loop(
                     current_context.push_str(&format!("{}\n\n", new_phase_msg));
                     current_role = AgentRole::Planner;
                     continue; // Advance the next phase before evaluating mission completion.
-                } else if !journal.fases.is_empty()
+                } else if !scoped_visual_review
+                    && !journal.fases.is_empty()
                     && journal.fase_actual == journal.fases.len() - 1
                 {
                     let current_phase = &journal.fases[journal.fase_actual];
@@ -5386,53 +10141,184 @@ pub async fn run_agent_loop(
                 runtime.observe_world()?;
                 let review_hash = runtime.current_world_hash();
                 let mut technical_contract = runtime.contract.clone();
-                technical_contract.acceptance_criteria.retain(|ac| !matches!(ac.verification,
-                    crate::core::mission_contract::VerificationMethod::ManualReview));
+                technical_contract.acceptance_criteria.retain(|ac| {
+                    !matches!(
+                        ac.verification,
+                        crate::core::mission_contract::VerificationMethod::ManualReview
+                    )
+                });
                 let technical_ready = (technical_contract.acceptance_criteria.is_empty()
-                    && technical_contract.required_evidence.is_empty()) || matches!(
-                    crate::core::completion_gate::CompletionGate::evaluate(&technical_contract,
-                        &runtime.cognitive_state, &runtime.evidence_graph, review_hash,
-                        std::path::Path::new(&workspace_path)),
-                    crate::core::completion_gate::CompletionDecision::Complete);
-                let pending_reviews: Vec<_> = runtime.contract.acceptance_criteria.iter()
-                    .filter(|ac| technical_ready && ac.required && matches!(ac.verification, crate::core::mission_contract::VerificationMethod::ManualReview))
-                    .filter(|ac| !runtime.evidence_graph.has_valid_manual_evidence_for_state(
-                        &format!("{} verified manually", ac.id), 1.0, review_hash))
-                    .cloned().collect();
+                    && technical_contract.required_evidence.is_empty())
+                    || matches!(
+                        crate::core::completion_gate::CompletionGate::evaluate(
+                            &technical_contract,
+                            &runtime.cognitive_state,
+                            &runtime.evidence_graph,
+                            review_hash,
+                            std::path::Path::new(&workspace_path)
+                        ),
+                        crate::core::completion_gate::CompletionDecision::Complete
+                    );
+                let pending_reviews: Vec<_> = if mission_type == MissionType::Planning {
+                    Vec::new()
+                } else {
+                    runtime
+                        .contract
+                        .acceptance_criteria
+                        .iter()
+                        .filter(|ac| {
+                            technical_ready
+                                && ac.required
+                                && matches!(
+                                    ac.verification,
+                                    crate::core::mission_contract::VerificationMethod::ManualReview
+                                )
+                        })
+                        .filter(|ac| {
+                            !runtime.evidence_graph.has_valid_manual_evidence_for_state(
+                                &format!("{} verified manually", ac.id),
+                                1.0,
+                                review_hash,
+                            )
+                        })
+                        .cloned()
+                        .collect()
+                };
                 for criterion in pending_reviews {
+                    let question = if mission_type == MissionType::Planning {
+                        format!(
+                            "Plan inicial propuesto:\n\n{}\n\n¿Esta hoja de ruta representa lo que quieres construir?",
+                            respuesta_conv
+                        )
+                    } else {
+                        format!(
+                            "Revisa los entregables en {}. ¿Se cumple este criterio? {}",
+                            workspace_path, criterion.description
+                        )
+                    };
                     let answer = crate::core::ask_user::ask_user_async(
                         &app_handle,
-                        format!("Revisa los entregables en {}. ¿Se cumple este criterio? {}", workspace_path, criterion.description),
+                        question,
                         vec!["Aprobar criterio".into(), "Requiere correcciones".into()],
-                        format!("Misión: {}. Criterio: {}", original_prompt_parsed, criterion.id),
-                    ).await?;
+                        format!(
+                            "Misión: {}. Criterio: {}",
+                            original_prompt_parsed, criterion.id
+                        ),
+                    )
+                    .await?;
                     if answer == "Aprobar criterio" {
                         let review_step = runtime.current_step();
                         runtime.evidence_graph.record_with_hash(
                             crate::core::evidence::EvidenceKind::UserConfirmation,
-                            "user", &format!("{} verified manually", criterion.id),
-                            &answer, 1.0, review_step, Some(review_hash),
+                            "user",
+                            &format!("{} verified manually", criterion.id),
+                            &answer,
+                            1.0,
+                            review_step,
+                            Some(review_hash),
                         )?;
                     } else {
-                        current_context.push_str(&format!("\n[REVISIÓN DEL USUARIO] {}: {}\n", criterion.id, answer));
+                        current_context.push_str(&format!(
+                            "\n[REVISIÓN DEL USUARIO] {}: {}\n",
+                            criterion.id, answer
+                        ));
                     }
                 }
                 runtime.observe_world()?;
 
                 // ↀ CompletionGate delegado a MissionRuntime (fuente única de verdad) ↀ
-                let completion_decision = runtime.can_complete();
+                let completion_decision = if mission_type == MissionType::Planning {
+                    if planning_research_failed
+                        && !respuesta_conv
+                            .to_lowercase()
+                            .contains("no se pudo verificar")
+                    {
+                        respuesta_conv.push_str(
+                            "\n\nInvestigación web: no se pudo verificar información actual de Firebase porque la búsqueda no devolvió resultados. Este plan es preliminar y no cita fuentes externas.",
+                        );
+                    }
+                    if !planning_response_complete(
+                        &respuesta_conv,
+                        planning_research_failed,
+                        &original_prompt_parsed,
+                    ) {
+                        respuesta_conv = build_fallback_initial_plan(
+                            &original_prompt_parsed,
+                            planning_research_failed,
+                        );
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[PLAN INICIAL] El borrador del modelo no pasó la revisión; se generó una hoja de ruta estructurada automáticamente.",
+                            "INFO",
+                        );
+                    }
+                    if planning_response_complete(
+                        &respuesta_conv,
+                        planning_research_failed,
+                        &original_prompt_parsed,
+                    ) {
+                        emit_event(
+                            &app_handle,
+                            runtime.current_step(),
+                            "[COMPLETION GATE] Plan inicial validado: incluye fases, entregables, supuestos y decisiones pendientes.",
+                            "SUCCESS",
+                        );
+                        crate::core::completion_gate::CompletionDecision::Complete
+                    } else {
+                        let research_requirement = if planning_research_failed {
+                            " Como la búsqueda falló, declara explícitamente 'No se pudo verificar información actual de Firebase' y no presentes datos externos como confirmados."
+                        } else {
+                            ""
+                        };
+                        let mut gaps = Vec::new();
+                        if !initial_plan_response_complete(&respuesta_conv) {
+                            gaps.push("El plan debe incluir al menos dos fases, entregables, supuestos y decisiones pendientes.".to_string());
+                        }
+                        gaps.extend(
+                            missing_requested_plan_coverage(
+                                &original_prompt_parsed,
+                                &respuesta_conv,
+                            )
+                            .into_iter()
+                            .map(|item| format!("Falta cubrir el requisito explícito: {item}.")),
+                        );
+                        let lower_request = original_prompt_parsed.to_lowercase();
+                        let local_first = lower_request.contains("local")
+                            && (lower_request.contains("luego")
+                                || lower_request.contains("después")
+                                || lower_request.contains("despues"))
+                            && (lower_request.contains("firebase")
+                                || lower_request.contains("despleg"));
+                        if local_first && !plan_tests_locally_before_deploying(&respuesta_conv) {
+                            gaps.push("Respeta el orden pedido: pruebas locales en la primera fase y despliegue Firebase en una fase posterior.".to_string());
+                        }
+                        if !research_requirement.is_empty() {
+                            gaps.push(research_requirement.trim().to_string());
+                        }
+                        crate::core::completion_gate::CompletionDecision::Incomplete(gaps)
+                    }
+                } else {
+                    runtime.can_complete()
+                };
                 match completion_decision {
                     crate::core::completion_gate::CompletionDecision::Incomplete(
                         missing_reasons,
                     ) => {
                         let block_msg = format!("[COMPLETION GATE] ⚠︠ Finalización rechazada. Requisitos pendientes:\n{}", missing_reasons.join("\n"));
-                        emit_event(
-                            &app_handle,
-                            runtime.current_step(),
-                            "[COMPLETION GATE] Criterios de misión aún no satisfechos.",
-                            "WARNING",
-                        );
-                        current_context.push_str(&format!("{}\n[ACCIÓN OBLIGATORIA]: Resuelve estos puntos antes de llamar a TOOL_FINISH.\n\n", block_msg));
+                        emit_event(&app_handle, runtime.current_step(), &block_msg, "WARNING");
+                        if mission_type == MissionType::Planning {
+                            current_context.push_str(&format!(
+                                "{}\n[CORRECCIÓN OBLIGATORIA DEL PLAN]: No repitas una reflexión ni una frase genérica de cierre. Devuelve ahora TOOL_FINISH con las fases, los módulos solicitados que faltan, entregables verificables, supuestos y decisiones pendientes. En cada fase escribe objetivo, entregables y condición de finalización. Si el usuario pidió probar localmente antes de desplegar, pon los emuladores/pruebas en la fase inicial y el despliegue en una posterior. No solicites una decisión fiscal para iniciar una fase local; confirma la jurisdicción solo antes de implementar esa parte fiscal. Si la búsqueda web falló, declara 'No se pudo verificar información actual de Firebase' y no inventes fuentes.\n\n",
+                                block_msg
+                            ));
+                            forced_next_tool = Some((
+                                "TOOL_FINISH".to_string(),
+                                "Corrige el plan ahora: cubre todos los módulos solicitados y el orden local primero, despliegue después; cada fase debe tener objetivo, entregables verificables y condición de salida. No preguntes el país para empezar la fase local. Si la búsqueda falló, aclara que no se pudo verificar Firebase y no inventes fuentes.".to_string(),
+                            ));
+                        } else {
+                            current_context.push_str(&format!("{}\n[ACCIÓN OBLIGATORIA]: Resuelve estos puntos antes de llamar a TOOL_FINISH.\n\n", block_msg));
+                        }
                         continue;
                     }
                     crate::core::completion_gate::CompletionDecision::Blocked(block_reasons) => {
@@ -5452,6 +10338,59 @@ pub async fn run_agent_loop(
                     crate::core::completion_gate::CompletionDecision::Complete => {
                         emit_event(&app_handle, runtime.current_step(), "🎯 [COMPLETION GATE] Verificación superada: Todos los criterios cumplidos.", "SUCCESS");
                     }
+                }
+
+                if scoped_visual_review {
+                    let finding = if scoped_visual_rejection {
+                        visual_validation_error.clone().unwrap_or_else(|| {
+                            "La evaluación visual detectó elementos que requieren revisión."
+                                .to_string()
+                        })
+                    } else {
+                        "La página local se cargó y la captura actual recibió aprobación visual."
+                            .to_string()
+                    };
+                    journal.status = "EN_PROGRESO".to_string();
+                    journal.interrupted = false;
+                    journal.ultimo_paso = runtime.current_step();
+                    journal.ultimo_estado =
+                        "Revisión visual aislada completada; la fase original sigue pendiente."
+                            .to_string();
+                    journal.fsm_role = Some("Planner".to_string());
+                    journal.fsm_step = 0;
+                    journal.fsm_context = None;
+                    if let Err(error) =
+                        crate::core::session_journal::save_journal(&workspace_path, &journal)
+                    {
+                        let final_res = FinalResponse {
+                            status: "ERROR".to_string(),
+                            respuesta_conversacional: format!(
+                                "La revisión terminó, pero no se pudo conservar el estado de la fase original: {error}"
+                            ),
+                        };
+                        return Ok(serde_json::to_string(&final_res).unwrap());
+                    }
+
+                    let evidence_text = visual_validation_result.as_deref().unwrap_or(&finding);
+                    let evidence_path = visual_capture_from_error(&workspace_path, evidence_text)
+                        .map(|path| format!("\nCaptura: {}", path.display()))
+                        .unwrap_or_default();
+                    let response = if respuesta_conv.trim().is_empty() {
+                        format!("{finding}{evidence_path}")
+                    } else {
+                        format!("{}\n\n{}{}", respuesta_conv.trim(), finding, evidence_path)
+                    };
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        "[REVISION VISUAL] Informe entregado; la fase PESP original permanece en el estado guardado.",
+                        "SUCCESS",
+                    );
+                    let final_res = FinalResponse {
+                        status: "FINISH".to_string(),
+                        respuesta_conversacional: response,
+                    };
+                    return Ok(serde_json::to_string(&final_res).unwrap());
                 }
 
                 emit_event(
@@ -5525,9 +10464,9 @@ pub async fn run_agent_loop(
                     .record_outcome(
                         al_fingerprint.clone(),
                         orchestrator_model.clone(),
-                        al_recommendation.strategy.clone(),
+                        applied_strategy.clone(),
                         al_result,
-                        al_recommendation.confidence,
+                        applied_strategy_confidence,
                         runtime.mission_id.clone(),
                         None,
                     )
@@ -5777,8 +10716,16 @@ pub async fn run_agent_loop(
 
     let (final_status, reason) = match &runtime.terminal_state {
         Some(crate::core::mission_runtime::RuntimeTerminalState::Failed(msg)) => {
-            emit_event(&app_handle, runtime.current_step(), &format!("Abortando misión: {}", msg), "FATAL");
-            ("ERROR", format!("La misión ha sido abortada por un error crítico: {}", msg))
+            emit_event(
+                &app_handle,
+                runtime.current_step(),
+                &format!("Abortando misión: {}", msg),
+                "FATAL",
+            );
+            (
+                "ERROR",
+                format!("La misión ha sido abortada por un error crítico: {}", msg),
+            )
         }
         Some(crate::core::mission_runtime::RuntimeTerminalState::WaitingUser(prompt)) => {
             ("WAITING_USER", prompt.clone())
@@ -5793,16 +10740,23 @@ pub async fn run_agent_loop(
                 "Límite máximo de pasos alcanzado. Bucle abortado.",
                 "FATAL",
             );
-            ("ERROR", format!(
-                "He alcanzado el límite máximo de {} pasos sin llegar a una conclusión. \
+            (
+                "ERROR",
+                format!(
+                    "He alcanzado el límite máximo de {} pasos sin llegar a una conclusión. \
                  Por favor, revisa el historial de pasos y proporciona más contexto.",
-                runtime.budget.total_steps
-            ))
+                    runtime.budget.total_steps
+                ),
+            )
         }
     };
 
     // ── Journal: mark status ──
-    journal.status = if final_status == "FINISH" { "COMPLETADO".to_string() } else { "ESPERANDO".to_string() };
+    journal.status = if final_status == "FINISH" {
+        "COMPLETADO".to_string()
+    } else {
+        "ESPERANDO".to_string()
+    };
     if let Err(e) = crate::core::session_journal::save_journal(&workspace_path, &journal) {
         emit_event(
             &app_handle,
@@ -5819,12 +10773,19 @@ pub async fn run_agent_loop(
     Ok(serde_json::to_string(&final_res).unwrap())
 }
 
-/// Registers all 28 tool executors with ToolRegistry.
-/// Every tool in KNOWN_TOOLS has a concrete, real executor — zero stubs.
+/// Registers the concrete executor adapters for all 29 known tools.
+/// Mission-specific policy and completion checks remain in MissionRuntime.
 pub fn register_default_tools(
     runtime: &mut crate::core::mission_runtime::MissionRuntime,
     workspace_path: &str,
     original_prompt_parsed: &str,
+    app_handle: Option<AppHandle>,
+    orchestrator_model: String,
+    agent_workspace: std::sync::Arc<
+        std::sync::Mutex<
+            chronos_vfs::workspace::AgentWorkspace<chronos_vfs::aura_bridge::AuraAstNode>,
+        >,
+    >,
 ) {
     use std::sync::Arc;
 
@@ -5992,11 +10953,22 @@ pub fn register_default_tools(
         let _ws = workspace_path.to_string();
         let _ = runtime.tool_registry.register(
             "TOOL_TESTER",
-            Arc::new(move |ws, _args| {
+            Arc::new(move |ws, args| {
                 let workspace = ws.clone();
-                Box::pin(
-                    async move { crate::core::tester::execute_tester_detailed(&workspace).await },
-                )
+                Box::pin(async move {
+                    let command = args
+                        .get("comando")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    if crate::core::browser_automation::is_browser_test_command(command) {
+                        crate::core::browser_automation::execute_browser_test_command(
+                            &workspace, command,
+                        )
+                        .await
+                    } else {
+                        crate::core::tester::execute_tester_detailed(&workspace).await
+                    }
+                })
             }),
         );
     }
@@ -6168,6 +11140,39 @@ pub fn register_default_tools(
         );
     }
 
+    // TOOL_WEB_SEARCH: live web search used by the Planner and research tasks.
+    {
+        let _ = runtime.tool_registry.register(
+            "TOOL_WEB_SEARCH",
+            Arc::new(move |_ws, args| {
+                Box::pin(async move {
+                    let query = args
+                        .get("comando")
+                        .or_else(|| args.get("query"))
+                        .or_else(|| args.get("url_a_investigar"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if query.is_empty() {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "TOOL_WEB_SEARCH requiere una consulta en 'comando' o 'query'.",
+                            1,
+                        ));
+                    }
+                    match crate::net::search_web(&query).await {
+                        Ok(results) => Ok(crate::core::tool_registry::ExecutionResult::success(
+                            results,
+                        )),
+                        Err(error) => {
+                            Ok(crate::core::tool_registry::ExecutionResult::error(error, 1))
+                        }
+                    }
+                })
+            }),
+        );
+    }
+
     // TOOL_WEB_SCRAPER: real execution via fetch_url_text
     {
         let _ = runtime.tool_registry.register(
@@ -6255,24 +11260,97 @@ pub fn register_default_tools(
     // TOOL_AUDITOR: real audit reading workspace files
     {
         let _ws = workspace_path.to_string();
+        let model = orchestrator_model.clone();
         let _ = runtime.tool_registry.register(
             "TOOL_AUDITOR",
             Arc::new(move |ws, args| {
                 let workspace = ws.clone();
+                let model = model.clone();
                 Box::pin(async move {
-                    let files: Vec<String> =
-                        if let Some(arr) = args.get("archivos").and_then(|v| v.as_array()) {
-                            arr.iter()
-                                .filter_map(|v| v.as_str())
-                                .map(|s| s.to_string())
-                                .collect()
-                        } else {
-                            vec![]
+                    let mut files: Vec<String> =
+                        ["archivos", "archivos_auditar", "archivos_a_editar"]
+                            .iter()
+                            .filter_map(|key| args.get(*key).and_then(|value| value.as_array()))
+                            .flat_map(|values| values.iter().filter_map(serde_json::Value::as_str))
+                            .map(str::to_string)
+                            .collect();
+                    if files.is_empty() {
+                        let root = match std::path::Path::new(&workspace).canonicalize() {
+                            Ok(root) => root,
+                            Err(error) => {
+                                return Ok(crate::core::tool_registry::ExecutionResult::error(
+                                    format!("TOOL_AUDITOR no pudo abrir el workspace: {}", error),
+                                    1,
+                                ))
+                            }
                         };
+                        let tree = match crate::memory::get_workspace_tree_internal(
+                            root.to_string_lossy().to_string(),
+                        )
+                        .await
+                        {
+                            Ok(tree) => tree,
+                            Err(error) => {
+                                return Ok(crate::core::tool_registry::ExecutionResult::error(
+                                    error, 1,
+                                ))
+                            }
+                        };
+                        files.extend(tree.into_iter().filter_map(|entry| {
+                            if entry.is_dir
+                                || !matches!(
+                                    std::path::Path::new(&entry.path)
+                                        .extension()
+                                        .and_then(|value| value.to_str()),
+                                    Some(
+                                        "py" | "rs"
+                                            | "js"
+                                            | "ts"
+                                            | "go"
+                                            | "c"
+                                            | "cpp"
+                                            | "html"
+                                            | "htm"
+                                            | "css"
+                                            | "json"
+                                            | "md"
+                                            | "toml"
+                                            | "yaml"
+                                            | "yml"
+                                    )
+                                )
+                            {
+                                return None;
+                            }
+                            std::path::Path::new(&entry.path)
+                                .strip_prefix(&root)
+                                .ok()
+                                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                        }));
+                    }
+                    files.sort();
+                    files.dedup();
+                    if files.is_empty() {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "TOOL_AUDITOR no encontró archivos de código para revisar.",
+                            1,
+                        ));
+                    }
                     let safe_files = memory::read_files_safely(&workspace, files).await;
-                    Ok(crate::core::tool_registry::ExecutionResult::success(
-                        format!("Auditoría completada:\n{}", safe_files),
-                    ))
+                    if safe_files.trim().is_empty() {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "TOOL_AUDITOR no pudo leer archivos accesibles dentro del workspace.",
+                            1,
+                        ));
+                    }
+                    let report = delegate_to_auditor(&safe_files, &model).await;
+                    if report.starts_with("Error en auditoría:") {
+                        Ok(crate::core::tool_registry::ExecutionResult::error(
+                            report, 1,
+                        ))
+                    } else {
+                        Ok(crate::core::tool_registry::ExecutionResult::success(report))
+                    }
                 })
             }),
         );
@@ -6294,33 +11372,65 @@ pub fn register_default_tools(
         );
     }
 
-    // TOOL_AST_INJECT: AST node parsing and validation via chronos_vfs
+    // TOOL_AST_INJECT: inserts validated intent nodes into the mission's shared VFS.
     {
+        let agent_workspace = agent_workspace.clone();
         let _ = runtime.tool_registry.register(
             "TOOL_AST_INJECT",
             Arc::new(move |_ws, args| {
+                let agent_workspace = agent_workspace.clone();
                 Box::pin(async move {
-                    let opcode = args.get("opcode").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
-                    let parent_id = args.get("parent_id").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let intent = args
-                        .get("intent")
-                        .or_else(|| args.get("comando"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let meta = [0u8; 16];
-                    let node = chronos_vfs::aura_bridge::AuraIntentTranslator::tokenize_intent(
-                        opcode.into(),
-                        parent_id,
-                        1,
-                        intent,
-                        meta,
-                    );
-                    Ok(crate::core::tool_registry::ExecutionResult::success(
-                        format!(
-                            "AST node generated (id: {}, opcode: {:?})",
-                            node.node_id, node.opcode
-                        ),
-                    ))
+                    let nodes = if let Some(values) = args.get("nodes").and_then(|v| v.as_array()) {
+                        values.iter().filter_map(|value| {
+                            let intent = value.get("intent")?.as_str()?.trim();
+                            if intent.is_empty() { return None; }
+                            let parent_id = value.get("parent_id").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                            let opcode = value.get("opcode").and_then(serde_json::Value::as_u64)
+                                .and_then(|value| u8::try_from(value).ok()).unwrap_or(2);
+                            Some((intent.to_string(), parent_id, opcode))
+                        }).collect::<Vec<_>>()
+                    } else {
+                        args.get("intent").or_else(|| args.get("comando"))
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                            .map(|intent| {
+                                let parent_id = args.get("parent_id").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                                let opcode = args.get("opcode").and_then(serde_json::Value::as_u64)
+                                    .and_then(|value| u8::try_from(value).ok()).unwrap_or(2);
+                                vec![(intent.to_string(), parent_id, opcode)]
+                            }).unwrap_or_default()
+                    };
+                    if nodes.is_empty() {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "TOOL_AST_INJECT requiere al menos un nodo con intent no vacío.", 1,
+                        ));
+                    }
+                    let mut report = Vec::with_capacity(nodes.len());
+                    for (index, (intent, parent_id, opcode)) in nodes.iter().enumerate() {
+                        let node_id = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default().as_nanos() as u64 + index as u64;
+                        let node = chronos_vfs::aura_bridge::AuraIntentTranslator::tokenize_intent(
+                            *opcode, *parent_id, node_id, intent, [0u8; 16],
+                        );
+                        let summary = format!("NodeID={} Hash={} Opcode={:?}", node.node_id, node.content_hash, node.opcode);
+                        let mut workspace = match agent_workspace.lock() {
+                            Ok(workspace) => workspace,
+                            Err(_) => return Ok(crate::core::tool_registry::ExecutionResult::error(
+                                "TOOL_AST_INJECT no pudo acceder al buffer AST compartido (mutex envenenado).", 1,
+                            )),
+                        };
+                        if let Err(error) = workspace.push_node(node) {
+                            return Ok(crate::core::tool_registry::ExecutionResult::error(
+                                format!("TOOL_AST_INJECT no pudo insertar el nodo: {}", error), 1,
+                            ));
+                        }
+                        report.push(summary);
+                    }
+                    Ok(crate::core::tool_registry::ExecutionResult::success(format!(
+                        "{} nodo(s) insertado(s) en el buffer AST compartido: {}",
+                        report.len(), report.join("; ")
+                    )))
                 })
             }),
         );
@@ -6367,9 +11477,12 @@ pub fn register_default_tools(
 
     // TOOL_VISION_EVALUATOR: visual evaluation check via core::vision
     {
+        let require_target =
+            mission_requires_visual_verification(original_prompt_parsed, workspace_path);
         let _ = runtime.tool_registry.register(
             "TOOL_VISION_EVALUATOR",
-            Arc::new(move |_ws, args| {
+            Arc::new(move |ws, args| {
+                let workspace = std::path::PathBuf::from(ws);
                 Box::pin(async move {
                     let prompt = args
                         .get("prompt")
@@ -6377,7 +11490,19 @@ pub fn register_default_tools(
                         .and_then(|v| v.as_str())
                         .unwrap_or("Evalua la calidad visual de esta pantalla.");
                     let url = args.get("url").and_then(|v| v.as_str());
-                    match crate::core::vision::evaluate_vision(prompt, false, url).await {
+                    let require_target = args
+                        .get("require_target")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(require_target);
+                    match crate::core::vision::evaluate_vision(
+                        prompt,
+                        false,
+                        url,
+                        &workspace,
+                        require_target,
+                    )
+                    .await
+                    {
                         Ok(res) => Ok(crate::core::tool_registry::ExecutionResult::success(res)),
                         Err(e) => Ok(crate::core::tool_registry::ExecutionResult::error(
                             format!("Error visual: {}", e),
@@ -6389,39 +11514,75 @@ pub fn register_default_tools(
         );
     }
 
-    // TOOL_ASK_USER: user prompt registration
+    // TOOL_ASK_USER: actual interactive prompt through the Tauri event bridge
     {
+        let app = app_handle.clone();
         let _ = runtime.tool_registry.register(
             "TOOL_ASK_USER",
             Arc::new(move |_ws, args| {
+                let app = app.clone();
                 Box::pin(async move {
-                    let q = args
+                    let Some(app) = app else {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "TOOL_ASK_USER requiere una interfaz Tauri activa.",
+                            1,
+                        ));
+                    };
+                    let question = args
                         .get("pregunta")
                         .or_else(|| args.get("question"))
+                        .or_else(|| args.get("comando"))
                         .and_then(|v| v.as_str())
-                        .unwrap_or("Confirmación requerida");
-                    Ok(crate::core::tool_registry::ExecutionResult::success(
-                        format!("Pregunta a usuario registrada: {}", q),
-                    ))
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or("Confirmación requerida")
+                        .to_string();
+                    let options = args
+                        .get("opciones")
+                        .or_else(|| args.get("options"))
+                        .and_then(|value| value.as_array())
+                        .map(|values| {
+                            values
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let context = args
+                        .get("context")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    match crate::core::ask_user::ask_user_async(&app, question, options, context)
+                        .await
+                    {
+                        Ok(answer) => {
+                            Ok(crate::core::tool_registry::ExecutionResult::success(answer))
+                        }
+                        Err(error) => {
+                            Ok(crate::core::tool_registry::ExecutionResult::error(error, 1))
+                        }
+                    }
                 })
             }),
         );
     }
 
-    // TOOL_LEARN: learning experience registration
+    // TOOL_LEARN: index the selected workspace in persistent project memory
     {
         let _ = runtime.tool_registry.register(
             "TOOL_LEARN",
-            Arc::new(move |_ws, args| {
+            Arc::new(move |ws, _args| {
+                let workspace = ws.clone();
                 Box::pin(async move {
-                    let k = args
-                        .get("conocimiento")
-                        .or_else(|| args.get("knowledge"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Aprendizaje registrado");
-                    Ok(crate::core::tool_registry::ExecutionResult::success(
-                        format!("Aprendizaje procesado: {}", k),
-                    ))
+                    match crate::core::memory::index_project(&workspace).await {
+                        Ok(report) => {
+                            Ok(crate::core::tool_registry::ExecutionResult::success(report))
+                        }
+                        Err(error) => {
+                            Ok(crate::core::tool_registry::ExecutionResult::error(error, 1))
+                        }
+                    }
                 })
             }),
         );
@@ -6447,6 +11608,12 @@ pub fn register_default_tools(
                                 .to_string()
                         })
                         .collect();
+                    if names.is_empty() {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "No se generaron runners: no se detectó un proyecto compatible en el workspace.",
+                            1,
+                        ));
+                    }
                     Ok(crate::core::tool_registry::ExecutionResult::success(
                         format!("Runners generados: {:?}", names),
                     ))
@@ -6475,15 +11642,19 @@ pub fn register_default_tools(
                             1,
                         ));
                     }
-                    let id = crate::core::scheduler::register_task(
+                    match crate::core::scheduler::register_task(
                         parts[1].trim(),
                         &workspace,
                         parts[0].trim(),
                         parts[1].trim(),
-                    );
-                    Ok(crate::core::tool_registry::ExecutionResult::success(
-                        format!("Tarea programada ID {}", id),
-                    ))
+                    ) {
+                        Ok(id) => Ok(crate::core::tool_registry::ExecutionResult::success(
+                            format!("Tarea programada ID {}", id),
+                        )),
+                        Err(error) => {
+                            Ok(crate::core::tool_registry::ExecutionResult::error(error, 1))
+                        }
+                    }
                 })
             }),
         );
@@ -6502,17 +11673,31 @@ pub fn register_default_tools(
                         .or_else(|| args.get("comando"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    match crate::core::memory::query_memory(query).await {
-                        Ok(msg) if !msg.is_empty() => {
+                    let memory_result = crate::core::memory::query_memory(query, &workspace).await;
+                    let memory_detail = match &memory_result {
+                        Ok(detail) => detail.clone(),
+                        Err(error) => format!("La búsqueda en memoria falló: {}", error),
+                    };
+                    match memory_result {
+                        Ok(msg)
+                            if !msg.trim().is_empty()
+                                && !msg.starts_with("La memoria de este workspace está vacía")
+                                && !msg.starts_with("No se encontró contexto histórico relevante") =>
+                        {
                             Ok(crate::core::tool_registry::ExecutionResult::success(msg))
                         }
                         _ => {
                             let results =
                                 memory::read_files_safely(&workspace, vec![query.to_string()])
                                     .await;
-                            Ok(crate::core::tool_registry::ExecutionResult::success(
-                                results,
-                            ))
+                            if results.trim().is_empty() {
+                                Ok(crate::core::tool_registry::ExecutionResult::error(
+                                    format!("No encontré resultados relevantes de memoria ni un archivo legible para '{}'. Detalle: {}", query, memory_detail),
+                                    1,
+                                ))
+                            } else {
+                                Ok(crate::core::tool_registry::ExecutionResult::success(results))
+                            }
                         }
                     }
                 })
@@ -6526,34 +11711,68 @@ pub fn register_default_tools(
             "TOOL_LOGIC_SOLVER",
             Arc::new(move |_ws, args| {
                 Box::pin(async move {
-                    let n_vars_opt = args
+                    if let crate::core::schema_validator::SchemaValidationResult::Invalid(
+                        error,
+                    ) = crate::core::schema_validator::SchemaValidator::validate_tool_payload(
+                        "TOOL_LOGIC_SOLVER",
+                        &args,
+                    ) {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            error, 2,
+                        ));
+                    }
+
+                    let Some(n_vars) = args
                         .get("n_vars")
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as usize);
-                    let clauses_opt = args.get("clauses").and_then(|v| v.as_array()).map(|arr| {
-                        arr.iter()
-                            .filter_map(|row| {
-                                row.as_array().map(|r| {
-                                    r.iter()
-                                        .filter_map(|x| x.as_i64().map(|i| i as i32))
-                                        .collect::<Vec<i32>>()
+                        .and_then(|value| value.as_u64())
+                        .and_then(|value| usize::try_from(value).ok())
+                    else {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "El ejecutor SAT requiere n_vars y clauses. La revisión de código usa la ruta semántica del agente.",
+                            2,
+                        ));
+                    };
+                    let Some(clauses) = args.get("clauses").and_then(|value| value.as_array())
+                    else {
+                        return Ok(crate::core::tool_registry::ExecutionResult::error(
+                            "El ejecutor SAT requiere 'clauses' como una matriz de cláusulas.",
+                            2,
+                        ));
+                    };
+                    let clauses: Vec<Vec<i32>> = clauses
+                        .iter()
+                        .map(|clause| {
+                            clause
+                                .as_array()
+                                .expect("payload schema validated clause arrays")
+                                .iter()
+                                .map(|literal| {
+                                    i32::try_from(
+                                        literal
+                                            .as_i64()
+                                            .expect("payload schema validated integer literals"),
+                                    )
+                                    .expect("payload schema validated i32 literals")
                                 })
-                            })
-                            .collect::<Vec<Vec<i32>>>()
-                    });
-                    if let (Some(n_vars), Some(clauses)) = (n_vars_opt, clauses_opt) {
-                        let verdict = crate::llm::solve_with_spectrasat(n_vars, clauses);
-                        Ok(crate::core::tool_registry::ExecutionResult::success(
-                            verdict,
-                        ))
+                                .collect()
+                        })
+                        .collect();
+
+                    let verdict = crate::llm::solve_with_spectrasat(n_vars, clauses);
+                    let status = serde_json::from_str::<serde_json::Value>(&verdict)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("status")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_default();
+                    if status.starts_with("SAT") || status.starts_with("UNSAT") {
+                        Ok(crate::core::tool_registry::ExecutionResult::success(verdict))
                     } else {
-                        let text = args
-                            .get("comando")
-                            .or_else(|| args.get("query"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        Ok(crate::core::tool_registry::ExecutionResult::success(
-                            format!("Logic analysis processed for: {}", text),
+                        Ok(crate::core::tool_registry::ExecutionResult::error(
+                            verdict, 2,
                         ))
                     }
                 })
@@ -6584,28 +11803,1266 @@ mod tests {
     use crate::core::mission_runtime::MissionRuntime;
     use crate::core::tool_registry::KNOWN_TOOLS;
 
+    #[test]
+    fn visual_gate_is_scoped_to_ui_deliverables_and_not_existing_workspace_ui() {
+        assert!(mission_requires_visual_verification(
+            "Construye una aplicación web de consultas y revisa cómo se ve en navegador",
+            "C:/workspace"
+        ));
+        assert!(!mission_requires_visual_verification(
+            "Corrige el calculador de un programa de consola CLI y valida su salida",
+            "C:/workspace"
+        ));
+        assert!(phase_has_visual_deliverable(&[
+            "index.html".to_string(),
+            "styles.css".to_string()
+        ]));
+        assert!(!phase_has_visual_deliverable(&[
+            "src/main.rs".to_string(),
+            "tests/cli_test.rs".to_string()
+        ]));
+    }
+
+    #[test]
+    fn explicit_http_server_requirement_converts_file_open_to_a_background_server() {
+        let prompt = "Inicia la aplicación con un servidor HTTP local y pruébala en el navegador";
+        assert!(mission_requires_local_http_server(prompt));
+        assert!(is_local_html_open_command("start index.html"));
+        assert_eq!(
+            local_http_server_command_for_request(prompt, "start index.html"),
+            Some("python -m http.server 8000 --bind 127.0.0.1")
+        );
+        assert_eq!(
+            local_http_server_command_for_request(prompt, "npx serve -s ."),
+            Some("python -m http.server 8000 --bind 127.0.0.1")
+        );
+        assert_eq!(
+            local_http_server_command_for_request(
+                "Abre el archivo HTML directamente",
+                "start index.html"
+            ),
+            None
+        );
+        assert_eq!(
+            local_http_server_command_for_request(prompt, "python -m http.server 8000"),
+            None
+        );
+
+        let workspace =
+            std::env::temp_dir().join(format!("aura-local-http-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("index.html"), "<main>demo</main>").unwrap();
+        let workspace_path = workspace.to_string_lossy().to_string();
+        assert_eq!(
+            local_http_server_recovery_action(prompt, &workspace_path, None),
+            Some((
+                "TOOL_BACKGROUND_START".into(),
+                "python -m http.server 8000 --bind 127.0.0.1".into()
+            ))
+        );
+        assert_eq!(
+            local_http_server_recovery_action(prompt, &workspace_path, Some("web-server")),
+            Some(("TOOL_BACKGROUND_READ".into(), "web-server".into()))
+        );
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn local_server_probe_url_is_derived_only_from_loopback_bindings() {
+        assert_eq!(
+            local_http_url_from_server_command("python -m http.server 8000 --bind 127.0.0.1"),
+            Some("http://127.0.0.1:8000/".into())
+        );
+        assert_eq!(
+            local_http_url_from_server_command("python -m http.server --bind localhost"),
+            Some("http://127.0.0.1:8000/".into())
+        );
+        assert_eq!(
+            local_http_url_from_server_command("python -m http.server 8123 --bind 0.0.0.0"),
+            Some("http://127.0.0.1:8123/".into())
+        );
+        assert_eq!(
+            local_http_url_from_server_command("python -m http.server 8000 --bind 192.168.1.2"),
+            None
+        );
+        assert_eq!(local_http_url_from_server_command("npm run dev"), None);
+    }
+
+    #[test]
+    fn adaptive_router_excludes_vision_and_embedding_only_models_from_text_candidates() {
+        assert!(is_adaptive_text_model_candidate("qwen2.5-coder:7b"));
+        assert!(is_adaptive_text_model_candidate("gemma3:4b"));
+        assert!(!is_adaptive_text_model_candidate("moondream:latest"));
+        assert!(!is_adaptive_text_model_candidate("llama3.2-vision:11b"));
+        assert!(!is_adaptive_text_model_candidate("nomic-embed-text:latest"));
+
+        let guidance = adaptive_strategy_guidance(
+            &crate::core::learning::strategy::StrategyKind::CompileFirst,
+        );
+        assert!(guidance.contains("sintaxis correcta por sí sola no prueba la tarea"));
+        let history = crate::core::learning::RecommendationReason::GlobalHistory { sample_size: 8 };
+        assert!(!learned_strategy_has_reliable_evidence(
+            0.9, &history, 18, 0
+        ));
+        assert!(!learned_strategy_has_reliable_evidence(0.6, &history, 8, 2));
+        assert!(learned_strategy_has_reliable_evidence(0.8, &history, 8, 2));
+        assert!(!learned_strategy_has_reliable_evidence(
+            0.8,
+            &crate::core::learning::RecommendationReason::Exploration,
+            8,
+            2
+        ));
+        assert_eq!(
+            adaptive_failure_details("NO_PROGRESS_EXHAUSTED"),
+            ("NoProgress", Some("TOOL_PROGRAMMER"))
+        );
+        assert_eq!(
+            adaptive_failure_details("LOCAL_SERVER_NOT_CONFIRMED"),
+            ("LocalServer", Some("TOOL_BACKGROUND_READ"))
+        );
+        assert_eq!(
+            adaptive_failure_details("POLICY_DENY: blocked"),
+            ("Policy", None)
+        );
+    }
+
+    #[test]
+    fn syntax_only_stall_recovery_routes_to_real_web_validation() {
+        let prompt = "Construye y prueba con un servidor HTTP local y abre la página en navegador";
+        assert!(should_force_web_validation_after_stall(
+            prompt,
+            "node --check script.js",
+            1,
+            None
+        ));
+        assert!(!should_force_web_validation_after_stall(
+            prompt,
+            "node --check script.js",
+            0,
+            None
+        ));
+        assert!(!should_force_web_validation_after_stall(
+            prompt,
+            "node --check script.js",
+            1,
+            Some("http://127.0.0.1:8000/")
+        ));
+        assert!(!should_force_web_validation_after_stall(
+            "Corrige una biblioteca sin interfaz web",
+            "node --check script.js",
+            1,
+            None
+        ));
+
+        let workspace =
+            std::env::temp_dir().join(format!("aura-web-handoff-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("index.html"), "<main>demo</main>").unwrap();
+        let workspace_path = workspace.to_string_lossy().to_string();
+        assert_eq!(
+            web_validation_handoff_action(
+                prompt,
+                "node --check script.js",
+                1,
+                None,
+                &workspace_path,
+                Some("active-server-task"),
+            ),
+            Some(("TOOL_BACKGROUND_READ".into(), "active-server-task".into()))
+        );
+        assert_eq!(
+            web_validation_handoff_action(
+                prompt,
+                "node --check script.js",
+                1,
+                None,
+                &workspace_path,
+                None,
+            ),
+            Some((
+                "TOOL_BACKGROUND_START".into(),
+                "python -m http.server 8000 --bind 127.0.0.1".into()
+            ))
+        );
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn browser_flows_are_required_and_bound_to_the_confirmed_local_server() {
+        let prompt = "Prueba en el navegador los flujos de login, registro, citas y persistencia tras recargar";
+        assert!(mission_requires_browser_interaction_verification(prompt));
+        assert!(!mission_requires_browser_interaction_verification(
+            "Construye una página web profesional y revisa su apariencia"
+        ));
+        assert!(same_local_server_origin(
+            "http://127.0.0.1:8000/appointments",
+            "http://127.0.0.1:8000/"
+        ));
+        assert!(!same_local_server_origin(
+            "http://127.0.0.1:8001/",
+            "http://127.0.0.1:8000/"
+        ));
+        assert!(!same_local_server_origin(
+            "https://example.com/",
+            "http://127.0.0.1:8000/"
+        ));
+
+        let workspace =
+            std::env::temp_dir().join(format!("aura-browser-route-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("index.html"), "<main></main>").unwrap();
+        let workspace = workspace.to_string_lossy().to_string();
+        assert_eq!(
+            web_validation_recovery_action(prompt, &workspace, None, Some("web-task")),
+            Some(("TOOL_BACKGROUND_READ".into(), "web-task".into()))
+        );
+        let (tool, guidance) = web_validation_recovery_action(
+            prompt,
+            &workspace,
+            Some("http://127.0.0.1:8000/"),
+            Some("web-task"),
+        )
+        .unwrap();
+        assert_eq!(tool, "TOOL_TESTER");
+        assert!(guidance.contains("BROWSER_TEST:"));
+        assert!(guidance.contains("persistencia"));
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn prior_failure_episodes_are_loaded_only_for_the_same_mission_follow_up() {
+        assert!(should_inject_prior_episodes(true, false));
+        assert!(should_inject_prior_episodes(false, true));
+        assert!(!should_inject_prior_episodes(false, false));
+    }
+
+    #[test]
+    fn forced_local_server_log_and_visual_checks_are_resolved_without_a_model_guess() {
+        let contract = crate::core::mission_contract::MissionContract::new(
+            "Construye y valida una aplicación web local.",
+        );
+        let start = deterministic_forced_decision(
+            "C:/workspace",
+            "TOOL_BACKGROUND_START",
+            "python -m http.server 8000 --bind 127.0.0.1",
+            &contract,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            start["comando"],
+            "python -m http.server 8000 --bind 127.0.0.1"
+        );
+
+        let read = deterministic_forced_decision(
+            "C:/workspace",
+            "TOOL_BACKGROUND_READ",
+            "consulta-clara-server",
+            &contract,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(read["task_id"], "consulta-clara-server");
+
+        let vision = deterministic_forced_decision(
+            "C:/workspace",
+            "TOOL_VISION_EVALUATOR",
+            "http://127.0.0.1:8000/",
+            &contract,
+            &[],
+        )
+        .unwrap();
+        assert!(vision["comando"]
+            .as_str()
+            .unwrap()
+            .contains("http://127.0.0.1:8000/"));
+    }
+
+    #[test]
+    fn console_validation_scales_from_smoke_test_to_requested_workflows() {
+        assert_eq!(
+            console_validation_profile("Crea un programa de consola para calcular el total"),
+            Some((
+                "BÁSICA",
+                "Ejecuta el caso principal con una entrada real; comprueba la salida observable y el código de salida. No afirmes funcionalidades que no ejecutaste."
+            ))
+        );
+        let (_, guidance) = console_validation_profile(
+            "Crea un programa de consola con login, registro, permisos, reportes y casos límite detallados",
+        )
+        .unwrap();
+        assert!(guidance.contains("cada flujo"));
+    }
+
+    #[test]
+    fn visual_review_follow_up_is_scoped_and_does_not_request_edits() {
+        let review = "revisa si la pagina esta bien estruturada y biseno profesional desde el login a los modulo levanta local y prueba";
+        assert!(is_scoped_visual_review(review));
+        assert_eq!(
+            resolve_scoped_visual_review_instruction("continua", review, true).as_deref(),
+            Some(review)
+        );
+        assert_eq!(
+            resolve_scoped_visual_review_instruction("continua", review, false),
+            None
+        );
+        assert!(!is_scoped_visual_review(
+            "revisa la pagina y corrige los defectos visuales que encuentres"
+        ));
+        assert!(scoped_review_forbids_action("TOOL_PROGRAMMER", ""));
+        assert!(scoped_review_forbids_action("TOOL_TERMINAL", "npm install"));
+        assert!(!scoped_review_forbids_action("TOOL_TERMINAL", "npm test"));
+        assert!(!scoped_review_forbids_action(
+            "TOOL_BACKGROUND_START",
+            "npm run dev"
+        ));
+    }
+
+    #[test]
+    fn console_completion_requires_a_successful_current_workspace_run() {
+        use crate::core::evidence::{EvidenceGraph, EvidenceKind, StructuredFact};
+
+        assert!(is_console_runtime_command("python main.py"));
+        assert!(is_console_runtime_command("cargo run --quiet"));
+        assert!(!is_console_runtime_command("cargo test"));
+        assert!(!is_console_runtime_command("npm test"));
+
+        let workspace =
+            std::env::temp_dir().join(format!("aura console run {}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace = workspace
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let mut evidence = EvidenceGraph::new();
+        evidence
+            .record_structured(
+                EvidenceKind::CommandExitCode,
+                "TOOL_TERMINAL",
+                StructuredFact::CommandResult {
+                    command: "cargo test".to_string(),
+                    cwd: workspace.clone(),
+                    exit_code: 0,
+                    stdout_hash: "test".to_string(),
+                    stderr_hash: String::new(),
+                },
+                0.85,
+                2,
+                Some(42),
+            )
+            .unwrap();
+        assert!(!has_current_console_runtime_evidence(
+            &evidence, 42, &workspace
+        ));
+
+        evidence
+            .record_structured(
+                EvidenceKind::CommandExitCode,
+                "TOOL_TERMINAL",
+                StructuredFact::CommandResult {
+                    command: "cargo run --quiet".to_string(),
+                    cwd: workspace.clone(),
+                    exit_code: 0,
+                    stdout_hash: "runtime".to_string(),
+                    stderr_hash: String::new(),
+                },
+                0.85,
+                3,
+                Some(42),
+            )
+            .unwrap();
+        assert!(has_current_console_runtime_evidence(
+            &evidence, 42, &workspace
+        ));
+        assert!(!has_current_console_runtime_evidence(
+            &evidence, 43, &workspace
+        ));
+
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn manual_visual_fallback_uses_only_the_capture_named_by_the_failure() {
+        let workspace =
+            std::env::temp_dir().join(format!("aura visual evidence {}", uuid::Uuid::new_v4()));
+        let directory = workspace.join(".aura").join("evidence").join("visual");
+        std::fs::create_dir_all(&directory).unwrap();
+        let capture = directory.join("ui-current.png");
+        std::fs::write(&capture, b"image").unwrap();
+        let relative = capture
+            .strip_prefix(&workspace)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let error = format!("VISUAL_QA_UNCERTAIN: Captura: {relative}\nUNCERTAIN");
+        assert_eq!(
+            visual_capture_from_error(&workspace.to_string_lossy(), &error),
+            Some(capture.canonicalize().unwrap())
+        );
+        assert!(visual_capture_from_error(
+            &workspace.to_string_lossy(),
+            "VISUAL_QA_UNCERTAIN: no se incluyó una ruta"
+        )
+        .is_none());
+        assert!(vision_result_needs_manual_review("VISUAL_QA_UNCERTAIN"));
+        assert!(!vision_result_needs_manual_review("VISUAL_QA_REJECTED"));
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn test_runner_classifier_covers_common_local_runners_without_matching_installs() {
+        for command in [
+            "npm test",
+            "npm run test -- --watch=false",
+            "pnpm test",
+            "yarn test",
+            "bun test",
+            "node --test tests/app.test.js",
+            "cargo test -p aura",
+            "python -m pytest tests",
+            "go test ./...",
+            "dotnet test",
+        ] {
+            assert!(
+                is_test_runner_command(command),
+                "should recognize: {command}"
+            );
+        }
+        for command in ["npm install jest", "npm run dev", "node app.js", "dir"] {
+            assert!(!is_test_runner_command(command), "should reject: {command}");
+        }
+    }
+
+    #[test]
+    fn firebase_spark_executable_rejection_is_terminal_and_not_a_generic_retry() {
+        let output = "Request to https://firebasehosting.googleapis.com/v1beta1/projects/123/sites/site/versions/abc:populateFiles had HTTP Error: 400, Executable files are forbidden on the Spark billing plan.";
+        assert!(is_firebase_hosting_spark_executable_rejection(output));
+        assert!(!is_firebase_hosting_spark_executable_rejection(
+            "Firebase deploy failed: permission denied"
+        ));
+    }
+
+    #[test]
+    fn failed_test_repair_has_priority_over_phase_acceptance_validation() {
+        let forced = (
+            "TOOL_PROGRAMMER".to_string(),
+            "Repair the failed test before retrying.".to_string(),
+        );
+        assert!(is_forced_test_repair(Some(&forced), true));
+        assert!(!is_forced_test_repair(Some(&forced), false));
+        let terminal = ("TOOL_TERMINAL".to_string(), "npm test".to_string());
+        assert!(!is_forced_test_repair(Some(&terminal), true));
+        assert!(only_deliverables_review_pending(&[
+            "[AC-DELIVERABLES] Revisión de los entregables solicitados".into(),
+        ]));
+        assert!(!only_deliverables_review_pending(&[
+            "[AC-DELIVERABLES] Revisión de los entregables solicitados".into(),
+            "[AC-VALIDATION] Pruebas locales".into(),
+        ]));
+        assert!(!only_deliverables_review_pending(&[]));
+        assert!(consultation_audit_diagnostic_improved(
+            "app.js no conecta registro\nindex.html no tiene agenda",
+            "index.html no tiene agenda",
+        ));
+        assert!(!consultation_audit_diagnostic_improved(
+            "app.js no conecta registro\nindex.html no tiene agenda",
+            "app.js no conecta registro\nindex.html no tiene agenda",
+        ));
+        assert!(!consultation_audit_diagnostic_improved(
+            "app.js no conecta registro\nindex.html no tiene agenda",
+            "app.js sigue sin conectar registro\nindex.html no tiene agenda",
+        ));
+        let mut audit_world = None;
+        let mut audit_stalls = 0;
+        let mut audit_diagnostic = String::new();
+        assert_eq!(
+            update_consultation_audit_stall_count(
+                &mut audit_world,
+                &mut audit_stalls,
+                &mut audit_diagnostic,
+                41,
+                "app.js sin eventos\nindex.html sin formulario",
+            ),
+            0
+        );
+        assert_eq!(
+            update_consultation_audit_stall_count(
+                &mut audit_world,
+                &mut audit_stalls,
+                &mut audit_diagnostic,
+                41,
+                "app.js sin eventos\nindex.html sin formulario",
+            ),
+            1
+        );
+        assert_eq!(
+            update_consultation_audit_stall_count(
+                &mut audit_world,
+                &mut audit_stalls,
+                &mut audit_diagnostic,
+                41,
+                "index.html sin formulario",
+            ),
+            0,
+            "an improving audit must reset the stale-world retry counter"
+        );
+        assert_eq!(
+            update_consultation_audit_stall_count(
+                &mut audit_world,
+                &mut audit_stalls,
+                &mut audit_diagnostic,
+                41,
+                "index.html sin formulario",
+            ),
+            1
+        );
+        assert_eq!(
+            update_consultation_audit_stall_count(
+                &mut audit_world,
+                &mut audit_stalls,
+                &mut audit_diagnostic,
+                41,
+                "index.html sin formulario",
+            ),
+            2
+        );
+        reset_consultation_audit_stall_tracking(
+            &mut audit_world,
+            &mut audit_stalls,
+            &mut audit_diagnostic,
+        );
+        assert_eq!(audit_stalls, 0);
+        let jest_failure = "> node --test tests/app.test.js\nReferenceError: jest is not defined";
+        assert!(is_node_test_jest_mock_failure(jest_failure));
+        assert!(is_node_test_jest_mock_failure(
+            "> node --test tests/app.test.js\nTypeError: mockStorage.getItem.mockReturnValue is not a function"
+        ));
+        assert!(is_node_test_jest_mock_failure(
+            "> node --test tests/app.test.js\nTypeError: mockStorage.getItem.mockImplementation is not a function"
+        ));
+        assert!(!is_node_test_jest_mock_failure(
+            "Jest is not defined in a project using a different test runner"
+        ));
+        let undefined_push = "> node --test tests/app.test.js\nTypeError: Cannot read properties of undefined (reading 'push')\n    at registerUser (file:///workspace/app.js:3:15)";
+        assert!(is_node_test_undefined_push_failure(undefined_push));
+        assert!(!is_node_test_undefined_push_failure(
+            "TypeError: Cannot read properties of undefined (reading 'push')"
+        ));
+        let storage_mock_failure = "> node --test tests/app.test.js\nTypeError: Cannot read properties of undefined (reading 'set')\n    at Object.setItem (file:///workspace/tests/app.test.js:8:38)";
+        assert!(is_node_test_uninitialized_storage_mock_failure(
+            storage_mock_failure
+        ));
+        assert!(!is_node_test_uninitialized_storage_mock_failure(
+            "TypeError: Cannot read properties of undefined (reading 'set')"
+        ));
+        let browser_document_failure = "> node --test tests/app.test.js\nReferenceError: document is not defined\n    at file:///workspace/app.js:72:3";
+        assert!(is_node_test_browser_document_failure(
+            browser_document_failure
+        ));
+        assert!(!is_node_test_browser_document_failure(
+            "ReferenceError: document is not defined"
+        ));
+
+        let mut tool = "TOOL_TERMINAL".to_string();
+        let mut role = AgentRole::Critic;
+        let mut command = "npm test".to_string();
+        let mut files = vec![
+            "app.js".to_string(),
+            "tests/app.test.js".to_string(),
+            "index.html".to_string(),
+        ];
+        let mut payload = serde_json::json!({
+            "herramienta": "TOOL_TERMINAL",
+            "comando": "npm test"
+        });
+        let mut diagnostic = String::new();
+
+        apply_forced_test_repair_override(
+            &mut tool,
+            &mut role,
+            &mut command,
+            &mut files,
+            &mut payload,
+            &mut diagnostic,
+            "npm test",
+            jest_failure,
+        );
+
+        assert_eq!(tool, "TOOL_PROGRAMMER");
+        assert_eq!(role, AgentRole::Executor);
+        assert!(command.is_empty());
+        assert_eq!(files, vec!["tests/app.test.js"]);
+        assert_eq!(payload["herramienta"], "TOOL_PROGRAMMER");
+        assert_eq!(payload["archivos_a_editar"], serde_json::json!(files));
+        assert!(payload["instruccion"]
+            .as_str()
+            .unwrap()
+            .contains("node:test"));
+        assert!(payload["instruccion"].as_str().unwrap().contains("Map"));
+        assert!(payload["instruccion"]
+            .as_str()
+            .unwrap()
+            .contains("No uses jest.fn()"));
+        assert!(diagnostic.contains("jest is not defined"));
+    }
+
+    #[test]
+    fn node_test_undefined_push_repair_targets_source_and_tests_with_specific_guidance() {
+        let failure = "> node --test tests/app.test.js\nTypeError: Cannot read properties of undefined (reading 'push')\n    at registerUser (file:///workspace/app.js:3:15)";
+        let mut tool = "TOOL_TERMINAL".to_string();
+        let mut role = AgentRole::Critic;
+        let mut command = "npm test".to_string();
+        let mut files = vec![
+            "app.js".to_string(),
+            "tests/app.test.js".to_string(),
+            "index.html".to_string(),
+            "styles.css".to_string(),
+        ];
+        let mut payload = serde_json::json!({"herramienta":"TOOL_TERMINAL","comando":"npm test"});
+        let mut diagnostic = String::new();
+
+        apply_forced_test_repair_override(
+            &mut tool,
+            &mut role,
+            &mut command,
+            &mut files,
+            &mut payload,
+            &mut diagnostic,
+            "npm test",
+            failure,
+        );
+
+        assert_eq!(tool, "TOOL_PROGRAMMER");
+        assert_eq!(files, vec!["app.js", "tests/app.test.js"]);
+        let instruction = payload["instruccion"].as_str().unwrap();
+        assert!(instruction.contains("colecciones ausentes"));
+        assert!(instruction.contains("claves correctas"));
+        assert!(instruction.contains("no elimines ni debilites pruebas"));
+        assert!(diagnostic.contains("app.js"));
+    }
+
+    #[test]
+    fn node_test_uninitialized_storage_mock_repair_targets_tests_only() {
+        let failure = "> node --test tests/app.test.js\nTypeError: Cannot read properties of undefined (reading 'set')\n    at Object.setItem (file:///workspace/tests/app.test.js:8:38)";
+        let mut tool = "TOOL_TERMINAL".to_string();
+        let mut role = AgentRole::Critic;
+        let mut command = "npm test".to_string();
+        let mut files = vec![
+            "app.js".to_string(),
+            "tests/app.test.js".to_string(),
+            "index.html".to_string(),
+        ];
+        let mut payload = serde_json::json!({"herramienta":"TOOL_TERMINAL","comando":"npm test"});
+        let mut diagnostic = String::new();
+
+        apply_forced_test_repair_override(
+            &mut tool,
+            &mut role,
+            &mut command,
+            &mut files,
+            &mut payload,
+            &mut diagnostic,
+            "npm test",
+            failure,
+        );
+
+        assert_eq!(tool, "TOOL_PROGRAMMER");
+        assert_eq!(files, vec!["tests/app.test.js"]);
+        let instruction = payload["instruccion"].as_str().unwrap();
+        assert!(instruction.contains("const storage = new Map()"));
+        assert!(instruction.contains("no cambies el runner ni app.js"));
+        assert!(diagnostic.contains("reading 'set'"));
+    }
+
+    #[test]
+    fn node_test_browser_document_failure_repairs_the_source_module_only() {
+        let failure = "> node --test tests/app.test.js\nReferenceError: document is not defined\n    at file:///workspace/app.js:72:3";
+        let mut tool = "TOOL_TERMINAL".to_string();
+        let mut role = AgentRole::Critic;
+        let mut command = "npm test".to_string();
+        let mut files = vec![
+            "app.js".to_string(),
+            "tests/app.test.js".to_string(),
+            "index.html".to_string(),
+        ];
+        let mut payload = serde_json::json!({"herramienta":"TOOL_TERMINAL","comando":"npm test"});
+        let mut diagnostic = String::new();
+
+        apply_forced_test_repair_override(
+            &mut tool,
+            &mut role,
+            &mut command,
+            &mut files,
+            &mut payload,
+            &mut diagnostic,
+            "npm test",
+            failure,
+        );
+
+        assert_eq!(tool, "TOOL_PROGRAMMER");
+        assert_eq!(files, vec!["app.js"]);
+        assert!(payload["instruccion"]
+            .as_str()
+            .unwrap()
+            .contains("typeof document !== 'undefined'"));
+        assert!(diagnostic.contains("document is not defined"));
+    }
+
+    #[test]
+    fn terminal_observation_reuses_recovery_decision_without_double_counting() {
+        let mut runtime = MissionRuntime::new(".", "test recovery counter", 10);
+        for expected_count in 1..=3 {
+            let observation = crate::core::observation::Observation::error(
+                "TOOL_TERMINAL",
+                "test failed",
+                Some(1),
+                true,
+                None,
+            );
+            let observed = runtime
+                .handle_observation(&observation)
+                .expect("terminal error should produce one recovery decision");
+            let selected = reuse_or_record_recovery_decision(
+                &mut runtime,
+                Some(observed.clone()),
+                "TOOL_TERMINAL",
+                "test failed",
+            );
+            assert_eq!(selected, observed);
+            assert!(!matches!(
+                selected,
+                crate::core::recovery::RecoveryDecision::Abort { .. }
+            ));
+            assert_eq!(runtime.recovery.total_recoveries(), expected_count);
+        }
+    }
+
+    #[test]
+    fn programmer_file_changes_do_not_clear_failed_terminal_retry_budget() {
+        let mut runtime = MissionRuntime::new(".", "test progress retry reset", 10);
+        let mut retry_tracker = crate::core::error_classifier::RetryTracker::new();
+
+        for _ in 0..4 {
+            runtime.plan_recovery("TOOL_TERMINAL", "test failed");
+            retry_tracker.record_failure(
+                "TOOL_TERMINAL",
+                &crate::core::error_classifier::ErrorType::Logic,
+            );
+        }
+        assert_eq!(runtime.recovery.total_recoveries(), 4);
+        assert_eq!(retry_tracker.total_error_count, 4);
+        assert!(!workspace_changed_after_programmer(&[], 0));
+        assert!(workspace_changed_after_programmer(&["app.js".into()], 0,));
+        assert_eq!(runtime.recovery.total_recoveries(), 4);
+        assert_eq!(retry_tracker.total_error_count, 4);
+
+        reset_terminal_retry_circuits_after_success(&mut runtime, &mut retry_tracker);
+        assert_eq!(runtime.recovery.total_recoveries(), 0);
+        assert_eq!(retry_tracker.total_error_count, 0);
+
+        for _ in 0..4 {
+            let decision = runtime.plan_recovery("TOOL_TERMINAL", "test failed");
+            assert!(!matches!(
+                decision,
+                crate::core::recovery::RecoveryDecision::Abort { .. }
+            ));
+            retry_tracker.record_failure(
+                "TOOL_TERMINAL",
+                &crate::core::error_classifier::ErrorType::Logic,
+            );
+        }
+    }
+
+    #[test]
+    fn approval_parser_accepts_explicit_answers_and_rejects_qualified_or_negative_ones() {
+        for answer in ["Sí", "SI, AUTORIZO", "Autorizar esta acción", "I approve"] {
+            assert!(is_explicit_approval(answer), "should accept: {answer}");
+        }
+        for answer in [
+            "",
+            "No, autorizo",
+            "Sí, pero solo después de revisar",
+            "Yes, but do not run it yet",
+            "continuar",
+        ] {
+            assert!(!is_explicit_approval(answer), "should reject: {answer}");
+        }
+    }
+
+    #[test]
+    fn sat_input_parsing_never_silently_drops_invalid_literals() {
+        let valid = parse_sat_payload(&serde_json::json!({
+            "n_vars": 2,
+            "clauses": [[1, -2], []]
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(valid, (2, vec![vec![1, -2], vec![]]));
+
+        assert!(parse_sat_payload(&serde_json::json!({
+            "n_vars": 1,
+            "clauses": [[1, "ignored"]]
+        }))
+        .is_err());
+        assert!(extract_sat_payload("Resuelve [[1, no-es-un-literal]]").is_err());
+        assert_eq!(
+            extract_sat_payload("Analiza la lógica de este código").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn sat_input_can_be_recovered_from_the_user_message_without_changing_literals() {
+        let instance = extract_sat_payload("Resuelve este CNF: [[1, -2], [2]]")
+            .unwrap()
+            .unwrap();
+        assert_eq!(instance, (2, vec![vec![1, -2], vec![2]]));
+    }
+
+    #[test]
+    fn python_module_commands_are_not_treated_as_workspace_scripts() {
+        assert_eq!(python_script_argument("python -m unittest -v"), None);
+        assert_eq!(python_script_argument("python3 -m pytest tests"), None);
+        assert_eq!(python_script_argument("py -c print(1)"), None);
+        assert_eq!(
+            python_script_argument("python -X utf8 verify.py"),
+            Some("verify.py".into())
+        );
+        assert_eq!(
+            python_script_argument("python verify.py"),
+            Some("verify.py".into())
+        );
+    }
+
+    #[test]
+    fn web_consultation_mission_gets_a_javascript_only_implementation_contract() {
+        let blueprint = tactical_repair_blueprint(
+            "[MODO IMPLEMENTACION DE PLAN APROBADO] aplicación web de consulta, facturas, contabilidad y Firebase",
+        );
+        assert!(blueprint.contains("SOLAMENTE con HTML, CSS y JavaScript"));
+        assert!(blueprint.contains("no uses Python/Flask"));
+        assert!(blueprint.contains("localStorage"));
+        assert!(blueprint.contains("node:test"));
+        assert!(blueprint.contains("autenticación segura de producción"));
+    }
+
+    #[test]
+    fn nested_javascript_tests_are_recognized_as_tests() {
+        assert!(is_test_artifact_path("tests/app.test.js"));
+        assert!(is_test_artifact_path("tests\\ledger.spec.ts"));
+        assert!(is_test_artifact_path("verify_solution.py"));
+        assert!(!is_test_artifact_path("app.js"));
+        assert_eq!(
+            test_command_for_path("tests/app.test.js").as_deref(),
+            Some("node --test \"tests/app.test.js\"")
+        );
+        assert_eq!(
+            test_command_for_path("checks/verify_index.py").as_deref(),
+            Some("python \"checks/verify_index.py\"")
+        );
+        assert_eq!(test_command_for_path("tests/suite.rs"), None);
+    }
+
+    #[test]
+    fn node_precheck_parses_quoted_script_paths_and_ignores_inline_code() {
+        assert_eq!(
+            node_script_argument("node --test \"app.test.js\""),
+            Some("app.test.js".into())
+        );
+        assert_eq!(
+            node_script_argument("node --check \"tests/Consulta Clara.test.js\""),
+            Some("tests/Consulta Clara.test.js".into())
+        );
+        assert_eq!(node_script_argument("node -e \"console.log(1)\""), None);
+    }
+
+    #[test]
+    fn repeated_programmer_loop_routes_to_a_real_available_check() {
+        let contract = crate::core::mission_contract::MissionContract::new(
+            "Construye una aplicación web local y verifica sus flujos.",
+        );
+        let workspace = std::env::temp_dir().join(format!(
+            "aura-programmer-loop-verifier-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(workspace.join("tests")).unwrap();
+        std::fs::write(workspace.join("script.js"), "console.log('app');\n").unwrap();
+        std::fs::write(workspace.join("index.html"), "<main></main>\n").unwrap();
+        let workspace_path = workspace.to_string_lossy().to_string();
+
+        assert_eq!(
+            programmer_loop_validation_command(
+                &["index.html".into(), "script.js".into(), "styles.css".into()],
+                &contract,
+                &workspace_path,
+            )
+            .as_deref(),
+            Some("node --check \"script.js\"")
+        );
+        let fake_test = "const { test, expect } = require('node:test');\nfunction testLogin() {}\nmodule.exports = { testLogin };\n";
+        std::fs::write(workspace.join("tests/app.test.js"), fake_test).unwrap();
+        assert_eq!(
+            programmer_loop_validation_command(
+                &[
+                    "index.html".into(),
+                    "script.js".into(),
+                    "tests/app.test.js".into()
+                ],
+                &contract,
+                &workspace_path,
+            )
+            .as_deref(),
+            Some("node --check \"script.js\"")
+        );
+        std::fs::write(
+            workspace.join("tests/app.test.js"),
+            "const { test } = require('node:test');\ntest('renders appointments', () => {});\n",
+        )
+        .unwrap();
+        assert_eq!(
+            programmer_loop_validation_command(
+                &[
+                    "index.html".into(),
+                    "script.js".into(),
+                    "tests/app.test.js".into()
+                ],
+                &contract,
+                &workspace_path,
+            )
+            .as_deref(),
+            Some("node --check \"script.js\""),
+            "an empty Node test callback must not be treated as a useful validator"
+        );
+        let behavioral_test = "const { test } = require('node:test');\nconst assert = require('node:assert/strict');\ntest('renders appointments', () => { assert.equal(1, 1); });\n";
+        std::fs::write(workspace.join("tests/app.test.js"), behavioral_test).unwrap();
+        assert_eq!(
+            programmer_loop_validation_command(
+                &[
+                    "index.html".into(),
+                    "script.js".into(),
+                    "tests/app.test.js".into()
+                ],
+                &contract,
+                &workspace_path,
+            )
+            .as_deref(),
+            Some("node --test \"tests/app.test.js\"")
+        );
+        assert!(successful_test_run_has_behavioral_cases(
+            "node --test \"tests/app.test.js\"",
+            &workspace_path,
+            "ℹ tests 2\nℹ pass 2\n"
+        ));
+        let fake_dom_test = "const { test, expect } = require('node:test');\ntest('login', () => { expect(console.log).toHaveBeenCalledWith('ok'); });\n";
+        std::fs::write(workspace.join("tests/app.test.js"), fake_dom_test).unwrap();
+        assert!(!test_file_has_runnable_cases(
+            &workspace_path,
+            "tests/app.test.js"
+        ));
+        std::fs::write(
+            workspace.join("tests/app.test.js"),
+            "const { test } = require('node:test');\ntest('renders appointments', () => {});\n",
+        )
+        .unwrap();
+        assert!(!successful_test_run_has_behavioral_cases(
+            "node --test \"tests/app.test.js\"",
+            &workspace_path,
+            "✔ app.test.js (50ms)\nℹ tests 1\nℹ pass 1\n"
+        ));
+        std::fs::remove_file(workspace.join("tests/app.test.js")).unwrap();
+        assert_eq!(
+            programmer_loop_validation_command(&["index.html".into()], &contract, &workspace_path,),
+            None
+        );
+        assert_eq!(
+            programmer_loop_validation_command(
+                &[
+                    "index.html".into(),
+                    "missing.js".into(),
+                    "tests/app.test.js".into()
+                ],
+                &contract,
+                &workspace_path,
+            ),
+            None,
+            "stale workspace entries must not be sent to the terminal as validators"
+        );
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn empty_programmer_target_recovers_only_from_the_active_phase_or_contract() {
+        let root =
+            std::env::temp_dir().join(format!("aura-schema-target-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = root.to_string_lossy().to_string();
+        let mut journal = crate::core::session_journal::SessionJournal::default();
+        journal.fases.push(crate::core::session_journal::Fase {
+            numero: 1,
+            archivos: vec!["index.html".into(), "app.js".into()],
+            ..Default::default()
+        });
+
+        assert_eq!(
+            schema_recovery_programmer_target(&journal, &workspace, &[]).as_deref(),
+            Some("index.html")
+        );
+        std::fs::write(root.join("index.html"), "<main></main>").unwrap();
+        assert_eq!(
+            schema_recovery_programmer_target(&journal, &workspace, &[]).as_deref(),
+            Some("app.js")
+        );
+        std::fs::write(root.join("app.js"), "export {};\n").unwrap();
+        assert_eq!(
+            schema_recovery_programmer_target(&journal, &workspace, &[]).as_deref(),
+            Some("index.html")
+        );
+
+        journal.fases.clear();
+        assert_eq!(
+            schema_recovery_programmer_target(&journal, &workspace, &[]),
+            None,
+            "without a planned or contract target, recovery must not invent a filename"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn consultation_audit_overrides_a_repeated_test_command_with_a_targeted_repair() {
+        let audit = crate::llm::phase_planner::ConsultationMvpAudit {
+            issues: vec![
+                "app.js contiene un stub".into(),
+                "tests/app.test.js no registra casos".into(),
+            ],
+            repair_files: vec!["app.js".into(), "tests/app.test.js".into()],
+        };
+        let mut tool = "TOOL_TERMINAL".to_string();
+        let mut role = AgentRole::Critic;
+        let mut command = "npm test".to_string();
+        let mut files = Vec::new();
+        let mut payload = serde_json::json!({"herramienta":"TOOL_TERMINAL", "comando":"npm test"});
+        let mut diagnostic = String::new();
+
+        assert!(apply_consultation_mvp_audit_override(
+            &mut tool,
+            &mut role,
+            &mut command,
+            &mut files,
+            &mut payload,
+            &mut diagnostic,
+            &audit,
+        ));
+        assert_eq!(tool, "TOOL_PROGRAMMER");
+        assert_eq!(role, AgentRole::Executor);
+        assert!(command.is_empty());
+        assert_eq!(files, vec!["tests/app.test.js"]);
+        assert_eq!(payload["herramienta"], "TOOL_PROGRAMMER");
+        assert_eq!(
+            payload["archivos_a_editar"],
+            serde_json::json!(["tests/app.test.js"])
+        );
+        assert_eq!(payload["require_all_targets"], true);
+        assert!(diagnostic.contains("tests/app.test.js no registra casos"));
+        assert!(!diagnostic.contains("app.js contiene un stub"));
+    }
+
+    #[test]
+    fn approved_mission_replaces_stale_generic_phase_plan_until_a_phase_is_complete() {
+        let mut journal = crate::core::session_journal::SessionJournal::default();
+        journal.plan_generado = true;
+        journal.fases = vec![crate::core::session_journal::Fase {
+            numero: 1,
+            descripcion: "Create project structure".into(),
+            archivos: vec!["README.md".into(), "requirements.txt".into()],
+            criterio_de_exito: "python --version".into(),
+            estado: "EN_PROGRESO".into(),
+        }];
+        assert!(needs_approved_plan_recovery(true, &journal));
+        journal.fases[0].estado = "COMPLETADA".into();
+        journal.fases.push(crate::core::session_journal::Fase {
+            numero: 2,
+            descripcion: "Build application".into(),
+            archivos: vec!["app.py".into()],
+            criterio_de_exito: "python app.py".into(),
+            estado: "EN_PROGRESO".into(),
+        });
+        assert!(needs_approved_plan_recovery(true, &journal));
+        journal.fases[0] = crate::core::session_journal::Fase {
+            numero: 1,
+            descripcion: "MVP web local".into(),
+            archivos: vec![
+                "index.html".into(),
+                "styles.css".into(),
+                "app.js".into(),
+                "package.json".into(),
+                "tests/app.test.js".into(),
+            ],
+            criterio_de_exito: "npm test".into(),
+            estado: "COMPLETADA".into(),
+        };
+        journal.fases.push(crate::core::session_journal::Fase {
+            numero: 2,
+            descripcion: "Firebase Auth y Firestore con emuladores".into(),
+            archivos: vec!["firebase-config.js".into()],
+            criterio_de_exito: "npm test".into(),
+            estado: "EN_PROGRESO".into(),
+        });
+        journal.fases.push(crate::core::session_journal::Fase {
+            numero: 3,
+            descripcion: "Hosting".into(),
+            archivos: vec![".firebaserc".into()],
+            criterio_de_exito: "firebase deploy --only hosting".into(),
+            estado: "PENDIENTE".into(),
+        });
+        assert!(needs_approved_plan_recovery(true, &journal));
+        journal.fases[1].criterio_de_exito = "npm run test:firebase".into();
+        assert!(!needs_approved_plan_recovery(true, &journal));
+        assert!(!needs_approved_plan_recovery(false, &journal));
+    }
+
+    #[test]
+    fn resumed_local_agenda_replaces_a_phase_that_only_mentions_login() {
+        let mut journal = crate::core::session_journal::SessionJournal::default();
+        journal.plan_generado = true;
+        journal.fases = vec![crate::core::session_journal::Fase {
+            numero: 1,
+            descripcion: "Implementar login y registro, validación y buen contraste".into(),
+            archivos: vec!["index.html".into(), "styles.css".into(), "script.js".into()],
+            criterio_de_exito: "Abrir en navegador".into(),
+            estado: "EN_PROGRESO".into(),
+        }];
+        assert!(needs_local_consultation_agenda_plan_recovery(
+            true, &journal
+        ));
+        journal.fases[0].estado = "COMPLETADA".into();
+        assert!(!needs_local_consultation_agenda_plan_recovery(
+            true, &journal
+        ));
+        assert!(!needs_local_consultation_agenda_plan_recovery(
+            false, &journal
+        ));
+    }
+
+    #[test]
+    fn completed_phase_plan_does_not_request_an_arbitrary_programmer_target() {
+        let root = std::env::temp_dir().join(format!("aura-phase-files-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        for file in [
+            "index.html",
+            "styles.css",
+            "app.js",
+            "package.json",
+            "tests/app.test.js",
+        ] {
+            let path = root.join(file);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, "present").unwrap();
+        }
+        let journal = crate::core::session_journal::SessionJournal {
+            fases: vec![crate::core::session_journal::Fase {
+                numero: 1,
+                descripcion: "MVP web local".into(),
+                archivos: vec![
+                    "index.html".into(),
+                    "styles.css".into(),
+                    "app.js".into(),
+                    "package.json".into(),
+                    "tests/app.test.js".into(),
+                ],
+                criterio_de_exito: "npm test".into(),
+                estado: "EN_PROGRESO".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            phase_pending_programmer_file(&journal, root.to_str().unwrap()),
+            None
+        );
+        assert!(programmer_file_fallback(&journal, root.to_str().unwrap(), &[]).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn programmer_recovers_missing_or_internal_targets_from_the_active_phase() {
+        let root =
+            std::env::temp_dir().join(format!("aura-programmer-args-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut journal = crate::core::session_journal::SessionJournal::default();
+        journal.fases = vec![crate::core::session_journal::Fase {
+            numero: 1,
+            descripcion: "MVP local".into(),
+            archivos: vec!["index.html".into(), "styles.css".into(), "app.js".into()],
+            criterio_de_exito: "pruebas locales".into(),
+            estado: "EN_PROGRESO".into(),
+        }];
+
+        let mut omitted = serde_json::json!({"archivos_a_editar": []});
+        let first =
+            recover_programmer_file_args(&mut omitted, &journal, root.to_str().unwrap(), &[])
+                .expect("empty tool args should recover the first pending phase deliverable");
+        assert_eq!(first, vec!["index.html"]);
+        assert_eq!(
+            omitted["archivos_a_editar"],
+            serde_json::json!(["index.html"])
+        );
+
+        std::fs::write(root.join("index.html"), "<!doctype html>").unwrap();
+        let mut internal_only = serde_json::json!({"archivos_a_editar": ["fenix_chat.json"]});
+        let next =
+            recover_programmer_file_args(&mut internal_only, &journal, root.to_str().unwrap(), &[])
+                .expect("internal-only targets should recover the next pending product file");
+        assert_eq!(next, vec!["styles.css"]);
+        assert_eq!(
+            internal_only["archivos_a_editar"],
+            serde_json::json!(["styles.css"])
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn forced_think_reuses_diagnosis_without_an_orchestrator_retry() {
+        let reason = "Analiza ModuleNotFoundError: flask y propone una corrección.";
+        let contract = crate::core::mission_contract::MissionContract::from_objective(
+            "Corrige la aplicación web",
+        );
+        let decision = deterministic_forced_decision(".", "TOOL_THINK", reason, &contract, &[])
+            .expect("forced TOOL_THINK is a deterministic control transfer");
+        assert_eq!(decision["herramienta"], "TOOL_THINK");
+        assert_eq!(decision["comando"], reason);
+    }
+
     #[tokio::test]
-    async fn test_all_28_known_tools_have_registered_executors() {
+    async fn test_all_29_known_tools_have_registered_executors() {
         let temp_dir =
             std::env::temp_dir().join(format!("aura_tools_test_{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let ws = temp_dir.to_str().unwrap();
 
         let mut runtime = MissionRuntime::new(ws, "Tool inventory verification mission", 50);
+        let ast_workspace = std::sync::Arc::new(std::sync::Mutex::new(
+            chronos_vfs::workspace::AgentWorkspace::<chronos_vfs::aura_bridge::AuraAstNode>::new(1)
+                .unwrap(),
+        ));
         register_default_tools(
             &mut runtime,
             ws,
             "Build a high reliability verification system",
+            None,
+            "test-model".to_string(),
+            ast_workspace.clone(),
         );
 
-        // 1. Assert exactly 28 tools in KNOWN_TOOLS
+        // 1. Assert exactly 29 tools in KNOWN_TOOLS
         assert_eq!(
             KNOWN_TOOLS.len(),
-            28,
-            "KNOWN_TOOLS must contain exactly 28 tools"
+            29,
+            "KNOWN_TOOLS must contain exactly 29 tools"
         );
 
-        // 2. Assert all 28 known tools are registered
+        // 2. Assert all 29 known tools are registered
         for tool_name in KNOWN_TOOLS {
             assert!(
                 runtime.tool_registry.is_registered(tool_name),
@@ -6617,8 +13074,8 @@ mod tests {
         // 3. Assert registered count in ToolRegistry matches KNOWN_TOOLS.len()
         assert_eq!(
             runtime.tool_registry.registered_count(),
-            28,
-            "ToolRegistry must have exactly 28 registered executors"
+            29,
+            "ToolRegistry must have exactly 29 registered executors"
         );
 
         // 4. Assert dispatching to each tool resolves to a real executor and doesn't fail with TOOL_UNREGISTERED
@@ -6652,13 +13109,86 @@ mod tests {
             )
             .await;
         assert!(logic_res.is_ok());
-        assert!(logic_res.unwrap().stdout.contains("SAT"));
+        assert!(logic_res.unwrap().stdout.contains("SAT_CERTIFIED"));
+
+        let missing_logic_input = runtime
+            .tool_registry
+            .dispatch("TOOL_LOGIC_SOLVER", serde_json::Value::Null, ".")
+            .await
+            .unwrap();
+        assert_ne!(missing_logic_input.exit_code, 0);
+        assert!(missing_logic_input
+            .stderr
+            .contains("requiere n_vars y clauses"));
+
+        let ast_result = runtime
+            .tool_registry
+            .dispatch(
+                "TOOL_AST_INJECT",
+                serde_json::json!({ "intent": "register a real AST node" }),
+                ws,
+            )
+            .await
+            .unwrap();
+        assert_eq!(ast_result.exit_code, 0);
+        assert!(ast_result.stdout.contains("insertado"));
+        let ast_capacity_result = runtime
+            .tool_registry
+            .dispatch(
+                "TOOL_AST_INJECT",
+                serde_json::json!({ "intent": "the shared buffer is now full" }),
+                ws,
+            )
+            .await
+            .unwrap();
+        assert_ne!(ast_capacity_result.exit_code, 0);
+        assert!(ast_capacity_result.stderr.contains("Buffer full"));
+
+        let ask_user_without_ui = runtime
+            .tool_registry
+            .dispatch(
+                "TOOL_ASK_USER",
+                serde_json::json!({ "question": "Are you there?" }),
+                ws,
+            )
+            .await
+            .unwrap();
+        assert_ne!(ask_user_without_ui.exit_code, 0);
+        assert!(ask_user_without_ui.stderr.contains("interfaz Tauri activa"));
+
+        let empty_audit = runtime
+            .tool_registry
+            .dispatch("TOOL_AUDITOR", serde_json::Value::Null, ws)
+            .await
+            .unwrap();
+        assert_ne!(empty_audit.exit_code, 0);
+        assert!(empty_audit.stderr.contains("no encontró archivos"));
+
+        let empty_runner = runtime
+            .tool_registry
+            .dispatch("TOOL_CREATE_RUNNER", serde_json::Value::Null, ws)
+            .await
+            .unwrap();
+        assert_ne!(empty_runner.exit_code, 0);
+        assert!(empty_runner.stderr.contains("no se detectó un proyecto"));
+
+        let missing_search = runtime
+            .tool_registry
+            .dispatch(
+                "TOOL_SEARCH",
+                serde_json::json!({ "query": format!("missing_{}", uuid::Uuid::new_v4()) }),
+                ws,
+            )
+            .await
+            .unwrap();
+        assert_ne!(missing_search.exit_code, 0);
+        assert!(missing_search.stderr.contains("No encontré resultados"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]
-    async fn test_pesp_fase_advancement_and_ground_truth() {
+    async fn test_pesp_file_writes_do_not_complete_or_advance_a_phase() {
         let temp_dir = std::env::temp_dir().join("aura_test_pesp_advancement");
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
@@ -6698,29 +13228,21 @@ mod tests {
             "script.js".to_string(),
         ];
 
-        // Simulate PESP advancement logic
-        let total_fases = journal.fases.len();
-        let mut should_advance = false;
+        // Writing every planned file is progress only. Validation and the phase
+        // gate must happen before marking it complete or advancing.
         if let Some(fase) = journal.fases.get_mut(journal.fase_actual) {
-            let all_done = fase.archivos.is_empty()
-                || fase.archivos.iter().all(|f| {
-                    written_files
-                        .iter()
-                        .any(|w: &String| w.contains(f.as_str()))
-                });
-            if all_done {
-                fase.estado = "COMPLETADA".to_string();
-                if journal.fase_actual + 1 < total_fases {
-                    should_advance = true;
-                }
+            let files_written = fase.archivos.iter().all(|f| {
+                written_files
+                    .iter()
+                    .any(|w: &String| w.contains(f.as_str()))
+            });
+            if files_written {
+                fase.estado = "EN_PROGRESO".to_string();
             }
         }
-        if should_advance {
-            journal.fase_actual += 1;
-        }
 
-        assert_eq!(journal.fases[0].estado, "COMPLETADA");
-        assert_eq!(journal.fase_actual, 1);
+        assert_eq!(journal.fases[0].estado, "EN_PROGRESO");
+        assert_eq!(journal.fase_actual, 0);
         assert_eq!(journal.fases[1].descripcion, "Verification Script");
 
         // Verify WorldState sees the files immediately
@@ -6740,7 +13262,109 @@ mod tests {
     }
     #[test]
     fn building_and_verifying_is_a_construction_mission() {
-        assert_eq!(classify_mission("Construye cyber_sentinel.html y crea verify_dashboard.py, ejecútalo y verifica"), MissionType::Construction);
+        assert_eq!(
+            classify_mission(
+                "Construye cyber_sentinel.html y crea verify_dashboard.py, ejecútalo y verifica"
+            ),
+            MissionType::Construction
+        );
+    }
+
+    #[test]
+    fn broad_initial_application_plan_stays_in_planning_mode() {
+        let prompt = "vamos a contruir una aplicacion tipo web; por ahora este es el plan inicial";
+        assert!(is_initial_plan_request(prompt));
+        assert_eq!(classify_mission(prompt), MissionType::Planning);
+        assert_eq!(
+            classify_mission("Construye la aplicación y crea los archivos ahora"),
+            MissionType::Construction
+        );
+    }
+
+    #[test]
+    fn approved_plan_marker_switches_the_original_plan_to_construction() {
+        let request = "[MODO IMPLEMENTACION DE PLAN APROBADO] Solicitud original: vamos a construir una aplicación web; por ahora este es el plan inicial. Fase 1: pruebas locales. Fase 2: Firebase.";
+        assert!(!is_initial_plan_request(request));
+        assert_eq!(classify_mission(request), MissionType::Construction);
+    }
+
+    #[test]
+    fn planning_mode_only_allows_research_thinking_and_finish() {
+        assert!(planning_tool_allowed("TOOL_WEB_SEARCH"));
+        assert!(planning_tool_allowed("TOOL_THINK"));
+        assert!(planning_tool_allowed("TOOL_FINISH"));
+        assert!(!planning_tool_allowed("TOOL_PROGRAMMER"));
+        assert!(!planning_tool_allowed("TOOL_TERMINAL"));
+    }
+
+    #[test]
+    fn initial_plan_requires_phases_deliverables_assumptions_and_open_decisions() {
+        let complete = "Fase 1: MVP. Entregables: login y consultas. Fase 2: facturación. Supuestos: Firebase. Decisiones pendientes: país.";
+        assert!(initial_plan_response_complete(complete));
+        assert!(!initial_plan_response_complete(
+            "Plan listo. Fase 1: login."
+        ));
+        assert!(!initial_plan_response_complete(""));
+    }
+
+    #[test]
+    fn failed_research_must_be_disclosed_before_plan_can_finish() {
+        let request = "Aplicación de consultas y clientes con login y registro, facturación y contabilidad; probar local y luego desplegar en Firebase.";
+        let complete = "Fase 1: aplicación local: pruebas locales del login, registro, consultas y clientes. Entregables: MVP funcional. Fase 2: facturación y contabilidad. Entregables: módulos verificables y despliegue en Firebase Hosting. Supuestos: Firebase. Decisiones pendientes: confirmar país antes de requisitos fiscales.";
+        assert!(!planning_response_complete(complete, true, request));
+        assert!(planning_response_complete(
+            &format!(
+                "{} No se pudo verificar información actual de Firebase.",
+                complete
+            ),
+            true,
+            request
+        ));
+        assert!(planning_response_complete(complete, false, request));
+    }
+
+    #[test]
+    fn initial_plan_cannot_omit_requested_modules_or_reverse_local_first_order() {
+        let request = "Crear aplicación de consultas con clientes, login, facturación y contabilidad; probar local y luego desplegar en Firebase.";
+        let shallow = "Fase 1: Firebase y login. Entregables: acceso. Fase 2: despliegue. Supuestos: conexión. Decisiones pendientes: país.";
+        assert!(!planning_response_complete(shallow, false, request));
+
+        let reversed = "Fase 1: despliegue en Firebase Hosting. Entregables: sitio publicado. Fase 2: pruebas locales de login, registro, consultas, clientes, facturación y contabilidad. Supuestos: Firebase. Decisiones pendientes: país.";
+        assert!(!planning_response_complete(reversed, false, request));
+
+        let missing = missing_requested_plan_coverage(request, shallow);
+        assert!(missing.contains(&"consultas o citas".to_string()));
+        assert!(missing.contains(&"contabilidad".to_string()));
+    }
+
+    #[test]
+    fn fallback_plan_recovers_the_reported_seven_billion_model_loop() {
+        let request = "vamos a contruir una aplicacion tipo web probamos local y luego desplegamos en firebase la aplicacion sera de consulta debe tener todas las ociones que tiene un sistema de consulta con un login legante que permita registro y el neogico es de consulta se hacen facuta y en el sistema tenga modulo de contabilidad por ahora este es el plan inicial";
+        let fallback = build_fallback_initial_plan(request, false);
+        assert!(planning_response_complete(&fallback, false, request));
+        assert!(fallback.contains("### Fase 1 — MVP y pruebas locales"));
+        assert!(fallback.contains("### Fase 2 — Firebase y despliegue"));
+        assert!(fallback.contains("facturas"));
+
+        let fallback_after_search_error = build_fallback_initial_plan(request, true);
+        assert!(planning_response_complete(
+            &fallback_after_search_error,
+            true,
+            request
+        ));
+    }
+
+    #[test]
+    fn structured_conversational_plan_is_preserved_for_completion_gate() {
+        let value = serde_json::json!({
+            "Fase 1": { "Entregables": ["Login"] },
+            "Fase 2": { "Entregables": ["Consultas"] },
+            "Supuestos": ["Firebase"],
+            "Decisiones pendientes": ["País"]
+        });
+        let response = conversational_response(Some(&value));
+        assert!(initial_plan_response_complete(&response));
+        assert!(response.contains("Login"));
     }
 
     #[test]
@@ -6764,7 +13388,10 @@ mod tests {
         )
         .expect("the contract provides an exact target");
         assert_eq!(decision["herramienta"], "TOOL_PROGRAMMER");
-        assert_eq!(decision["archivos_a_editar"], serde_json::json!(["index.html"]));
+        assert_eq!(
+            decision["archivos_a_editar"],
+            serde_json::json!(["index.html"])
+        );
     }
 
     #[test]
@@ -6824,7 +13451,6 @@ mod tests {
         assert!(file_is_already_known(&known, "verify_dashboard.py"));
         assert!(!file_is_already_known(&known, "dashboard.html"));
     }
-
 }
 
 fn persist_failed_journal(
@@ -6832,10 +13458,73 @@ fn persist_failed_journal(
     workspace_path: &str,
     app: &AppHandle,
     step: u32,
+    reason: &str,
 ) {
+    journal.ultimo_estado = reason.chars().take(1000).collect();
     if let Err(error) =
         crate::core::session_journal::close_journal(journal, "FALLIDO", workspace_path)
     {
         emit_event(app, step, &error, "FATAL");
+    }
+    crate::core::episodic_memory::save_failure_episode(
+        &journal.session_id,
+        workspace_path,
+        &journal.objetivo,
+        reason,
+        &journal.herramientas_usadas,
+        &journal.archivos_tocados,
+    );
+}
+
+async fn record_adaptive_failure(
+    engine: &crate::core::learning::LearningEngine,
+    fingerprint: &crate::core::learning::fingerprint::TaskFingerprint,
+    model: &str,
+    strategy: &crate::core::learning::strategy::StrategyKind,
+    confidence: f32,
+    runtime: &crate::core::mission_runtime::MissionRuntime,
+    started_at_ms: u64,
+    reason: &str,
+) {
+    let (class, tool) = adaptive_failure_details(reason);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(started_at_ms);
+    let metrics = &runtime.cognitive_state.metrics;
+    let result = crate::core::learning::LearningResult {
+        outcome: crate::core::learning::LearningOutcome::Failed,
+        metrics: crate::core::learning::OutcomeMetrics {
+            steps: runtime.steps_taken(),
+            tool_calls: metrics.tool_calls,
+            failed_actions: metrics.failed_actions,
+            recovery_actions: metrics.recovery_actions,
+            verification_attempts: metrics.verification_attempts,
+            successful_verifications: metrics.successful_verifications,
+            elapsed_ms: now_ms.saturating_sub(started_at_ms),
+        },
+        failures: vec![crate::core::learning::FailureInfo {
+            class: class.to_string(),
+            tool: tool.map(str::to_string),
+            step: runtime.current_step(),
+        }],
+        recovery: Some(crate::core::learning::RecoveryRecord {
+            strategy: "Abort".to_string(),
+            succeeded: false,
+        }),
+    };
+    if let Err(error) = engine
+        .record_outcome(
+            fingerprint.clone(),
+            model.to_string(),
+            strategy.clone(),
+            result,
+            confidence,
+            runtime.mission_id.clone(),
+            Some(format!("{}_{}", runtime.mission_id, class)),
+        )
+        .await
+    {
+        eprintln!("[LearningEngine] FAILURE_RECORD_WARN: {error}");
     }
 }

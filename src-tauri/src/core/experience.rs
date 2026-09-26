@@ -93,56 +93,34 @@ impl ExperienceStore {
         }
     }
 
-    /// Busca experiencias relevantes que coincidan con palabras clave o lenguaje
-    #[allow(dead_code)]
-    pub fn find_analogous(objective: &str, lang: &str, limit: usize) -> Vec<ExperienceRecord> {
-        let all = Self::load_recent(50);
-        let obj_tokens: Vec<String> = objective
-            .to_lowercase()
-            .split_whitespace()
-            .filter(|w| w.len() > 3)
-            .map(|w| w.to_string())
-            .collect();
-
-        let mut scored: Vec<(usize, ExperienceRecord)> = all
-            .into_iter()
-            .filter_map(|rec| {
-                let mut score = 0usize;
-                if !lang.is_empty() && rec.fingerprint.language.eq_ignore_ascii_case(lang) {
-                    score += 3;
-                }
-                let rec_obj = rec.objective.to_lowercase();
-                for token in &obj_tokens {
-                    if rec_obj.contains(token) {
-                        score += 1;
-                    }
-                }
-                if score > 0 {
-                    Some((score, rec))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
-        scored.into_iter().take(limit).map(|(_, r)| r).collect()
+    /// Recupera ejemplos solo del proyecto activo. Las experiencias globales
+    /// parecidas por palabras pueden pertenecer a una aplicación distinta y no
+    /// deben contaminar el contexto de una misión.
+    pub fn find_analogous_in_workspace(
+        objective: &str,
+        lang: &str,
+        workspace: &str,
+        limit: usize,
+    ) -> Vec<ExperienceRecord> {
+        let scoped = records_for_workspace(Self::load_recent(50), workspace);
+        analogous_records(scoped, objective, lang, limit)
     }
 
-    /// Construye un bloque formateado de lecciones aprendidas para inyectar al LLM
-    #[allow(dead_code)]
-    pub fn build_experience_context(objective: &str, lang: &str) -> String {
-        let relevant = Self::find_analogous(objective, lang, 3);
+    fn build_context_from_records(relevant: Vec<ExperienceRecord>) -> String {
+        let relevant: Vec<_> = relevant
+            .into_iter()
+            .filter(|record| !matches!(record.outcome, ExperienceOutcome::Failed(_)))
+            .collect();
         if relevant.is_empty() {
             return String::new();
         }
 
-        let mut block = String::from("🧠 [EXPERIENCIA COGNITIVA PREVIA]:\n");
+        let mut block = String::from("🧠 [EXPERIENCIA COGNITIVA PREVIA DEL WORKSPACE ACTUAL]:\n");
         for exp in relevant {
             let status = match &exp.outcome {
-                ExperienceOutcome::Success => "✅ ÉXITO",
-                ExperienceOutcome::PartialSuccess => "⚠️ PARCIAL",
-                ExperienceOutcome::Failed(reason) => &format!("❌ FALLO ({})", reason),
+                ExperienceOutcome::Success => "ÉXITO",
+                ExperienceOutcome::PartialSuccess => "PARCIAL",
+                ExperienceOutcome::Failed(_) => continue,
             };
             block.push_str(&format!(
                 "• Tarea: {} | Resultado: {}\n",
@@ -156,7 +134,13 @@ impl ExperienceStore {
         block
     }
 
-    /// Genera un registro rápido al finalizar una misión
+    /// Construye contexto de experiencias análogas únicamente del workspace activo.
+    pub fn build_experience_context(objective: &str, lang: &str, workspace: &str) -> String {
+        let relevant = Self::find_analogous_in_workspace(objective, lang, workspace, 3);
+        Self::build_context_from_records(relevant)
+    }
+
+    /// Generates a quick record at mission completion.
     #[allow(dead_code)]
     pub fn create_record(
         workspace: &str,
@@ -186,6 +170,69 @@ impl ExperienceStore {
     }
 }
 
+fn analogous_records(
+    all: Vec<ExperienceRecord>,
+    objective: &str,
+    lang: &str,
+    limit: usize,
+) -> Vec<ExperienceRecord> {
+    let obj_tokens: Vec<String> = objective
+        .to_lowercase()
+        .split_whitespace()
+        .filter(|w| w.len() > 3)
+        .map(|w| w.to_string())
+        .collect();
+
+    let mut scored: Vec<(usize, ExperienceRecord)> = all
+        .into_iter()
+        .filter_map(|rec| {
+            let mut score = 0usize;
+            if !lang.is_empty() && rec.fingerprint.language.eq_ignore_ascii_case(lang) {
+                score += 3;
+            }
+            let rec_obj = rec.objective.to_lowercase();
+            for token in &obj_tokens {
+                if rec_obj.contains(token) {
+                    score += 1;
+                }
+            }
+            if score > 0 {
+                Some((score, rec))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.into_iter().take(limit).map(|(_, r)| r).collect()
+}
+
+fn same_workspace(left: &str, right: &str) -> bool {
+    let normalize = |value: &str| {
+        let path = Path::new(value)
+            .canonicalize()
+            .unwrap_or_else(|_| Path::new(value).to_path_buf());
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        #[cfg(windows)]
+        {
+            normalized.to_lowercase()
+        }
+        #[cfg(not(windows))]
+        {
+            normalized
+        }
+    };
+    normalize(left) == normalize(right)
+}
+
+fn records_for_workspace(records: Vec<ExperienceRecord>, workspace: &str) -> Vec<ExperienceRecord> {
+    records
+        .into_iter()
+        .filter(|record| same_workspace(&record.workspace, workspace))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +252,28 @@ mod tests {
         assert_eq!(rec.fingerprint.language, "rust");
         assert_eq!(rec.steps_taken, 12);
         assert_eq!(rec.outcome, ExperienceOutcome::Success);
+    }
+
+    #[test]
+    fn workspace_experience_filter_excludes_similar_tasks_from_other_projects() {
+        let mut current = ExperienceStore::create_record(
+            "C:/projects/consulta-clara",
+            "Construir una aplicación web de consultas",
+            "javascript",
+            vec!["TOOL_PROGRAMMER".to_string()],
+            8,
+            ExperienceOutcome::Success,
+            vec!["Validar los flujos de citas".to_string()],
+        );
+        let mut other = current.clone();
+        other.id = "otro-proyecto".into();
+        other.workspace = "C:/projects/cotizador".into();
+        let filtered =
+            records_for_workspace(vec![other, current.clone()], "c:\\projects\\consulta-clara");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].workspace, current.workspace);
+        current.outcome = ExperienceOutcome::Failed("syntax error viejo".into());
+        assert!(ExperienceStore::build_context_from_records(vec![current]).is_empty());
     }
 }

@@ -164,13 +164,17 @@ impl WorldState {
                         if prev_file.metadata_fingerprint == fingerprint {
                             prev_file.content_hash.clone()
                         } else {
-                            compute_content_hash(&path).ok_or_else(|| format!("WORKSPACE_HASH_FAILED: {}", path.display()))?
+                            compute_content_hash(&path).ok_or_else(|| {
+                                format!("WORKSPACE_HASH_FAILED: {}", path.display())
+                            })?
                         }
                     } else {
-                        compute_content_hash(&path).ok_or_else(|| format!("WORKSPACE_HASH_FAILED: {}", path.display()))?
+                        compute_content_hash(&path)
+                            .ok_or_else(|| format!("WORKSPACE_HASH_FAILED: {}", path.display()))?
                     }
                 } else {
-                    compute_content_hash(&path).ok_or_else(|| format!("WORKSPACE_HASH_FAILED: {}", path.display()))?
+                    compute_content_hash(&path)
+                        .ok_or_else(|| format!("WORKSPACE_HASH_FAILED: {}", path.display()))?
                 };
                 out.insert(
                     rel_str.clone(),

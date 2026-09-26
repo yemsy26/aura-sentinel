@@ -14,160 +14,214 @@ use crate::gf2_elimination::Gf2System;
 use crate::sdp_branching::branch_and_bound_solve;
 use crate::sdp_solver::{solve_sos_sdp, SdpVerdict};
 use crate::spectral::Clause3;
-
 use serde::Serialize;
+
+const MAX_VARIABLES: usize = 128;
+const MAX_CLAUSES: usize = 20_000;
+const MAX_TOTAL_LITERALS: usize = 100_000;
+const MAX_DPLL_NODES: usize = 50_000;
 
 #[derive(Serialize)]
 pub struct SatResult {
     pub status: String,
     pub assignment: Option<Vec<bool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
-pub fn solve_native_rust(n_vars: usize, clauses_in: Vec<Vec<i32>>) -> String {
-    let mut clauses = Vec::new();
-    for c in &clauses_in {
-        match c.len() {
-            3 => clauses.push(Clause3([c[0], c[1], c[2]])),
-            2 => clauses.push(Clause3([c[0], c[1], c[1]])),
-            1 => clauses.push(Clause3([c[0], c[0], c[0]])),
-            _ => continue,
+enum DpllOutcome {
+    Satisfiable(Vec<bool>),
+    Unsatisfiable,
+    SearchLimit,
+}
+
+fn result_json(status: &str, assignment: Option<Vec<bool>>, error: Option<String>) -> String {
+    serde_json::to_string(&SatResult {
+        status: status.to_string(),
+        assignment,
+        error,
+    })
+    .unwrap_or_else(|_| status.to_string())
+}
+
+fn validate_instance(n_vars: usize, clauses: &[Vec<i32>]) -> Result<(), String> {
+    if n_vars > MAX_VARIABLES {
+        return Err(format!(
+            "La instancia declara {n_vars} variables; el límite seguro actual es {MAX_VARIABLES}."
+        ));
+    }
+    if clauses.len() > MAX_CLAUSES {
+        return Err(format!(
+            "La instancia contiene {} cláusulas; el límite seguro actual es {MAX_CLAUSES}.",
+            clauses.len()
+        ));
+    }
+
+    let mut total_literals = 0usize;
+    for (clause_index, clause) in clauses.iter().enumerate() {
+        total_literals = total_literals.saturating_add(clause.len());
+        if total_literals > MAX_TOTAL_LITERALS {
+            return Err(format!(
+                "La instancia supera el límite de {MAX_TOTAL_LITERALS} literales."
+            ));
+        }
+        for (literal_index, &literal) in clause.iter().enumerate() {
+            if literal == 0 {
+                return Err(format!(
+                    "El literal 0 no es válido (cláusula {}, posición {}).",
+                    clause_index + 1,
+                    literal_index + 1
+                ));
+            }
+            let variable = literal.unsigned_abs() as usize;
+            if variable > n_vars {
+                return Err(format!(
+                    "El literal {literal} referencia una variable fuera de 1..={n_vars}."
+                ));
+            }
         }
     }
+    Ok(())
+}
 
-    // ── Stage 1: GF2 Algebraic pre-filter ─────────────────────────────────
-    let mut gf2 = Gf2System::extract_from_3cnf(n_vars, &clauses);
-    if gf2.is_tseitin_unsat() {
-        let res = SatResult {
-            status: "UNSAT_GF2".to_string(),
-            assignment: None,
-        };
-        return serde_json::to_string(&res).unwrap_or_else(|_| "UNSAT_GF2".to_string());
+/// Resuelve CNF booleana. SDP/GF(2) y Branch-and-Bound solo proponen candidatos;
+/// únicamente una asignación comprobada o la búsqueda exacta puede dar veredicto.
+pub fn solve_native_rust(n_vars: usize, clauses_in: Vec<Vec<i32>>) -> String {
+    if let Err(error) = validate_instance(n_vars, &clauses_in) {
+        return result_json("INVALID_INPUT", None, Some(error));
     }
 
-    // ── Stage 2: SDP relaxation to guide branching ─────────────────────────
-    let mut chordal = ChordalExtension::new(n_vars, &clauses);
-    let _cliques = chordal.extract_maximal_cliques();
-    let (verdict, _) = solve_sos_sdp(n_vars, &clauses, false);
+    // Una cláusula vacía es falsa para cualquier asignación. La fórmula sin
+    // cláusulas es verdadera y puede resolverse sin iniciar los motores pesados.
+    if clauses_in.iter().any(Vec::is_empty) {
+        return result_json("UNSAT_EXHAUSTED", None, None);
+    }
+    if clauses_in.is_empty() {
+        return result_json("SAT_CERTIFIED", Some(vec![false; n_vars]), None);
+    }
 
-    let res = match verdict {
-        SdpVerdict::ProvenUnsat { .. } => SatResult {
-            status: "UNSAT_SDP".to_string(),
-            assignment: None,
-        },
-        SdpVerdict::PossibleSat { .. } | SdpVerdict::Unknown { .. } => {
-            // ── Stage 3: Branch & Bound (SDP-guided heuristic) ──────────────
-            let (bb_verdict, bb_assign) = branch_and_bound_solve(n_vars, &clauses);
+    // Las capas geométricas solo entienden 1..=3 literales por cláusula. Se
+    // omiten para k-SAT general: nunca se debe verificar un modelo contra una
+    // versión incompleta de la fórmula.
+    let is_three_cnf = clauses_in
+        .iter()
+        .all(|clause| (1..=3).contains(&clause.len()));
+    if is_three_cnf && n_vars <= 24 {
+        let clauses_3: Vec<Clause3> = clauses_in
+            .iter()
+            .map(|clause| match clause.len() {
+                1 => Clause3([clause[0], clause[0], clause[0]]),
+                2 => Clause3([clause[0], clause[1], clause[1]]),
+                _ => Clause3([clause[0], clause[1], clause[2]]),
+            })
+            .collect();
 
-            if bb_verdict == "SAT_CERTIFIED" {
-                if let Some(ref asgn) = bb_assign {
-                    // CRITICAL: Verify the assignment actually satisfies ALL clauses
-                    if satisfies_all_clauses(asgn, &clauses) {
-                        return serde_json::to_string(&SatResult {
-                            status: "SAT_CERTIFIED".to_string(),
-                            assignment: bb_assign,
-                        })
-                        .unwrap_or_else(|_| "SAT_CERTIFIED".to_string());
+        let mut gf2 = Gf2System::extract_from_3cnf(n_vars, &clauses_3);
+        let gf2_unsat_hint = gf2.is_tseitin_unsat();
+        if !gf2_unsat_hint {
+            let mut chordal = ChordalExtension::new(n_vars, &clauses_3);
+            let _cliques = chordal.extract_maximal_cliques();
+            let (sdp_verdict, _) = solve_sos_sdp(n_vars, &clauses_3, false);
+
+            // A numerical relaxation is not accepted as an UNSAT certificate.
+            // It may guide a witness search; UNSAT is settled below by exact DPLL.
+            if matches!(sdp_verdict, SdpVerdict::PossibleSat { .. }) {
+                let (_, candidate) = branch_and_bound_solve(n_vars, &clauses_3);
+                if let Some(assignment) = candidate {
+                    if satisfies_all_clauses(&assignment, &clauses_in) {
+                        return result_json("SAT_CERTIFIED", Some(assignment), None);
                     }
                 }
             }
+        }
+    }
 
-            // ── Stage 4: DPLL exhaustive fallback (always correct) ──────────
-            // Branch-and-Bound is heuristic — if its answer fails verification,
-            // fall back to exact DPLL which is guaranteed correct.
-            match dpll_solve(n_vars, &clauses_in) {
-                Some(assignment) => SatResult {
-                    status: "SAT_CERTIFIED".to_string(),
-                    assignment: Some(assignment),
-                },
-                None => SatResult {
-                    status: "UNSAT_EXHAUSTED".to_string(),
-                    assignment: None,
-                },
+    match dpll_solve(n_vars, &clauses_in) {
+        DpllOutcome::Satisfiable(assignment) => {
+            if satisfies_all_clauses(&assignment, &clauses_in) {
+                result_json("SAT_CERTIFIED", Some(assignment), None)
+            } else {
+                result_json(
+                    "INTERNAL_VERIFICATION_FAILED",
+                    None,
+                    Some("El modelo SAT no satisface la fórmula original.".to_string()),
+                )
             }
         }
-    };
-
-    serde_json::to_string(&res).unwrap_or_else(|_| "UNKNOWN".to_string())
+        DpllOutcome::Unsatisfiable => result_json("UNSAT_EXHAUSTED", None, None),
+        DpllOutcome::SearchLimit => result_json(
+            "UNKNOWN_SEARCH_LIMIT",
+            None,
+            Some(format!(
+                "La búsqueda exacta alcanzó el límite de {MAX_DPLL_NODES} nodos; no se certifica SAT ni UNSAT."
+            )),
+        ),
+    }
 }
 
-/// Verifica que una asignación booleana satisface TODAS las cláusulas.
-/// Esta es la "prueba matemática de cierre": sin esto, el motor puede certificar falsos positivos.
-fn satisfies_all_clauses(assignment: &[bool], clauses: &[Clause3]) -> bool {
+/// Verifica el modelo contra todas las cláusulas originales recibidas.
+fn satisfies_all_clauses(assignment: &[bool], clauses: &[Vec<i32>]) -> bool {
     clauses.iter().all(|clause| {
-        clause.0.iter().any(|&lit| {
-            let var_idx = (lit.unsigned_abs() as usize) - 1;
-            if var_idx >= assignment.len() {
-                return false;
-            }
-            let value = assignment[var_idx];
-            if lit > 0 {
-                value
-            } else {
-                !value
-            }
+        clause.iter().any(|&literal| {
+            let index = (literal.unsigned_abs() as usize) - 1;
+            assignment
+                .get(index)
+                .is_some_and(|&value| if literal > 0 { value } else { !value })
         })
     })
 }
 
-/// Solucionador DPLL exacto y minimalista.
-/// Garantiza corrección matemática absoluta (completo y correcto por construcción).
-/// Complejidad: O(2^n) en peor caso, pero la poda unit-propagation lo hace
-/// práctico para instancias de hasta ~40 variables.
-fn dpll_solve(n_vars: usize, raw_clauses: &[Vec<i32>]) -> Option<Vec<bool>> {
-    let mut assignment = vec![None::<bool>; n_vars];
-    if dpll_recursive(&mut assignment, raw_clauses) {
-        Some(assignment.into_iter().map(|v| v.unwrap_or(false)).collect())
-    } else {
-        None
-    }
+/// Búsqueda DPLL exacta con límite de trabajo explícito; si se alcanza, devuelve
+/// UNKNOWN en vez de presentar una conclusión parcial como si fuera un teorema.
+fn dpll_solve(n_vars: usize, clauses: &[Vec<i32>]) -> DpllOutcome {
+    dpll_recursive(vec![None; n_vars], clauses, &mut 0)
 }
 
-fn dpll_recursive(assignment: &mut Vec<Option<bool>>, clauses: &[Vec<i32>]) -> bool {
-    // 1. Unit propagation
+fn dpll_recursive(
+    mut assignment: Vec<Option<bool>>,
+    clauses: &[Vec<i32>],
+    visited_nodes: &mut usize,
+) -> DpllOutcome {
+    if *visited_nodes >= MAX_DPLL_NODES {
+        return DpllOutcome::SearchLimit;
+    }
+    *visited_nodes += 1;
+
+    // Unit propagation. Each recursive branch owns its assignment, so failed
+    // branch deductions cannot leak into the sibling branch.
     loop {
         let mut propagated = false;
         for clause in clauses {
-            let mut unset_lit: Option<i32> = None;
+            let mut unassigned_literal = None;
+            let mut unassigned_count = 0usize;
             let mut clause_satisfied = false;
-            let mut all_false = true;
-            for &lit in clause {
-                let idx = (lit.unsigned_abs() as usize) - 1;
-                match assignment.get(idx).and_then(|v| *v) {
-                    Some(val) => {
-                        let sat = if lit > 0 { val } else { !val };
-                        if sat {
-                            clause_satisfied = true;
-                            all_false = false;
-                            break;
-                        }
-                        // this literal is false, keep scanning
+
+            for &literal in clause {
+                let index = (literal.unsigned_abs() as usize) - 1;
+                match assignment[index] {
+                    Some(value) if (literal > 0 && value) || (literal < 0 && !value) => {
+                        clause_satisfied = true;
+                        break;
                     }
+                    Some(_) => {}
                     None => {
-                        all_false = false;
-                        unset_lit = Some(lit);
+                        unassigned_literal = Some(literal);
+                        unassigned_count += 1;
                     }
                 }
             }
+
             if clause_satisfied {
                 continue;
             }
-            if all_false {
-                return false;
-            } // conflict
-            if let Some(unit) = unset_lit {
-                // Check no other unset literal — it's a unit clause
-                let unset_count = clause
-                    .iter()
-                    .filter(|&&l| {
-                        let idx = (l.unsigned_abs() as usize) - 1;
-                        assignment.get(idx).and_then(|v| *v).is_none()
-                    })
-                    .count();
-                if unset_count == 1 {
-                    let idx = (unit.unsigned_abs() as usize) - 1;
-                    assignment[idx] = Some(unit > 0);
-                    propagated = true;
-                }
+            if unassigned_count == 0 {
+                return DpllOutcome::Unsatisfiable;
+            }
+            if unassigned_count == 1 {
+                let literal = unassigned_literal.expect("one unassigned literal was counted");
+                let index = (literal.unsigned_abs() as usize) - 1;
+                assignment[index] = Some(literal > 0);
+                propagated = true;
             }
         }
         if !propagated {
@@ -175,44 +229,81 @@ fn dpll_recursive(assignment: &mut Vec<Option<bool>>, clauses: &[Vec<i32>]) -> b
         }
     }
 
-    // 2. Check if all clauses satisfied
-    let all_sat = clauses.iter().all(|clause| {
-        clause.iter().any(|&lit| {
-            let idx = (lit.unsigned_abs() as usize) - 1;
-            matches!(assignment.get(idx).and_then(|v| *v),
-                Some(val) if (lit > 0 && val) || (lit < 0 && !val))
+    let all_satisfied = clauses.iter().all(|clause| {
+        clause.iter().any(|&literal| {
+            let index = (literal.unsigned_abs() as usize) - 1;
+            matches!(assignment[index], Some(value) if (literal > 0 && value) || (literal < 0 && !value))
         })
     });
-    if all_sat {
-        return true;
+    if all_satisfied {
+        return DpllOutcome::Satisfiable(
+            assignment
+                .into_iter()
+                .map(|value| value.unwrap_or(false))
+                .collect(),
+        );
     }
 
-    // 3. Check for conflict (any clause all-false)
-    let conflict = clauses.iter().any(|clause| {
-        clause.iter().all(|&lit| {
-            let idx = (lit.unsigned_abs() as usize) - 1;
-            matches!(assignment.get(idx).and_then(|v| *v),
-                Some(val) if (lit > 0 && !val) || (lit < 0 && val))
-        })
-    });
-    if conflict {
-        return false;
-    }
-
-    // 4. Pick first unset variable and branch
-    let branch_var = match assignment.iter().position(|v| v.is_none()) {
-        Some(idx) => idx,
-        None => return false, // no unset vars, but not all clauses satisfied = conflict
+    let Some(branch_index) = assignment.iter().position(Option::is_none) else {
+        return DpllOutcome::Unsatisfiable;
     };
 
-    for &val in &[true, false] {
-        assignment[branch_var] = Some(val);
-        if dpll_recursive(assignment, clauses) {
-            return true;
+    for value in [true, false] {
+        let mut child = assignment.clone();
+        child[branch_index] = Some(value);
+        match dpll_recursive(child, clauses, visited_nodes) {
+            sat @ DpllOutcome::Satisfiable(_) => return sat,
+            DpllOutcome::SearchLimit => return DpllOutcome::SearchLimit,
+            DpllOutcome::Unsatisfiable => {}
         }
-        assignment[branch_var] = None;
     }
-    false
+    DpllOutcome::Unsatisfiable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn parsed(n_vars: usize, clauses: Vec<Vec<i32>>) -> Value {
+        serde_json::from_str(&solve_native_rust(n_vars, clauses)).unwrap()
+    }
+
+    #[test]
+    fn k_sat_constraints_are_not_dropped_by_the_three_sat_fast_path() {
+        let result = parsed(1, vec![vec![1, 1, 1, 1], vec![-1, -1, -1, -1]]);
+        assert_eq!(result["status"], "UNSAT_EXHAUSTED");
+        assert!(result["assignment"].is_null());
+    }
+
+    #[test]
+    fn empty_clause_is_certified_unsat() {
+        let result = parsed(2, vec![vec![]]);
+        assert_eq!(result["status"], "UNSAT_EXHAUSTED");
+    }
+
+    #[test]
+    fn valid_model_is_returned_for_a_satisfiable_formula() {
+        let clauses = vec![vec![1, 2], vec![-1, 2]];
+        let result = parsed(2, clauses.clone());
+        assert_eq!(result["status"], "SAT_CERTIFIED");
+        let assignment: Vec<bool> = serde_json::from_value(result["assignment"].clone()).unwrap();
+        assert!(satisfies_all_clauses(&assignment, &clauses));
+    }
+
+    #[test]
+    fn zero_and_out_of_range_literals_are_rejected_without_panicking() {
+        assert_eq!(parsed(1, vec![vec![0]])["status"], "INVALID_INPUT");
+        assert_eq!(parsed(1, vec![vec![2]])["status"], "INVALID_INPUT");
+        assert_eq!(parsed(0, vec![vec![1]])["status"], "INVALID_INPUT");
+    }
+
+    #[test]
+    fn empty_formula_is_satisfiable_even_without_variables() {
+        let result = parsed(0, vec![]);
+        assert_eq!(result["status"], "SAT_CERTIFIED");
+        assert_eq!(result["assignment"], serde_json::json!([]));
+    }
 }
 
 #[cfg(feature = "python-ext")]

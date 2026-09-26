@@ -1,26 +1,26 @@
 ﻿# SpectraSAT 🧮⚡
 
-Motor de inferencia y satisfacibilidad lógica (SAT) ultrarrápido escrito en Rust, diseñado para actuar como cerebro matemático de agentes de Inteligencia Artificial (como Aura-Sentinel). 
+Motor de satisfacibilidad booleana (SAT/CNF) escrito en Rust, diseñado para resolver restricciones booleanas dentro de agentes como Aura-Sentinel. No es un solver de aritmética general ni de optimización de grafos.
 
 ## 🚀 Arquitectura en Cascada de 4 Capas (v1.1.0)
 
-A diferencia de los solvers DPLL tradicionales, SpectraSAT utiliza una arquitectura geométrica y algebraica en memoria que garantiza la ausencia de falsos positivos:
+SpectraSAT usa heurísticas geométricas y algebraicas para buscar candidatos, y una búsqueda DPLL exacta como verificador de respaldo. Solo certifica SAT si la asignación satisface cada cláusula original y solo certifica UNSAT si la búsqueda exacta agota todas las opciones:
 
-1. **Pre-filtro GF(2):** Extracción de subsistemas de ecuaciones lineales sobre el campo de Galois. Detecta contradicciones algebraicas masivas (Tseitin) en O(N^3) de forma determinista y paralela.
-2. **Relajación SDP (Semidefinite Programming):** Transforma las cláusulas en hiperplanos geométricos usando el método ADMM y la jerarquía de Lasserre. Actúa como un faro espectral que guía la ramificación.
-3. **B&B guiado por SDP + Verificador Estricto:** Branch-and-Bound que explora el subespacio continuo proyectado por el SDP. Incorpora un verificador booleano estricto de clausuras en las hojas para evitar que el SDP certifique falsos positivos matemáticos.
-4. **DPLL Fallback Exhaustivo:** Si la relajación SDP falla al construir un certificado exacto, el sistema desciende a un solucionador DPLL puro (Davis-Putnam-Logemann-Loveland) con propagación unitaria. Esto garantiza que el motor sea **Completo y Correcto por Construcción**.
+1. **Pistas GF(2) y SDP:** pueden ayudar a proponer asignaciones, pero no son aceptadas por sí solas como prueba de UNSAT.
+2. **Búsqueda guiada:** cualquier asignación candidata se vuelve a comprobar contra todas las cláusulas originales; una fórmula general k-CNF nunca se recorta a 3-CNF.
+3. **DPLL exacto acotado:** decide SAT/UNSAT con propagación unitaria hasta un máximo de 50 000 nodos.
+4. **Límite explícito:** si se alcanza el tope de variables, tamaño o nodos, devuelve `INVALID_INPUT` o `UNKNOWN_SEARCH_LIMIT`; nunca presenta una búsqueda incompleta como veredicto.
 
 ## 📦 Integración como Librería (FFI)
 
 SpectraSAT expone un puente C-FFI seguro que retorna resultados estructurados en JSON, optimizado para ser consumido directamente por el NLU del agente, evitando que el LLM tenga que hacer cálculos deductivos.
 
-`json
+```json
 {
   "status": "SAT_CERTIFIED",
   "assignment": [true, true, true, false, false, false, false, true]
 }
-`
+```
 
 ## 🛠️ Herramientas Binarias
 

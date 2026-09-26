@@ -167,7 +167,8 @@ impl EvidenceGraph {
         if !reliability.is_finite() || !(0.0..=1.0).contains(&reliability) {
             return Err("Evidence reliability must be finite and between 0 and 1".into());
         }
-        if kind == EvidenceKind::UserConfirmation && !matches!(fact, StructuredFact::Generic { .. }) {
+        if kind == EvidenceKind::UserConfirmation && !matches!(fact, StructuredFact::Generic { .. })
+        {
             return Err("User confirmation cannot impersonate technical evidence".into());
         }
         if Self::kind_requires_workspace_hash(&kind) {
@@ -425,11 +426,32 @@ mod tests {
     fn invalid_reliability_and_mislabeled_technical_evidence_are_rejected() {
         let mut graph = EvidenceGraph::new();
         for reliability in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
-            assert!(graph.record(EvidenceKind::UserConfirmation, "user", "ok", "yes", reliability, 1).is_err());
+            assert!(graph
+                .record(
+                    EvidenceKind::UserConfirmation,
+                    "user",
+                    "ok",
+                    "yes",
+                    reliability,
+                    1
+                )
+                .is_err());
         }
-        assert!(graph.record_structured(EvidenceKind::UserConfirmation, "user", StructuredFact::CommandResult {
-            command: "cargo test".into(), cwd: ".".into(), exit_code: 0, stdout_hash: "".into(), stderr_hash: "".into(),
-        }, 1.0, 1, None).is_err());
+        assert!(graph
+            .record_structured(
+                EvidenceKind::UserConfirmation,
+                "user",
+                StructuredFact::CommandResult {
+                    command: "cargo test".into(),
+                    cwd: ".".into(),
+                    exit_code: 0,
+                    stdout_hash: "".into(),
+                    stderr_hash: "".into(),
+                },
+                1.0,
+                1,
+                None
+            )
+            .is_err());
     }
-
 }

@@ -47,6 +47,8 @@ if __name__ == "__main__":
             ) >= 2
             and source.count("getcontext") >= 2
             and ("trafficctx" in source or "trafficcontext" in source)
+            and re.search(r"\btrafficctx\s*\.\s*lineto\s*\(", source) is not None
+            and re.search(r"\btrafficctx\s*\.\s*stroke\s*\(", source) is not None
             and ("alert" in source or "alerta" in source)
             and ("attack" in source or "ataque" in source),
         ),
@@ -150,6 +152,7 @@ mod tests {
         assert!(source.contains("requestanimationframe"));
         assert!(source.contains("import re"));
         assert!(source.contains("trafficctx"));
+        assert!(source.contains("trafficctx\\s*\\.\\s*lineto"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

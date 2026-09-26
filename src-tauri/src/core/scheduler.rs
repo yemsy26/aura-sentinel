@@ -26,19 +26,22 @@ fn scheduler_path() -> std::path::PathBuf {
     Path::new(&home).join(SCHEDULER_FILE)
 }
 
-fn load_tasks() -> Vec<ScheduledTask> {
+fn load_tasks() -> Result<Vec<ScheduledTask>, String> {
     let path = scheduler_path();
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents)
+            .map_err(|error| format!("No se pudo interpretar {}: {}", path.display(), error)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(format!("No se pudo leer {}: {}", path.display(), error)),
+    }
 }
 
-fn save_tasks(tasks: &[ScheduledTask]) {
+fn save_tasks(tasks: &[ScheduledTask]) -> Result<(), String> {
     let path = scheduler_path();
-    if let Ok(json) = serde_json::to_string_pretty(tasks) {
-        let _ = std::fs::write(path, json);
-    }
+    let json = serde_json::to_string_pretty(tasks)
+        .map_err(|error| format!("No se pudo serializar el programador: {}", error))?;
+    std::fs::write(&path, json)
+        .map_err(|error| format!("No se pudo guardar {}: {}", path.display(), error))
 }
 
 /// Register a new scheduled task. Returns the task ID.
@@ -47,8 +50,12 @@ pub fn register_task(
     workspace: &str,
     cron_expr: &str,
     description: &str,
-) -> String {
-    let mut tasks = load_tasks();
+) -> Result<String, String> {
+    if objective.trim().is_empty() || workspace.trim().is_empty() || description.trim().is_empty() {
+        return Err("La tarea requiere objetivo, workspace y descripción no vacíos.".into());
+    }
+    validate_cron_expr(cron_expr)?;
+    let mut tasks = load_tasks()?;
     let id = format!("sched_{:x}", uuid_lite());
     tasks.push(ScheduledTask {
         id: id.clone(),
@@ -60,22 +67,124 @@ pub fn register_task(
         last_run: None,
         created_at: Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
     });
-    save_tasks(&tasks);
-    id
+    save_tasks(&tasks)?;
+    Ok(id)
 }
 
 /// Remove a scheduled task by ID
-pub fn remove_task(id: &str) -> bool {
-    let mut tasks = load_tasks();
+pub fn remove_task(id: &str) -> Result<bool, String> {
+    let mut tasks = load_tasks()?;
     let before = tasks.len();
     tasks.retain(|t| t.id != id);
-    save_tasks(&tasks);
-    tasks.len() < before
+    let removed = tasks.len() < before;
+    if removed {
+        save_tasks(&tasks)?;
+    }
+    Ok(removed)
 }
 
 /// List all scheduled tasks as JSON string
-pub fn list_tasks_json() -> String {
-    serde_json::to_string_pretty(&load_tasks()).unwrap_or_else(|_| "[]".to_string())
+pub fn list_tasks_json() -> Result<String, String> {
+    serde_json::to_string_pretty(&load_tasks()?)
+        .map_err(|error| format!("No se pudo serializar el listado de tareas: {}", error))
+}
+
+fn cron_value(raw: &str, field_index: usize) -> Option<u32> {
+    if field_index == 4 {
+        let named = match raw.to_ascii_uppercase().as_str() {
+            "MON" => Some(1),
+            "TUE" => Some(2),
+            "WED" => Some(3),
+            "THU" => Some(4),
+            "FRI" => Some(5),
+            "SAT" => Some(6),
+            "SUN" => Some(7),
+            _ => None,
+        };
+        return named
+            .or_else(|| raw.parse::<u32>().ok())
+            .map(|value| if value == 0 { 7 } else { value });
+    }
+    raw.parse::<u32>().ok()
+}
+
+fn cron_bounds(field_index: usize) -> (u32, u32) {
+    match field_index {
+        0 => (0, 59),
+        1 => (0, 23),
+        2 => (1, 31),
+        3 => (1, 12),
+        _ => (1, 7),
+    }
+}
+
+/// Rejects malformed schedules before they can be saved as enabled but inert tasks.
+fn validate_cron_expr(cron: &str) -> Result<(), String> {
+    let fields: Vec<&str> = cron.split_whitespace().collect();
+    if fields.len() != 5 {
+        return Err(
+            "La expresión cron debe contener cinco campos: minuto hora día mes día-semana.".into(),
+        );
+    }
+    for (field_index, field) in fields.iter().enumerate() {
+        let (minimum, maximum) = cron_bounds(field_index);
+        for item in field.split(',') {
+            if item.is_empty() {
+                return Err(format!(
+                    "Campo cron {} contiene una opción vacía.",
+                    field_index + 1
+                ));
+            }
+            let mut step_parts = item.split('/');
+            let base = step_parts.next().unwrap_or_default();
+            let step = match step_parts.next() {
+                Some(raw) if step_parts.next().is_none() => {
+                    let value = raw
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| format!("Paso cron inválido en '{}'.", item))?;
+                    if value > maximum - minimum + 1 {
+                        return Err(format!(
+                            "Paso cron fuera del rango permitido en '{}'.",
+                            item
+                        ));
+                    }
+                    Some(value)
+                }
+                Some(_) => return Err(format!("Opción cron inválida '{}'.", item)),
+                None => None,
+            };
+            if base == "?" && step.is_some() {
+                return Err(format!("El comodín '?' no admite pasos en '{}'.", item));
+            }
+            if base == "*" || base == "?" {
+                continue;
+            }
+            if let Some((start_raw, end_raw)) = base.split_once('-') {
+                let start = cron_value(start_raw, field_index)
+                    .ok_or_else(|| format!("Inicio de rango cron inválido en '{}'.", item))?;
+                let end = cron_value(end_raw, field_index)
+                    .ok_or_else(|| format!("Fin de rango cron inválido en '{}'.", item))?;
+                if start < minimum || end > maximum || start > end {
+                    return Err(format!("Rango cron fuera de límites en '{}'.", item));
+                }
+                if step.is_some() && start == end {
+                    return Err(format!(
+                        "El rango con paso debe abarcar más de un valor: '{}'.",
+                        item
+                    ));
+                }
+            } else {
+                let value = cron_value(base, field_index)
+                    .ok_or_else(|| format!("Valor cron inválido en '{}'.", item))?;
+                if value < minimum || value > maximum {
+                    return Err(format!("Valor cron fuera de límites en '{}'.", item));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Start the background scheduler loop (tick every 60 seconds)
@@ -92,7 +201,16 @@ pub fn start_scheduler(app_handle: AppHandle) {
 
 fn check_and_fire(app: &AppHandle) {
     let now = Utc::now();
-    let mut tasks = load_tasks();
+    let mut tasks = match load_tasks() {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            eprintln!(
+                "[SCHEDULER][ERROR] No se pudieron cargar las tareas: {}",
+                error
+            );
+            return;
+        }
+    };
     let mut changed = false;
 
     for task in tasks.iter_mut() {
@@ -115,7 +233,12 @@ fn check_and_fire(app: &AppHandle) {
     }
 
     if changed {
-        save_tasks(&tasks);
+        if let Err(error) = save_tasks(&tasks) {
+            eprintln!(
+                "[SCHEDULER][ERROR] No se pudo guardar el estado de ejecución: {}",
+                error
+            );
+        }
     }
 }
 
@@ -131,6 +254,13 @@ fn should_fire(cron: &str, last_run: &Option<String>, now: &DateTime<Utc>) -> bo
     }
 
     let match_part = |part: &str, value: u32, is_dow: bool| -> bool {
+        let parse_value = |raw: &str| {
+            if is_dow {
+                cron_value(raw, 4)
+            } else {
+                raw.parse::<u32>().ok()
+            }
+        };
         if part == "*" || part == "?" {
             return true;
         }
@@ -140,6 +270,9 @@ fn should_fire(cron: &str, last_run: &Option<String>, now: &DateTime<Utc>) -> bo
             let sub = sub.trim();
             if sub.is_empty() {
                 continue;
+            }
+            if sub == "*" || sub == "?" {
+                return true;
             }
 
             // Handle steps e.g. "*/5" or "10-30/5"
@@ -152,7 +285,14 @@ fn should_fire(cron: &str, last_run: &Option<String>, now: &DateTime<Utc>) -> bo
                             if value % step == 0 {
                                 return true;
                             }
-                        } else if let Ok(start) = step_parts[0].parse::<u32>() {
+                        } else if let Some((start, end)) = step_parts[0].split_once('-') {
+                            if let (Some(start), Some(end)) = (parse_value(start), parse_value(end))
+                            {
+                                if value >= start && value <= end && (value - start) % step == 0 {
+                                    return true;
+                                }
+                            }
+                        } else if let Some(start) = parse_value(step_parts[0]) {
                             if value >= start && (value - start) % step == 0 {
                                 return true;
                             }
@@ -166,8 +306,8 @@ fn should_fire(cron: &str, last_run: &Option<String>, now: &DateTime<Utc>) -> bo
             if sub.contains('-') {
                 let range_parts: Vec<&str> = sub.split('-').collect();
                 if range_parts.len() == 2 {
-                    if let (Ok(start), Ok(end)) =
-                        (range_parts[0].parse::<u32>(), range_parts[1].parse::<u32>())
+                    if let (Some(start), Some(end)) =
+                        (parse_value(range_parts[0]), parse_value(range_parts[1]))
                     {
                         if value >= start && value <= end {
                             return true;
@@ -250,4 +390,36 @@ fn uuid_lite() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_fire, validate_cron_expr};
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn accepts_supported_cron_syntax() {
+        assert!(validate_cron_expr("*/5 8-18/2 * 1,6 MON-FRI").is_ok());
+        assert!(validate_cron_expr("0 9 1 1 *").is_ok());
+        assert!(validate_cron_expr("0 0 * * SUN").is_ok());
+        assert!(validate_cron_expr("*,1 * * * *").is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_cron_before_registration() {
+        assert!(validate_cron_expr("*/0 * * * *").is_err());
+        assert!(validate_cron_expr("60 * * * *").is_err());
+        assert!(validate_cron_expr("0 24 * * *").is_err());
+        assert!(validate_cron_expr("0 9 * *").is_err());
+        assert!(validate_cron_expr("0, 9 * * *").is_err());
+        assert!(validate_cron_expr("?/2 * * * *").is_err());
+    }
+
+    #[test]
+    fn weekday_name_ranges_are_evaluated_by_the_scheduler() {
+        let monday = Utc.with_ymd_and_hms(2024, 1, 1, 9, 0, 0).unwrap();
+        let sunday = Utc.with_ymd_and_hms(2024, 1, 7, 9, 0, 0).unwrap();
+        assert!(should_fire("0 9 * * MON-FRI", &None, &monday));
+        assert!(!should_fire("0 9 * * MON-FRI", &None, &sunday));
+    }
 }

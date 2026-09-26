@@ -7,6 +7,7 @@ echo =======================================================
 echo.
 echo Cambiando al directorio del proyecto...
 cd /d "%~dp0"
+set "CARGO_TARGET_DIR=%CD%\target-audit"
 
 echo Forzando variables de entorno seguras...
 set "PATH=%USERPROFILE%\.cargo\bin;%LOCALAPPDATA%\Programs\Ollama;%PATH%"

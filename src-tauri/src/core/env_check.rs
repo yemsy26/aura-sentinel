@@ -292,7 +292,10 @@ pub async fn validate_environment(workspace_path: &str) -> Result<EnvironmentRep
     }
 
     if errors.is_empty() {
-        Ok(EnvironmentReport { models: available_models, warnings })
+        Ok(EnvironmentReport {
+            models: available_models,
+            warnings,
+        })
     } else {
         Err(errors)
     }

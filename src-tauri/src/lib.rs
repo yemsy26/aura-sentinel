@@ -61,17 +61,17 @@ fn schedule_task(
     workspace: String,
     cron_expr: String,
     description: String,
-) -> String {
+) -> Result<String, String> {
     core::scheduler::register_task(&objective, &workspace, &cron_expr, &description)
 }
 
 #[tauri::command]
-fn list_scheduled_tasks() -> String {
+fn list_scheduled_tasks() -> Result<String, String> {
     core::scheduler::list_tasks_json()
 }
 
 #[tauri::command]
-fn remove_scheduled_task(id: String) -> bool {
+fn remove_scheduled_task(id: String) -> Result<bool, String> {
     core::scheduler::remove_task(&id)
 }
 
@@ -149,6 +149,36 @@ async fn get_ollama_models() -> Result<Vec<String>, String> {
     }
 }
 
+#[tauri::command]
+fn get_user_profile(
+    app: tauri::AppHandle,
+    workspace_path: Option<String>,
+) -> Result<core::user_profile::ProfileSnapshot, String> {
+    core::user_profile::load(&app, workspace_path.as_deref())
+}
+
+#[tauri::command]
+fn save_user_profile(
+    app: tauri::AppHandle,
+    profile: core::user_profile::UserProfile,
+) -> Result<core::user_profile::UserProfile, String> {
+    core::user_profile::save(&app, profile)
+}
+
+#[tauri::command]
+fn clear_user_profile(app: tauri::AppHandle) -> Result<(), String> {
+    core::user_profile::clear(&app)
+}
+
+#[tauri::command]
+fn save_project_country(
+    app: tauri::AppHandle,
+    workspace_path: String,
+    country: Option<String>,
+) -> Result<(), String> {
+    core::user_profile::save_project_country(&app, &workspace_path, country)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Aislamiento de hardware: Desactivar GPU en WebView2 (Windows)
@@ -192,6 +222,10 @@ pub fn run() {
             dismiss_pending_mission,
             get_system_stats,
             get_ollama_models,
+            get_user_profile,
+            save_user_profile,
+            clear_user_profile,
+            save_project_country,
             get_background_tasks,
             ui_kill_task,
             core::ask_user::submit_user_answer,

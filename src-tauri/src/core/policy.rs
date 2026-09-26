@@ -79,7 +79,8 @@ impl ActionProposal {
         if let Some(object) = effective_args.as_object_mut() {
             object.remove("context"); // A growing log is not a new action.
         }
-        let payload_hash = crate::core::content_hash::hash_bytes(effective_args.to_string().as_bytes());
+        let payload_hash =
+            crate::core::content_hash::hash_bytes(effective_args.to_string().as_bytes());
         ActionIdentity {
             payload_hash,
             tool: self.tool.clone(),
@@ -99,14 +100,23 @@ impl PolicyEngine {
     pub fn authorize(proposal: &ActionProposal) -> PolicyDecision {
         let tool = proposal.tool.to_uppercase();
 
-        // 1. Reglas estrictas para TOOL_TERMINAL
-        if tool == "TOOL_TERMINAL" {
-            let cmd = proposal
+        // 1. Strict command rules apply to every registered shell-backed route.
+        if matches!(
+            tool.as_str(),
+            "TOOL_TERMINAL" | "TOOL_GIT" | "TOOL_BACKGROUND_START"
+        ) {
+            let raw_command = proposal
                 .arguments
                 .get("comando")
+                .or_else(|| proposal.arguments.get("command"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
+            let cmd = if tool == "TOOL_GIT" {
+                format!("git {}", raw_command)
+            } else {
+                raw_command.to_string()
+            };
 
             let cmd_lower = cmd.to_lowercase();
 

@@ -1,3 +1,4 @@
+use crate::core::workspace_resolver::WorkspaceResolver;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -337,9 +338,89 @@ mod tests {
         assert_eq!(journal.fases[0].estado, "FALLIDA");
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn a_new_mission_discards_only_the_old_repair_draft() {
+        let root = std::env::temp_dir().join(format!("aura-journal-{}", uuid::Uuid::new_v4()));
+        let internal = root.join(".aura");
+        std::fs::create_dir_all(&internal).unwrap();
+        let project_file = root.join("index.html");
+        std::fs::write(&project_file, "<main>trabajo vigente</main>").unwrap();
+        let repair_draft = internal.join("programmer_failure.json");
+        std::fs::write(
+            &repair_draft,
+            r#"{"error":"NODE_SYNTAX_ERROR","cambios":[]}"#,
+        )
+        .unwrap();
+
+        let objective = "Construye una nueva aplicación web de demostración";
+        let journal = start_new_mission(root.to_str().unwrap(), objective).unwrap();
+
+        assert_eq!(journal.objetivo, objective);
+        assert!(!repair_draft.exists());
+        assert_eq!(
+            std::fs::read_to_string(project_file).unwrap(),
+            "<main>trabajo vigente</main>"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn approved_resume_restores_objective_without_erasing_failure_diagnostics() {
+        let root = std::env::temp_dir().join(format!("aura-journal-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = root.to_string_lossy().to_string();
+        let mut journal = SessionJournal::default();
+        journal.objetivo = "continua".into();
+        journal.status = "FALLIDO".into();
+        journal.ultimo_paso = 41;
+        journal.fsm_step = 41;
+        journal.fsm_role = Some("Executor".into());
+        journal.fsm_context = Some("contexto de objetivo contaminado".into());
+        journal.ultimo_estado = "El programador devolvió argumentos inválidos".into();
+        journal.fases.push(Fase {
+            descripcion: "Fase previa".into(),
+            estado: "FALLIDA".into(),
+            ..Fase::default()
+        });
+        journal.plan_generado = true;
+        journal.micro_metas.push(MicroMeta {
+            descripcion: "Micro objetivo de una implementación antigua".into(),
+            estado: "PENDIENTE".into(),
+            ..MicroMeta::default()
+        });
+        journal.archivos_tocados.push("index.html".into());
+        save_journal(&workspace, &journal).unwrap();
+        let failure_path = root.join(".aura").join("programmer_failure.json");
+        std::fs::create_dir_all(failure_path.parent().unwrap()).unwrap();
+        std::fs::write(&failure_path, "diagnóstico utilizable para continuar").unwrap();
+        let objective = "Implementa la aplicación web aprobada con pruebas locales";
+
+        let restored = restore_mission_for_resume(&workspace, objective, true).unwrap();
+        assert_eq!(restored.objetivo, objective);
+        assert_eq!(restored.status, "EN_PROGRESO");
+        assert_eq!(restored.ultimo_paso, 0);
+        assert_eq!(restored.fsm_step, 0);
+        assert!(restored.fsm_role.is_none());
+        assert!(restored.fsm_context.is_none());
+        assert_eq!(
+            restored.ultimo_estado,
+            "El programador devolvió argumentos inválidos"
+        );
+        assert!(restored.fases.is_empty());
+        assert!(!restored.plan_generado);
+        assert!(restored.micro_metas.is_empty());
+        assert_eq!(restored.archivos_tocados, vec!["index.html"]);
+        assert_eq!(
+            std::fs::read_to_string(failure_path).unwrap(),
+            "diagnóstico utilizable para continuar"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 pub fn start_new_mission(workspace_path: &str, objective: &str) -> Result<SessionJournal, String> {
+    clear_stale_programmer_failure_draft(workspace_path)?;
     let mut journal = SessionJournal::default();
     journal.session_id = new_session_id();
     journal.objetivo = objective.to_string();
@@ -358,6 +439,22 @@ pub fn start_new_mission(workspace_path: &str, objective: &str) -> Result<Sessio
     Ok(journal)
 }
 
+/// A new objective must not consume a rejected proposal from an older mission.
+/// Explicit resume paths intentionally do not call this helper, so their draft
+/// remains available for a focused repair.
+fn clear_stale_programmer_failure_draft(workspace_path: &str) -> Result<(), String> {
+    let resolver = WorkspaceResolver::new(Path::new(workspace_path))?;
+    let failure_path = resolver.resolve_for_create(".aura/programmer_failure.json")?;
+    match std::fs::remove_file(failure_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "[JOURNAL] no se pudo separar el borrador de reparación de la misión anterior: {}",
+            error
+        )),
+    }
+}
+
 pub fn resume_existing_mission(workspace_path: &str) -> Result<SessionJournal, String> {
     let mut journal = load_journal(workspace_path);
     if !journal.interrupted {
@@ -369,6 +466,41 @@ pub fn resume_existing_mission(workspace_path: &str) -> Result<SessionJournal, S
     }
     journal.status = "EN_PROGRESO".to_string();
     journal.interrupted = false; // We are actively resuming now
+    journal.ultima_actualizacion = current_timestamp();
+    save_journal(workspace_path, &journal)?;
+    Ok(journal)
+}
+
+/// Repairs a mission objective while keeping workspace files and diagnostics
+/// intact. An approved-history recovery can discard the stale plan so the
+/// normal planner rebuilds phases from the restored objective.
+pub fn restore_mission_for_resume(
+    workspace_path: &str,
+    objective: &str,
+    rebuild_plan: bool,
+) -> Result<SessionJournal, String> {
+    let objective = objective.trim();
+    if objective.len() < 20 {
+        return Err("[JOURNAL] recovered mission objective is too short".to_string());
+    }
+    let mut journal = load_journal(workspace_path);
+    if journal.status == "COMPLETADO" {
+        return Err("[JOURNAL] refusing to reopen a completed mission".to_string());
+    }
+    journal.objetivo = objective.to_string();
+    journal.status = "EN_PROGRESO".to_string();
+    journal.interrupted = false;
+    journal.ultimo_paso = 0;
+    journal.fsm_context = None;
+    journal.fsm_role = None;
+    journal.fsm_step = 0;
+    if rebuild_plan {
+        journal.fases.clear();
+        journal.fase_actual = 0;
+        journal.plan_generado = false;
+        journal.micro_metas.clear();
+        journal.micro_meta_actual = 0;
+    }
     journal.ultima_actualizacion = current_timestamp();
     save_journal(workspace_path, &journal)?;
     Ok(journal)

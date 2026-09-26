@@ -38,17 +38,67 @@ pub struct MissionRuntime {
     pub tool_registry: ToolRegistry,
 }
 
+fn css_braces_are_balanced(css: &str) -> bool {
+    let bytes = css.as_bytes();
+    let mut depth = 0usize;
+    let mut index = 0usize;
+    let mut quote = None;
+    let mut in_comment = false;
+
+    while index < bytes.len() {
+        let current = bytes[index];
+        let next = bytes.get(index + 1).copied();
+
+        if in_comment {
+            if current == b'*' && next == Some(b'/') {
+                in_comment = false;
+                index += 2;
+                continue;
+            }
+        } else if let Some(delimiter) = quote {
+            if current == b'\\' {
+                index += 2;
+                continue;
+            }
+            if current == delimiter {
+                quote = None;
+            }
+        } else if current == b'/' && next == Some(b'*') {
+            in_comment = true;
+            index += 2;
+            continue;
+        } else if current == b'\'' || current == b'"' {
+            quote = Some(current);
+        } else if current == b'{' {
+            depth += 1;
+        } else if current == b'}' {
+            if depth == 0 {
+                return false;
+            }
+            depth -= 1;
+        }
+        index += 1;
+    }
+
+    depth == 0 && quote.is_none() && !in_comment
+}
+
 impl MissionRuntime {
     fn minimum_semantic_checks(&self) -> u64 {
-        let Ok(pattern) = regex::Regex::new(r"(?:^|\s)(\d+)\)") else { return 1 };
-        let mut numbers: Vec<u64> = pattern.captures_iter(&self.contract.objective)
+        let Ok(pattern) = regex::Regex::new(r"(?:^|\s)(\d+)\)") else {
+            return 1;
+        };
+        let mut numbers: Vec<u64> = pattern
+            .captures_iter(&self.contract.objective)
             .filter_map(|capture| capture.get(1)?.as_str().parse().ok())
             .collect();
         numbers.sort_unstable();
         numbers.dedup();
         let mut expected = 1u64;
         for number in numbers {
-            if number == expected { expected += 1; }
+            if number == expected {
+                expected += 1;
+            }
         }
         (expected - 1).max(1)
     }
@@ -64,14 +114,43 @@ impl MissionRuntime {
         }
 
         let mut source = String::new();
+        let mut css_source = String::new();
         if let Ok(entries) = std::fs::read_dir(&self.workspace_path) {
-            let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).filter(|path| {
-                path.is_file() && matches!(path.extension().and_then(|value| value.to_str()), Some("html" | "css" | "js" | "ts"))
-            }).collect();
+            let mut paths: Vec<_> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.is_file()
+                        && matches!(
+                            path.extension().and_then(|value| value.to_str()),
+                            Some("html" | "css" | "js" | "ts")
+                        )
+                })
+                .collect();
             paths.sort();
             for path in paths {
-                if let Ok(text) = std::fs::read_to_string(path) {
-                    source.push_str(&text.to_lowercase());
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    let lower_text = text.to_lowercase();
+                    if path.extension().and_then(|value| value.to_str()) == Some("css") {
+                        css_source.push_str(&lower_text);
+                        css_source.push('\n');
+                    }
+                    if matches!(
+                        path.extension().and_then(|value| value.to_str()),
+                        Some("html" | "htm")
+                    ) {
+                        if let Ok(style_tags) =
+                            regex::Regex::new(r"(?is)<style\b[^>]*>(.*?)</style\s*>")
+                        {
+                            for capture in style_tags.captures_iter(&lower_text) {
+                                if let Some(styles) = capture.get(1) {
+                                    css_source.push_str(styles.as_str());
+                                    css_source.push('\n');
+                                }
+                            }
+                        }
+                    }
+                    source.push_str(&lower_text);
                     source.push('\n');
                 }
             }
@@ -80,38 +159,62 @@ impl MissionRuntime {
         let contains_all = |tokens: &[&str]| tokens.iter().all(|token| source.contains(token));
         let mut failures = Vec::new();
         if !(contains_all(&["<canvas", "requestanimationframe", "math.cos", "math.sin"])
-            && (source.contains("threat") || source.contains("amenaza") || source.contains("node"))) {
+            && (source.contains("threat") || source.contains("amenaza") || source.contains("node")))
+        {
             failures.push("Radar Canvas incompleto: requiere animación, barrido y nodos en coordenadas polares".to_string());
         }
-        let dynamic_packet_source = regex::Regex::new(
-            r"\b(?:const|let|var|function)\s+\w*(?:packet|paquete)\w*",
-        )
-        .map(|pattern| pattern.is_match(&source))
-        .unwrap_or(false);
+        let dynamic_packet_source =
+            regex::Regex::new(r"\b(?:const|let|var|function)\s+\w*(?:packet|paquete)\w*")
+                .map(|pattern| pattern.is_match(&source))
+                .unwrap_or(false);
         if !((source.contains("packet") || source.contains("paquete"))
             && source.contains("ip")
             && (source.contains("protocol") || source.contains("protocolo"))
             && source.contains("latenc")
             && (source.contains("risk") || source.contains("riesgo"))
             && dynamic_packet_source
-            && (source.contains("textcontent") || source.contains("innerhtml"))) {
-            failures.push("Telemetría incompleta: faltan paquetes con IP, protocolo, latencia y riesgo".to_string());
+            && (source.contains("textcontent") || source.contains("innerhtml")))
+        {
+            failures.push(
+                "Telemetría incompleta: faltan paquetes con IP, protocolo, latencia y riesgo"
+                    .to_string(),
+            );
         }
         let canvas_count = source.matches("<canvas").count()
             + source.matches("createelement('canvas')").count()
             + source.matches("createelement(\"canvas\")").count();
-        if !((source.contains("traffic") || source.contains("trafico") || source.contains("tráfico"))
+        let traffic_draws_lines = regex::Regex::new(r"\btrafficctx\s*\.\s*lineto\s*\(")
+            .map(|pattern| pattern.is_match(&source))
+            .unwrap_or(false);
+        let traffic_strokes = regex::Regex::new(r"\btrafficctx\s*\.\s*stroke\s*\(")
+            .map(|pattern| pattern.is_match(&source))
+            .unwrap_or(false);
+        if !((source.contains("traffic")
+            || source.contains("trafico")
+            || source.contains("tráfico"))
             && canvas_count >= 2
             && source.matches("getcontext").count() >= 2
             && (source.contains("trafficctx") || source.contains("trafficcontext"))
+            && traffic_draws_lines
+            && traffic_strokes
             && (source.contains("alert") || source.contains("alerta"))
-            && (source.contains("attack") || source.contains("ataque"))) {
-            failures.push("Visualización incompleta: faltan gráfico de tráfico y barra de alerta de ataques".to_string());
+            && (source.contains("attack") || source.contains("ataque")))
+        {
+            failures.push(
+                "Visualización incompleta: faltan gráfico de tráfico y barra de alerta de ataques"
+                    .to_string(),
+            );
         }
         if !(source.contains("monospace")
             && (source.contains("glass") || source.contains("backdrop-filter"))
-            && (source.contains("neon") || source.contains("box-shadow") || source.contains("text-shadow"))) {
+            && (source.contains("neon")
+                || source.contains("box-shadow")
+                || source.contains("text-shadow")))
+        {
             failures.push("Diseño incompleto: faltan señales físicas de glassmorphism oscuro, tipografía monospace y neón".to_string());
+        }
+        if !css_source.trim().is_empty() && !css_braces_are_balanced(&css_source) {
+            failures.push("CSS inválido: los bloques de estilo tienen llaves, comillas o comentarios sin cerrar".to_string());
         }
         failures
     }
@@ -454,7 +557,7 @@ impl MissionRuntime {
         let canonical_ws = std::path::Path::new(&self.workspace_path)
             .canonicalize()
             .unwrap_or_else(|_| std::path::PathBuf::from(&self.workspace_path));
-        
+
         let canonical_cwd = std::path::Path::new(obs_cwd)
             .canonicalize()
             .unwrap_or_else(|_| std::path::PathBuf::from(obs_cwd));
@@ -486,7 +589,11 @@ impl MissionRuntime {
 
         // 5. NUMERIC RANGE
         let numbered_requirements = self.minimum_semantic_checks();
-        if total_raw == 0 || total_raw < numbered_requirements || passed_raw > total_raw || total_raw > u32::MAX as u64 {
+        if total_raw == 0
+            || total_raw < numbered_requirements
+            || passed_raw > total_raw
+            || total_raw > u32::MAX as u64
+        {
             return None;
         }
         let passed = passed_raw as u32;
@@ -613,7 +720,11 @@ impl MissionRuntime {
             last_tool_used: obs.tool_name.clone(),
             last_command: obs.command.clone().unwrap_or_default(),
             last_action_identity: obs.action_identity.clone(),
-            last_verifier_result_hash: if ok { None } else { Some(format!("{:x}", _err_hash)) },
+            last_verifier_result_hash: if ok {
+                None
+            } else {
+                Some(format!("{:x}", _err_hash))
+            },
         };
         self.stall_detector.record_signature(sig);
     }
@@ -655,32 +766,54 @@ impl MissionRuntime {
         PolicyEngine::authorize(proposal)
     }
 
-    /// H-10 + FINAL-1+2+6: Action Gateway — complete authorization pipeline.
-    /// Order: ToolRegistry.validate_name → SchemaValidator → Budget → Policy.
-    /// agent.rs MUST NOT call tools directly — always goes through execute_action.
+    /// H-10 + FINAL-1+2+6: shared authorization gate for known actions.
+    /// Order: ToolRegistry.validate_name → executor registration → SchemaValidator → Budget → Policy.
+    /// Orchestration handlers that do not dispatch here must still pass this gate first.
     pub fn authorize_action(&self, proposal: &ActionProposal) -> Result<(), String> {
+        self.authorize_action_with_user_approval(proposal, false)
+    }
+
+    /// A positive answer from the user may satisfy only a `RequireUser` decision.
+    /// It never bypasses registration, schema, budget, recovery, or hard-deny rules.
+    pub fn authorize_action_with_user_approval(
+        &self,
+        proposal: &ActionProposal,
+        user_approved: bool,
+    ) -> Result<(), String> {
         // 0a. ToolRegistry — is this a known tool name?
         ToolRegistry::validate_name(&proposal.tool)?;
 
-        // P0-4: Recovery Barrier
-        if let Some(stall) = self.should_stall_recover(3) {
-            if let Some(last_sig) = self.stall_detector.last_signature() {
-                let current_identity =
-                    proposal.identity(&self.workspace_path, self.current_world_hash(), None);
+        // Polling a background process is read-only and may legitimately return
+        // the same log tail several times while a server is starting. Keep the
+        // poll budget in the mission-specific handler; do not mistake it for an
+        // attempted mutation or block the only way to observe process startup.
+        let is_background_poll = matches!(
+            proposal.tool.as_str(),
+            "TOOL_BACKGROUND_READ" | "TOOL_BACKGROUND_QUERY"
+        );
 
-                if let Some(last_identity) = &last_sig.last_action_identity {
-                    if current_identity == *last_identity {
-                        return Err(format!("RECOVERY_BARRIER: Acción repetida bloqueada por estancamiento ({:?}). Debes cambiar tu estrategia (herramienta, comando o archivo objetivo).", stall));
-                    }
-                } else {
-                    // Fallback to old comparison just in case
-                    let cmd = current_identity.command;
-                    let _files = current_identity.files.join(",");
-                    if proposal.tool == last_sig.last_tool_used && cmd == last_sig.last_command {
-                        return Err(format!(
+        // P0-4: Recovery Barrier
+        if !is_background_poll {
+            if let Some(stall) = self.should_stall_recover(3) {
+                if let Some(last_sig) = self.stall_detector.last_signature() {
+                    let current_identity =
+                        proposal.identity(&self.workspace_path, self.current_world_hash(), None);
+
+                    if let Some(last_identity) = &last_sig.last_action_identity {
+                        if current_identity == *last_identity {
+                            return Err(format!("RECOVERY_BARRIER: Acción repetida bloqueada por estancamiento ({:?}). Debes cambiar tu estrategia (herramienta, comando o archivo objetivo).", stall));
+                        }
+                    } else {
+                        // Fallback to old comparison just in case
+                        let cmd = current_identity.command;
+                        let _files = current_identity.files.join(",");
+                        if proposal.tool == last_sig.last_tool_used && cmd == last_sig.last_command
+                        {
+                            return Err(format!(
                             "RECOVERY_BARRIER: Acción repetida bloqueada por estancamiento ({:?}).",
                             stall
                         ));
+                        }
                     }
                 }
             }
@@ -713,12 +846,13 @@ impl MissionRuntime {
         match PolicyEngine::authorize(proposal) {
             PolicyDecision::Allow => Ok(()),
             PolicyDecision::Deny(reason) => Err(format!("POLICY_DENY: {}", reason)),
+            PolicyDecision::RequireUser(_) if user_approved => Ok(()),
             PolicyDecision::RequireUser(msg) => Err(format!("POLICY_REQUIRE_USER: {}", msg)),
             PolicyDecision::Sandbox(msg) => Err(format!("POLICY_SANDBOX: {}", msg)),
         }
     }
 
-    /// FINAL-6: Execution Gateway — ToolRegistry is the sole dispatch authority.
+    /// FINAL-6: Execution Gateway — dispatches executor-backed actions through ToolRegistry.
     ///
     /// Pipeline: ToolRegistry.validate_name → Schema → Budget → Policy
     ///         → observe_world before → ToolRegistry.dispatch → observe_world after
@@ -730,8 +864,18 @@ impl MissionRuntime {
         &mut self,
         proposal: &ActionProposal,
     ) -> Result<Observation, String> {
+        self.execute_action_with_user_approval(proposal, false)
+            .await
+    }
+
+    /// Dispatches an action after the user approved a pending `RequireUser` prompt.
+    pub async fn execute_action_with_user_approval(
+        &mut self,
+        proposal: &ActionProposal,
+        user_approved: bool,
+    ) -> Result<Observation, String> {
         // 1. Full authorization gate: name → schema → budget → policy
-        self.authorize_action(proposal)?;
+        self.authorize_action_with_user_approval(proposal, user_approved)?;
 
         // P0-3: Action Identity + Stale Proposal Rejection
         if let Some(expected_hash) = proposal.world_hash {
@@ -850,9 +994,23 @@ impl MissionRuntime {
 
         // A verifier exiting 0 without results is not a successful verification.
         let official = self.contract.acceptance_criteria.iter().find_map(|ac| {
-            if let crate::core::mission_contract::VerificationMethod::SemanticVerification { command } = &ac.verification {
-                if obs.command.as_deref().map(crate::core::evidence::normalize_command_str) == Some(crate::core::evidence::normalize_command_str(command)) { Some(command.clone()) } else { None }
-            } else { None }
+            if let crate::core::mission_contract::VerificationMethod::SemanticVerification {
+                command,
+            } = &ac.verification
+            {
+                if obs
+                    .command
+                    .as_deref()
+                    .map(crate::core::evidence::normalize_command_str)
+                    == Some(crate::core::evidence::normalize_command_str(command))
+                {
+                    Some(command.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         });
         if let Some(command) = official {
             let minimum_checks = self.minimum_semantic_checks();
@@ -916,9 +1074,12 @@ impl MissionRuntime {
         use crate::core::observation::ObservationStatus;
         match obs.status {
             ObservationStatus::Error => {
-                if obs.payload.starts_with("VERIFIER_PROTOCOL_ERROR:") || obs.payload.starts_with("VERIFIER_GROUNDING_ERROR:") {
+                if obs.payload.starts_with("VERIFIER_PROTOCOL_ERROR:")
+                    || obs.payload.starts_with("VERIFIER_GROUNDING_ERROR:")
+                {
                     return Some(RecoveryDecision::RepairCriteria {
-                        criteria: vec![obs.payload.clone()], recommended_tool: "TOOL_PROGRAMMER".into(),
+                        criteria: vec![obs.payload.clone()],
+                        recommended_tool: "TOOL_PROGRAMMER".into(),
                     });
                 }
                 let tool_upper = obs.tool_name.to_uppercase();
@@ -997,40 +1158,113 @@ impl MissionRuntime {
 mod tests {
     use super::*;
 
+    #[test]
+    fn explicit_user_approval_satisfies_only_the_require_user_policy() {
+        let mut runtime = MissionRuntime::new(".", "policy approval", 10);
+        runtime
+            .tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                std::sync::Arc::new(|_, _| {
+                    Box::pin(async {
+                        Ok(crate::core::tool_registry::ExecutionResult::success("ok"))
+                    })
+                }),
+            )
+            .unwrap();
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::json!({"comando":"git reset --hard"}),
+            expected_effect: "Reset the current git workspace".into(),
+            risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: None,
+        };
+
+        let pending = runtime.authorize_action(&proposal).unwrap_err();
+        assert!(pending.contains("POLICY_REQUIRE_USER"));
+        assert!(runtime
+            .authorize_action_with_user_approval(&proposal, true)
+            .is_ok());
+
+        let hard_denied = crate::core::policy::ActionProposal {
+            arguments: serde_json::json!({"comando":"format C:\\"}),
+            ..proposal
+        };
+        let error = runtime
+            .authorize_action_with_user_approval(&hard_denied, true)
+            .unwrap_err();
+        assert!(error.contains("POLICY_DENY"));
+    }
+
     #[tokio::test]
     async fn empty_verifier_stdout_is_repairable_error_not_success() {
         let mut rt = MissionRuntime::new(".", "Verify", 10);
-        rt.contract.add_criterion("verify", "Checks", crate::core::mission_contract::VerificationMethod::SemanticVerification { command: "python verify_dashboard.py".into() }, true);
-        rt.tool_registry.register("TOOL_TERMINAL", std::sync::Arc::new(|_, _| Box::pin(async {
-            Ok(crate::core::tool_registry::ExecutionResult::success(""))
-        }))).unwrap();
+        rt.contract.add_criterion(
+            "verify",
+            "Checks",
+            crate::core::mission_contract::VerificationMethod::SemanticVerification {
+                command: "python verify_dashboard.py".into(),
+            },
+            true,
+        );
+        rt.tool_registry
+            .register(
+                "TOOL_TERMINAL",
+                std::sync::Arc::new(|_, _| {
+                    Box::pin(async { Ok(crate::core::tool_registry::ExecutionResult::success("")) })
+                }),
+            )
+            .unwrap();
         let proposal = crate::core::policy::ActionProposal {
-            tool: "TOOL_TERMINAL".into(), arguments: serde_json::json!({"comando":"python verify_dashboard.py"}),
-            expected_effect: "Verify".into(), risk: crate::core::policy::RiskLevel::Safe,
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::json!({"comando":"python verify_dashboard.py"}),
+            expected_effect: "Verify".into(),
+            risk: crate::core::policy::RiskLevel::Safe,
             world_hash: Some(rt.current_world_hash()),
         };
         let obs = rt.execute_action(&proposal).await.unwrap();
-        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error);
+        assert_eq!(
+            obs.status,
+            crate::core::observation::ObservationStatus::Error
+        );
         assert!(obs.payload.starts_with("VERIFIER_PROTOCOL_ERROR:"));
-        assert!(matches!(rt.handle_observation(&obs), Some(crate::core::recovery::RecoveryDecision::RepairCriteria { .. })));
-        assert!(!matches!(rt.can_complete(), crate::core::completion_gate::CompletionDecision::Complete));
+        assert!(matches!(
+            rt.handle_observation(&obs),
+            Some(crate::core::recovery::RecoveryDecision::RepairCriteria { .. })
+        ));
+        assert!(!matches!(
+            rt.can_complete(),
+            crate::core::completion_gate::CompletionDecision::Complete
+        ));
     }
 
     #[tokio::test]
     async fn verifier_cannot_claim_full_coverage_with_fewer_checks_than_requirements() {
         let objective = "Construye: 1) radar 2) telemetria 3) grafico 4) alertas 5) verificador";
         let mut rt = MissionRuntime::new(".", objective, 10);
-        rt.contract.add_criterion("verify", "Checks", crate::core::mission_contract::VerificationMethod::SemanticVerification { command: "python verify.py".into() }, true);
+        rt.contract.add_criterion(
+            "verify",
+            "Checks",
+            crate::core::mission_contract::VerificationMethod::SemanticVerification {
+                command: "python verify.py".into(),
+            },
+            true,
+        );
         rt.tool_registry.register("TOOL_TERMINAL", std::sync::Arc::new(|_, _| Box::pin(async {
             Ok(crate::core::tool_registry::ExecutionResult::success("{\"passed\":3,\"total\":3,\"percentage\":100.0,\"failed_criteria\":[]}"))
         }))).unwrap();
         let proposal = crate::core::policy::ActionProposal {
-            tool: "TOOL_TERMINAL".into(), arguments: serde_json::json!({"comando":"python verify.py"}),
-            expected_effect: "Verify".into(), risk: crate::core::policy::RiskLevel::Safe,
+            tool: "TOOL_TERMINAL".into(),
+            arguments: serde_json::json!({"comando":"python verify.py"}),
+            expected_effect: "Verify".into(),
+            risk: crate::core::policy::RiskLevel::Safe,
             world_hash: Some(rt.current_world_hash()),
         };
         let obs = rt.execute_action(&proposal).await.unwrap();
-        assert_eq!(obs.status, crate::core::observation::ObservationStatus::Error);
+        assert_eq!(
+            obs.status,
+            crate::core::observation::ObservationStatus::Error
+        );
         assert!(obs.payload.starts_with("VERIFIER_PROTOCOL_ERROR:"));
     }
 
@@ -1083,7 +1317,10 @@ mod tests {
             assert_eq!(criteria[0], "Dashboard no carga");
             assert_eq!(recommended_tool, "TOOL_PROGRAMMER");
         } else {
-            panic!("Expected RepairCriteria but got something else: {:?}", recovery);
+            panic!(
+                "Expected RepairCriteria but got something else: {:?}",
+                recovery
+            );
         }
     }
 
@@ -1211,6 +1448,52 @@ mod tests {
             loop_detected,
             "Recovery Barrier should have triggered within 19 steps"
         );
+    }
+
+    #[test]
+    fn repeated_background_log_polls_are_allowed_during_stall_recovery() {
+        let mut runtime = MissionRuntime::new(".", "Read local server logs", 10);
+        runtime
+            .tool_registry
+            .register(
+                "TOOL_BACKGROUND_READ",
+                std::sync::Arc::new(|_, _| {
+                    Box::pin(async {
+                        Ok(crate::core::tool_registry::ExecutionResult::success(
+                            "still starting",
+                        ))
+                    })
+                }),
+            )
+            .unwrap();
+        let proposal = crate::core::policy::ActionProposal {
+            tool: "TOOL_BACKGROUND_READ".into(),
+            arguments: serde_json::json!({"task_id":"web-server"}),
+            expected_effect: "Poll server startup output".into(),
+            risk: crate::core::policy::RiskLevel::Safe,
+            world_hash: Some(0),
+        };
+        let identity = proposal.identity(".", runtime.current_world_hash(), None);
+        for step in 0..3 {
+            runtime.stall_detector.record_signature(ProgressSignature {
+                step,
+                state_hash: 0,
+                world_version: 0,
+                criteria_satisfied: 0,
+                criteria_remaining: 1,
+                evidence_count: 0,
+                last_tool_used: "TOOL_BACKGROUND_READ".into(),
+                last_command: String::new(),
+                last_action_identity: Some(identity.clone()),
+                last_verifier_result_hash: None,
+            });
+        }
+
+        assert_eq!(
+            runtime.should_stall_recover(3),
+            Some(StallType::RepeatedTool)
+        );
+        assert!(runtime.authorize_action(&proposal).is_ok());
     }
 
     #[tokio::test]
@@ -2225,27 +2508,82 @@ mod tests {
 
     #[test]
     fn tactical_dashboard_grounding_rejects_superficial_success() {
-        let root = std::env::temp_dir().join(format!("aura-grounding-poor-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("aura-grounding-poor-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("index.html"), "<canvas id='radar'></canvas><script>requestAnimationFrame(draw); Math.cos(1); Math.sin(1); const threatNode = {};</script><style>body{font-family:monospace}</style>").unwrap();
-        let runtime = MissionRuntime::new(root.to_str().unwrap(), "Dashboard con 1) radar 2) telemetría 3) tráfico 4) glassmorphism", 10);
+        let runtime = MissionRuntime::new(
+            root.to_str().unwrap(),
+            "Dashboard con 1) radar 2) telemetría 3) tráfico 4) glassmorphism",
+            10,
+        );
         let failures = runtime.independent_objective_failures();
         let _ = std::fs::remove_dir_all(root);
-        assert!(failures.iter().any(|failure| failure.contains("Telemetría")));
-        assert!(failures.iter().any(|failure| failure.contains("Visualización")));
+        assert!(failures
+            .iter()
+            .any(|failure| failure.contains("Telemetría")));
+        assert!(failures
+            .iter()
+            .any(|failure| failure.contains("Visualización")));
         assert!(failures.iter().any(|failure| failure.contains("Diseño")));
     }
 
     #[test]
     fn tactical_dashboard_grounding_accepts_all_physical_features() {
-        let root = std::env::temp_dir().join(format!("aura-grounding-full-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("aura-grounding-full-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let source = "<canvas id='radar'></canvas><canvas id='traffic'></canvas><div id='packets'></div><script>const radarCtx=document.getElementById('radar').getContext('2d'); const trafficCtx=document.getElementById('traffic').getContext('2d'); requestAnimationFrame(draw); Math.cos(1); Math.sin(1); const threatNode = {}; const packet={ip:'1',protocol:'TCP',latency:2,risk:3}; document.getElementById('packets').textContent=packet.ip; function traffic(){trafficCtx.lineTo(1,1);alert('attack')}</script><style>body{font-family:monospace;backdrop-filter:blur(8px);box-shadow:0 0 8px cyan}</style>";
+        let source = "<canvas id='radar'></canvas><canvas id='traffic'></canvas><div id='packets'></div><script>const radarCtx=document.getElementById('radar').getContext('2d'); const trafficCtx=document.getElementById('traffic').getContext('2d'); requestAnimationFrame(draw); Math.cos(1); Math.sin(1); const threatNode = {}; const packet={ip:'1',protocol:'TCP',latency:2,risk:3}; document.getElementById('packets').textContent=packet.ip; function traffic(){trafficCtx.beginPath();trafficCtx.lineTo(1,1);trafficCtx.stroke();alert('attack')}</script><style>body{font-family:monospace;backdrop-filter:blur(8px);box-shadow:0 0 8px cyan}</style>";
         std::fs::write(root.join("index.html"), source).unwrap();
-        let runtime = MissionRuntime::new(root.to_str().unwrap(), "Dashboard con 1) radar 2) telemetría 3) tráfico 4) glassmorphism", 10);
+        let runtime = MissionRuntime::new(
+            root.to_str().unwrap(),
+            "Dashboard con 1) radar 2) telemetría 3) tráfico 4) glassmorphism",
+            10,
+        );
         let failures = runtime.independent_objective_failures();
         let _ = std::fs::remove_dir_all(root);
         assert!(failures.is_empty(), "{:?}", failures);
+    }
+
+    #[test]
+    fn tactical_dashboard_grounding_rejects_unbalanced_css() {
+        let root =
+            std::env::temp_dir().join(format!("aura-grounding-css-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = "<canvas id='radar'></canvas><canvas id='traffic'></canvas><div id='packets'></div><script>const radarCtx=document.getElementById('radar').getContext('2d'); const trafficCtx=document.getElementById('traffic').getContext('2d'); requestAnimationFrame(draw); Math.cos(1); Math.sin(1); const threatNode = {}; const packet={ip:'1',protocol:'TCP',latency:2,risk:3}; document.getElementById('packets').textContent=packet.ip; function traffic(){trafficCtx.lineTo(1,1);alert('attack')}</script><style>body{font-family:monospace;backdrop-filter:blur(8px);box-shadow:0 0 8px cyan}</style>";
+        let malformed = source.replace("<style>body{font-family:monospace;backdrop-filter:blur(8px);box-shadow:0 0 8px cyan}</style>", "<style>body{font-family:monospace} margin:0;}</style>");
+        std::fs::write(root.join("index.html"), malformed).unwrap();
+        let runtime = MissionRuntime::new(
+            root.to_str().unwrap(),
+            "Dashboard con 1) radar 2) telemetría 3) tráfico 4) glassmorphism",
+            10,
+        );
+        let failures = runtime.independent_objective_failures();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(failures
+            .iter()
+            .any(|failure| failure.contains("CSS inválido")));
+    }
+
+    #[test]
+    fn tactical_dashboard_grounding_rejects_unused_traffic_canvas() {
+        let root = std::env::temp_dir().join(format!(
+            "aura-grounding-idle-traffic-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = "<canvas id='radar'></canvas><canvas id='traffic'></canvas><div id='packets'></div><script>const radarCtx=document.getElementById('radar').getContext('2d'); const trafficCtx=document.getElementById('traffic').getContext('2d'); requestAnimationFrame(draw); Math.cos(1); Math.sin(1); const threatNode = {}; const packet={ip:'1',protocol:'TCP',latency:2,risk:3}; document.getElementById('packets').textContent=packet.ip; function draw(){radarCtx.stroke();alert('attack')}</script><style>body{font-family:monospace;backdrop-filter:blur(8px);box-shadow:0 0 8px cyan}</style>";
+        std::fs::write(root.join("index.html"), source).unwrap();
+        let runtime = MissionRuntime::new(
+            root.to_str().unwrap(),
+            "Dashboard con 1) radar 2) telemetría 3) tráfico 4) glassmorphism",
+            10,
+        );
+        let failures = runtime.independent_objective_failures();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(failures
+            .iter()
+            .any(|failure| failure.contains("gráfico de tráfico")));
     }
 }
 

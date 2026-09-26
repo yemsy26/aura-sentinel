@@ -1,16 +1,30 @@
 {
-  "m1": {
-    "model": "m1",
-    "language": "rust",
-    "attempts": 3,
-    "successes": 3,
+  "qwen2.5-coder:14b": {
+    "model": "qwen2.5-coder:14b",
+    "language": "unknown",
+    "attempts": 1,
+    "successes": 1,
     "partial": 0,
     "failures": 0,
-    "total_steps": 9,
+    "total_steps": 3,
     "total_latency_ms": 0,
     "tool_failures": 0,
     "compile_failures": 0,
     "test_failures": 0,
     "recoveries": 0
+  },
+  "qwen2.5-coder:7b": {
+    "model": "qwen2.5-coder:7b",
+    "language": "unknown",
+    "attempts": 21,
+    "successes": 17,
+    "partial": 0,
+    "failures": 4,
+    "total_steps": 120,
+    "total_latency_ms": 0,
+    "tool_failures": 6,
+    "compile_failures": 0,
+    "test_failures": 0,
+    "recoveries": 4
   }
 }

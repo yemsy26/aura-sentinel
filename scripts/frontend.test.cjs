@@ -61,6 +61,9 @@ test('frontend sanitizes messages, queues workspaces and releases listeners on f
     assert.equal(w.document.getElementById('mission-verification').textContent, '100% APROBADA');
     assert.equal(w.document.getElementById('mission-repairs').textContent, '1');
     assert.equal(w.document.getElementById('phase-progress-percentage').textContent, '100%');
+    assert.match(w.document.getElementById('ollama-connection-status').textContent, /Servicio disponible · sin modelos/);
+    assert.equal(w.document.getElementById('ollama-connection-status').classList.contains('is-empty'), true);
+    assert.equal(w.document.getElementById('active-workspace-name').textContent, 'scheduled');
     for (const fn of handlers.get('agent-ask-user')) fn({ payload: { id: 'review', question: 'Review', options: ['Approve'] } });
     assert.equal(w.document.getElementById('ask-user-modal').style.display, 'flex');
     for (const fn of handlers.get('agent-ask-user-closed')) fn({ payload: { id: 'review' } });
@@ -77,4 +80,49 @@ test('every startup script is bundled locally', () => {
     assert.ok(fs.existsSync(require('node:path').join(root, 'src', src)), src);
   }
   dom.window.close();
+});
+
+test('profile dialog loads Windows suggestion and saves personal and project settings separately', async () => {
+  const dom = new JSDOM(read('src/index.html'), { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
+  const w = dom.window;
+  const calls = [];
+  w.__TAURI__ = {
+    dialog: { open: async () => null },
+    event: { listen: async () => () => {} },
+    core: { invoke: async (name, args) => {
+      calls.push([name, args]);
+      if (name === 'get_current_directory') return '/project-a';
+      if (name === 'get_workspace_tree' || name === 'load_chat_history') return '[]';
+      if (name === 'get_pending_mission') return null;
+      if (name === 'get_ollama_models' || name === 'get_background_tasks') return [];
+      if (name === 'get_user_profile') return {
+        profile: { displayName: 'Ana', homeCountry: 'BO', preferredLanguage: 'es', autoRememberFacts: false },
+        windowsRegionSuggestion: 'BO', projectCountry: 'CL'
+      };
+      if (name === 'save_user_profile') return args.profile;
+      return null;
+    } }
+  };
+  try {
+    w.eval(read('src/marked.min.js'));
+    w.eval(read('src/vendor/purify.min.js'));
+    w.eval(read('src/main.js'));
+    await pause(80);
+    w.document.getElementById('profile-open-btn').click();
+    await pause(30);
+    assert.equal(w.document.getElementById('profile-name').value, 'Ana');
+    assert.equal(w.document.getElementById('profile-country').value, 'BO');
+    assert.equal(w.document.getElementById('profile-project-country').value, 'CL');
+    assert.match(w.document.getElementById('profile-region-hint').textContent, /región configurada/);
+    w.document.getElementById('profile-auto-remember').checked = true;
+    w.document.getElementById('user-profile-form').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+    await pause(40);
+    const personalSave = calls.find(([name]) => name === 'save_user_profile');
+    const projectSave = calls.find(([name]) => name === 'save_project_country');
+    assert.equal(personalSave[1].profile.autoRememberFacts, true);
+    assert.equal(personalSave[1].profile.homeCountry, 'BO');
+    assert.equal(projectSave[1].workspacePath, '/project-a');
+    assert.equal(projectSave[1].country, 'CL');
+    assert.match(w.document.getElementById('profile-feedback').textContent, /guardadas localmente/);
+  } finally { w.close(); }
 });

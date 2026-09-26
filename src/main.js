@@ -8,6 +8,12 @@ let mostPowerfulModel = null;
 async function loadOllamaModels() {
     try {
         const rawModels = await invoke('get_ollama_models').then(list => list.map(name => ({ name })));
+        const serviceStatus = document.getElementById('ollama-connection-status');
+        if (serviceStatus) {
+            serviceStatus.className = rawModels.length ? 'service-status is-connected' : 'service-status is-empty';
+            serviceStatus.innerHTML = `<i></i>${rawModels.length ? `Servicio disponible · ${rawModels.length} modelos` : 'Servicio disponible · sin modelos'}`;
+            serviceStatus.title = 'Estado obtenido desde el servicio local de modelos';
+        }
         availableModels = rawModels.filter(m => {
             const low = m.name.toLowerCase();
             return !low.includes("embed") && !low.includes("minilm") && !low.includes("bge-");
@@ -79,6 +85,12 @@ async function loadOllamaModels() {
         }
 
     } catch (e) {
+        const serviceStatus = document.getElementById('ollama-connection-status');
+        if (serviceStatus) {
+            serviceStatus.className = 'service-status is-offline';
+            serviceStatus.innerHTML = '<i></i>Servicio sin conexión';
+            serviceStatus.title = String(e);
+        }
         console.error("No se pudieron cargar los modelos de Ollama", e);
     }
 }
@@ -153,6 +165,155 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let currentWorkspace = "Ninguno";
     let expandedFolders = new Set();
+
+    const profileModal = document.getElementById('user-profile-modal');
+    const profileOpenBtn = document.getElementById('profile-open-btn');
+    const profileForm = document.getElementById('user-profile-form');
+    const profileFeedback = document.getElementById('profile-feedback');
+    const regionHint = document.getElementById('profile-region-hint');
+    const profileCountryInput = document.getElementById('profile-country');
+    const projectCountryInput = document.getElementById('profile-project-country');
+    let windowsRegionSuggestion = null;
+    const isoCountryCodes = 'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW'.split(' ');
+
+    function fillCountrySuggestions() {
+        const list = document.getElementById('profile-country-codes');
+        if (!list || list.options.length) return;
+        let names;
+        try { names = new Intl.DisplayNames(['es'], { type: 'region' }); } catch (_) { names = null; }
+        for (const code of isoCountryCodes) {
+            const option = document.createElement('option');
+            option.value = code;
+            option.label = names ? `${names.of(code)} (${code})` : code;
+            list.appendChild(option);
+        }
+    }
+
+    function profileValue(id) {
+        const value = document.getElementById(id)?.value?.trim();
+        return value || null;
+    }
+
+    function setProfileFeedback(message, isError = false) {
+        if (!profileFeedback) return;
+        profileFeedback.textContent = message;
+        profileFeedback.classList.toggle('is-error', isError);
+    }
+
+    function closeProfileDialog() {
+        if (profileModal) profileModal.style.display = 'none';
+        profileOpenBtn?.focus();
+    }
+
+    async function openProfileDialog() {
+        fillCountrySuggestions();
+        setProfileFeedback('');
+        if (profileOpenBtn) profileOpenBtn.disabled = true;
+        try {
+            const snapshot = await invoke('get_user_profile', {
+                workspacePath: currentWorkspace !== 'Ninguno' ? currentWorkspace : null
+            });
+            const profile = snapshot?.profile || {};
+            windowsRegionSuggestion = snapshot?.windowsRegionSuggestion || null;
+            document.getElementById('profile-name').value = profile.displayName || '';
+            document.getElementById('profile-city').value = profile.city || '';
+            profileCountryInput.value = profile.homeCountry || '';
+            document.getElementById('profile-language').value = profile.preferredLanguage || 'es';
+            document.getElementById('profile-timezone').value = profile.timeZone || '';
+            document.getElementById('profile-response-style').value = profile.responseStyle || '';
+            document.getElementById('profile-auto-remember').checked = profile.autoRememberFacts === true;
+            projectCountryInput.value = snapshot?.projectCountry || '';
+            projectCountryInput.disabled = currentWorkspace === 'Ninguno';
+            projectCountryInput.placeholder = currentWorkspace === 'Ninguno' ? 'Selecciona un espacio primero' : 'Vacío = sin país de proyecto';
+            if (windowsRegionSuggestion) {
+                let name = windowsRegionSuggestion;
+                try { name = new Intl.DisplayNames(['es'], { type: 'region' }).of(windowsRegionSuggestion) || name; } catch (_) { }
+                regionHint.textContent = `Windows sugiere ${name} (${windowsRegionSuggestion}), según la región configurada en el equipo. No es una ubicación física verificada ni el país legal de este proyecto.`;
+                document.getElementById('profile-use-windows-region').disabled = false;
+            } else {
+                regionHint.textContent = 'Windows no proporcionó una región configurada. Puedes indicarla manualmente; Aura no consulta GPS ni servicios de ubicación.';
+                document.getElementById('profile-use-windows-region').disabled = true;
+            }
+            profileModal.style.display = 'flex';
+            document.getElementById('profile-name').focus();
+        } catch (error) {
+            setProfileFeedback(`No se pudo abrir el perfil local: ${error}`, true);
+        } finally {
+            if (profileOpenBtn) profileOpenBtn.disabled = false;
+        }
+    }
+
+    profileOpenBtn?.addEventListener('click', openProfileDialog);
+    document.getElementById('profile-close-btn')?.addEventListener('click', closeProfileDialog);
+    document.getElementById('profile-cancel-btn')?.addEventListener('click', closeProfileDialog);
+    profileModal?.addEventListener('click', event => {
+        if (event.target === profileModal) closeProfileDialog();
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && profileModal?.style.display === 'flex') closeProfileDialog();
+    });
+    document.getElementById('profile-use-windows-region')?.addEventListener('click', () => {
+        if (windowsRegionSuggestion) profileCountryInput.value = windowsRegionSuggestion;
+    });
+    profileCountryInput?.addEventListener('input', () => {
+        profileCountryInput.value = profileCountryInput.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+    });
+    projectCountryInput?.addEventListener('input', () => {
+        projectCountryInput.value = projectCountryInput.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+    });
+
+    profileForm?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const profile = {
+            displayName: profileValue('profile-name'),
+            city: profileValue('profile-city'),
+            homeCountry: profileValue('profile-country'),
+            preferredLanguage: profileValue('profile-language'),
+            timeZone: profileValue('profile-timezone'),
+            responseStyle: profileValue('profile-response-style'),
+            autoRememberFacts: document.getElementById('profile-auto-remember').checked
+        };
+        const projectCountry = profileValue('profile-project-country');
+        if (projectCountry && currentWorkspace === 'Ninguno') {
+            setProfileFeedback('Selecciona un espacio de trabajo para guardar un país objetivo de proyecto.', true);
+            return;
+        }
+        const saveButton = document.getElementById('profile-save-btn');
+        saveButton.disabled = true;
+        try {
+            const saved = await invoke('save_user_profile', { profile });
+            if (currentWorkspace !== 'Ninguno') {
+                await invoke('save_project_country', { workspacePath: currentWorkspace, country: projectCountry });
+            }
+            const label = saved.displayName ? `Perfil · ${saved.displayName}` : 'Perfil';
+            profileOpenBtn.textContent = label;
+            profileOpenBtn.title = 'Perfil guardado solo en este equipo';
+            setProfileFeedback('Preferencias guardadas localmente. La ubicación de una tarea puede sustituirlas sin cambiar este perfil.');
+            logSystemThought('[PERFIL] Preferencias personales guardadas localmente.', '#84c7a4');
+        } catch (error) {
+            setProfileFeedback(`No se pudieron guardar todas las preferencias: ${error}`, true);
+        } finally {
+            saveButton.disabled = false;
+        }
+    });
+
+    document.getElementById('profile-clear-btn')?.addEventListener('click', async () => {
+        try {
+            await invoke('clear_user_profile');
+            document.getElementById('profile-name').value = '';
+            document.getElementById('profile-city').value = '';
+            profileCountryInput.value = '';
+            document.getElementById('profile-language').value = 'es';
+            document.getElementById('profile-timezone').value = '';
+            document.getElementById('profile-response-style').value = '';
+            document.getElementById('profile-auto-remember').checked = false;
+            profileOpenBtn.textContent = 'Perfil';
+            profileOpenBtn.title = 'Preferencias y datos locales';
+            setProfileFeedback('Perfil personal borrado. El país objetivo de este proyecto se conserva por separado.');
+        } catch (error) {
+            setProfileFeedback(`No se pudo borrar el perfil: ${error}`, true);
+        }
+    });
 
     // SPRINT 3: TABS STATE
     let openTabs = new Map();
@@ -464,8 +625,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         localStorage.setItem('aura_last_workspace', currentWorkspace);
 
         const wsLabel = document.getElementById('current-ws-label');
+        const activeWorkspaceName = document.getElementById('active-workspace-name');
+        const shortName = selectedPath.split(/[\\\/]/).pop() || selectedPath;
+        if (activeWorkspaceName) {
+            activeWorkspaceName.textContent = shortName;
+            activeWorkspaceName.title = selectedPath;
+        }
         if (wsLabel) {
-            const shortName = selectedPath.split(/[\\\/]/).pop() || selectedPath;
             wsLabel.textContent = shortName;
             wsLabel.title = selectedPath;
         }

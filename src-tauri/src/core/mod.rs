@@ -1,5 +1,6 @@
 pub mod ask_user;
 pub mod auto_validator;
+pub mod browser_automation;
 pub mod command_trail;
 pub mod dependency_mapper;
 pub mod env_check;
@@ -7,12 +8,13 @@ pub mod env_manager;
 pub mod error_classifier;
 pub mod intent_router;
 pub mod languages;
-pub mod map;
 pub mod managed_verifier;
+pub mod map;
 pub mod memory;
 pub mod runner_generator;
 pub mod security;
 pub mod session_journal;
+pub mod structured_json;
 pub mod stub_enforcer;
 pub mod tester;
 pub mod vision; // generate_repo_map — árbol visual del workspace para contexto LLM
@@ -41,6 +43,7 @@ pub mod schema_validator; // Validación de esquemas de llamadas de herramientas
 pub mod stall_detector; // Detección de estancamiento basada en firmas de progreso
 pub mod step_budget; // Presupuesto de pasos con distribución 40/30/20/10
 pub mod tool_registry; // FINAL-2: Autoridad de nombres de herramientas permitidas (ToolRegistry)
+pub mod user_profile; // Perfil local del usuario separado de la memoria de misiones y proyectos
 pub mod validation; // Módulos desacoplados de validación sintáctica y de compilación
 pub mod world_state; // Snapshot determinista del estado del workspace y diffs // AL-v1: Adaptive Learning — Experience, Stats, Router (recommend only)
 
@@ -56,8 +59,109 @@ use tokio::sync::Mutex;
 pub struct BackgroundTask {
     pub child: tokio::process::Child,
     pub logs: Arc<Mutex<Vec<String>>>,
+    pub command: String,
     #[allow(dead_code)]
     pub started_at: std::time::Instant,
+}
+
+const TERMINAL_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn split_simple_command_args(command: &str) -> Option<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    for character in command.chars() {
+        match quote {
+            Some(delimiter) if character == delimiter => quote = None,
+            Some(_) => current.push(character),
+            None if matches!(character, '"' | '\'') => quote = Some(character),
+            None if character.is_whitespace() => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(character),
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    Some(args)
+}
+
+fn direct_node_validation_args(command: &str) -> Option<Vec<String>> {
+    let mut args = split_simple_command_args(command)?;
+    let executable = args.first()?.to_ascii_lowercase();
+    if !matches!(executable.as_str(), "node" | "node.exe" | "nodejs") {
+        return None;
+    }
+    args.remove(0);
+    if args.len() != 2
+        || !matches!(args[0].as_str(), "--check" | "--test")
+        || args[1].is_empty()
+        || args[1].starts_with('-')
+    {
+        return None;
+    }
+    Some(args)
+}
+
+async fn run_terminal_command_with_timeout(
+    workspace_path: &str,
+    command: &str,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    // Run Node's built-in validators without a shell. Windows cmd.exe quoting
+    // can preserve quotes as literal filename characters when the whole command
+    // is passed through an argument boundary (for example, `node --check "app.js"`).
+    let mut process = if let Some(args) = direct_node_validation_args(command) {
+        let mut process = Command::new("node");
+        process.args(args);
+        process
+    } else {
+        let mut process = Command::new(get_shell());
+        process.args([get_shell_args(), command]);
+        process
+    };
+    let child = process
+        .current_dir(workspace_path)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Process Error: {}", e))?;
+    let pid = child.id();
+
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(format!("Process Error: {}", error)),
+        Err(_) => {
+            // On Windows, killing cmd.exe alone can leave its child process alive.
+            #[cfg(windows)]
+            if let Some(pid) = pid {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    Command::new("taskkill")
+                        .args(["/PID", &pid.to_string(), "/T", "/F"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status(),
+                )
+                .await;
+            }
+            Err(format!(
+                "COMMAND_TIMEOUT: el comando superó el límite de {} segundos y fue interrumpido.",
+                timeout.as_secs()
+            ))
+        }
+    }
 }
 
 /// Limpia de la memoria las tareas en segundo plano que ya hayan terminado o salido.
@@ -188,6 +292,7 @@ pub async fn start_background_task(
     let task = BackgroundTask {
         child,
         logs,
+        command: command.to_string(),
         started_at: std::time::Instant::now(),
     };
 
@@ -198,6 +303,19 @@ pub async fn start_background_task(
         "Asynchronous task '{}' (Command: '{}') started successfully.",
         task_id, command
     ))
+}
+
+/// Returns the command associated with a running task so callers can perform
+/// bounded, command-specific readiness checks instead of inferring state from
+/// an empty or delayed stdout/stderr buffer.
+pub async fn background_task_command(task_id: &str) -> Option<String> {
+    let tasks = get_bg_tasks();
+    let mut tasks_guard = tasks.lock().await;
+    let task = tasks_guard.get_mut(task_id)?;
+    match task.child.try_wait() {
+        Ok(None) => Some(task.command.clone()),
+        Ok(Some(_)) | Err(_) => None,
+    }
 }
 
 /// Fetches the recent logs (max 50 lines) of a running background task.
@@ -217,7 +335,10 @@ pub async fn read_task_logs(task_id: &str) -> Result<String, String> {
         if recent_logs.is_empty() {
             recent_logs = "[No new logs]".to_string();
         }
-        Ok(format!("Logs for task '{}':\n{}", task_id, recent_logs))
+        Ok(format!(
+            "Task '{}' command: {}\nLogs:\n{}",
+            task_id, task.command, recent_logs
+        ))
     } else {
         Err(format!(
             "Task '{}' not found or already terminated.",
@@ -506,7 +627,8 @@ pub async fn execute_terminal_command_detailed(
 
         // 4. Detect blocking server commands and short-circuit them
         //    Commands like `python -m http.server`, `npx serve`, `npm start` etc.
-        //    block the terminal forever. For static web projects just open the file.
+        //    block the terminal forever. If the mission requires HTTP, start the
+        //    server with TOOL_BACKGROUND_START instead of opening index.html as file://.
         let trimmed_lower = trimmed.to_lowercase();
         let is_blocking_server = trimmed_lower.contains("-m http.server")
             || trimmed_lower.contains("-m httpserver")
@@ -520,7 +642,7 @@ pub async fn execute_terminal_command_detailed(
         // Mark blocking commands so the caller can return early
         let trimmed = if is_blocking_server {
             // Return a synthetic echo so the terminal handler gets a fast OK
-            format!("echo [SERVIDOR OMITIDO] '{}' es un servidor bloqueante. Para proyectos web estaticos usa 'start index.html' directamente.", trimmed)
+            format!("echo [SERVIDOR OMITIDO] '{}' es un servidor bloqueante. Para iniciar una pagina estatica mediante HTTP, ejecuta el servidor con TOOL_BACKGROUND_START y lee sus logs para confirmar la URL localhost.", trimmed)
         } else {
             trimmed
         };
@@ -770,15 +892,12 @@ pub async fn execute_terminal_command_detailed(
         }
     };
 
-    let output = Command::new(get_shell())
-        .args([get_shell_args(), &resolved_command])
-        .current_dir(workspace_path)
-        .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("Process Error: {}", e))?;
+    let output = run_terminal_command_with_timeout(
+        workspace_path,
+        &resolved_command,
+        TERMINAL_COMMAND_TIMEOUT,
+    )
+    .await?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -847,6 +966,58 @@ pub async fn format_system_error(error_msg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_validation_arguments_remove_quotes_and_preserve_paths_with_spaces() {
+        assert_eq!(
+            direct_node_validation_args("node --check \"script.js\""),
+            Some(vec!["--check".into(), "script.js".into()])
+        );
+        assert_eq!(
+            direct_node_validation_args("node --test \"tests/Consulta Clara.test.js\""),
+            Some(vec!["--test".into(), "tests/Consulta Clara.test.js".into()])
+        );
+        assert_eq!(
+            direct_node_validation_args("node -e \"console.log(1)\""),
+            None
+        );
+        assert_eq!(
+            direct_node_validation_args("node --check \"broken.js"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_command_timeout_stops_long_process() {
+        #[cfg(windows)]
+        let command = "ping 127.0.0.1 -n 10 >nul";
+        #[cfg(not(windows))]
+        let command = "sleep 10";
+
+        let started = std::time::Instant::now();
+        let result =
+            run_terminal_command_with_timeout(".", command, std::time::Duration::from_millis(100))
+                .await;
+
+        assert!(result.unwrap_err().contains("COMMAND_TIMEOUT"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn terminal_command_captures_stdout_and_stderr() {
+        #[cfg(windows)]
+        let command = "echo AURA_STDOUT_CAPTURED & echo AURA_STDERR_CAPTURED 1>&2";
+        #[cfg(not(windows))]
+        let command = "printf AURA_STDOUT_CAPTURED; printf AURA_STDERR_CAPTURED >&2";
+
+        let output =
+            run_terminal_command_with_timeout(".", command, std::time::Duration::from_secs(3))
+                .await
+                .expect("command should complete");
+
+        assert!(String::from_utf8_lossy(&output.stdout).contains("AURA_STDOUT_CAPTURED"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("AURA_STDERR_CAPTURED"));
+    }
 
     #[test]
     fn test_hide_file_windows_sync() {

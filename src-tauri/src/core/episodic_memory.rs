@@ -69,9 +69,83 @@ pub fn save_episode(
     }
 }
 
+/// Persist a failed attempt with its actual stop reason so a resumed mission can
+/// avoid repeating the same ineffective route. The caller supplies a stable
+/// session id, making repeated checkpoint cleanup idempotent.
+pub fn save_failure_episode(
+    episode_id: &str,
+    workspace: &str,
+    objective: &str,
+    reason: &str,
+    tools_used: &[String],
+    files_touched: &[String],
+) {
+    // The id is stable for a mission; checking only the last ten entries lets
+    // retries append duplicates once the global ledger grows. Read the full
+    // ledger so checkpoint cleanup remains idempotent for older missions too.
+    if load_recent_episodes(usize::MAX)
+        .iter()
+        .any(|episode| episode.id == episode_id)
+    {
+        return;
+    }
+
+    let tags = auto_extract_tags(objective, tools_used);
+    let failure_category = [
+        "NO_PROGRESS_EXHAUSTED",
+        "BUDGET_EXHAUSTED",
+        "PROGRAMMER_REPAIR_EXHAUSTED",
+        "VERIFIER_REPAIR_EXHAUSTED",
+        "LOCAL_SERVER_NOT_CONFIRMED",
+        "CONSULTATION_MVP_REPAIR_EXHAUSTED",
+        "FIREBASE_INTEGRATION_REPAIR_EXHAUSTED",
+        "FIREBASE_HOSTING_ASSET_BLOCKED",
+    ]
+    .iter()
+    .find(|marker| reason.contains(**marker))
+    .copied()
+    .unwrap_or("MISSION_STOPPED");
+    let summary = format!(
+        "{} | Clase de fallo: {}",
+        build_summary(objective, "FALLIDO", tools_used.len(), files_touched.len()),
+        failure_category
+    );
+    let episode = Episode {
+        id: episode_id.to_string(),
+        timestamp: Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        workspace: workspace.to_string(),
+        objective: objective.chars().take(200).collect(),
+        outcome: "FALLIDO".to_string(),
+        tools_used: tools_used.to_vec(),
+        files_touched: files_touched
+            .iter()
+            .map(|file| {
+                Path::new(file)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file.clone())
+            })
+            .collect(),
+        summary,
+        tags,
+    };
+    if let Ok(line) = serde_json::to_string(&episode) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(episodes_path())
+        {
+            let _ = writeln!(file, "{}", line);
+        }
+    }
+}
+
 /// Returns the last N episodes as a formatted context block for the Planner
-pub fn get_episode_context(n: usize) -> String {
-    let episodes = load_recent_episodes(n);
+pub fn get_episode_context(workspace: &str, n: usize) -> String {
+    let mut episodes = episodes_for_workspace(load_recent_episodes(usize::MAX), workspace);
+    if episodes.len() > n {
+        episodes = episodes.split_off(episodes.len() - n);
+    }
     if episodes.is_empty() {
         return String::new();
     }
@@ -90,6 +164,62 @@ pub fn get_episode_context(n: usize) -> String {
     }
     block.push_str("[FIN MEMORIA HISTÓRICA]\n\n");
     block
+}
+
+fn episodes_for_workspace(episodes: Vec<Episode>, workspace: &str) -> Vec<Episode> {
+    let workspace_key = normalized_workspace(workspace);
+    episodes
+        .into_iter()
+        .filter(|episode| normalized_workspace(&episode.workspace) == workspace_key)
+        .collect()
+}
+
+fn normalized_workspace(workspace: &str) -> String {
+    let path = Path::new(workspace)
+        .canonicalize()
+        .unwrap_or_else(|_| Path::new(workspace).to_path_buf());
+    let value = path.to_string_lossy().trim().to_string();
+    #[cfg(windows)]
+    {
+        value.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        value
+    }
+}
+
+#[cfg(test)]
+mod workspace_scope_tests {
+    use super::*;
+
+    fn episode(workspace: &str, objective: &str) -> Episode {
+        Episode {
+            id: objective.into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            workspace: workspace.into(),
+            objective: objective.into(),
+            outcome: "COMPLETADO".into(),
+            tools_used: vec![],
+            files_touched: vec![],
+            summary: objective.into(),
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn planner_history_contains_only_the_active_workspace() {
+        let selected = episodes_for_workspace(
+            vec![
+                episode("C:/work/a", "app A"),
+                episode("C:/work/b", "app B"),
+                episode("C:/work/a", "follow up A"),
+            ],
+            "C:/work/a",
+        );
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().all(|item| item.workspace == "C:/work/a"));
+    }
 }
 
 /// Loads the last N episodes from the JSONL file (reads from end)

@@ -2,8 +2,8 @@
 ///
 /// Upgraded from FINAL-2 (name validator) to FINAL-6 (executor registry).
 /// The LLM delivers an ActionProposal. The Runtime resolves and dispatches
-/// the executor via this registry. agent.rs NEVER decides which code runs
-/// for a given tool name — ToolRegistry is the sole dispatch authority.
+/// the executor via this registry. Orchestration also keeps mission-specific
+/// checks around selected handlers before or after registry dispatch.
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -78,6 +78,7 @@ pub static KNOWN_TOOLS: &[&str] = &[
     "TOOL_BACKGROUND_START",
     "TOOL_BACKGROUND_QUERY",
     "TOOL_BROWSE",
+    "TOOL_WEB_SEARCH",
     "TOOL_GIT",
     "TOOL_THINK",
     "TOOL_AUDITOR",

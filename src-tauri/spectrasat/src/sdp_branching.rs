@@ -1,6 +1,8 @@
 use crate::sdp_solver::{solve_sos_sdp, SdpVerdict};
 use crate::spectral::Clause3;
 
+const MAX_BRANCH_NODES: usize = 32;
+
 /// Executes a Branch-and-Bound search guided by Semidefinite Programming (SDP) relaxations.
 ///
 /// This function constructs a search tree over the boolean variables. At each node,
@@ -14,12 +16,18 @@ use crate::spectral::Clause3;
 /// * `clauses` - A slice containing the baseline 3-SAT clauses.
 ///
 /// # Returns
-/// A `String` indicating the exact boolean verdict ("SAT_CERTIFIED" or "UNSAT_EXHAUSTED").
+/// A SAT candidate that must be checked against the original formula, or a
+/// search-limit result. This heuristic never certifies UNSAT.
 pub fn branch_and_bound_solve(n_vars: usize, clauses: &[Clause3]) -> (String, Option<Vec<bool>>) {
     let mut stack: Vec<Vec<Option<bool>>> = Vec::new();
     stack.push(vec![None; n_vars]);
+    let mut visited_nodes = 0usize;
 
     while let Some(assignment) = stack.pop() {
+        visited_nodes += 1;
+        if visited_nodes > MAX_BRANCH_NODES {
+            return ("SEARCH_LIMIT".to_string(), None);
+        }
         let mut local_clauses = clauses.to_vec();
         for (i, &val) in assignment.iter().enumerate() {
             if let Some(b) = val {

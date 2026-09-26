@@ -71,16 +71,30 @@ impl AutoValidator {
                             }
                         }
                     }
-                    if line.contains("<link") && line.contains("stylesheet") && line.contains("href=") {
-                        let href = line.find("href=\"").and_then(|start| {
-                            let rest = &line[start + 6..];
-                            rest.find('"').map(|end| &rest[..end])
-                        }).or_else(|| line.find("href='").and_then(|start| {
-                            let rest = &line[start + 6..];
-                            rest.find('\'').map(|end| &rest[..end])
-                        }));
+                    if line.contains("<link")
+                        && line.contains("stylesheet")
+                        && line.contains("href=")
+                    {
+                        let href = line
+                            .find("href=\"")
+                            .and_then(|start| {
+                                let rest = &line[start + 6..];
+                                rest.find('"').map(|end| &rest[..end])
+                            })
+                            .or_else(|| {
+                                line.find("href='").and_then(|start| {
+                                    let rest = &line[start + 6..];
+                                    rest.find('\'').map(|end| &rest[..end])
+                                })
+                            });
                         if let Some(href) = href {
-                            self.validate_local_reference(href, "Hoja de estilo", &path_str, line_num + 1, result);
+                            self.validate_local_reference(
+                                href,
+                                "Hoja de estilo",
+                                &path_str,
+                                line_num + 1,
+                                result,
+                            );
                         }
                     }
                 }
@@ -123,8 +137,19 @@ impl AutoValidator {
         }
     }
 
-    fn validate_local_reference(&self, reference: &str, kind: &str, html_file: &str, line: usize, result: &mut ValidationResult) {
-        if reference.starts_with("http://") || reference.starts_with("https://") || reference.starts_with("//") || reference.starts_with("data:") {
+    fn validate_local_reference(
+        &self,
+        reference: &str,
+        kind: &str,
+        html_file: &str,
+        line: usize,
+        result: &mut ValidationResult,
+    ) {
+        if reference.starts_with("http://")
+            || reference.starts_with("https://")
+            || reference.starts_with("//")
+            || reference.starts_with("data:")
+        {
             return;
         }
         let base = Path::new(html_file).parent().unwrap_or(Path::new("."));
@@ -134,8 +159,16 @@ impl AutoValidator {
                 severity: Severity::Error,
                 file: html_file.to_string(),
                 line: Some(line),
-                message: format!("{} local referenciada no existe: '{}' (resuelto a: {})", kind, reference, resolved.display()),
-                suggested_fix: Some(format!("Crear el archivo o corregir href: {}", resolved.display())),
+                message: format!(
+                    "{} local referenciada no existe: '{}' (resuelto a: {})",
+                    kind,
+                    reference,
+                    resolved.display()
+                ),
+                suggested_fix: Some(format!(
+                    "Crear el archivo o corregir href: {}",
+                    resolved.display()
+                )),
             });
         }
     }
@@ -514,10 +547,17 @@ mod tests {
     async fn missing_local_stylesheet_is_an_error() {
         let root = std::env::temp_dir().join(format!("aura-assets-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("index.html"), "<link rel=\"stylesheet\" href=\"style.css\">").unwrap();
+        std::fs::write(
+            root.join("index.html"),
+            "<link rel=\"stylesheet\" href=\"style.css\">",
+        )
+        .unwrap();
         let result = AutoValidator::new(root.to_str().unwrap()).validate().await;
         let _ = std::fs::remove_dir_all(root);
         assert!(!result.passed);
-        assert!(result.issues.iter().any(|issue| issue.message.contains("style.css") && issue.severity == Severity::Error));
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("style.css") && issue.severity == Severity::Error));
     }
 }

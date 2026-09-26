@@ -64,9 +64,11 @@ impl StallDetector {
 
         // Reusing a tool is productive when the physical world or criteria advance.
         let first = &slice[0];
-        if slice.iter().skip(1).any(|s| s.state_hash != first.state_hash
-            || s.world_version != first.world_version
-            || s.criteria_satisfied > first.criteria_satisfied) {
+        if slice.iter().skip(1).any(|s| {
+            s.state_hash != first.state_hash
+                || s.world_version != first.world_version
+                || s.criteria_satisfied > first.criteria_satisfied
+        }) {
             return None;
         }
 
@@ -193,8 +195,9 @@ mod tests {
     #[test]
     fn repeated_programmer_with_physical_progress_is_not_stalled() {
         let mut detector = StallDetector::new(6);
-        for i in 0..3 { detector.record_signature(sig(i, "TOOL_PROGRAMMER", "", 0, i, 0, 0)); }
+        for i in 0..3 {
+            detector.record_signature(sig(i, "TOOL_PROGRAMMER", "", 0, i, 0, 0));
+        }
         assert_eq!(detector.detect_stall(3), None);
     }
-
 }

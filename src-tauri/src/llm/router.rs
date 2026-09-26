@@ -1,7 +1,6 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use tauri::AppHandle;
-use tokio::process::Command;
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
@@ -126,59 +125,37 @@ pub async fn get_best_model(
         }
     }
 
-    if let Some(first_choice) = ranked.first() {
-        if !available_models.iter().any(|m| m.starts_with(first_choice)) {
-            crate::llm::agent::emit_event(
-                app_handle,
-                step,
-                &format!(
-                    "Modelo preferido '{}' no encontrado. Descargando automaticamente...",
-                    first_choice
-                ),
-                "WARNING",
-            );
-            let status = Command::new("ollama")
-                .args(["pull", first_choice])
-                .status()
-                .await;
-            match status {
-                Ok(s) if s.success() => {
-                    crate::llm::agent::emit_event(
-                        app_handle,
-                        step,
-                        &format!("Modelo '{}' descargado exitosamente.", first_choice),
-                        "SUCCESS",
-                    );
-                    return Ok(first_choice.clone());
-                }
-                _ => {
-                    crate::llm::agent::emit_event(
-                        app_handle,
-                        step,
-                        &format!(
-                            "Fallo al descargar '{}'. Haciendo fallback...",
-                            first_choice
-                        ),
-                        "ERROR",
-                    );
-                }
-            }
-        }
-    }
-
     let has_model = |prefix: &str| -> Option<String> {
         available_models
             .iter()
             .find(|m| m.starts_with(prefix))
             .cloned()
     };
-    for model in ranked {
+    for model in &ranked {
         if let Some(m) = has_model(&model) {
+            if ranked.first().is_some_and(|preferred| preferred != model) {
+                crate::llm::agent::emit_event(
+                    app_handle,
+                    step,
+                    &format!(
+                        "Modelo preferido '{}' no está instalado; se usará '{}' sin descargar modelos.",
+                        ranked.first().unwrap_or(model),
+                        m
+                    ),
+                    "WARNING",
+                );
+            }
             return Ok(m);
         }
     }
+    crate::llm::agent::emit_event(
+        app_handle,
+        step,
+        "No hay modelos compatibles instalados; la selección no descarga modelos automáticamente.",
+        "ERROR",
+    );
     Err(
-        "No hay modelos compatibles disponibles en brains.json para ejecutar esta tarea."
+        "No hay modelos compatibles instalados en brains.json. Instala uno manualmente y reintenta."
             .to_string(),
     )
 }

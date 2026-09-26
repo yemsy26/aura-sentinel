@@ -60,6 +60,7 @@ impl SchemaValidator {
                 }
                 SchemaValidationResult::Valid
             }
+            "TOOL_LOGIC_SOLVER" => validate_logic_solver_payload(payload),
             "TOOL_FINISH" => SchemaValidationResult::Valid,
             "TOOL_THINK" => SchemaValidationResult::Valid,
             _ => SchemaValidationResult::Valid,
@@ -120,6 +121,69 @@ impl SchemaValidator {
 
         None
     }
+}
+
+fn validate_logic_solver_payload(payload: &Value) -> SchemaValidationResult {
+    let has_n_vars = payload.get("n_vars").is_some();
+    let has_clauses = payload.get("clauses").is_some();
+    if !has_n_vars && !has_clauses {
+        // No SAT instance means the agent may be requesting a source-code logic
+        // review. That mode is handled separately and must never be reported as
+        // a SAT calculation by the registered native executor.
+        return SchemaValidationResult::Valid;
+    }
+    if !has_n_vars || !has_clauses {
+        return SchemaValidationResult::Invalid(
+            "TOOL_LOGIC_SOLVER requiere 'n_vars' y 'clauses' juntos para resolver SAT".into(),
+        );
+    }
+
+    let Some(n_vars) = payload.get("n_vars").and_then(Value::as_u64) else {
+        return SchemaValidationResult::Invalid(
+            "TOOL_LOGIC_SOLVER requiere 'n_vars' como entero no negativo".into(),
+        );
+    };
+    let Some(clauses) = payload.get("clauses").and_then(Value::as_array) else {
+        return SchemaValidationResult::Invalid(
+            "TOOL_LOGIC_SOLVER requiere 'clauses' como una matriz de cláusulas".into(),
+        );
+    };
+
+    for (clause_index, clause) in clauses.iter().enumerate() {
+        let Some(literals) = clause.as_array() else {
+            return SchemaValidationResult::Invalid(format!(
+                "La cláusula {} debe ser una matriz de literales enteros",
+                clause_index + 1
+            ));
+        };
+        for (literal_index, literal) in literals.iter().enumerate() {
+            let Some(value) = literal.as_i64() else {
+                return SchemaValidationResult::Invalid(format!(
+                    "El literal {} de la cláusula {} debe ser un entero",
+                    literal_index + 1,
+                    clause_index + 1
+                ));
+            };
+            let Ok(value) = i32::try_from(value) else {
+                return SchemaValidationResult::Invalid(format!(
+                    "El literal {} de la cláusula {} excede el rango admitido",
+                    literal_index + 1,
+                    clause_index + 1
+                ));
+            };
+            if value == 0 {
+                return SchemaValidationResult::Invalid(
+                    "El literal 0 no es válido en una fórmula SAT".into(),
+                );
+            }
+            if value.unsigned_abs() as u64 > n_vars {
+                return SchemaValidationResult::Invalid(format!(
+                    "El literal {value} referencia una variable fuera de 1..={n_vars}"
+                ));
+            }
+        }
+    }
+    SchemaValidationResult::Valid
 }
 
 pub fn validate_interpreter_target(cmd: &str) -> Result<(), String> {
@@ -185,6 +249,40 @@ mod tests {
         let payload = json!({ "comando": "node script.js" });
         assert_eq!(
             SchemaValidator::validate_tool_payload("TOOL_TERMINAL", &payload),
+            SchemaValidationResult::Valid
+        );
+    }
+
+    #[test]
+    fn test_logic_solver_rejects_partial_or_malformed_sat_payloads() {
+        for payload in [
+            json!({ "n_vars": 2 }),
+            json!({ "clauses": [[1]] }),
+            json!({ "n_vars": 1, "clauses": [[0]] }),
+            json!({ "n_vars": 1, "clauses": [[2]] }),
+            json!({ "n_vars": 1, "clauses": [[1.5]] }),
+        ] {
+            assert!(matches!(
+                SchemaValidator::validate_tool_payload("TOOL_LOGIC_SOLVER", &payload),
+                SchemaValidationResult::Invalid(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn test_logic_solver_accepts_valid_sat_and_code_review_payloads() {
+        assert_eq!(
+            SchemaValidator::validate_tool_payload(
+                "TOOL_LOGIC_SOLVER",
+                &json!({ "n_vars": 2, "clauses": [[1, -2], []] })
+            ),
+            SchemaValidationResult::Valid
+        );
+        assert_eq!(
+            SchemaValidator::validate_tool_payload(
+                "TOOL_LOGIC_SOLVER",
+                &json!({ "archivos_a_editar": ["src/lib.rs"] })
+            ),
             SchemaValidationResult::Valid
         );
     }

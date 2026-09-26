@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -19,12 +19,30 @@
     <script src="vendor/monaco/vs/loader.js"></script>
 </head>
 <body>
+    <header class="app-topbar" aria-label="Estado de Aura Sentinel">
+        <div class="brand-lockup">
+            <div class="brand-mark" aria-hidden="true">A</div>
+            <div class="brand-copy">
+                <strong>AURA <span>SENTINEL</span></strong>
+                <small>ENTORNO LOCAL DE TRABAJO</small>
+            </div>
+            <button id="profile-open-btn" class="profile-open-btn" type="button" title="Preferencias y datos locales">Perfil</button>
+        </div>
+        <div class="topbar-status" aria-live="polite">
+            <span class="status-label">ESTADO DEL SERVICIO</span>
+            <span id="ollama-connection-status" class="service-status is-checking"><i></i>Comprobando modelos…</span>
+        </div>
+        <div class="topbar-workspace">
+            <span class="status-label">ESPACIO ACTIVO</span>
+            <strong id="active-workspace-name" title="Selecciona una carpeta para comenzar">Sin espacio seleccionado</strong>
+        </div>
+    </header>
     <div class="grid-container">
         <!-- Panel Izquierdo: Árbol de carpetas del espacio de trabajo -->
         <div class="panel panel-left" id="workspace-panel">
             <div class="panel-header">
                 <div style="display:flex;align-items:center;gap:6px;overflow:hidden;flex:1;">
-                    <span style="flex-shrink:0;">WORKSPACE</span>
+                    <span style="flex-shrink:0;">ARCHIVOS</span>
                     <span id="current-ws-label" style="font-size:10px;color:#38bdf8;background:rgba(56,189,248,0.12);padding:1px 6px;border-radius:4px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-code);" title="Carpeta actual">Ninguno</span>
                     <button id="load-workspace-btn" class="action-btn" style="padding: 2px 6px; font-size:10px;flex-shrink:0;">[+] Cargar</button>
                 </div>
@@ -56,7 +74,7 @@
             <div class="panel chat-panel" id="chat-panel">
                 <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center;">
                     <div style="display:flex;align-items:center;gap:10px;">
-                        <span>ORCHESTRATOR LINK</span>
+                        <span>AGENTE AURA</span>
                         <button id="clear-chat-btn" class="action-btn" style="padding: 2px 8px; font-size: 10px; background:#f85149; border:none;">🗑 Limpiar</button>
                     </div>
                     <div class="panel-controls"><button class="min-btn" title="Minimizar/Restaurar">−</button></div>
@@ -105,7 +123,7 @@
             <!-- Consola técnica en tiempo real -->
             <div class="panel panel-console" id="console-panel">
                 <div class="panel-header">
-                    <span>TECHNICAL CONSOLE [RUST & OLLAMA]</span>
+                    <span>ACTIVIDAD DEL AGENTE</span>
                     <div class="panel-controls"><button class="min-btn" title="Minimizar/Restaurar">−</button></div>
                 </div>
                 <div class="panel-content" id="system-thoughts">
@@ -116,7 +134,7 @@
             <!-- Monitor de telemetría ligero -->
             <div class="panel panel-telemetry" id="telemetry-panel" style="flex: 0 0 auto;">
                 <div class="panel-header" style="padding: 5px 10px; font-size: 10px;">
-                    <span>TELEMETRY</span>
+                    <span>ESTADO Y MISIÓN</span>
                     <div class="panel-controls"><button class="min-btn" title="Minimizar/Restaurar" style="font-size:10px;padding:0 4px;">−</button></div>
                 </div>
                 
@@ -177,6 +195,35 @@
                 <button id="ask-user-custom-btn" style="width: 100%; margin-top: 5px; background: #238636; color: white; border: none; padding: 6px; border-radius: 4px; cursor: pointer;">Enviar</button>
             </div>
         </div>
+    </div>
+
+    <div id="user-profile-modal" class="profile-modal" style="display:none;" role="presentation">
+        <section class="profile-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-title">
+            <header class="profile-dialog-header">
+                <div><span class="status-label">PERSONALIZACIÓN LOCAL</span><h2 id="profile-title">Tu perfil de Aura</h2></div>
+                <button id="profile-close-btn" class="profile-close-btn" type="button" aria-label="Cerrar perfil">×</button>
+            </header>
+            <p class="profile-intro">Guarda solo preferencias que quieras reutilizar. Se quedan en este equipo; cada petición y proyecto puede usar otra ubicación.</p>
+            <div id="profile-region-hint" class="profile-region-hint" aria-live="polite">Comprobando la región configurada en Windows…</div>
+            <form id="user-profile-form">
+                <div class="profile-form-grid">
+                    <label>Nombre preferido<input id="profile-name" maxlength="60" autocomplete="off" placeholder="Opcional"></label>
+                    <label>Ciudad de referencia<input id="profile-city" maxlength="80" autocomplete="off" placeholder="Opcional"></label>
+                    <label>País predeterminado (código ISO)<input id="profile-country" maxlength="2" list="profile-country-codes" autocomplete="off" placeholder="BO"><datalist id="profile-country-codes"></datalist></label>
+                    <button id="profile-use-windows-region" class="profile-suggestion-btn" type="button">Usar región de Windows</button>
+                    <label>Idioma preferido<select id="profile-language"><option value="es">Español</option><option value="en">English</option><option value="pt">Português</option></select></label>
+                    <label>Zona horaria<input id="profile-timezone" maxlength="80" autocomplete="off" placeholder="America/La_Paz"></label>
+                    <label>Estilo de respuesta<select id="profile-response-style"><option value="">Sin preferencia</option><option value="conciso">Conciso</option><option value="detallado">Detallado</option><option value="paso a paso">Paso a paso</option></select></label>
+                    <label class="profile-project-target">País objetivo de este proyecto<input id="profile-project-country" maxlength="2" list="profile-country-codes" autocomplete="off" placeholder="Vacío = sin país de proyecto"></label>
+                </div>
+                <label class="profile-memory-toggle"><input id="profile-auto-remember" type="checkbox"><span><strong>Recordar datos personales que comparta claramente</strong><small>Solo nombre, ciudad y país, y solo mientras este permiso esté activado. Nunca toma la ubicación mencionada para un proyecto como dato personal.</small></span></label>
+                <p id="profile-feedback" class="profile-feedback" role="status"></p>
+                <footer class="profile-actions">
+                    <button id="profile-clear-btn" class="profile-clear-btn" type="button">Borrar mi perfil</button>
+                    <div><button id="profile-cancel-btn" class="profile-cancel-btn" type="button">Cancelar</button><button id="profile-save-btn" class="profile-save-btn" type="submit">Guardar preferencias</button></div>
+                </footer>
+            </form>
+        </section>
     </div>
 
 </body>

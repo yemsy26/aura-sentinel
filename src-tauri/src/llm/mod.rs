@@ -26,16 +26,160 @@ pub(crate) struct ProgrammerOutput {
     pub cambios: Vec<crate::memory::Cambio>,
 }
 
-fn get_safe_num_ctx() -> u32 {
+fn context_from_available_memory(
+    free_vram_mib: u64,
+    model_size_mib: Option<u64>,
+    is_loaded: bool,
+    high_ram_pressure: bool,
+) -> u32 {
+    let estimated_free = if is_loaded {
+        free_vram_mib
+    } else {
+        // Unknown model sizes get a conservative 6 GiB reservation. This avoids
+        // granting a large context if Ollama metadata is temporarily unavailable.
+        free_vram_mib.saturating_sub(model_size_mib.unwrap_or(6144))
+    };
+    let gpu_context = if estimated_free >= 2304 {
+        8192
+    } else if estimated_free >= 1024 {
+        4096
+    } else {
+        2048
+    };
+    if high_ram_pressure {
+        gpu_context.min(4096)
+    } else {
+        gpu_context
+    }
+}
+
+async fn get_safe_num_ctx(model: &str) -> u32 {
     use sysinfo::System;
     let mut sys = System::new_all();
     sys.refresh_all();
     let total_mem = sys.total_memory() as f64;
     let used_mem = sys.used_memory() as f64;
-    if total_mem > 0.0 && (used_mem / total_mem) > 0.80 {
-        return 4096; // Safe Mode under heavy system memory load
+    let high_ram_pressure = total_mem > 0.0 && (used_mem / total_mem) > 0.80;
+
+    // Read only local runtime metadata. Missing tools/API must never block inference
+    // or trigger an implicit model install.
+    let free_vram_mib = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .filter(|output| output.status.success())
+    .and_then(|output| String::from_utf8(output.stdout).ok())
+    .and_then(|output| output.lines().next()?.trim().parse::<u64>().ok());
+
+    let Some(free_vram_mib) = free_vram_mib else {
+        return if high_ram_pressure { 2048 } else { 4096 };
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            return context_from_available_memory(free_vram_mib, None, false, high_ram_pressure)
+        }
+    };
+
+    let (tags, running) = tokio::join!(
+        client.get("http://127.0.0.1:11434/api/tags").send(),
+        client.get("http://127.0.0.1:11434/api/ps").send(),
+    );
+    let tags = match tags {
+        Ok(response) if response.status().is_success() => {
+            response.json::<serde_json::Value>().await.ok()
+        }
+        _ => None,
+    };
+    let running = match running {
+        Ok(response) if response.status().is_success() => {
+            response.json::<serde_json::Value>().await.ok()
+        }
+        _ => None,
+    };
+
+    let matches_model = |candidate: &str| {
+        candidate == model
+            || candidate.strip_suffix(":latest") == Some(model)
+            || model.strip_suffix(":latest") == Some(candidate)
+    };
+    let is_loaded = running
+        .as_ref()
+        .and_then(|value| value.get("models"))
+        .and_then(|value| value.as_array())
+        .is_some_and(|models| {
+            models.iter().any(|entry| {
+                entry
+                    .get("name")
+                    .and_then(|name| name.as_str())
+                    .is_some_and(matches_model)
+            })
+        });
+    let model_size_mib = tags
+        .as_ref()
+        .and_then(|value| value.get("models"))
+        .and_then(|value| value.as_array())
+        .and_then(|models| {
+            models.iter().find_map(|entry| {
+                let name = entry.get("name")?.as_str()?;
+                if !matches_model(name) {
+                    return None;
+                }
+                entry
+                    .get("size")?
+                    .as_u64()
+                    .map(|bytes| bytes / (1024 * 1024))
+            })
+        });
+
+    context_from_available_memory(free_vram_mib, model_size_mib, is_loaded, high_ram_pressure)
+}
+
+#[cfg(test)]
+mod context_budget_tests {
+    use super::context_from_available_memory;
+
+    #[test]
+    fn context_budget_reserves_model_memory_before_loading() {
+        assert_eq!(
+            context_from_available_memory(8192, Some(4600), false, false),
+            8192
+        );
+        assert_eq!(
+            context_from_available_memory(8192, Some(7000), false, false),
+            4096
+        );
+        assert_eq!(
+            context_from_available_memory(8192, Some(7600), false, false),
+            2048
+        );
+        assert_eq!(
+            context_from_available_memory(8192, None, false, false),
+            4096
+        );
     }
-    8192 // Standard safe context for 8GB consumer GPUs (prevents CUDA OOM crashes)
+
+    #[test]
+    fn loaded_model_uses_current_free_vram_and_ram_pressure_caps_context() {
+        assert_eq!(
+            context_from_available_memory(3000, Some(7000), true, false),
+            8192
+        );
+        assert_eq!(
+            context_from_available_memory(3000, Some(7000), true, true),
+            4096
+        );
+    }
 }
 
 pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
@@ -53,7 +197,7 @@ pub async fn call_ollama(model: &str, prompt: &str) -> Result<String, String> {
         format: serde_json::json!("json"),
         // Tool routing is a small JSON decision. A 4K generation budget made 7B
         // models slower and more likely to ramble without improving the choice.
-        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 1024, "repeat_penalty": 1.1, "temperature": 0.1 }),
+        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(model).await, "num_predict": 1024, "repeat_penalty": 1.1, "temperature": 0.1 }),
     };
 
     let res = client
@@ -80,6 +224,18 @@ pub async fn call_ollama_with_schema(
     prompt: &str,
     schema: serde_json::Value,
 ) -> Result<String, String> {
+    call_ollama_with_schema_options(model, prompt, schema, 4096, 0.2).await
+}
+
+/// Schema-constrained generation with caller-selected latency and determinism.
+/// Routing and NLU use small outputs; code generation keeps the larger default.
+pub async fn call_ollama_with_schema_options(
+    model: &str,
+    prompt: &str,
+    schema: serde_json::Value,
+    max_output_tokens: u32,
+    temperature: f32,
+) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()
@@ -91,7 +247,12 @@ pub async fn call_ollama_with_schema(
         prompt,
         stream: false,
         format: schema,
-        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.05, "temperature": 0.2 }),
+        options: serde_json::json!({
+            "num_ctx": get_safe_num_ctx(model).await,
+            "num_predict": max_output_tokens.max(64),
+            "repeat_penalty": 1.05,
+            "temperature": temperature.clamp(0.0, 1.0)
+        }),
     };
 
     let res = client
@@ -132,7 +293,7 @@ pub async fn call_ollama_text(model: &str, prompt: &str) -> Result<String, Strin
         model,
         prompt,
         stream: false,
-        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(), "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }),
+        options: serde_json::json!({ "num_ctx": get_safe_num_ctx(model).await, "num_predict": 4096, "repeat_penalty": 1.1, "temperature": 0.2 }),
     };
 
     let res = client
@@ -205,24 +366,30 @@ pub(crate) async fn delegate_to_programmer(
     file_contents: &str,
     requested_files: &[String],
     require_patch: bool,
+    require_empty_search: bool,
+    max_changes: usize,
     model: &str,
 ) -> Result<String, String> {
     let patch_rule = if require_patch {
-        "MODO REPARACIÓN INCREMENTAL OBLIGATORIO: 'buscar' no puede estar vacío. Copia en 'buscar' un fragmento breve y literal de ARCHIVOS ACTUALES, y en 'reemplazar' devuelve ese mismo fragmento con la corrección añadida. No devuelvas el archivo completo ni elimines funciones existentes."
+        "MODO REPARACIÓN INCREMENTAL OBLIGATORIO: 'buscar' no puede estar vacío. Copia en 'buscar' un fragmento breve y literal del archivo actual o del borrador rechazado incluido en el diagnóstico; en 'reemplazar' devuelve solo ese fragmento corregido. Conserva automáticamente el resto. No pegues el archivo completo, no anexes una segunda copia y no dupliques funciones existentes."
+    } else if require_empty_search {
+        "MODO REEMPLAZO COMPLETO OBLIGATORIO: 'buscar' debe ser exactamente una cadena vacía. Devuelve en 'reemplazar' el contenido completo y corregido de cada archivo objetivo, tomando como base su contenido actual incluido arriba. No devuelvas parches parciales."
     } else {
-        "Para crear un archivo nuevo usa 'buscar' vacío. Para modificar uno existente, prefiere un fragmento literal breve en 'buscar'."
+        "Para crear un archivo nuevo usa 'buscar' vacío. Si la instrucción pide reemplazar un archivo completo, usa 'buscar' vacío y devuelve el archivo entero corregido en 'reemplazar'. En los demás cambios de archivos existentes, prefiere un fragmento literal breve en 'buscar'."
     };
     let system_prompt = format!(
         "Eres el programador de Aura Sentinel. Implementa por completo la acción solicitada, respetando el código existente y el objetivo global.\n\nTAREA:\n{}\n\nARCHIVOS ACTUALES Y DIAGNÓSTICO:\n{}\n\n\
         Devuelve un objeto JSON con explicacion_tecnica y cambios. Cada cambio contiene archivo (ruta relativa), buscar (texto exacto; vacío solo al crear o reemplazar por completo) y reemplazar (código que sustituye ese fragmento).\n\
         {}\n\
-        No uses placeholders ni funciones vacías. No inventes archivos fuera de los solicitados. Devuelve como máximo UN cambio por archivo y nunca repitas el mismo valor de 'archivo'. Usa sintaxis válida del lenguaje; en Python son válidas comillas simples y dobles. Escapa las cadenas del JSON sin alterar el contenido del código.\n\
+        No uses placeholders ni funciones vacías. No inventes archivos fuera de los solicitados. Devuelve como máximo {} cambios, con un solo cambio por archivo y nunca repitas el mismo valor de 'archivo'. Usa sintaxis válida del lenguaje; en Python son válidas comillas simples y dobles. Escapa las cadenas del JSON sin alterar el contenido del código. Mantén la respuesta compacta: no añadas filas repetitivas, datos de relleno ni código dentro de comentarios para aparentar avance; para interfaces, renderiza los registros desde datos reales del programa. No crees archivos de prueba, documentación o configuración auxiliar si el usuario no los solicitó ni son necesarios para un comando real de validación. Para una interfaz, las pruebas interactivas se hacen con el navegador; no generes pruebas Node que dependan de document o alert.\n\
           Para verify_*.py: usa solo json, pathlib y re de la biblioteca estándar; lee los archivos reales, comprueba CADA requisito numerado del objetivo con al menos un check independiente y ejecuta los checks bajo if __name__ == '__main__'. Busca tokens simples por separado (por ejemplo requestAnimationFrame, Math.cos, Math.sin); NUNCA incrustes una línea HTML o JavaScript completa con comillas anidadas dentro de una cadena Python. Emite exactamente una línea JSON: passed debe ser el NÚMERO ENTERO de checks aprobados (nunca booleano), total debe ser el NÚMERO ENTERO de checks ejecutados y ser al menos 5 en esta tarea, percentage debe ser 100*passed/total, y failed_criteria debe ser una lista de textos con longitud total-passed. Termina con código 1 si hay fallos. Definir funciones sin llamarlas NO es una verificación. No basta con buscar un nombre: verifica la estructura y los comportamientos solicitados. Si JavaScript está en archivos enlazados, léelos también. Evita nombres de IDs inventados: usa el HTML real que figura arriba.\n\
         Los scripts automáticos no deben pedir input ni usar pause. No cambies código correcto por causa de un error del entorno.",
-        task, file_contents, patch_rule
+        task, file_contents, patch_rule, max_changes.max(1)
     );
     let buscar_schema = if require_patch {
         serde_json::json!({"type":"string", "minLength":1})
+    } else if require_empty_search {
+        serde_json::json!({"type":"string", "enum":[""]})
     } else {
         serde_json::json!({"type":"string"})
     };
@@ -230,7 +397,7 @@ pub(crate) async fn delegate_to_programmer(
         "type":"object", "required":["explicacion_tecnica","cambios"], "additionalProperties":false,
         "properties":{
             "explicacion_tecnica":{"type":"string"},
-            "cambios":{"type":"array","minItems":1,"maxItems":requested_files.len().max(1),"items":{
+            "cambios":{"type":"array","minItems":1,"maxItems":max_changes.max(1).min(requested_files.len().max(1)),"items":{
                 "type":"object","required":["archivo","buscar","reemplazar"],"additionalProperties":false,
                 "properties":{"archivo":{"type":"string","enum":requested_files},"buscar":buscar_schema,"reemplazar":{"type":"string"}}
             }}
@@ -260,9 +427,8 @@ async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {
         .unwrap_or_else(|e| format!("Error en auditoría: {}", e))
 }
 
-/// Invoca el motor SpectraSAT directamente en memoria (FFI nativo, cero latencia de subproceso).
-/// Si se proveen `n_vars` y `clauses` en el JSON del agente, los resuelve directamente.
-/// Si no, cae en modo de revisión de código vía LLM (análisis de satisfacibilidad semántica).
+/// Invoca SpectraSAT para resolver una fórmula booleana CNF en memoria.
+/// La revisión semántica de código se realiza por separado en `delegate_to_logic_solver`.
 pub(crate) fn solve_with_spectrasat(n_vars: usize, clauses: Vec<Vec<i32>>) -> String {
     spectrasat_core::solve_native_rust(n_vars, clauses)
 }
@@ -346,14 +512,52 @@ pub async fn process_user_prompt(
         user_message = user_message[..idx].trim().to_string();
     }
 
+    let mut profile_snapshot =
+        crate::core::user_profile::load(&app_handle, Some(&workspace_path)).unwrap_or_default();
+    if crate::core::user_profile::remember_explicit_facts(
+        &mut profile_snapshot.profile,
+        &user_message,
+    ) {
+        match crate::core::user_profile::save(&app_handle, profile_snapshot.profile.clone()) {
+            Ok(saved) => {
+                profile_snapshot.profile = saved;
+                agent::emit_event(
+                    &app_handle,
+                    0,
+                    "[PERFIL] Se guardó una preferencia personal explícita en el perfil local.",
+                    "INFO",
+                );
+            }
+            Err(error) => agent::emit_event(
+                &app_handle,
+                0,
+                &format!("[PERFIL] No se pudo guardar la preferencia: {error}"),
+                "WARNING",
+            ),
+        }
+    }
+    let profile_context = crate::core::user_profile::prompt_context(&profile_snapshot);
+
     let mut enriched_message = String::new();
     // The selected workspace remains authoritative, including continuation requests.
     let mut journal = crate::core::session_journal::load_journal(&workspace_path);
+    let mut active_mission_context = crate::core::intent_router::active_mission_context(&journal);
+    let recovered_resume_objective = if crate::core::intent_router::is_resume_command(&user_message)
+    {
+        let chat_json = crate::memory::load_chat_history(workspace_path.clone())
+            .await
+            .unwrap_or_else(|_| "[]".to_string());
+        crate::core::intent_router::recover_pending_approved_plan_request(&chat_json, &user_message)
+    } else {
+        None
+    };
 
     // ── Zero-latency meta-command intercept ──────────────────────────────────
-    if let Some(action) =
-        crate::core::intent_router::try_handle_meta_command(&user_message, &workspace_path)
-    {
+    if let Some(action) = crate::core::intent_router::try_handle_meta_command_with_recovery(
+        &user_message,
+        &workspace_path,
+        recovered_resume_objective.as_deref(),
+    ) {
         match action {
             crate::core::intent_router::IntentAction::Finish(msg) => {
                 agent::emit_event(&app_handle, 0, "[META-CMD] Consulta de estado detectada. Respondiendo desde la memoria local...", "PLANNING");
@@ -365,10 +569,36 @@ pub async fn process_user_prompt(
                 return Ok(response.to_string());
             }
             crate::core::intent_router::IntentAction::Resume {
-                objetivo: _,
+                objetivo,
                 resume_msg,
             } => {
                 agent::emit_event(&app_handle, 0, &resume_msg, "INFO");
+                if objetivo != journal.objetivo {
+                    match crate::core::session_journal::restore_mission_for_resume(
+                        &workspace_path,
+                        &objetivo,
+                        recovered_resume_objective.is_some(),
+                    ) {
+                        Ok(restored) => {
+                            journal = restored;
+                            active_mission_context =
+                                crate::core::intent_router::active_mission_context(&journal);
+                            agent::emit_event(
+                                &app_handle,
+                                0,
+                                "[REANUDACIÓN] Objetivo recuperado; el agente validará y reconstruirá el plan aprobado conservando el trabajo existente.",
+                                "SUCCESS",
+                            );
+                        }
+                        Err(error) => {
+                            let response = serde_json::json!({
+                                "status": "ERROR",
+                                "respuesta_conversacional": format!("No pude restaurar el diario de la misión: {}", error)
+                            });
+                            return Ok(response.to_string());
+                        }
+                    }
+                }
                 // Preserve the continuation signal so the agent restores the checkpoint.
                 enriched_message = "continua".to_string();
             }
@@ -581,9 +811,13 @@ pub async fn process_user_prompt(
             "consulta",
             "consulte",
         ];
-        let forced_search = search_keywords.iter().any(|kw| lower_msg.contains(kw));
+        let first_token = lower_msg
+            .split(|c: char| !c.is_alphanumeric())
+            .find(|token| !token.is_empty())
+            .unwrap_or("");
+        let forced_search = search_keywords.iter().any(|kw| first_token.starts_with(kw));
 
-        if forced_search {
+        if forced_search && active_mission_context.is_none() {
             agent::emit_event(
                 &app_handle,
                 0,
@@ -623,43 +857,187 @@ pub async fn process_user_prompt(
                 let skip = combined_history.len() - 8;
                 combined_history = combined_history.into_iter().skip(skip).collect();
             }
-
             // FIX #2: Synchronize the journal's chat history before NLU so the Agent Loop inherits it
             journal.chat_history = combined_history.clone();
             let _ = crate::core::session_journal::save_journal(&workspace_path, &journal);
 
-            let mut nlu_response = translator::translate_to_technical_intent(
+            let approved_plan_request = crate::core::intent_router::recover_approved_plan_request(
+                &chat_json,
                 &user_message,
-                &app_handle,
-                &combined_history,
-                &orchestrator_model,
-            )
-            .await;
-            let start_idx = nlu_response.find('{');
-            let end_idx = nlu_response.rfind('}');
-            if let (Some(s), Some(e)) = (start_idx, end_idx) {
-                if e > s {
-                    nlu_response = nlu_response[s..=e].to_string();
-                }
-            }
+            );
+            let pending_clarification_request =
+                crate::core::intent_router::recover_pending_clarification_request(
+                    &chat_json,
+                    &user_message,
+                );
+            let scoped_visual_review =
+                crate::core::intent_router::is_scoped_visual_review(&user_message);
+            let mut nlu_response = if let Some(request) = approved_plan_request.as_deref() {
+                agent::emit_event(
+                    &app_handle,
+                    0,
+                    "[PLAN APROBADO] Recuperé el mandato y la hoja de ruta de esta conversación; continuaré con la implementación local.",
+                    "INFO",
+                );
+                serde_json::json!({
+                    "intent_type": "AGENTIC_TASK",
+                    "technical_translation": request
+                })
+                .to_string()
+            } else if let Some(request) = pending_clarification_request.as_deref() {
+                agent::emit_event(
+                    &app_handle,
+                    0,
+                    "[NLU_RECOVERY] Respuesta vinculada a la aclaración pendiente; se conserva el mandato original completo.",
+                    "INFO",
+                );
+                serde_json::json!({
+                    "intent_type": "AGENTIC_TASK",
+                    "turn_relation": "FOLLOW_UP",
+                    "phase_updates": [],
+                    "technical_translation": request,
+                    "os_command": null,
+                    "direct_response": null,
+                    "clarification_question": null
+                })
+                .to_string()
+            } else if scoped_visual_review {
+                agent::emit_event(
+                    &app_handle,
+                    0,
+                    "[INTENT DETERMINISTIC] Revisión de interfaz detectada; se conserva el alcance de solo lectura sin pedir aclaraciones.",
+                    "INFO",
+                );
+                serde_json::json!({
+                    "intent_type": "AGENTIC_TASK",
+                    "turn_relation": if active_mission_context.is_some() { "FOLLOW_UP" } else { "NEW_TASK" },
+                    "phase_updates": [],
+                    "technical_translation": user_message,
+                    "os_command": null,
+                    "direct_response": null,
+                    "clarification_question": null
+                })
+                .to_string()
+            } else {
+                translator::translate_to_technical_intent(
+                    &user_message,
+                    &app_handle,
+                    &combined_history,
+                    active_mission_context.as_deref(),
+                    &orchestrator_model,
+                )
+                .await
+            };
             nlu_response = nlu_response.trim().to_string();
             println!("[NLU] Input: '{}' -> RAW: '{}'", user_message, nlu_response);
 
-            let nlu_json: serde_json::Value =
-                serde_json::from_str(&nlu_response).unwrap_or_else(|_| {
+            let nlu_json: serde_json::Value = match crate::core::structured_json::parse_json_object(
+                &nlu_response,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    agent::emit_event(
+                            &app_handle,
+                            0,
+                            &format!(
+                                "[NLU_JSON_INVALID] Respuesta estructurada inválida: {}. Se conserva literalmente la solicitud del usuario; no se usan argumentos generados por el NLU.",
+                                error
+                            ),
+                            "WARNING",
+                        );
                     serde_json::json!({
                         "intent_type": "AGENTIC_TASK",
-                        "technical_translation": nlu_response
+                        "turn_relation": crate::core::intent_router::fallback_turn_relation(
+                            &user_message,
+                            active_mission_context.as_deref(),
+                        ),
+                        "phase_updates": [],
+                        "technical_translation": user_message,
+                        "os_command": null,
+                        "direct_response": null,
+                        "clarification_question": null
                     })
-                });
+                }
+            };
 
             let mut intent_type = nlu_json
                 .get("intent_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("AGENTIC_TASK");
+            let turn_relation = nlu_json
+                .get("turn_relation")
+                .and_then(|value| value.as_str())
+                .unwrap_or_else(|| {
+                    crate::core::intent_router::fallback_turn_relation(
+                        &user_message,
+                        active_mission_context.as_deref(),
+                    )
+                });
+            let is_contextual_follow_up = pending_clarification_request.is_none()
+                && active_mission_context.is_some()
+                && matches!(
+                    turn_relation,
+                    "FOLLOW_UP" | "PLAN_CHANGE" | "ANSWER_TO_QUESTION"
+                );
+            if turn_relation == "PLAN_CHANGE" && active_mission_context.is_some() {
+                let updated_phases =
+                    crate::core::intent_router::apply_phase_plan_updates(&mut journal, &nlu_json);
+                if updated_phases > 0 {
+                    if let Err(error) =
+                        crate::core::session_journal::save_journal(&workspace_path, &journal)
+                    {
+                        agent::emit_event(
+                            &app_handle,
+                            0,
+                            &format!("[PLAN CHANGE] No se pudo guardar el cambio: {}", error),
+                            "FATAL",
+                        );
+                        return Ok(serde_json::json!({
+                            "status": "ERROR",
+                            "respuesta_conversacional": format!("No pude guardar el cambio solicitado al plan: {}", error)
+                        }).to_string());
+                    }
+                    active_mission_context =
+                        crate::core::intent_router::active_mission_context(&journal);
+                    agent::emit_event(
+                        &app_handle,
+                        0,
+                        &format!(
+                            "[PLAN CHANGE] {} fase(s) actualizadas; se conserva el diario y el resto del plan.",
+                            updated_phases
+                        ),
+                        "SUCCESS",
+                    );
+                } else {
+                    agent::emit_event(
+                        &app_handle,
+                        0,
+                        "[PLAN CHANGE] No se pudo identificar con confianza una fase concreta; se conserva el plan y se continúa con la instrucción para evitar cambios accidentales.",
+                        "WARNING",
+                    );
+                }
+            }
+            if is_contextual_follow_up {
+                intent_type = "AGENTIC_TASK";
+            }
 
-            let lower_msg = user_message.to_lowercase();
-            if lower_msg.contains("tool_")
+            let effective_user_request = approved_plan_request
+                .as_deref()
+                .or(pending_clarification_request.as_deref())
+                .unwrap_or(&user_message);
+            let lower_msg = effective_user_request.to_lowercase();
+            let initial_plan_request = agent::is_initial_plan_request(effective_user_request);
+            if initial_plan_request {
+                if intent_type != "AGENTIC_TASK" {
+                    agent::emit_event(
+                        &app_handle,
+                        0,
+                        "[NLU] Plan inicial reconocido; se preparará una hoja de ruta antes de programar.",
+                        "INFO",
+                    );
+                }
+                intent_type = "AGENTIC_TASK";
+            } else if lower_msg.contains("tool_")
                 || lower_msg.contains("script")
                 || lower_msg.contains("reto")
                 || lower_msg.contains("algoritmo")
@@ -675,6 +1053,9 @@ pub async fn process_user_prompt(
                 || lower_msg.contains("continua")
             {
                 intent_type = "AGENTIC_TASK";
+            }
+            if turn_relation == "NEEDS_CLARIFICATION" {
+                intent_type = "NEEDS_CLARIFICATION";
             }
 
             if intent_type == "CONVERSATION" {
@@ -720,7 +1101,11 @@ pub async fn process_user_prompt(
                 journal
                     .chat_history
                     .push(format!("Usuario: {}", user_message));
-                journal.chat_history.push(format!("Aura: {}", question));
+                journal.chat_history.push(format!(
+                    "Aura: {} {}",
+                    crate::core::intent_router::pending_clarification_marker(),
+                    question
+                ));
                 if journal.chat_history.len() > 6 {
                     journal
                         .chat_history
@@ -791,13 +1176,39 @@ pub async fn process_user_prompt(
             let technical_intent = nlu_json
                 .get("technical_translation")
                 .and_then(|v| v.as_str())
-                .unwrap_or(&user_message);
+                .unwrap_or(effective_user_request);
             // Include both the original (for user reference) and the cleaned technical intent
-            enriched_message = format!(
-            "Petición Original del Usuario: {}\n\nGuía de Traducción Técnica (generada por NLU): {}",
-            user_message, technical_intent
-        );
+            enriched_message = if is_contextual_follow_up {
+                crate::core::intent_router::contextual_follow_up_request(
+                    active_mission_context.as_deref().unwrap_or_default(),
+                    effective_user_request,
+                    technical_intent,
+                )
+                .unwrap_or_else(|| {
+                    format!(
+                        "Petición Original del Usuario: {}\n\nGuía de Traducción Técnica (generada por NLU): {}",
+                        effective_user_request, technical_intent
+                    )
+                })
+            } else {
+                format!(
+                    "Petición Original del Usuario: {}\n\nGuía de Traducción Técnica (generada por NLU): {}",
+                    effective_user_request, technical_intent
+                )
+            };
+            if initial_plan_request {
+                enriched_message.push_str(
+                    "\n\n[MODO PLAN INICIAL]: Presenta una hoja de ruta MVP con fases, objetivos, entregables verificables y condiciones de salida; cubre cada módulo concreto que pidió el usuario. Respeta el orden pedido: primero pruebas locales/emuladores y después despliegue Firebase si así se solicitó. No escribas código. No bloquees la fase local por una decisión fiscal futura; confirma el país objetivo solo antes de implementar requisitos fiscales. El país de residencia del usuario no define automáticamente el mercado del proyecto. Usa documentación oficial para los datos actuales de Firebase y termina con solo preguntas que realmente bloqueen la primera fase.",
+                );
+            }
         } // end else (no keyword intercept)
+    }
+
+    if !profile_context.is_empty()
+        && !crate::core::intent_router::is_resume_command(&enriched_message)
+    {
+        enriched_message.push_str("\n\n");
+        enriched_message.push_str(&profile_context);
     }
 
     let workspace_tree_nodes =

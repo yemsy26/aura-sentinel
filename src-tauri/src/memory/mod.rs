@@ -52,8 +52,9 @@ pub async fn write_vector_index(
 }
 
 pub async fn get_workspace_tree_internal(path: String) -> Result<Vec<FileNode>, String> {
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let mut nodes = Vec::new();
+        let mut walk_errors = Vec::new();
         let walker = WalkBuilder::new(&path)
             .hidden(true)
             .git_ignore(true)
@@ -85,13 +86,22 @@ pub async fn get_workspace_tree_internal(path: String) -> Result<Vec<FileNode>, 
                         is_dir,
                     });
                 }
-                Err(err) => eprintln!("Aura-Sentinel Walker Error: {}", err),
+                Err(err) => walk_errors.push(err.to_string()),
             }
         }
-        nodes
+        if walk_errors.is_empty() {
+            Ok(nodes)
+        } else {
+            Err(format!(
+                "No se pudo recorrer completamente el workspace ({} errores): {}",
+                walk_errors.len(),
+                walk_errors.iter().take(5).cloned().collect::<Vec<_>>().join("; ")
+            ))
+        }
     })
     .await
-    .map_err(|e| format!("Error en la tarea de lectura del workspace: {}", e))
+    .map_err(|e| format!("Error en la tarea de lectura del workspace: {}", e))?;
+    result
 }
 
 pub async fn read_files_safely(workspace_path: &str, files: Vec<String>) -> String {

@@ -9,6 +9,29 @@ const MODEL_STATS_FILE: &str = "model_stats.json";
 const STRATEGY_STATS_FILE: &str = "strategy_stats.json";
 
 fn data_dir() -> PathBuf {
+    // Unit tests must never append synthetic outcomes to the production learner
+    // database, even when the developer has AURA_DATA_DIR configured. Tests may
+    // opt into a dedicated fixture root with AURA_TEST_DATA_DIR; production
+    // configuration is intentionally ignored in test builds.
+    if cfg!(test) {
+        let test_root = std::env::var_os("AURA_TEST_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let test_name = std::thread::current()
+                    .name()
+                    .unwrap_or("unnamed")
+                    .chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                    .collect::<String>();
+                std::env::temp_dir().join(format!(
+                    "aura-sentinel-learning-tests-{}-{}",
+                    std::process::id(),
+                    test_name
+                ))
+            });
+        return test_root.join("data").join("learning");
+    }
+
     let base = std::env::var("AURA_DATA_DIR").unwrap_or_else(|_| {
         let mut p = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         if p.ends_with("src-tauri") {
@@ -17,6 +40,38 @@ fn data_dir() -> PathBuf {
         p.to_string_lossy().to_string()
     });
     PathBuf::from(base).join("data").join("learning")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LearningPersistence;
+    use std::path::PathBuf;
+
+    #[test]
+    fn default_test_persistence_is_outside_the_production_data_directory() {
+        let persistence = LearningPersistence::new();
+        let production_dir = std::env::current_dir()
+            .unwrap()
+            .join("data")
+            .join("learning");
+        assert!(!persistence.experiences_path().starts_with(production_dir));
+        let test_root = std::env::var_os("AURA_TEST_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let test_name = std::thread::current()
+                    .name()
+                    .unwrap_or("unnamed")
+                    .chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                    .collect::<String>();
+                std::env::temp_dir().join(format!(
+                    "aura-sentinel-learning-tests-{}-{}",
+                    std::process::id(),
+                    test_name
+                ))
+            });
+        assert!(persistence.experiences_path().starts_with(test_root));
+    }
 }
 
 #[derive(Clone, Debug)]

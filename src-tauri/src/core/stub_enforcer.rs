@@ -52,9 +52,9 @@ pub fn detect_stubs(content: &str, file_path: &str) -> StubReport {
         format!(
             "[ANTI-STUB ENFORCER] ❌ Código RECHAZADO en '{}'. \
             Se detectaron {} implementaciones vacías o incompletas:\n{}\n\n\
-            REGLA ABSOLUTA: DEBES reescribir este archivo con implementaciones REALES y COMPLETAS. \
-            PROHIBIDO usar 'pass', 'TODO', funciones vacías, o placeholders. \
-            Cada función debe tener lógica funcional real.",
+            Corrige cada bloque señalado con lógica real. Al reparar un borrador conservado, \
+            sustituye solo los bloques incompletos, conserva el código válido y no pegues una segunda \
+            copia del archivo ni dupliques funciones. No uses 'pass', 'TODO', funciones vacías o placeholders.",
             file_path,
             warnings.len(),
             warnings
@@ -106,6 +106,23 @@ fn check_python_stubs(content: &str, warnings: &mut Vec<String>) {
                 .next()
                 .unwrap_or("desconocida")
                 .to_string();
+            // Python permits a one-line suite (`def test_x(): assert ...`).
+            // Treat its body as implemented so real compact tests are not
+            // rejected as empty functions. A one-line `pass` remains a stub.
+            if let Some((_, suite)) = trimmed.split_once(':') {
+                let suite = suite.trim();
+                if !suite.is_empty() && !suite.starts_with('#') {
+                    if suite == "pass" || suite == "..." {
+                        warnings.push(format!(
+                            "Línea {}: función '{}' contiene un cuerpo placeholder de una línea",
+                            function_line + 1,
+                            function_name
+                        ));
+                    } else {
+                        body_lines = 1;
+                    }
+                }
+            }
             continue;
         }
 
@@ -274,6 +291,71 @@ fn check_js_stubs(content: &str, warnings: &mut Vec<String>) {
             ));
         }
     }
+
+    // A function that only returns a constant success value is a common way a
+    // small model can evade comment-based placeholder detection while leaving
+    // login, persistence, or business operations unimplemented.
+    let constant_return =
+        regex::Regex::new(r"(?s)function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{([^{}]*)\}").unwrap();
+    let comments = regex::Regex::new(r"(?s)/\*.*?\*/|//[^\n]*").unwrap();
+    let mut declared_functions: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for captures in constant_return.captures_iter(content) {
+        let Some(name) = captures.get(1) else {
+            continue;
+        };
+        let Some(body) = captures.get(2) else {
+            continue;
+        };
+        let function_name = name.as_str();
+        let line = content[..name.start()].matches('\n').count() + 1;
+        declared_functions
+            .entry(function_name.to_ascii_lowercase())
+            .or_default()
+            .push(line);
+
+        let action_name = function_name.to_ascii_lowercase();
+        let is_business_action = [
+            "login",
+            "auth",
+            "register",
+            "registr",
+            "client",
+            "consulta",
+            "appointment",
+            "invoice",
+            "factura",
+            "account",
+            "contab",
+            "save",
+            "create",
+            "add",
+            "update",
+            "delete",
+            "persist",
+            "issue",
+            "logout",
+            "validat",
+        ]
+        .iter()
+        .any(|part| action_name.contains(part));
+        let executable_body = comments.replace_all(body.as_str(), " ");
+        let statement = executable_body.trim().trim_end_matches(';').trim();
+        if is_business_action && matches!(statement, "return true" | "return false") {
+            warnings.push(format!(
+                "Línea {}: función de negocio '{}' solo devuelve un booleano constante y no realiza su operación",
+                line, function_name
+            ));
+        }
+    }
+    for (function_name, lines) in declared_functions {
+        if lines.len() > 1 {
+            warnings.push(format!(
+                "Líneas {:?}: la función '{}' está declarada varias veces; conserva una sola implementación",
+                lines, function_name
+            ));
+        }
+    }
 }
 
 fn check_go_stubs(content: &str, warnings: &mut Vec<String>) {
@@ -376,6 +458,23 @@ mod tests {
     }
 
     #[test]
+    fn test_python_one_line_assertions_are_not_misclassified_as_stubs() {
+        let code = "import unittest\nclass TotalTests(unittest.TestCase):\n    def test_empty(self): self.assertEqual(total([]), 0)\n    def test_single(self): self.assertEqual(total([4]), 4)\n    def test_multiple(self): self.assertEqual(total([1, 2, 3]), 6)\n";
+        let report = detect_stubs(code, "test_app.py");
+        assert!(
+            !report.has_stubs,
+            "Las funciones de prueba de una línea con aserciones son implementaciones reales: {:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn test_python_one_line_pass_is_still_a_stub() {
+        let report = detect_stubs("def unfinished(): pass\n", "app.py");
+        assert!(report.has_stubs);
+    }
+
+    #[test]
     fn test_rust_todo_detected() {
         let code = "fn calcular(&self) -> i32 {\n    todo!()\n}\n";
         let report = detect_stubs(code, "main.rs");
@@ -393,9 +492,37 @@ mod tests {
     }
 
     #[test]
+    fn anti_stub_diagnostic_preserves_the_rejected_draft_for_incremental_repair() {
+        let report = detect_stubs(
+            "function register() {\n  // Aquí iría la lógica de registro\n  return true;\n}\n",
+            "app.js",
+        );
+        assert!(report.has_stubs);
+        assert!(report
+            .rejection_message
+            .contains("sustituye solo los bloques incompletos"));
+        assert!(report
+            .rejection_message
+            .contains("no pegues una segunda copia"));
+        assert!(!report.rejection_message.contains("reescribir este archivo"));
+    }
+
+    #[test]
     fn test_javascript_deferred_code_placeholder_detected() {
         let code = "// JavaScript code will be added here later\n";
         let report = detect_stubs(code, "dashboard.js");
-        assert!(report.has_stubs, "Debería rechazar código aplazado para después");
+        assert!(
+            report.has_stubs,
+            "Debería rechazar código aplazado para después"
+        );
+    }
+
+    #[test]
+    fn javascript_constant_success_and_duplicate_business_functions_are_rejected() {
+        let code = "function register(email, password) {\n  // Simulamos un registro exitoso\n  return true;\n}\nfunction register(email, password) { return true; }\n";
+        let report = detect_stubs(code, "app.js");
+        assert!(report.has_stubs);
+        assert!(report.rejection_message.contains("booleano constante"));
+        assert!(report.rejection_message.contains("declarada varias veces"));
     }
 }
