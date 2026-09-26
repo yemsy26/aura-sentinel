@@ -39,9 +39,9 @@ fn context_from_available_memory(
         // granting a large context if Ollama metadata is temporarily unavailable.
         free_vram_mib.saturating_sub(model_size_mib.unwrap_or(6144))
     };
-    let gpu_context = if estimated_free >= 2304 {
+    let gpu_context = if estimated_free >= 1024 {
         8192
-    } else if estimated_free >= 1024 {
+    } else if estimated_free >= 512 {
         4096
     } else {
         2048
@@ -157,15 +157,19 @@ mod context_budget_tests {
         );
         assert_eq!(
             context_from_available_memory(8192, Some(7000), false, false),
+            8192
+        );
+        assert_eq!(
+            context_from_available_memory(8192, Some(7400), false, false),
             4096
         );
         assert_eq!(
-            context_from_available_memory(8192, Some(7600), false, false),
+            context_from_available_memory(8192, Some(7800), false, false),
             2048
         );
         assert_eq!(
             context_from_available_memory(8192, None, false, false),
-            4096
+            8192
         );
     }
 
@@ -224,7 +228,7 @@ pub async fn call_ollama_with_schema(
     prompt: &str,
     schema: serde_json::Value,
 ) -> Result<String, String> {
-    call_ollama_with_schema_options(model, prompt, schema, 4096, 0.2).await
+    call_ollama_with_schema_options(model, prompt, schema, 8192, 0.2).await
 }
 
 /// Schema-constrained generation with caller-selected latency and determinism.
@@ -377,14 +381,18 @@ pub(crate) async fn delegate_to_programmer(
     } else {
         "Para crear un archivo nuevo usa 'buscar' vacío. Si la instrucción pide reemplazar un archivo completo, usa 'buscar' vacío y devuelve el archivo entero corregido en 'reemplazar'. En los demás cambios de archivos existentes, prefiere un fragmento literal breve en 'buscar'."
     };
+    // JS DOM guideline kept as concat! to avoid rustc misinterpreting backticks/quotes inside format!
+    let js_dom_guideline = concat!(
+        "Para JavaScript de navegador: usa manipulacion directa del DOM ",
+        "(document.createElement, textContent, addEventListener) o delegacion de eventos. ",
+        "NUNCA uses atributos de manejadores inline (onclick, onsubmit, onchange, etc.) dentro de ",
+        "cadenas HTML o template literals en JavaScript; ",
+        "las comillas anidadas rompen la serializacion JSON del codigo y causan errores de sintaxis. ",
+        "Cierra siempre todas las funciones, bloques y llaves antes del final del archivo."
+    );
     let system_prompt = format!(
-        "Eres el programador de Aura Sentinel. Implementa por completo la acción solicitada, respetando el código existente y el objetivo global.\n\nTAREA:\n{}\n\nARCHIVOS ACTUALES Y DIAGNÓSTICO:\n{}\n\n\
-        Devuelve un objeto JSON con explicacion_tecnica y cambios. Cada cambio contiene archivo (ruta relativa), buscar (texto exacto; vacío solo al crear o reemplazar por completo) y reemplazar (código que sustituye ese fragmento).\n\
-        {}\n\
-        No uses placeholders ni funciones vacías. No inventes archivos fuera de los solicitados. Devuelve como máximo {} cambios, con un solo cambio por archivo y nunca repitas el mismo valor de 'archivo'. Usa sintaxis válida del lenguaje; en Python son válidas comillas simples y dobles. Escapa las cadenas del JSON sin alterar el contenido del código. Mantén la respuesta compacta: no añadas filas repetitivas, datos de relleno ni código dentro de comentarios para aparentar avance; para interfaces, renderiza los registros desde datos reales del programa. No crees archivos de prueba, documentación o configuración auxiliar si el usuario no los solicitó ni son necesarios para un comando real de validación. Para una interfaz, las pruebas interactivas se hacen con el navegador; no generes pruebas Node que dependan de document o alert.\n\
-          Para verify_*.py: usa solo json, pathlib y re de la biblioteca estándar; lee los archivos reales, comprueba CADA requisito numerado del objetivo con al menos un check independiente y ejecuta los checks bajo if __name__ == '__main__'. Busca tokens simples por separado (por ejemplo requestAnimationFrame, Math.cos, Math.sin); NUNCA incrustes una línea HTML o JavaScript completa con comillas anidadas dentro de una cadena Python. Emite exactamente una línea JSON: passed debe ser el NÚMERO ENTERO de checks aprobados (nunca booleano), total debe ser el NÚMERO ENTERO de checks ejecutados y ser al menos 5 en esta tarea, percentage debe ser 100*passed/total, y failed_criteria debe ser una lista de textos con longitud total-passed. Termina con código 1 si hay fallos. Definir funciones sin llamarlas NO es una verificación. No basta con buscar un nombre: verifica la estructura y los comportamientos solicitados. Si JavaScript está en archivos enlazados, léelos también. Evita nombres de IDs inventados: usa el HTML real que figura arriba.\n\
-        Los scripts automáticos no deben pedir input ni usar pause. No cambies código correcto por causa de un error del entorno.",
-        task, file_contents, patch_rule, max_changes.max(1)
+        "Eres el programador de Aura Sentinel. Implementa por completo la accion solicitada, respetando el codigo existente y el objetivo global.\n\nTAREA:\n{}\n\nARCHIVOS ACTUALES Y DIAGNOSTICO:\n{}\n\nDevuelve un objeto JSON con explicacion_tecnica y cambios. Cada cambio contiene archivo (ruta relativa), buscar (texto exacto; vacio solo al crear o reemplazar por completo) y reemplazar (codigo que sustituye ese fragmento).\n{}\nNo uses placeholders ni funciones vacias. No inventes archivos fuera de los solicitados. Devuelve como maximo {} cambios, con un solo cambio por archivo y nunca repitas el mismo valor de archivo. Usa sintaxis valida del lenguaje; en Python son validas comillas simples y dobles. {} Escapa las cadenas del JSON sin alterar el contenido del codigo. Manten la respuesta compacta: no anadas filas repetitivas, datos de relleno ni codigo dentro de comentarios; para interfaces, renderiza los registros desde datos reales del programa. No crees archivos de prueba, documentacion o configuracion auxiliar si el usuario no los solicito ni son necesarios para un comando real de validacion. Para una interfaz, las pruebas interactivas se hacen con el navegador; no generes pruebas Node que dependan de document o alert.\nPara verify_py: usa solo json, pathlib y re de la biblioteca estandar; lee los archivos reales, comprueba CADA requisito numerado del objetivo con al menos un check independiente y ejecuta los checks bajo if __name__ == __main__. Busca tokens simples por separado; NUNCA incrustes una linea HTML o JavaScript completa con comillas anidadas dentro de una cadena Python. Emite exactamente una linea JSON: passed debe ser el NUMERO ENTERO de checks aprobados (nunca booleano), total debe ser el NUMERO ENTERO de checks ejecutados y ser al menos 5 en esta tarea, percentage debe ser 100*passed/total, y failed_criteria debe ser una lista de textos con longitud total-passed. Termina con codigo 1 si hay fallos. Definir funciones sin llamarlas NO es una verificacion. Evita nombres de IDs inventados: usa el HTML real que figura arriba.\nLos scripts automaticos no deben pedir input ni usar pause. No cambies codigo correcto por causa de un error del entorno.",
+        task, file_contents, patch_rule, max_changes.max(1), js_dom_guideline
     );
     let buscar_schema = if require_patch {
         serde_json::json!({"type":"string", "minLength":1})
@@ -403,7 +411,7 @@ pub(crate) async fn delegate_to_programmer(
             }}
         }
     });
-    call_ollama_with_schema(model, &system_prompt, schema).await
+    call_ollama_with_schema_options(model, &system_prompt, schema, 8192, 0.2).await
 }
 
 async fn delegate_to_auditor(file_contents: &str, model: &str) -> String {

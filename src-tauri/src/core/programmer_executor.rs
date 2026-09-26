@@ -566,11 +566,20 @@ impl ProgrammerExecutor {
             }
         }
         let mut context_files = files.clone();
-        // Verification needs the implementation, even when only the verifier is edited.
-        if files
+        let is_verifier_target = files
             .iter()
-            .any(|f| f.contains("verify_") || f.contains("test_"))
-        {
+            .any(|f| f.contains("verify_") || f.contains("test_"));
+        let is_frontend_target = files.iter().any(|f| {
+            let lower = f.to_lowercase();
+            lower.ends_with(".js")
+                || lower.ends_with(".ts")
+                || lower.ends_with(".css")
+                || lower.ends_with(".html")
+        });
+
+        // Verification needs the implementation, and frontend files (like script.js)
+        // need the existing HTML/CSS files to inspect IDs and structure.
+        if is_verifier_target || is_frontend_target {
             if let Ok(entries) = std::fs::read_dir(workspace_path) {
                 let mut sources: Vec<_> = entries
                     .flatten()
@@ -582,7 +591,12 @@ impl ProgrammerExecutor {
                                 Some("html" | "css" | "js" | "ts" | "py" | "rs")
                             )
                         {
-                            Some(entry.file_name().to_string_lossy().to_string())
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if !is_internal_workspace_file(&name) {
+                                Some(name)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
@@ -598,11 +612,21 @@ impl ProgrammerExecutor {
         }
         let safe_files = crate::memory::read_files_safely(workspace_path, context_files).await;
         let repair_context = if !failing_rejected.is_empty() {
-            serde_json::json!({
-                "error": repair_error,
-                "cambios_a_corregir": failing_rejected,
-            })
-            .to_string()
+            if requires_full_file_rewrite(&repair_error) {
+                let failing_files: Vec<_> = failing_rejected.iter().map(|c| &c.archivo).collect();
+                serde_json::json!({
+                    "error": repair_error,
+                    "archivos_con_error": failing_files,
+                    "aviso": "El borrador anterior fue descartado por error de sintaxis o conflicto. Reescribe el archivo COMPLETO desde cero con buscar vacío y sintaxis válida y cerrada."
+                })
+                .to_string()
+            } else {
+                serde_json::json!({
+                    "error": repair_error,
+                    "cambios_a_corregir": failing_rejected,
+                })
+                .to_string()
+            }
         } else {
             String::new()
         };
