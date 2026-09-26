@@ -149,9 +149,14 @@ fn is_local_html_open_command(command: &str) -> bool {
 }
 
 fn local_http_server_command_for_request(prompt: &str, command: &str) -> Option<&'static str> {
+    let trimmed = command.trim();
+    let lower = trimmed.to_ascii_lowercase();
     (mission_requires_local_http_server(prompt)
         && (is_local_html_open_command(command)
-            || command.trim().to_ascii_lowercase().starts_with("npx serve")))
+            || lower.starts_with("npx serve")
+            || trimmed.is_empty()
+            || trimmed.starts_with("tool_")
+            || trimmed.starts_with("TOOL_")))
     .then_some("python -m http.server 8000 --bind 127.0.0.1")
 }
 
@@ -5586,6 +5591,22 @@ pub async fn run_agent_loop(
                     );
                     continue;
                 }
+                if browser_interaction_validation_world_hash == Some(runtime.current_world_hash()) {
+                    current_context.push_str(
+                        "[BLOQUEO DE REGRESIÓN]: Las pruebas interactivas ya pasaron con éxito para la versión actual del código. No se permite volver a editar archivos sin una prueba fallida. Procede al cierre con TOOL_FINISH.\n\n",
+                    );
+                    forced_next_tool = Some((
+                        "TOOL_FINISH".to_string(),
+                        "Las pruebas interactivas ya pasaron con éxito en la versión actual del workspace. Procede al cierre con TOOL_FINISH.".to_string(),
+                    ));
+                    emit_event(
+                        &app_handle,
+                        runtime.current_step(),
+                        "[FSM LOCK] El Crítico intentó modificar código cuando las pruebas ya pasaron. Forzando TOOL_FINISH.",
+                        "WARNING",
+                    );
+                    continue;
+                }
                 // FIX: If the Critic wants to fix code, we gracefully auto-transition to Executor
                 // instead of throwing an angry [ACCESO DENEGADO] and forcing a loop.
                 current_role = AgentRole::Executor;
@@ -6146,7 +6167,7 @@ pub async fn run_agent_loop(
                     );
                     programmer_cooldown_hits = 0;
                     forced_next_tool = Some(("TOOL_BACKGROUND_START".to_string(), comando.clone()));
-                } else if comando.trim().is_empty() {
+                } else if comando.trim().is_empty() || comando.trim().starts_with("TOOL_") {
                     // Track consecutive empties — after 2, force a specific action
                     let empty_key = "__EMPTY_CMD__".to_string();
                     let empty_count = comandos_ejecutados_historico
@@ -7213,17 +7234,23 @@ pub async fn run_agent_loop(
             }
             "TOOL_BACKGROUND_START" => {
                 let original_background_command = comando.clone();
-                let comando = local_http_server_command_for_request(
+                let mut comando = local_http_server_command_for_request(
                     &original_prompt_parsed,
                     &original_background_command,
                 )
                 .unwrap_or(&original_background_command)
                 .to_string();
+                if (comando.trim().is_empty() || comando.trim().starts_with("TOOL_"))
+                    && (std::path::Path::new(&workspace_path).join("index.html").exists()
+                        || mission_requires_local_http_server(&original_prompt_parsed))
+                {
+                    comando = "python -m http.server 8000 --bind 127.0.0.1".to_string();
+                }
                 if comando != original_background_command {
                     emit_event(
                         &app_handle,
                         runtime.current_step(),
-                        "[SERVIDOR LOCAL] Se reemplazó la apertura file:// por un servidor HTTP en segundo plano, según el mandato.",
+                        "[SERVIDOR LOCAL] Se asignó el servidor HTTP en segundo plano según el mandato.",
                         "INFO",
                     );
                 }
@@ -8733,6 +8760,15 @@ pub async fn run_agent_loop(
                                         guidance
                                     ));
                                 }
+                            } else {
+                                current_role = AgentRole::Critic;
+                                forced_next_tool = Some((
+                                    "TOOL_FINISH".to_string(),
+                                    "La evaluación visual y las pruebas funcionales pasaron exitosamente. Procede al cierre definitivo de la misión con TOOL_FINISH.".to_string(),
+                                ));
+                                current_context.push_str(
+                                    "[VALIDACIÓN COMPLETA]: Evaluación visual y pruebas interactivas aprobadas. Procede con TOOL_FINISH.\n\n",
+                                );
                             }
                         } else {
                             let msg =
@@ -8916,6 +8952,40 @@ pub async fn run_agent_loop(
                                 if browser_test_requested {
                                     browser_interaction_validation_world_hash =
                                         Some(runtime.current_world_hash());
+                                    current_role = AgentRole::Critic;
+                                    visual_validation_required |= mission_requires_visual_verification(
+                                        &original_prompt_parsed,
+                                        &workspace_path,
+                                    );
+                                    if visual_validation_required
+                                        && visual_validation_world_hash
+                                            != Some(runtime.current_world_hash())
+                                    {
+                                        let target_url = last_local_ui_url
+                                            .clone()
+                                            .unwrap_or_else(|| "http://127.0.0.1:8000/".to_string());
+                                        forced_next_tool = Some((
+                                            "TOOL_VISION_EVALUATOR".to_string(),
+                                            target_url,
+                                        ));
+                                        current_context.push_str(
+                                            "[PRUEBAS DE NAVEGADOR PASARON]: Procede inmediatamente con la evaluación visual (TOOL_VISION_EVALUATOR).\n\n",
+                                        );
+                                    } else {
+                                        forced_next_tool = Some((
+                                            "TOOL_FINISH".to_string(),
+                                            "Todas las pruebas interactivas de navegador y validaciones pasaron exitosamente. Procede al cierre de la misión con TOOL_FINISH.".to_string(),
+                                        ));
+                                        current_context.push_str(
+                                            "[PRUEBAS DE NAVEGADOR PASARON]: Todas las verificaciones requeridas están completas. Procede con TOOL_FINISH.\n\n",
+                                        );
+                                    }
+                                } else if !browser_interaction_validation_required {
+                                    current_role = AgentRole::Critic;
+                                    forced_next_tool = Some((
+                                        "TOOL_FINISH".to_string(),
+                                        "Todas las pruebas pasaron exitosamente. Procede al cierre de la misión con TOOL_FINISH.".to_string(),
+                                    ));
                                 }
                                 mandatory_tools_executed.insert("TOOL_TESTER".to_string());
                                 current_context.push_str(&format!("Resultado Tests:\n{}\n\n[INSTRUCCIÓN ESTRICTA DE SEGURIDAD]: La comprobación ejecutada pasó. Revisa qué cubrió y cuáles criterios siguen sin evidencia; no declares completa la misión si queda alguna prueba o revisión requerida. No repitas exactamente el mismo runner sobre el mismo estado.\n\n", obs.payload));
