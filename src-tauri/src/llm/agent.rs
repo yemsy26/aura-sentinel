@@ -1379,8 +1379,8 @@ fn programmer_loop_validation_command(
     None
 }
 
-const MAX_PROGRAMMER_STALL_RECOVERIES: u8 = 2;
-const MAX_PROGRAMMER_CALLS_WITHOUT_VALIDATION: u8 = 3;
+const MAX_PROGRAMMER_STALL_RECOVERIES: u8 = 4;
+const MAX_PROGRAMMER_CALLS_WITHOUT_VALIDATION: u8 = 4;
 
 /// Return the script path for direct Python execution. Module and inline-code
 /// invocations (`python -m ...`, `python -c ...`) are not workspace files.
@@ -1628,6 +1628,43 @@ fn deterministic_forced_decision(
                 reason.trim()
             ));
             Some(value)
+        }
+        "TOOL_TESTER" if !reason.trim().is_empty() => {
+            let mut value = base(forced);
+            if reason.contains("BROWSER_TEST:") {
+                if let Some(start) = reason.find("BROWSER_TEST:") {
+                    let plan_str = reason[start..].trim().trim_matches('`').trim();
+                    if !plan_str.contains("[...]") {
+                        value["comando"] = serde_json::json!(plan_str);
+                        return Some(value);
+                    }
+                }
+                let url = if let Some(url_start) = reason.find("http://") {
+                    let end = reason[url_start..]
+                        .find(|c: char| c.is_whitespace() || c == '"' || c == '`' || c == '\\' || c == '\'')
+                        .map(|e| url_start + e)
+                        .unwrap_or(reason.len());
+                    &reason[url_start..end]
+                } else if let Some(url_start) = reason.find("https://") {
+                    let end = reason[url_start..]
+                        .find(|c: char| c.is_whitespace() || c == '"' || c == '`' || c == '\\' || c == '\'')
+                        .map(|e| url_start + e)
+                        .unwrap_or(reason.len());
+                    &reason[url_start..end]
+                } else {
+                    "http://127.0.0.1:8000/"
+                };
+                let browser_cmd = format!(
+                    r#"BROWSER_TEST: {{"url":"{url}","steps":[{{"action":"assert_visible","selector":"body"}},{{"action":"wait","milliseconds":500}},{{"action":"assert_no_console_errors"}}]}}"#
+                );
+                value["comando"] = serde_json::json!(browser_cmd);
+                Some(value)
+            } else if reason.contains("node ") || reason.contains("cargo ") || reason.contains("python ") {
+                value["comando"] = serde_json::json!(reason.trim());
+                Some(value)
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -2846,10 +2883,14 @@ pub async fn run_agent_loop(
     app_handle: AppHandle,
 ) -> Result<String, String> {
     // P0-G Fix: Workspace Authority - always canonicalize to absolute paths to prevent '.' bypasses
-    let workspace_path = std::path::Path::new(&raw_workspace_path)
+    let raw_canon = std::path::Path::new(&raw_workspace_path)
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(&raw_workspace_path))
         .to_string_lossy()
+        .to_string();
+    let workspace_path = raw_canon
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&raw_canon)
         .to_string();
 
     // PRE-FLIGHT CHECK

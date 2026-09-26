@@ -385,6 +385,9 @@ pub(crate) async fn delegate_to_programmer(
     let js_dom_guideline = concat!(
         "Para JavaScript de navegador: usa manipulacion directa del DOM ",
         "(document.createElement, textContent, addEventListener) o delegacion de eventos. ",
+        "Declara SIEMPRE cada variable o elemento antes de usarlo (ej: const form = document.getElementById('mi-id')). ",
+        "NUNCA uses variables globales no declaradas ni asumas que los IDs de HTML son variables globales en JavaScript. ",
+        "Los elementos de la pantalla inicial deben ser visibles por defecto; no ocultes el formulario principal ni uses display:none salvo tras accion del usuario. ",
         "NUNCA uses atributos de manejadores inline (onclick, onsubmit, onchange, etc.) dentro de ",
         "cadenas HTML o template literals en JavaScript; ",
         "las comillas anidadas rompen la serializacion JSON del codigo y causan errores de sintaxis. ",

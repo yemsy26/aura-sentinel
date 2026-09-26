@@ -70,6 +70,7 @@ pub async fn validate_javascript(workspace_path: &str) -> Result<(), String> {
         {
             return Err(format!("[JS_UNRESOLVED_GLOBAL] {} usa 'new Chart(...)' pero no define Chart ni enlaza Chart.js. Implementa el gráfico con Canvas/JavaScript puro o añade explícitamente la dependencia.", js_file));
         }
+        validate_undeclared_dom_listeners(&js_file, &content)?;
         check_source(
             workspace_path,
             &js_file,
@@ -165,6 +166,7 @@ pub async fn validate_javascript_files(
                 {
                     return Err(format!("[JS_UNRESOLVED_GLOBAL] {} usa 'new Chart(...)' pero no define Chart ni enlaza Chart.js.", file));
                 }
+                validate_undeclared_dom_listeners(file, &source)?;
                 check_source(
                     workspace_path,
                     file,
@@ -286,6 +288,52 @@ async fn check_source(workspace: &str, name: &str, source: &str, mode: &str) -> 
         ))
     }
 }
+
+fn validate_undeclared_dom_listeners(file_name: &str, content: &str) -> Result<(), String> {
+    let listener_re = match regex::Regex::new(r"\b([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\.\s*addEventListener\s*\(") {
+        Ok(re) => re,
+        Err(_) => return Ok(()),
+    };
+    for cap in listener_re.captures_iter(content) {
+        let var_name = &cap[1];
+        if matches!(
+            var_name,
+            "window"
+                | "document"
+                | "globalThis"
+                | "self"
+                | "this"
+                | "e"
+                | "event"
+                | "el"
+                | "element"
+                | "btn"
+                | "button"
+                | "form"
+                | "input"
+                | "item"
+                | "node"
+                | "target"
+        ) {
+            continue;
+        }
+        let is_declared = content.contains(&format!("const {}", var_name))
+            || content.contains(&format!("let {}", var_name))
+            || content.contains(&format!("var {}", var_name))
+            || content.contains(&format!("function {}", var_name))
+            || content.contains(&format!("{} =", var_name))
+            || content.contains(&format!("({}", var_name))
+            || content.contains(&format!(", {}", var_name));
+        if !is_declared {
+            return Err(format!(
+                "[JS_UNDECLARED_ELEMENT] {}: '{}' se usa con addEventListener pero no está declarado en este archivo. Añade antes: const {} = document.getElementById('{}') o declara la variable.",
+                file_name, var_name, var_name, var_name
+            ));
+        }
+    }
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {
