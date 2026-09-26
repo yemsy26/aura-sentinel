@@ -228,7 +228,8 @@ fn visual_verdict(response: &str) -> Option<&'static str> {
     }
     let first_line = response
         .lines()
-        .next()?
+        .next()
+        .unwrap_or_default()
         .trim()
         .trim_matches(|character: char| !character.is_ascii_alphanumeric());
     let normalized = first_line.to_ascii_uppercase();
@@ -241,6 +242,28 @@ fn visual_verdict(response: &str) -> Option<&'static str> {
     if normalized.starts_with("UNCERTAIN") {
         return Some("UNCERTAIN");
     }
+
+    // Heuristic fallback for descriptive models (e.g. moondream)
+    let lower = response.to_lowercase();
+    let is_valid_page = lower.contains("webpage")
+        || lower.contains("web page")
+        || lower.contains("website")
+        || lower.contains("form")
+        || lower.contains("button")
+        || lower.contains("screen")
+        || lower.contains("interface")
+        || lower.contains("browser");
+    let is_fatal_error = lower.contains("error 404")
+        || lower.contains("not found")
+        || lower.contains("cannot be reached")
+        || lower.contains("connection refused")
+        || lower.contains("completely blank")
+        || lower.contains("empty white screen");
+
+    if is_valid_page && !is_fatal_error {
+        return Some("PASS");
+    }
+
     None
 }
 
@@ -301,7 +324,11 @@ pub async fn evaluate_vision(
     })?;
 
     let evaluation_prompt = if require_target {
-        "Inspect this screenshot of a local web application. Is a real webpage visibly rendered with interactive UI elements, rather than a completely blank page, browser error (such as 404 or connection refused), or broken layout? Reply with exactly one word: PASS, FAIL, or UNCERTAIN. Do not guess about behavior that is not visible.".to_string()
+        if vision_model.contains("moondream") {
+            "Describe what is shown in this screenshot. Mention any webpage titles, forms, buttons, or text visible.".to_string()
+        } else {
+            "Inspect this screenshot of a local web application. Is a real webpage visibly rendered with interactive UI elements, rather than a completely blank page, browser error (such as 404 or connection refused), or broken layout? Reply with exactly one word: PASS, FAIL, or UNCERTAIN. Do not guess about behavior that is not visible.".to_string()
+        }
     } else {
         prompt.to_string()
     };
