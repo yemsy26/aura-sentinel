@@ -99,14 +99,6 @@ impl MissionContract {
                 true,
             );
         }
-        if files.is_empty() {
-            contract.add_criterion(
-                "AC-DELIVERABLES",
-                "Revisión de los entregables solicitados",
-                VerificationMethod::ManualReview,
-                true,
-            );
-        }
         contract
     }
 
