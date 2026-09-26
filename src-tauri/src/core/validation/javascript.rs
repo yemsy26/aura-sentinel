@@ -71,6 +71,7 @@ pub async fn validate_javascript(workspace_path: &str) -> Result<(), String> {
             return Err(format!("[JS_UNRESOLVED_GLOBAL] {} usa 'new Chart(...)' pero no define Chart ni enlaza Chart.js. Implementa el gráfico con Canvas/JavaScript puro o añade explícitamente la dependencia.", js_file));
         }
         validate_undeclared_dom_listeners(&js_file, &content)?;
+        validate_dom_element_ids(workspace_path, &js_file, &content)?;
         check_source(
             workspace_path,
             &js_file,
@@ -167,6 +168,7 @@ pub async fn validate_javascript_files(
                     return Err(format!("[JS_UNRESOLVED_GLOBAL] {} usa 'new Chart(...)' pero no define Chart ni enlaza Chart.js.", file));
                 }
                 validate_undeclared_dom_listeners(file, &source)?;
+                validate_dom_element_ids(workspace_path, file, &source)?;
                 check_source(
                     workspace_path,
                     file,
@@ -184,6 +186,23 @@ pub async fn validate_javascript_files(
                     .await
                     .map_err(|error| format!("[HTML_READ_ERROR] {}: {}", file, error))?;
                 validate_canvas_bindings(file, &source)?;
+                let js_entries: Vec<(String, String)> = std::fs::read_dir(root)
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter_map(|entry| {
+                        let p = entry.path();
+                        if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("js")) {
+                            std::fs::read_to_string(&p).ok().map(|src| (p.file_name().unwrap().to_string_lossy().to_string(), src))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for (js_name, js_src) in js_entries {
+                    validate_dom_element_ids(workspace_path, &js_name, &js_src)?;
+                }
                 let selector = scraper::Selector::parse("script").unwrap();
                 let inline_scripts: Vec<(String, bool)> = {
                     let document = scraper::Html::parse_document(&source);
@@ -334,6 +353,92 @@ fn validate_undeclared_dom_listeners(file_name: &str, content: &str) -> Result<(
     Ok(())
 }
 
+fn validate_dom_element_ids(workspace_path: &str, file_name: &str, content: &str) -> Result<(), String> {
+    let root = Path::new(workspace_path);
+    let mut html_contents = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                if ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm") {
+                    if let Ok(c) = std::fs::read_to_string(&p) {
+                        html_contents.push(c);
+                    }
+                }
+            }
+        }
+    }
+
+    if html_contents.is_empty() {
+        return Ok(());
+    }
+
+    let id_attr_re = match regex::Regex::new(r#"(?i)\bid\s*=\s*["']([^"']+)["']"#) {
+        Ok(re) => re,
+        Err(_) => return Ok(()),
+    };
+    let mut html_ids = std::collections::HashSet::new();
+    for html in &html_contents {
+        for cap in id_attr_re.captures_iter(html) {
+            html_ids.insert(cap[1].to_string());
+        }
+    }
+
+    if html_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Direct: document.getElementById('xyz').addEventListener(...)
+    let direct_re = match regex::Regex::new(r#"document\.getElementById\(\s*['"]([^'"]+)['"]\s*\)\s*\.\s*addEventListener\s*\("#) {
+        Ok(re) => re,
+        Err(_) => return Ok(()),
+    };
+    for cap in direct_re.captures_iter(content) {
+        let el_id = &cap[1];
+        if !html_ids.contains(el_id) {
+            return Err(format!(
+                "[JS_DOM_ID_NOT_FOUND] {}: 'document.getElementById(\"{}\")' intenta registrar un addEventListener, pero ningún archivo HTML del workspace define id=\"{}\". Define el elemento <... id=\"{}\"> en el HTML o corrige el id en JavaScript.",
+                file_name, el_id, el_id, el_id
+            ));
+        }
+    }
+
+    // Bound: const form = document.getElementById('task-form'); ... form.addEventListener(...)
+    let bound_re = match regex::Regex::new(r#"(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*document\.getElementById\(\s*['"]([^'"]+)['"]\s*\)"#) {
+        Ok(re) => re,
+        Err(_) => return Ok(()),
+    };
+    for cap in bound_re.captures_iter(content) {
+        let var_name = &cap[1];
+        let el_id = &cap[2];
+        if !html_ids.contains(el_id) {
+            let listener_usage = format!("{}.addEventListener", var_name);
+            let listener_usage_ws = format!("{} .addEventListener", var_name);
+            let has_listener = content.contains(&listener_usage) || content.contains(&listener_usage_ws);
+            if has_listener {
+                let optional_chain = format!("{}?.addEventListener", var_name);
+                let guard1 = format!("if ({})", var_name);
+                let guard2 = format!("if ({} ", var_name);
+                let guard3 = format!("if(!{})", var_name);
+                let guard4 = format!("if (!{})", var_name);
+                if !content.contains(&optional_chain)
+                    && !content.contains(&guard1)
+                    && !content.contains(&guard2)
+                    && !content.contains(&guard3)
+                    && !content.contains(&guard4)
+                {
+                    return Err(format!(
+                        "[JS_DOM_ID_NOT_FOUND] {}: '{}' se obtiene con document.getElementById(\"{}\") y se usa en addEventListener sin comprobar si existe, pero ningún archivo HTML del workspace define id=\"{}\". Añade el elemento <... id=\"{}\"> en el HTML o añade comprobación de existencia 'if ({})'.",
+                        file_name, var_name, el_id, el_id, el_id, var_name
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -407,4 +512,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
         assert!(result.unwrap_err().contains("CANVAS_BINDING_ERROR"));
     }
+
+    #[tokio::test]
+    async fn missing_dom_element_id_with_listener_is_rejected() {
+        let root = std::env::temp_dir().join(format!("aura-dom-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("index.html"),
+            "<html><body><form id='login-form'></form></body></html>",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("script.js"),
+            "const taskForm = document.getElementById('task-form'); taskForm.addEventListener('submit', () => {});",
+        )
+        .unwrap();
+        let result = super::validate_javascript(root.to_str().unwrap()).await;
+        let _ = std::fs::remove_dir_all(root);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("JS_DOM_ID_NOT_FOUND"));
+    }
+
+    #[tokio::test]
+    async fn guarded_dom_element_id_with_listener_is_accepted() {
+        let root = std::env::temp_dir().join(format!("aura-dom-guarded-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("index.html"),
+            "<html><body><form id='login-form'></form></body></html>",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("script.js"),
+            "const taskForm = document.getElementById('task-form'); if (taskForm) { taskForm.addEventListener('submit', () => {}); }",
+        )
+        .unwrap();
+        let result = super::validate_javascript(root.to_str().unwrap()).await;
+        let _ = std::fs::remove_dir_all(root);
+        assert!(result.is_ok());
+    }
 }
+

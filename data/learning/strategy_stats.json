@@ -2,12 +2,12 @@
   "CompileFirst": {
     "strategy": "CompileFirst",
     "language": "unknown",
-    "attempts": 22,
+    "attempts": 25,
     "successes": 18,
     "partial": 0,
-    "failures": 4,
-    "total_steps": 123,
-    "recoveries": 4,
+    "failures": 7,
+    "total_steps": 145,
+    "recoveries": 7,
     "successful_recoveries": 0
   }
 }

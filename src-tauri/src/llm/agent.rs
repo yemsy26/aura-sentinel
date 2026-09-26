@@ -8497,6 +8497,7 @@ pub async fn run_agent_loop(
                                     obs.physical_files_changed.unwrap_or(0),
                                 );
                                 if workspace_progress {
+                                    tester_attempts = 0;
                                     if approved_consultation_task {
                                         reset_consultation_audit_stall_tracking(
                                             &mut last_consultation_audit_world,
@@ -9133,8 +9134,9 @@ pub async fn run_agent_loop(
                                     comandos_ejecutados_historico.clear();
                                     current_role = AgentRole::Executor;
                                     critic_feedback = Some(fail_msg.clone());
+                                    verifier_diagnostic = fail_msg.clone();
                                     current_context.push_str(&format!("[AUTO-DEBUGGER] Los tests fallaron:\n{}\n\nLos archivos actuales siguen en disco. Debes corregirlos usando TOOL_PROGRAMMER.\n", fail_msg));
-                                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), "Los tests fallaron, el sistema forzó TOOL_PROGRAMMER para corregir los errores.".to_string()));
+                                    forced_next_tool = Some(("TOOL_PROGRAMMER".to_string(), format!("Corrige el siguiente error detectado en las pruebas: {}", fail_msg)));
                                 }
                             }
                         }

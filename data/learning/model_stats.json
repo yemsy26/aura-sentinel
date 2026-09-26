@@ -16,15 +16,15 @@
   "qwen2.5-coder:7b": {
     "model": "qwen2.5-coder:7b",
     "language": "unknown",
-    "attempts": 21,
+    "attempts": 24,
     "successes": 17,
     "partial": 0,
-    "failures": 4,
-    "total_steps": 120,
+    "failures": 7,
+    "total_steps": 142,
     "total_latency_ms": 0,
-    "tool_failures": 6,
+    "tool_failures": 11,
     "compile_failures": 0,
     "test_failures": 0,
-    "recoveries": 4
+    "recoveries": 7
   }
 }
