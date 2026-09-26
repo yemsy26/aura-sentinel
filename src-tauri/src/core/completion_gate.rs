@@ -120,7 +120,8 @@ impl CompletionGate {
                                         || (norm == "python -m unittest"
                                             || norm.starts_with("python -m unittest "))
                                         || (norm == "python -m pytest"
-                                            || norm.starts_with("python -m pytest ")))
+                                            || norm.starts_with("python -m pytest "))
+                                        || norm == "run_tests")
                                     && paths_match(cwd, &ws_str)
                             }
                             _ => false,

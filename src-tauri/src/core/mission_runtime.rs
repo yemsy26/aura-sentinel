@@ -642,7 +642,7 @@ impl MissionRuntime {
         } else {
             // Record implicit evidence for successful terminal / validator tool calls
             let tool_upper = obs.tool_name.to_uppercase();
-            if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
+            if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") || tool_upper.contains("TESTER") {
                 use crate::core::evidence::{EvidenceKind, StructuredFact};
 
                 if let Some(exit_code) = obs.exit_code {
@@ -1083,7 +1083,7 @@ impl MissionRuntime {
                     });
                 }
                 let tool_upper = obs.tool_name.to_uppercase();
-                if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") {
+                if tool_upper.contains("TERMINAL") || tool_upper.contains("VALIDATOR") || tool_upper.contains("TESTER") {
                     let official_verifier_cmd = self.contract.acceptance_criteria.iter().find_map(|ac| {
                         if let crate::core::mission_contract::VerificationMethod::SemanticVerification { command } = &ac.verification {
                             Some(command.clone())
