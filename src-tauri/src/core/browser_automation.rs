@@ -463,7 +463,10 @@ fn run_browser_test(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if output.status.success() && stdout.contains("BROWSER_TEST_PASS:") {
-        Ok(crate::core::tool_registry::ExecutionResult::success(stdout))
+        let mut res = crate::core::tool_registry::ExecutionResult::success(stdout);
+        res.command = Some("run_tests".to_string());
+        res.cwd = Some(workspace.to_string());
+        Ok(res)
     } else {
         Err(format!(
             "{}{}{}",
