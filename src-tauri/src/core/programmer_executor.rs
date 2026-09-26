@@ -679,7 +679,7 @@ impl ProgrammerExecutor {
             &files,
             require_incremental_patch,
             require_empty_search,
-            if require_all_targets { files.len() } else { 2 },
+            files.len().max(1),
             &model,
         )
         .await;

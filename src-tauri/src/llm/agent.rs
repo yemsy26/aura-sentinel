@@ -3883,15 +3883,51 @@ pub async fn run_agent_loop(
                 &runtime.contract,
                 &workspace_path,
             );
-            let Some(command) = validation_command else {
-                let message = "NO_PROGRESS_EXHAUSTED: El agente repitió escrituras sin un comando de verificación disponible. La misión se detuvo antes de consumir los 50 pasos y conservó los archivos; no se declararon pruebas ni resultados.".to_string();
-                emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
-                persist_and_learn_failure!(&message);
-                return Ok(serde_json::json!({
-                    "status": "INCOMPLETE",
-                    "respuesta_conversacional": message
-                })
-                .to_string());
+            let command = match validation_command {
+                Some(cmd) => cmd,
+                None => {
+                    let has_html = runtime
+                        .state_anchor
+                        .existing_files
+                        .iter()
+                        .any(|f| f.eq_ignore_ascii_case("index.html") || f.ends_with(".html"));
+                    if has_html
+                        || mission_requires_visual_verification(&original_prompt_parsed, &workspace_path)
+                    {
+                        programmer_stall_recoveries = programmer_stall_recoveries.saturating_add(1);
+                        programmer_calls_since_validation = 0;
+                        current_role = AgentRole::Critic;
+                        let (next_tool, guidance) = web_validation_recovery_action(
+                            &original_prompt_parsed,
+                            &workspace_path,
+                            last_local_ui_url.as_deref(),
+                            last_http_server_task_id.as_deref(),
+                        )
+                        .unwrap_or_else(|| {
+                            (
+                                "TOOL_BACKGROUND_START".to_string(),
+                                "python -m http.server 8000 --bind 127.0.0.1".to_string(),
+                            )
+                        });
+                        forced_next_tool = Some((next_tool.clone(), guidance.clone()));
+                        let message = format!(
+                            "[NO-PROGRESS GUARD] Proyecto web detectado tras escrituras; transicionando a validación en navegador: {} — {}",
+                            next_tool, guidance
+                        );
+                        current_context.push_str(&format!("{message}\n\n"));
+                        emit_event(&app_handle, runtime.current_step(), &message, "WARNING");
+                        continue;
+                    }
+
+                    let message = "NO_PROGRESS_EXHAUSTED: El agente repitió escrituras sin un comando de verificación disponible. La misión se detuvo antes de consumir los 50 pasos y conservó los archivos; no se declararon pruebas ni resultados.".to_string();
+                    emit_event(&app_handle, runtime.current_step(), &message, "ERROR");
+                    persist_and_learn_failure!(&message);
+                    return Ok(serde_json::json!({
+                        "status": "INCOMPLETE",
+                        "respuesta_conversacional": message
+                    })
+                    .to_string());
+                }
             };
 
             programmer_stall_recoveries = programmer_stall_recoveries.saturating_add(1);
