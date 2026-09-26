@@ -7406,7 +7406,22 @@ pub async fn run_agent_loop(
                                 &format!("[UI LOCAL] URL confirmada mediante {confirmation_source}: {url}"),
                                 "SUCCESS",
                             );
-                            if mission_requires_visual_verification(
+                            if browser_interaction_validation_required
+                                && browser_interaction_validation_world_hash
+                                    != Some(runtime.current_world_hash())
+                            {
+                                let guidance = browser_interaction_test_guidance(
+                                    &url,
+                                    &original_prompt_parsed,
+                                );
+                                current_role = AgentRole::Critic;
+                                forced_next_tool =
+                                    Some(("TOOL_TESTER".to_string(), guidance.clone()));
+                                current_context.push_str(&format!(
+                                    "[SERVIDOR CONFIRMADO]: Ejecuta primero las pruebas de interacción en el navegador: {}\n\n",
+                                    guidance
+                                ));
+                            } else if mission_requires_visual_verification(
                                 &original_prompt_parsed,
                                 &workspace_path,
                             ) {
@@ -8118,6 +8133,11 @@ pub async fn run_agent_loop(
                                     "Plan completado. Inicia la creación o modificación de los archivos con TOOL_PROGRAMMER.".to_string(),
                                 ));
                         }
+                    } else if current_role == AgentRole::Executor && forced_next_tool.is_none() {
+                        forced_next_tool = Some((
+                            "TOOL_PROGRAMMER".to_string(),
+                            "Reflexión completada. Aplica las correcciones necesarias con TOOL_PROGRAMMER.".to_string(),
+                        ));
                     }
                 }
             }
@@ -8932,20 +8952,19 @@ pub async fn run_agent_loop(
                                         "[PRUEBAS DE LÓGICA PASARON]: falta confirmar el servidor local para probar la interfaz interactiva.\n\n",
                                     );
                                 }
-                            } else if tester_success_hits >= 1 {
-                                let res_msg = "[SISTEMA INTERCEPTO] Error Crítico: Bucle infinito de pruebas exitosas detectado. Abortando misión.";
-                                emit_event(&app_handle, runtime.current_step(), res_msg, "FATAL");
-                                let final_res = FinalResponse {
-                                    status: "ERROR".to_string(),
-                                    respuesta_conversacional: "Los tests ya pasaron con éxito, pero me quedé atascado ejecutándolos en bucle. He detenido el proceso para evitar un ciclo infinito. El cierre de la misión no está verificado.".to_string(),
-                                };
-                                crate::llm::router::record_model_result(
-                                    &orchestrator_model,
-                                    &crate::llm::router::TaskType::Orchestrator,
-                                    final_res.status == "FINISH",
+                            } else if tester_success_hits >= 3 {
+                                emit_event(
+                                    &app_handle,
                                     runtime.current_step(),
+                                    "[AUTO-CIERRE] Las pruebas han pasado repetidamente con éxito. Forzando cierre con TOOL_FINISH.",
+                                    "INFO",
                                 );
-                                return Ok(serde_json::to_string(&final_res).unwrap());
+                                current_role = AgentRole::Critic;
+                                forced_next_tool = Some((
+                                    "TOOL_FINISH".to_string(),
+                                    "Las pruebas han pasado exitosamente en múltiples ocasiones. Procede al cierre de la misión con TOOL_FINISH.".to_string(),
+                                ));
+                                continue;
                             } else {
                                 tester_success_hits += 1;
                                 runtime.cognitive_state.metrics.successful_verifications += 1;

@@ -300,11 +300,8 @@ pub async fn evaluate_vision(
         )
     })?;
 
-    let short_prompt = prompt.chars().take(500).collect::<String>();
     let evaluation_prompt = if require_target {
-        format!(
-            "This screenshot should show an application for this objective: {short_prompt}. Is a real webpage visibly rendered rather than a blank page, browser error, or obviously broken layout? Reply with exactly one word: PASS, FAIL, or UNCERTAIN. Use UNCERTAIN if you cannot tell. Do not guess about behavior that is not visible."
-        )
+        "Inspect this screenshot of a local web application. Is a real webpage visibly rendered with interactive UI elements, rather than a completely blank page, browser error (such as 404 or connection refused), or broken layout? Reply with exactly one word: PASS, FAIL, or UNCERTAIN. Do not guess about behavior that is not visible.".to_string()
     } else {
         prompt.to_string()
     };

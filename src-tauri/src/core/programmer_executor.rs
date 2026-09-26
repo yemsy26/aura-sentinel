@@ -483,6 +483,17 @@ impl ProgrammerExecutor {
             ));
         }
 
+        let is_no_op = {
+            let t = task.to_lowercase();
+            (t.contains("no necesita") || t.contains("no requiere") || t.contains("no se requiere") || t.contains("no hace falta"))
+                && (t.contains("modifica") || t.contains("cambio") || t.contains("accion") || t.contains("acción"))
+        };
+        if is_no_op {
+            return Ok(ExecutionResult::success(
+                "No se requieren modificaciones en los archivos; el estado actual se conserva intacto.",
+            ));
+        }
+
         // Only discover workspace-wide failures when no explicit phase/file scope
         // was supplied. A phase must not inherit unrelated broken files.
         if files.is_empty() {
