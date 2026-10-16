@@ -288,7 +288,8 @@ pub(crate) fn step_message(event: &Value, workspace: &str) -> String {
             .collect();
         return format!("Plan generado: {}", phases.join(" | "));
     }
-    if tool == "paso_hecho" {
+    let error = event["error"].as_bool().unwrap_or(false);
+    if tool == "paso_hecho" && !error {
         let done = plan_items.iter().filter(|line| line.starts_with("- [x]")).count();
         if done > 0 {
             return format!("[FASE {done} COMPLETADA] {}", text("resultado"));
@@ -297,7 +298,19 @@ pub(crate) fn step_message(event: &Value, workspace: &str) -> String {
     let detail = short_path(text("detalle"), workspace);
     let result = text("resultado");
     let arrow = if result.is_empty() { String::new() } else { format!(" → {result}") };
-    format!("[{}] {detail}{arrow}", tool.to_uppercase()).replace("]  →", "] →")
+    // En un error, la primera línea concreta del informe dice qué falla ("- texto cortado ...").
+    let reason = if error {
+        text("salida")
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .find(|line| line.starts_with("- "))
+            .map(|line| format!(" · {}", line.trim_start_matches("- ")))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    format!("[{}] {detail}{arrow}{reason}", tool.to_uppercase()).replace("]  →", "] →")
 }
 
 fn plan_step_text(line: &str) -> &str {
@@ -451,6 +464,19 @@ mod tests {
         assert_eq!(step_message(&event, "C:\\ws"), "Plan generado: Fase 1: Crear juego.py | Fase 2: Tests");
         let done = json!({"herramienta": "paso_hecho", "plan": plan, "resultado": "Paso 1 hecho"});
         assert_eq!(step_message(&done, "C:\\ws"), "[FASE 1 COMPLETADA] Paso 1 hecho");
+        let rejected = json!({"herramienta": "paso_hecho", "plan": plan, "error": true, "resultado": "RECHAZADO: falta"});
+        assert_eq!(step_message(&rejected, "C:\\ws"), "[PASO_HECHO] → RECHAZADO: falta");
+    }
+
+    #[test]
+    fn errors_show_the_first_concrete_reason() {
+        let event = json!({"herramienta": "ver_pantalla", "detalle": "index.html", "error": true,
+            "resultado": "VISUAL: PROBLEMAS en index.html",
+            "salida": "VISUAL: PROBLEMAS en index.html\nComprobación automática:\n- texto cortado: 'Puntos'\n- otro"});
+        assert_eq!(
+            step_message(&event, "C:\\ws"),
+            "[VER_PANTALLA] index.html → VISUAL: PROBLEMAS en index.html · texto cortado: 'Puntos'"
+        );
     }
 
     #[test]
