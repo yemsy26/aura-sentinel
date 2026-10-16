@@ -25,8 +25,6 @@ npm run tauri build
 
 Deja `AuraSentinel_<versión>_x64-setup.exe` (NSIS) y un `.msi` en `src-tauri\target\release\bundle\`
 (o en `%CARGO_TARGET_DIR%\release\bundle\`). El identificador de la app es `com.yemsy.aurasentinel`.
-(o en `%CARGO_TARGET_DIR%
-eleaseundle\`). El identificador de la app es `com.yemsy.aurasentinel`.
 
 Para depurar la interfaz de la versión instalada, arráncala con
 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` y abre `edge://inspect`: Aura añade sus
