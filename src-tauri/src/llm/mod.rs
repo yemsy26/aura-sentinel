@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod agent;
+pub mod local_agent;
 pub mod phase_planner;
 pub mod router;
 pub mod translator;
@@ -521,6 +522,18 @@ pub async fn process_user_prompt(
     }
     if let Some(idx) = user_message.find("[SYSTEM]") {
         user_message = user_message[..idx].trim().to_string();
+    }
+
+    // Motor Agente Local: planifica, programa, verifica y revisa por su cuenta con Bionic/LM Studio.
+    if let Some(engine) = local_agent::selected(&app_handle) {
+        return match engine {
+            Ok(dir) => {
+                local_agent::run_mission(&app_handle, dir, workspace_path, user_message, orchestrator_model)
+                    .await
+            }
+            Err(reason) => Ok(serde_json::json!({"status": "ERROR", "respuesta_conversacional": reason})
+                .to_string()),
+        };
     }
 
     let mut profile_snapshot =

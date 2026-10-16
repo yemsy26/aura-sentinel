@@ -95,6 +95,33 @@ async function loadOllamaModels() {
     }
 }
 
+// Motor de las misiones: Agente Local (Bionic/LM Studio) o el motor original de Aura (Ollama).
+async function loadEngineSelector() {
+    const engineSelect = document.getElementById('engine-select');
+    if (!engineSelect) return;
+    try {
+        const settings = await invoke('get_engine_settings');
+        if (settings && settings.motor) {
+            engineSelect.value = settings.motor;
+            engineSelect.title = settings.motor === 'agente-local'
+                ? `Agente Local: ${settings.carpeta || 'sin instalar'}`
+                : 'Motor original de Aura con Ollama';
+        }
+    } catch (e) {
+        console.error('No se pudo leer el motor', e);
+    }
+    engineSelect.onchange = async () => {
+        try {
+            await invoke('save_engine_settings', { motor: engineSelect.value });
+            logSystemThought(`[MOTOR] Misiones con: ${engineSelect.options[engineSelect.selectedIndex].text}`, '#58a6ff');
+        } catch (e) {
+            logSystemThought(`[MOTOR] ${e}`, '#f85149');
+            await loadEngineSelector();
+        }
+        await loadOllamaModels();
+    };
+}
+
 function updateModelStatusUI() {
     const agentModelSelect = document.getElementById('agent-model-select');
     const modelStatus = document.getElementById('model-status');
@@ -816,6 +843,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             setMissionField('mission-repairs', String(missionRepairCount), '#d29922');
             setMissionField('mission-verification', 'REPARANDO', '#d29922');
         }
+        if (normalized.startsWith('[verificar]')) { // Agente Local: verificación real del proyecto
+            const passed = status !== 'ERROR';
+            if (!passed) {
+                missionRepairCount += 1;
+                setMissionField('mission-repairs', String(missionRepairCount), '#d29922');
+            }
+            setMissionField('mission-verification', passed ? 'APROBADA' : 'CON ERRORES', passed ? '#3fb950' : '#d29922');
+        }
         if (normalized.includes('percentage') && normalized.includes('100.0')) {
             setMissionField('mission-verification', '100% APROBADA', '#3fb950');
         }
@@ -1023,6 +1058,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initial setups
     renderTabs();
+    await loadEngineSelector();
     await loadOllamaModels();
 
     // Auto-restore workspace on startup

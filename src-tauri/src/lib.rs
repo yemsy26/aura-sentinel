@@ -114,7 +114,10 @@ fn cancel_agent_mission() -> bool {
 }
 
 #[tauri::command]
-async fn get_ollama_models() -> Result<Vec<String>, String> {
+async fn get_ollama_models(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    if llm::local_agent::selected(&app).is_some() {
+        return llm::local_agent::list_models().await; // modelos de Bionic / LM Studio
+    }
     let client = reqwest::Client::new();
     let res = match client.get("http://127.0.0.1:11434/api/tags").send().await {
         Ok(r) => Ok(r),
@@ -222,6 +225,8 @@ pub fn run() {
             dismiss_pending_mission,
             get_system_stats,
             get_ollama_models,
+            llm::local_agent::get_engine_settings,
+            llm::local_agent::save_engine_settings,
             get_user_profile,
             save_user_profile,
             clear_user_profile,

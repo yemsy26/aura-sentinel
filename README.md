@@ -5,13 +5,30 @@ Desarrollado por Ramón Antonio Burgos Jerez.
 
 ## Ejecución
 
-Requisitos: Node.js 24, Rust con herramientas de compilación de Windows, WebView2 y Ollama.
-La configuración efectiva de las llamadas principales a Ollama utiliza `127.0.0.1:11434`.
+Requisitos: Node.js 24, Rust con herramientas de compilación de Windows y WebView2. Según el motor:
+Bionic o LM Studio con Agente Local, u Ollama (`127.0.0.1:11434`) para el motor original.
 
 ```sh
+git submodule update --init   # src-tauri/memory_vfs (Chronos-VFS)
 npm install
 npm run tauri dev
 ```
+
+## Motores de las misiones
+
+El selector junto al modelo elige quién ejecuta las misiones:
+
+- **Agente Local (Bionic)**, por defecto si está instalado. Aura lanza `python -m agente <carpeta> --json`
+  desde la instalación de Agente Local y muestra sus pasos, archivos y preguntas en la interfaz
+  (`src-tauri/src/llm/local_agent.rs`). El agente planifica, escribe, ejecuta, verifica y revisa con el modelo
+  cargado en Bionic/LM Studio. El selector de modelos lista los de Bionic; elegir otro lo carga ajustado a la VRAM.
+  Conserva la conversación mientras no cambies de carpeta ni de modelo. Cancelar detiene el agente y sus procesos.
+- **Aura (Ollama)**: el motor original de este repositorio.
+
+La elección se guarda en `motor.json` (carpeta de configuración de la app). `AURA_MOTOR=aura|agente-local` y
+`AGENTE_LOCAL_DIR=<carpeta>` la sustituyen. Sin configuración se busca la instalación en
+`%USERPROFILE%\.gemini\antigravity\scratch\lm studio` y `%USERPROFILE%\AgenteLocal`.
+El registro del agente queda en `%TEMP%\aura_agente_local.log`.
 
 El paso previo de Tauri copia Monaco y DOMPurify desde `node_modules` a `src/vendor`.
 El editor y el filtro HTML quedan incluidos en la aplicación; no necesitan un CDN durante el uso.
