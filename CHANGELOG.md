@@ -13,6 +13,10 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
   problemas, procesos y vista previa; paleta de comandos; búsqueda; git; puntos de restauración; reglas.
 - Backend: evento `agent-event`, órdenes rápidas `agent_order`, `ide.rs` (estado del sistema con VRAM, git,
   capturas, búsqueda, terminal, copia del proyecto por misión).
+- Instalador de Windows (NSIS y MSI) con identificador propio `com.yemsy.aurasentinel`.
+- Rendimiento: Monaco en diferido (paquete inicial de 4,3 MB a 358 KB; primer pintado en ~0,1 s), sin
+  consultas de sistema con la ventana oculta, binario con LTO y sin símbolos. Medido en la versión final:
+  236 MiB de RAM con WebView2, 0 MiB de VRAM; misión real desde la interfaz en 1,2 min.
 
 ## [4.0.0] — 2026-10-16 (Agente Local como único motor)
 

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { AgentPanel, type QuickKind } from './components/AgentPanel';
 import { ActivityBar, Splitter, StatusBar, TopBar, type SideView } from './components/Bars';
 import { BottomPanel, type BottomTab } from './components/BottomPanel';
 import { CommandPalette, SettingsDialog, Shortcuts, type PaletteCommand } from './components/Dialogs';
-import { EditorArea, type EditorHandle } from './components/EditorArea';
+import type { EditorHandle } from './components/EditorArea';
 import { Icon } from './components/Icon';
 import { SidePanel } from './components/SidePanel';
 import { agentReducer, initialAgent } from './lib/agent';
@@ -12,6 +12,9 @@ import {
   type AgentProcess, type Checkpoint, type FileNode, type GitInfo, type PendingMission, type QuickOrder, type SystemStats,
 } from './lib/api';
 import { relativePath, samePath, serverUrl } from './lib/text';
+
+// Monaco pesa ~4 MB: se carga aparte para que la ventana aparezca antes.
+const EditorArea = lazy(() => import('./components/EditorArea').then((m) => ({ default: m.EditorArea })));
 
 function stored<T>(key: string, fallback: T): T {
   try {
@@ -129,11 +132,14 @@ export default function App() {
     void (last ? Promise.resolve(last) : api.currentDirectory()).then(openWorkspace).catch(() => undefined);
     void refreshModels();
     void api.rules().then(setRules).catch(() => undefined);
-    const poll = () => void api.stats().then(setStats).catch(() => undefined);
+    // Con la ventana minimizada u oculta no se consulta nada (nvidia-smi cuesta un proceso por consulta).
+    const visible = () => document.visibilityState === 'visible';
+    const poll = () => { if (visible()) void api.stats().then(setStats).catch(() => undefined); };
     poll();
     const statsTimer = setInterval(poll, 4000);
-    const modelsTimer = setInterval(() => void refreshModels(), 30000);
-    return () => { clearInterval(statsTimer); clearInterval(modelsTimer); };
+    const modelsTimer = setInterval(() => { if (visible()) void refreshModels(); }, 30000);
+    document.addEventListener('visibilitychange', poll);
+    return () => { clearInterval(statsTimer); clearInterval(modelsTimer); document.removeEventListener('visibilitychange', poll); };
   }, [openWorkspace, refreshModels]);
 
   // Eventos del agente
@@ -346,8 +352,10 @@ export default function App() {
           <Splitter axis="x" size={sideWidth} onSize={setSideWidth} min={180} max={520} />
         </>}
         <main className="main">
-          <EditorArea ref={editor} workspace={workspace} tabs={tabs} active={active} agentChanged={agent.changed} dirty={dirty}
-            onActivate={setActive} onClose={closeTab} onDirty={markDirty} onToast={notify} welcome={welcome} />
+          <Suspense fallback={<div className="editor-zone">{welcome}</div>}>
+            <EditorArea ref={editor} workspace={workspace} tabs={tabs} active={active} agentChanged={agent.changed} dirty={dirty}
+              onActivate={setActive} onClose={closeTab} onDirty={markDirty} onToast={notify} welcome={welcome} />
+          </Suspense>
           {bottomOpen && <>
             <Splitter axis="y" size={bottomHeight} onSize={setBottomHeight} min={110} max={640} invert />
             <BottomPanel tab={bottomTab} onTab={(t) => { setBottomTab(t); if (t === 'processes') void refreshProcesses(); }}

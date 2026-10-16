@@ -30,8 +30,11 @@ fn save_project_country(app: tauri::AppHandle, workspace_path: String, country: 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Aislamiento de hardware: sin GPU en WebView2, la VRAM queda para el modelo.
-    std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu --disable-gpu-compositing");
+    // Aislamiento de hardware: sin GPU en WebView2, la VRAM queda para el modelo. Se añade a lo que ya
+    // hubiera (p. ej. --remote-debugging-port=9333 para depurar la interfaz) en vez de pisarlo.
+    const NO_GPU: &str = "--disable-gpu --disable-gpu-compositing";
+    let extra = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+    std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", format!("{extra} {NO_GPU}").trim());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

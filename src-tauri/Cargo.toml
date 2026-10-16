@@ -34,3 +34,7 @@ sha2 = "0.10.9"
 [[bin]]
 name = "aura-diagnostics"
 path = "src/diagnose_main.rs"
+
+[profile.release]
+lto = "thin"   # binario más pequeño y algo más rápido
+strip = true

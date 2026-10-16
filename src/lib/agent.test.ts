@@ -77,6 +77,7 @@ describe('utilidades de texto', () => {
     expect(joinPath('C:\\ws\\', 'src/a.js')).toBe('C:\\ws\\src\\a.js');
     expect(joinPath('C:\\ws', 'D:\\otro\\b.js')).toBe('D:\\otro\\b.js');
     expect(relativePath('C:\\WS', 'C:\\ws\\src\\a.js')).toBe('src\\a.js');
+    expect(relativePath('C:\\ws', 'npm test')).toBe('npm test'); // los comandos no son rutas
   });
   it('detecta el servidor de un proceso', () => {
     expect(serverUrl('python -m http.server 8000')).toBe('http://localhost:8000');

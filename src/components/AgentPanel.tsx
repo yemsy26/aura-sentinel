@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PHASE_LABEL, toolLabel, type AgentState, type ChatItem, type PlanItem, type RunEntry, type Step } from '../lib/agent';
 import { api, type PendingMission } from '../lib/api';
-import { formatElapsed, formatTokens, joinPath, markdown } from '../lib/text';
+import { formatElapsed, formatTokens, joinPath, markdown, relativePath } from '../lib/text';
 import { Meter } from './Bars';
 import { Icon, type IconName } from './Icon';
 
@@ -205,12 +205,13 @@ function StepCard({ step, workspace, onImage, onOpenFile }: {
     void api.image(joinPath(workspace, step.capture)).then(setImage).catch(() => setImage(null));
   }, [open, step.capture, workspace, image]);
   const isFile = FILE_TOOLS.has(step.tool) && step.detail && workspace;
+  const detail = workspace ? relativePath(workspace, step.detail) || '.' : step.detail; // rutas cortas, como en el explorador
   return (
     <div className={`step${step.error ? ' error' : ''}`}>
       <button className="step-row" onClick={() => setOpen(!open)} aria-expanded={open}>
         <Icon name={TOOL_ICON[step.tool] ?? 'spark'} />
         <span className="grow ellipsis" title={`${step.detail}\n${step.result}`}>
-          {toolLabel(step.tool)} {step.detail && <strong className={step.tool === 'ejecutar' ? 'mono' : ''} style={{ fontWeight: 500 }}>{step.detail}</strong>}
+          {toolLabel(step.tool)} {step.detail && <strong className={step.tool === 'ejecutar' ? 'mono' : ''} style={{ fontWeight: 500 }}>{detail}</strong>}
           {step.result && <span className={step.error ? 'err' : 'dim'}> · {step.result}</span>}
         </span>
         <span className="step-n">{step.n}</span>
@@ -218,7 +219,7 @@ function StepCard({ step, workspace, onImage, onOpenFile }: {
       {open && (
         <div className="step-detail">
           {isFile && <button className="btn small" style={{ alignSelf: 'flex-start' }} onClick={() => onOpenFile(joinPath(workspace!, step.detail))}>
-            <Icon name="file" size={14} />Abrir {step.detail}</button>}
+            <Icon name="file" size={14} />Abrir {detail}</button>}
           {step.capture && (image ? <img className="capture" src={image} alt="Captura de la pantalla" onClick={() => onImage(image)} />
             : <div className="dim">Cargando captura…</div>)}
           {step.output && <pre>{step.output}</pre>}

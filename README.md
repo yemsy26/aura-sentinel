@@ -14,7 +14,23 @@ npm install
 npm run tauri dev      # o start.bat (Vite en :1420 + ventana de Tauri)
 ```
 
-Vite empaqueta Monaco con sus workers: el editor funciona sin conexión.
+Vite empaqueta Monaco con sus workers: el editor funciona sin conexión. Monaco (~4 MB) se carga aparte, así que
+la ventana pinta en ~0,1 s con un paquete inicial de 358 KB.
+
+Instalador de Windows:
+
+```sh
+npm run tauri build
+```
+
+Deja `AuraSentinel_<versión>_x64-setup.exe` (NSIS) y un `.msi` en `src-tauri\target\release\bundle\`
+(o en `%CARGO_TARGET_DIR%\release\bundle\`). El identificador de la app es `com.yemsy.aurasentinel`.
+(o en `%CARGO_TARGET_DIR%
+eleaseundle\`). El identificador de la app es `com.yemsy.aurasentinel`.
+
+Para depurar la interfaz de la versión instalada, arráncala con
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` y abre `edge://inspect`: Aura añade sus
+opciones (WebView2 sin GPU, para dejar la VRAM al modelo) a las que pongas.
 
 ## La interfaz
 
