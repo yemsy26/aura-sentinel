@@ -1,11 +1,12 @@
 //! Motor de las misiones: Agente Local (agente para Bionic/LM Studio). Aura ejecuta
 //! `python -m agente <carpeta> --json` y traduce su protocolo a los eventos que escucha la interfaz:
-//! `agent-step`, `file-updated` y `agent-ask-user`. Una sesión por carpeta y modelo conserva la
+//! `agent-event` (el evento tal cual), `agent-step`, `file-updated` y `agent-ask-user`. Una sesión por carpeta y modelo conserva la
 //! conversación entre mensajes.
 //!
 //! Protocolo (una línea JSON por mensaje): Aura envía `{"tipo":"tarea","texto":...}` y, tras un evento
 //! `confirmar`, `{"tipo":"respuesta","si":bool}`. El agente emite `listo`, `paso`, `archivos`, `nota`,
-//! `aviso`, `progreso`, `error` y, al acabar cada orden, `fin`.
+//! `aviso`, `progreso`, `error`, `confirmar` y, al acabar cada orden, `fin`. Las órdenes rápidas
+//! (verificar, revisar, procesos, restaurar...) usan la misma sesión con `agent_order`.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -384,6 +385,7 @@ pub(crate) fn workspace_file(workspace: &str, file: &str) -> PathBuf {
 }
 
 fn forward(app: &AppHandle, workspace: &str, event: &Value, step: &mut u32) {
+    let _ = app.emit("agent-event", event); // la interfaz pinta tarjetas con el evento completo
     let text = |key: &str| event[key].as_str().unwrap_or_default().to_string();
     match event["tipo"].as_str().unwrap_or_default() {
         "paso" => {
@@ -427,7 +429,106 @@ fn with_profile(app: &AppHandle, workspace: &str, message: String) -> String {
     }
 }
 
-// ── Misión ──────────────────────────────────────────────────────────────────
+// ── Misión y órdenes ────────────────────────────────────────────────────────
+
+/// Por qué terminó una orden sin su evento `fin`: estado para la interfaz y texto.
+type Halt = (&'static str, String);
+
+/// Modelo pedido si Bionic lo conoce; vacío = el de agente.json.
+async fn known_model(model: Option<String>) -> String {
+    let model = model.unwrap_or_default();
+    let known = list_models().await.unwrap_or_default();
+    if known.contains(&model) { model } else { String::new() }
+}
+
+fn reusable(session: &mut Session, workspace: &str, model: Option<&str>) -> bool {
+    session.workspace == workspace
+        && model.is_none_or(|m| session.model == m)
+        && matches!(session.child.try_wait(), Ok(None))
+}
+
+/// Sesión para la carpeta: la abierta si sirve (`model` None = con cualquier modelo) o una nueva
+/// esperando su `listo`. Devuelve también si es nueva.
+async fn ready_session(
+    app: &AppHandle,
+    workspace: &str,
+    model: Option<&str>,
+    previous: Option<Session>,
+) -> Result<(Session, bool), Halt> {
+    let mut previous = previous;
+    if previous.as_mut().is_some_and(|s| reusable(s, workspace, model)) {
+        return Ok((previous.unwrap(), false));
+    }
+    if let Some(old) = previous {
+        stop(old).await;
+    }
+    let dir = installation(app).map_err(|reason| ("ERROR", reason))?;
+    emit_event(app, 0, "[AGENTE LOCAL] Iniciando el motor (si el modelo no está cargado, tarda un minuto)...", "PLANNING");
+    let mut fresh = spawn(&dir, workspace, model.unwrap_or_default()).await.map_err(|e| ("ERROR", e))?;
+    let mut step = 0;
+    loop {
+        match next(&mut fresh).await {
+            Next::Event(event) if event["tipo"] == "listo" => {
+                let _ = app.emit("agent-event", &event);
+                let info = format!(
+                    "[AGENTE LOCAL] Listo · modelo {} · contexto {} tokens",
+                    event["modelo"].as_str().unwrap_or("?"),
+                    event["contexto"]
+                );
+                emit_event(app, 0, &info, "PLANNING");
+                return Ok((fresh, true));
+            }
+            Next::Event(event) if event["tipo"] == "error" => {
+                let _ = app.emit("agent-event", &event);
+                stop(fresh).await;
+                return Err(("ERROR", event["texto"].as_str().unwrap_or("Error al iniciar Agente Local.").to_string()));
+            }
+            Next::Event(event) => forward(app, workspace, &event, &mut step),
+            Next::Cancelled => {
+                stop(fresh).await;
+                return Err(("CANCELLED", "Inicio de Agente Local cancelado.".into()));
+            }
+            Next::Closed => return Err(("ERROR", format!("Agente Local se cerró al iniciar.\n{}", log_tail()))),
+        }
+    }
+}
+
+/// Envía una orden y reenvía sus eventos hasta el `fin`, que devuelve; la sesión vuelve a `slot`.
+async fn run_order(
+    app: &AppHandle,
+    workspace: &str,
+    mut current: Session,
+    order: Value,
+    slot: &mut Option<Session>,
+) -> Result<Value, Halt> {
+    send(&mut current, order).await.map_err(|e| ("ERROR", e))?;
+    let mut step = 0;
+    loop {
+        match next(&mut current).await {
+            Next::Event(event) => match event["tipo"].as_str().unwrap_or_default() {
+                "fin" => {
+                    let _ = app.emit("agent-event", &event);
+                    *slot = Some(current); // la conversación sigue en el próximo mensaje
+                    return Ok(event);
+                }
+                "confirmar" => {
+                    let _ = app.emit("agent-event", &event);
+                    let command = event["comando"].as_str().unwrap_or_default().to_string();
+                    confirm(app, &mut current, &command).await.map_err(|e| ("ERROR", e))?;
+                }
+                _ => forward(app, workspace, &event, &mut step),
+            },
+            Next::Cancelled => {
+                stop(current).await;
+                return Err((
+                    "CANCELLED",
+                    "Misión cancelada: detuve el agente y sus procesos. Escribe 'continúa' para retomarla.".into(),
+                ));
+            }
+            Next::Closed => return Err(("ERROR", format!("Agente Local se cerró inesperadamente.\n{}", log_tail()))),
+        }
+    }
+}
 
 /// Ejecuta un mensaje del chat con Agente Local y devuelve la respuesta final en el formato de la interfaz.
 #[tauri::command]
@@ -448,95 +549,64 @@ pub async fn process_user_prompt(
     if let Some(idx) = message.find("[SYSTEM]") {
         message.truncate(idx);
     }
-    let dir = match installation(&app_handle) {
-        Ok(dir) => dir,
-        Err(reason) => return Ok(finish("ERROR", &reason)),
+    let message = message.trim().to_string();
+    if !is_resume(&message) {
+        let ws = workspace_path.clone(); // base de "Ver cambios" para esta misión (lee disco: fuera del runtime)
+        let _ = tokio::task::spawn_blocking(move || crate::ide::snapshot_workspace(&ws)).await;
+    }
+    let model = known_model(model).await;
+    let mut slot = session().lock().await;
+    let result = match ready_session(&app_handle, &workspace_path, Some(&model), slot.take()).await {
+        Ok((current, new_session)) => {
+            let text = if new_session && !is_resume(&message) {
+                with_profile(&app_handle, &workspace_path, message)
+            } else {
+                message
+            };
+            run_order(&app_handle, &workspace_path, current, json!({"tipo": "tarea", "texto": text}), &mut slot).await
+        }
+        Err(halt) => Err(halt),
     };
-    run_mission(&app_handle, dir, workspace_path, message.trim().to_string(), model.unwrap_or_default()).await
+    Ok(match result {
+        Ok(fin) => {
+            let status = if fin["estado"] == "error" { "ERROR" } else { "FINISH" };
+            finish(status, fin["respuesta"].as_str().unwrap_or_default())
+        }
+        Err((status, text)) => finish(status, &text),
+    })
 }
 
-async fn run_mission(
-    app: &AppHandle,
-    dir: PathBuf,
-    workspace: String,
-    message: String,
-    model: String,
-) -> Result<String, String> {
-    let known = list_models().await.unwrap_or_default();
-    let model = if known.contains(&model) { model } else { String::new() }; // vacío = el de agente.json
-    let mut slot = session().lock().await;
-    let mut previous = slot.take();
-    let reusable = previous.as_mut().is_some_and(|s| {
-        s.workspace == workspace && s.model == model && matches!(s.child.try_wait(), Ok(None))
-    });
-    let new_session = !reusable;
-    let mut current = match previous {
-        Some(s) if reusable => s,
-        previous => {
-            if let Some(old) = previous {
-                stop(old).await;
-            }
-            emit_event(app, 0, "[AGENTE LOCAL] Iniciando el motor (si el modelo no está cargado, tarda un minuto)...", "PLANNING");
-            let mut fresh = spawn(&dir, &workspace, &model).await?;
-            let mut step = 0;
-            loop {
-                match next(&mut fresh).await {
-                    Next::Event(event) if event["tipo"] == "listo" => {
-                        let info = format!(
-                            "[AGENTE LOCAL] Listo · modelo {} · contexto {} tokens",
-                            event["modelo"].as_str().unwrap_or("?"),
-                            event["contexto"]
-                        );
-                        emit_event(app, 0, &info, "PLANNING");
-                        break fresh;
-                    }
-                    Next::Event(event) if event["tipo"] == "error" => {
-                        stop(fresh).await;
-                        return Ok(finish("ERROR", event["texto"].as_str().unwrap_or("Error al iniciar Agente Local.")));
-                    }
-                    Next::Event(event) => forward(app, &workspace, &event, &mut step),
-                    Next::Cancelled => {
-                        stop(fresh).await;
-                        return Ok(finish("CANCELLED", "Inicio de Agente Local cancelado."));
-                    }
-                    Next::Closed => {
-                        return Ok(finish("ERROR", &format!("Agente Local se cerró al iniciar.\n{}", log_tail())));
-                    }
-                }
-            }
-        }
-    };
+const ORDERS: [&str; 8] = ["verificar", "revisar", "plan", "procesos", "detener", "restaurar", "regla", "nuevo"];
 
-    let text = if new_session && !is_resume(&message) { with_profile(app, &workspace, message) } else { message };
-    send(&mut current, json!({"tipo": "tarea", "texto": text})).await?;
-    let mut step = 0;
-    loop {
-        match next(&mut current).await {
-            Next::Event(event) => match event["tipo"].as_str().unwrap_or_default() {
-                "fin" => {
-                    let status = if event["estado"] == "error" { "ERROR" } else { "FINISH" };
-                    let text = event["respuesta"].as_str().unwrap_or_default().to_string();
-                    *slot = Some(current); // la conversación sigue en el próximo mensaje
-                    return Ok(finish(status, &text));
-                }
-                "confirmar" => {
-                    let command = event["comando"].as_str().unwrap_or_default().to_string();
-                    confirm(app, &mut current, &command).await?;
-                }
-                _ => forward(app, &workspace, &event, &mut step),
-            },
-            Next::Cancelled => {
-                stop(current).await;
-                return Ok(finish(
-                    "CANCELLED",
-                    "Misión cancelada: detuve el agente y sus procesos. Escribe 'continúa' para retomarla.",
-                ));
-            }
-            Next::Closed => {
-                return Ok(finish("ERROR", &format!("Agente Local se cerró inesperadamente.\n{}", log_tail())));
-            }
-        }
+/// Órdenes rápidas de la interfaz. Devuelve el evento `fin` (respuesta, uso del contexto y, en
+/// `procesos`, la lista estructurada en `datos`).
+#[tauri::command]
+pub async fn agent_order(order: Value, workspace_path: String, app_handle: AppHandle) -> Result<Value, String> {
+    let kind = order["tipo"].as_str().unwrap_or_default().to_string();
+    if !ORDERS.contains(&kind.as_str()) {
+        return Err(format!("Orden no permitida: {kind}"));
     }
+    let Some(_lock) = MissionLock::try_lock() else {
+        return Err("El agente está trabajando en una misión; espera a que termine.".into());
+    };
+    CANCELLED.store(false, Ordering::SeqCst);
+    let mut slot = session().lock().await;
+    let live = slot.as_mut().is_some_and(|s| reusable(s, &workspace_path, None));
+    if !live && matches!(kind.as_str(), "procesos" | "detener" | "nuevo") {
+        // Sin sesión no hay procesos ni historial: no se arranca el agente (ni se carga el modelo) para nada.
+        let text = if kind == "nuevo" { "Conversación nueva." } else { "No hay procesos del agente en marcha." };
+        return Ok(json!({"tipo": "fin", "orden": kind, "estado": "ok", "datos": [], "respuesta": text}));
+    }
+    let (current, _) = ready_session(&app_handle, &workspace_path, None, slot.take()).await.map_err(|(_, text)| text)?;
+    run_order(&app_handle, &workspace_path, current, order, &mut slot).await.map_err(|(_, text)| text)
+}
+
+/// Reglas del usuario y lecciones aprendidas que el agente aplica en cada tarea.
+#[tauri::command]
+pub fn get_agent_rules(app: AppHandle) -> Value {
+    let dir = PathBuf::from(installation_dir(&app));
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+    json!({"reglas": read("reglas.md"), "lecciones": read("lecciones.md")})
 }
 
 #[cfg(test)]

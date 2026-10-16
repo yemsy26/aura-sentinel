@@ -1,25 +1,9 @@
 mod diagnostics;
 pub mod agent;
 pub mod ask_user;
+pub mod ide;
 pub mod user_profile;
 pub mod workspace;
-
-#[tauri::command]
-fn get_system_stats() -> String {
-    use sysinfo::System;
-    let mut sys = System::new_all();
-    sys.refresh_all();
-    let total = sys.total_memory() as f64 / 1_073_741_824.0;
-    let used = sys.used_memory() as f64 / 1_073_741_824.0;
-    let cpus = sys.cpus();
-    let cpu = if cpus.is_empty() { 0.0 } else { cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpus.len() as f32 };
-    let app = sysinfo::get_current_pid()
-        .ok()
-        .and_then(|pid| sys.process(pid))
-        .map_or(0.0, |p| p.memory() as f64 / 1_048_576.0);
-    let warning = if used / total > 0.85 { " [RAM ALTA]" } else { "" };
-    format!("CPU: {cpu:.1}% | RAM Sys: {used:.1}/{total:.1} GB | App: {app:.0} MB{warning}")
-}
 
 #[tauri::command]
 fn get_user_profile(
@@ -73,8 +57,17 @@ pub fn run() {
             agent::save_agent_settings,
             agent::get_pending_mission,
             agent::dismiss_pending_mission,
+            agent::agent_order,
+            agent::get_agent_rules,
             ask_user::submit_user_answer,
-            get_system_stats,
+            ide::get_system_stats,
+            ide::get_git_info,
+            ide::list_checkpoints,
+            ide::read_image_data_url,
+            ide::open_external,
+            ide::search_workspace,
+            ide::run_command,
+            ide::get_mission_baseline,
             get_user_profile,
             save_user_profile,
             clear_user_profile,

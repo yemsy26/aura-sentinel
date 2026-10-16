@@ -1,15 +1,16 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AuraSentinel",
-  "version": "0.1.0",
+  "version": "4.0.0",
   "identifier": "com.tauri.dev",
   "build": {
-    "frontendDist": "../src",
-    "beforeDevCommand": "node scripts/prepare-frontend.cjs",
-    "beforeBuildCommand": "node scripts/prepare-frontend.cjs"
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "Aura Sentinel",
@@ -22,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434 http://127.0.0.1:11434 ws://localhost:*; img-src 'self' data:; font-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:*; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; frame-src http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'self'; form-action 'self';"
     }
   },
   "bundle": {

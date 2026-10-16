@@ -21,7 +21,7 @@ pub fn start(app: &tauri::AppHandle, job_path: &str) -> Result<(), String> {
     std::fs::create_dir_all(log_path.parent().unwrap()).map_err(|e| e.to_string())?;
     let file = std::sync::Arc::new(std::sync::Mutex::new(std::fs::File::create(&log_path).map_err(|e| e.to_string())?));
     let started = std::time::Instant::now();
-    for event_name in ["agent-step", "agent-ask-user", "file-updated"] {
+    for event_name in ["agent-event", "agent-step", "agent-ask-user", "file-updated"] {
         let file = file.clone();
         app.listen(event_name, move |event| {
             let record = serde_json::json!({"elapsed_ms": started.elapsed().as_millis(), "event": event_name,

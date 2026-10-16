@@ -4,6 +4,16 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 
 ---
 
+## [4.1.0] — 2026-10-16 (Interfaz nueva)
+
+- Interfaz reescrita en React + TypeScript con Vite (antes un `main.js` de 1 200 líneas). Monaco 0.57,
+  marked 18, DOMPurify 3.4.17; pruebas con Vitest.
+- Panel del agente con estado, plan, tarjetas por paso, capturas, confirmación en línea y acciones rápidas;
+  explorador con marcas de cambios del agente; aviso con diferencias y Deshacer en el editor; terminal,
+  problemas, procesos y vista previa; paleta de comandos; búsqueda; git; puntos de restauración; reglas.
+- Backend: evento `agent-event`, órdenes rápidas `agent_order`, `ide.rs` (estado del sistema con VRAM, git,
+  capturas, búsqueda, terminal, copia del proyecto por misión).
+
 ## [4.0.0] — 2026-10-16 (Agente Local como único motor)
 
 - Las misiones las ejecuta Agente Local con el modelo de Bionic/LM Studio (`src-tauri/src/agent.rs`).
@@ -66,7 +76,8 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 
 #### TOOL_CONTAINER (core/container.rs)
 - Soporte nativo para Docker y Podman mediante auto-detección de runtime.
-- Acciones: un, exec, stop, logs, ctivate_env.
+- Acciones: 
+un, exec, stop, logs, ctivate_env.
 - ctivate_env detecta tipo de proyecto (Node, Python, Rust) y activa el entorno virtual correcto.
 - Handler TOOL_CONTAINER integrado en la FSM del Ejecutor.
 
@@ -80,7 +91,8 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 - Motor de tareas programadas usando cron expressions estándar (5 campos).
 - Loop Tokio con tick cada 60 segundos, ejecutado en el runtime de Tauri (	auri::async_runtime::spawn).
 - Herramienta TOOL_SCHEDULER disponible para el Planificador.
-- Comandos Tauri: schedule_task, list_scheduled_tasks, emove_scheduled_task.
+- Comandos Tauri: schedule_task, list_scheduled_tasks, 
+emove_scheduled_task.
 
 #### Sanity Monitor (core/sanity_monitor.rs)
 - Evaluación de salud del agente cada 5 pasos de ejecución.
@@ -91,9 +103,11 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 ### Corregido
 - Bug: 	okio::spawn en el scheduler causaba pánico al inicio (
 o reactor running). Cambiado a 	auri::async_runtime::spawn.
-- Bug: Extractor de cláusulas usaba find("]]") frágil. Reemplazado por contador de profundidad de corchetes.
+- Bug: Extractor de cláusulas usaba 
+find("]]") frágil. Reemplazado por contador de profundidad de corchetes.
 - Bug: Planificador clasificaba auditorías matemáticas como misiones de Construcción, activando protocolo PESP de 4 fases y causando pausas interactivas innecesarias.
-- Bug: Variables etry_tracker y gent_workspace eliminadas accidentalmente de scope en refactor anterior.
+- Bug: Variables 
+etry_tracker y gent_workspace eliminadas accidentalmente de scope en refactor anterior.
 
 ### Modificado
 - session_journal.rs: Campos sm_context, sm_role, sm_step, interrupted añadidos.

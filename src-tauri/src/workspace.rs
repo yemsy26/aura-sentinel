@@ -56,9 +56,9 @@ fn is_system_path(path: &Path) -> bool {
     ["\\windows\\", "/windows/", "\\system32", "/etc/"].iter().any(|p| text.contains(p))
 }
 
-/// Recorre la carpeta respetando .gitignore. Las carpetas ilegibles (p. ej. marcadores de OneDrive
-/// sin descargar) se omiten en vez de dejar el árbol vacío.
-pub fn workspace_tree(path: &str) -> Vec<FileNode> {
+/// Recorre la carpeta respetando .gitignore, sin ocultos ni carpetas de herramientas. Las carpetas
+/// ilegibles (p. ej. marcadores de OneDrive sin descargar) se omiten en vez de cortar el recorrido.
+pub fn walk(path: &Path) -> impl Iterator<Item = ignore::DirEntry> {
     WalkBuilder::new(path)
         .hidden(true)
         .git_ignore(true)
@@ -68,6 +68,10 @@ pub fn workspace_tree(path: &str) -> Vec<FileNode> {
         })
         .build()
         .filter_map(Result::ok)
+}
+
+pub fn workspace_tree(path: &str) -> Vec<FileNode> {
+    walk(Path::new(path))
         .map(|entry| FileNode {
             name: entry.file_name().to_string_lossy().into_owned(),
             path: entry.path().to_string_lossy().into_owned(),
