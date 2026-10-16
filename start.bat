@@ -19,12 +19,14 @@ if errorlevel 1 (
     echo [OK] Bionic disponible.
 )
 
-if not exist "node_modules" (
-    echo.
-    echo Instalando dependencias de la interfaz...
-    call npm install
-    if errorlevel 1 goto :error
-)
+echo.
+echo Comprobando las dependencias de la interfaz...
+rem Siempre: si package.json cambio (p. ej. al actualizar desde GitHub) faltarian paquetes. Sin cambios tarda 1-2 s.
+call npm install --no-audit --no-fund --loglevel=error
+if errorlevel 1 goto :error
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\preparar-inicio.ps1"
+if errorlevel 1 goto :fin
 
 echo.
 echo Compilando e iniciando la interfaz de Tauri (la primera vez tarda unos minutos)...
