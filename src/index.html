@@ -87,12 +87,7 @@
                         <span>CEREBRO AGÉNTICO</span>
                     </div>
                     <div class="model-select-wrapper">
-                        <select id="engine-select" class="unified-model-select" title="Motor que ejecuta las misiones">
-                            <option value="agente-local">Agente Local (Bionic)</option>
-                            <option value="aura">Aura (Ollama)</option>
-                        </select>
                         <select id="agent-model-select" class="unified-model-select" title="Modelo activo para toda la ejecución agéntica"></select>
-                        <button id="quick-turbo-btn" class="turbo-btn" title="Conmutar al modelo más potente instalado">⚡ MÁXIMA POTENCIA</button>
                     </div>
                 </div>
 
@@ -146,7 +141,6 @@
                     <!-- Telemetry main stats -->
                     <div style="display: flex; justify-content: space-between; gap: 10px; align-items: center;">
                         <div class="telemetry-stat" style="margin-bottom:0;border:none;"><span style="color:#6e7681;">RAM:</span> <span id="ram-usage" style="color:#3fb950;font-family:var(--font-code);">0 MB</span></div>
-                        <div class="telemetry-stat" style="margin-bottom:0;border:none;"><span style="color:#6e7681;">Sanity:</span> <span id="sanity-indicator" style="font-weight:bold; color:#3fb950;" title="Salud cognitiva del agente">🟢 OPTIMAL</span></div>
                         <div class="telemetry-stat" style="margin-bottom:0;border:none;"><span style="color:#6e7681;">Model:</span> <span id="model-status" style="color:#38bdf8;font-family:var(--font-code);">Standby</span></div>
                     </div>
 
@@ -172,12 +166,6 @@
                     </div>
 
                     <!-- BACKGROUND TASKS UI -->
-                    <div id="bg-tasks-section" style="border-top: 1px dashed #30363d; padding-top: 5px; margin-top: 5px; display: none;">
-                        <span style="color:#6e7681; font-weight: bold; font-size: 10px;">BACKGROUND TASKS</span>
-                        <div id="bg-tasks-list" style="margin-top: 4px; display: flex; flex-direction: column; gap: 4px;">
-                            <!-- Dynamically populated -->
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>

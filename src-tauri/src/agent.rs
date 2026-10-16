@@ -1,15 +1,17 @@
-//! Motor "Agente Local": ejecuta `python -m agente <carpeta> --json` (agente para Bionic/LM Studio) y
-//! traduce su protocolo de eventos a los que ya escucha la interfaz: `agent-step`, `file-updated` y
-//! `agent-ask-user`. Una sesión por espacio de trabajo conserva la conversación entre mensajes.
+//! Motor de las misiones: Agente Local (agente para Bionic/LM Studio). Aura ejecuta
+//! `python -m agente <carpeta> --json` y traduce su protocolo a los eventos que escucha la interfaz:
+//! `agent-step`, `file-updated` y `agent-ask-user`. Una sesión por carpeta y modelo conserva la
+//! conversación entre mensajes.
 //!
 //! Protocolo (una línea JSON por mensaje): Aura envía `{"tipo":"tarea","texto":...}` y, tras un evento
 //! `confirmar`, `{"tipo":"respuesta","si":bool}`. El agente emite `listo`, `paso`, `archivos`, `nota`,
 //! `aviso`, `progreso`, `error` y, al acabar cada orden, `fin`.
 
-use super::agent::emit_event;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -21,15 +23,53 @@ const SERVERS: [&str; 2] = ["http://127.0.0.1:1235", "http://127.0.0.1:1234"]; /
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct EngineSettings {
-    /// "agente-local" o "aura" (motor original con Ollama).
-    #[serde(default)]
-    pub motor: String,
-    /// Carpeta de instalación de Agente Local (contiene `.venv` y `agente/`).
-    #[serde(default)]
-    pub carpeta: String,
+// ── Estado de la misión ─────────────────────────────────────────────────────
+
+static RUNNING: AtomicBool = AtomicBool::new(false);
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Una sola misión a la vez; se libera al soltarse.
+struct MissionLock;
+
+impl MissionLock {
+    fn try_lock() -> Option<Self> {
+        (!RUNNING.swap(true, Ordering::SeqCst)).then_some(MissionLock)
+    }
 }
+
+impl Drop for MissionLock {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+pub fn is_agent_cancelled() -> bool {
+    CANCELLED.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn cancel_agent_mission() -> bool {
+    CANCELLED.store(true, Ordering::SeqCst);
+    true
+}
+
+#[derive(Serialize, Clone)]
+struct AgentEvent {
+    step: u32,
+    message: String,
+    status: String,
+}
+
+pub fn emit_event(app: &AppHandle, step: u32, message: &str, status: &str) {
+    let event = AgentEvent { step, message: message.to_string(), status: status.to_string() };
+    let _ = app.emit("agent-step", event);
+}
+
+fn finish(status: &str, text: &str) -> String {
+    json!({"status": status, "respuesta_conversacional": text}).to_string()
+}
+
+// ── Instalación de Agente Local ─────────────────────────────────────────────
 
 fn settings_path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("motor.json"))
@@ -50,86 +90,58 @@ fn default_installation() -> Option<PathBuf> {
     .find(|dir| is_installation(dir))
 }
 
-/// motor.json de la configuración de la app; `AURA_MOTOR` y `AGENTE_LOCAL_DIR` lo sustituyen.
-pub fn load_settings(app: &AppHandle) -> EngineSettings {
-    let mut settings: EngineSettings = settings_path(app)
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default();
+/// Carpeta de Agente Local: `AGENTE_LOCAL_DIR`, la guardada en motor.json o la ubicación por defecto.
+pub fn installation_dir(app: &AppHandle) -> String {
     if let Ok(dir) = std::env::var("AGENTE_LOCAL_DIR") {
-        settings.carpeta = dir;
+        return dir;
     }
-    if let Ok(motor) = std::env::var("AURA_MOTOR") {
-        settings.motor = motor;
-    }
-    if settings.carpeta.is_empty() {
-        if let Some(dir) = default_installation() {
-            settings.carpeta = dir.to_string_lossy().into_owned();
-        }
-    }
-    if settings.motor.is_empty() {
-        let installed = is_installation(Path::new(&settings.carpeta));
-        settings.motor = if installed { "agente-local" } else { "aura" }.into();
-    }
-    settings
+    settings_path(app)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value["carpeta"].as_str().map(str::to_string))
+        .filter(|dir| !dir.is_empty())
+        .or_else(|| default_installation().map(|dir| dir.to_string_lossy().into_owned()))
+        .unwrap_or_default()
 }
 
-/// `None` con el motor de Aura; con Agente Local, su carpeta o el motivo por el que no se puede usar.
-pub fn selected(app: &AppHandle) -> Option<Result<PathBuf, String>> {
-    let settings = load_settings(app);
-    if settings.motor != "agente-local" {
-        return None;
-    }
-    let dir = PathBuf::from(&settings.carpeta);
-    Some(if is_installation(&dir) {
-        Ok(dir)
+fn installation(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = installation_dir(app);
+    if is_installation(Path::new(&dir)) {
+        Ok(PathBuf::from(dir))
     } else {
         Err(format!(
-            "No encuentro Agente Local en '{}'. Debe contener .venv\\Scripts\\python.exe y agente\\__main__.py \
-             (ejecuta instalar.bat allí) o elige el motor Aura.",
-            settings.carpeta
+            "No encuentro Agente Local en '{dir}'. Debe contener .venv\\Scripts\\python.exe y agente\\__main__.py \
+             (ejecuta instalar.bat allí) o indica su carpeta en la configuración."
         ))
-    })
+    }
 }
 
 #[tauri::command]
-pub fn get_engine_settings(app: AppHandle) -> Value {
-    let settings = load_settings(&app);
-    let installed = is_installation(Path::new(&settings.carpeta));
-    json!({"motor": settings.motor, "carpeta": settings.carpeta, "instalado": installed})
+pub fn get_agent_settings(app: AppHandle) -> Value {
+    let dir = installation_dir(&app);
+    json!({"carpeta": dir, "instalado": is_installation(Path::new(&dir))})
 }
 
 #[tauri::command]
-pub async fn save_engine_settings(
-    app: AppHandle,
-    motor: String,
-    carpeta: Option<String>,
-) -> Result<Value, String> {
-    if motor != "agente-local" && motor != "aura" {
-        return Err(format!("Motor desconocido: {motor}"));
-    }
-    let mut settings = load_settings(&app);
-    settings.motor = motor;
-    if let Some(dir) = carpeta.filter(|dir| !dir.trim().is_empty()) {
-        settings.carpeta = dir;
-    }
-    if settings.motor == "agente-local" && !is_installation(Path::new(&settings.carpeta)) {
-        return Err(format!("'{}' no es una instalación de Agente Local.", settings.carpeta));
+pub async fn save_agent_settings(app: AppHandle, carpeta: String) -> Result<Value, String> {
+    if !is_installation(Path::new(&carpeta)) {
+        return Err(format!("'{carpeta}' no es una instalación de Agente Local."));
     }
     let path = settings_path(&app).ok_or("No hay carpeta de configuración de la app.")?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| e.to_string())?;
-    // El próximo mensaje arranca con el motor elegido; con una misión en curso no se espera a que acabe.
+    std::fs::write(&path, json!({"carpeta": carpeta}).to_string()).map_err(|e| e.to_string())?;
+    // El próximo mensaje arranca con la nueva instalación; con una misión en curso no se espera.
     if let Ok(mut slot) = session().try_lock() {
         if let Some(old) = slot.take() {
             stop(old).await;
         }
     }
-    Ok(get_engine_settings(app))
+    Ok(get_agent_settings(app))
 }
+
+// ── Modelos ─────────────────────────────────────────────────────────────────
 
 /// Modelos LLM de Bionic o LM Studio; los cargados primero.
 pub async fn list_models() -> Result<Vec<String>, String> {
@@ -149,6 +161,11 @@ pub async fn list_models() -> Result<Vec<String>, String> {
     Err("No responde Bionic (:1235) ni LM Studio (:1234). Abre Bionic para usar Agente Local.".into())
 }
 
+#[tauri::command]
+pub async fn get_models() -> Result<Vec<String>, String> {
+    list_models().await
+}
+
 fn model_keys(body: &Value) -> Vec<String> {
     let mut models: Vec<(bool, String)> = body["models"]
         .as_array()
@@ -163,6 +180,46 @@ fn model_keys(body: &Value) -> Vec<String> {
     models.sort_by_key(|(loaded, _)| !loaded);
     models.into_iter().map(|(_, key)| key).collect()
 }
+
+// ── Misiones pendientes (plan de Agente Local con pasos sin marcar) ─────────
+
+fn is_resume(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    ["contin", "sigue", "retoma", "resume"].iter().any(|w| lower.starts_with(w))
+}
+
+/// Misión a medio hacer en la carpeta: el plan tiene pasos sin marcar. El objetivo es la última
+/// petición del usuario en el registro del agente (no un "continúa").
+pub fn pending_mission(workspace: &Path) -> Option<Value> {
+    let plan = std::fs::read_to_string(workspace.join(".agente").join("plan.md")).ok()?;
+    let steps: Vec<&str> = plan.lines().filter(|line| line.starts_with("- [")).collect();
+    let done = steps.iter().filter(|line| line.starts_with("- [x]")).count();
+    if steps.is_empty() || done == steps.len() {
+        return None;
+    }
+    let log = std::fs::read_to_string(workspace.join(".agente").join("registro.log")).unwrap_or_default();
+    let objective = log
+        .lines()
+        .rev()
+        .filter_map(|line| line.split_once("] USUARIO: ").map(|(_, text)| text.trim()))
+        .find(|text| !is_resume(text))
+        .map_or_else(|| plan_step_text(steps[done]).to_string(), str::to_string);
+    Some(json!({"objective": objective, "workspace": workspace.to_string_lossy(), "step": done,
+                "role": format!("{done}/{} pasos", steps.len())}))
+}
+
+#[tauri::command]
+pub fn get_pending_mission(workspace_path: Option<String>) -> Option<Value> {
+    pending_mission(Path::new(&workspace_path.filter(|w| !w.is_empty())?))
+}
+
+#[tauri::command]
+pub fn dismiss_pending_mission(workspace_path: String) -> Result<(), String> {
+    let dir = Path::new(&workspace_path).join(".agente");
+    std::fs::rename(dir.join("plan.md"), dir.join("plan_descartado.md")).map_err(|e| e.to_string())
+}
+
+// ── Sesión con el proceso del agente ────────────────────────────────────────
 
 struct Session {
     workspace: String,
@@ -253,7 +310,7 @@ async fn next(session: &mut Session) -> Next {
         tokio::select! {
             event = session.events.recv() => return event.map_or(Next::Closed, Next::Event),
             _ = tokio::time::sleep(Duration::from_millis(250)) => {
-                if super::is_agent_cancelled() {
+                if is_agent_cancelled() {
                     return Next::Cancelled;
                 }
             }
@@ -261,16 +318,14 @@ async fn next(session: &mut Session) -> Next {
     }
 }
 
-fn finish(status: &str, text: &str) -> String {
-    json!({"status": status, "respuesta_conversacional": text}).to_string()
-}
+// ── Traducción de eventos ───────────────────────────────────────────────────
 
 pub(crate) fn step_status(tool: &str, error: bool) -> &'static str {
     match tool {
         _ if error => "ERROR",
-        "verificar" | "revisar" => "VALIDATING",
+        "verificar" | "revisar" | "ver_pantalla" => "VALIDATING",
         "plan" | "paso_hecho" => "DECISION",
-        "terminar" | "escribir" | "editar" | "crear_bat" | "restaurar" | "ejecutar" => "SUCCESS",
+        "terminar" | "escribir" | "editar" | "crear_bat" | "restaurar" | "ejecutar" | "git" => "SUCCESS",
         _ => "ACTION",
     }
 }
@@ -350,7 +405,7 @@ fn forward(app: &AppHandle, workspace: &str, event: &Value, step: &mut u32) {
 }
 
 async fn confirm(app: &AppHandle, session: &mut Session, command: &str) -> Result<(), String> {
-    let answer = crate::core::ask_user::ask_user_async(
+    let answer = crate::ask_user::ask_user_async(
         app,
         format!("El agente quiere ejecutar un comando potencialmente destructivo:\n{command}"),
         vec!["Permitir".into(), "Bloquear".into()],
@@ -361,8 +416,46 @@ async fn confirm(app: &AppHandle, session: &mut Session, command: &str) -> Resul
     send(session, json!({"tipo": "respuesta", "si": answer == "Permitir"})).await
 }
 
-/// Ejecuta un mensaje del chat con Agente Local y devuelve la respuesta final en el formato de Aura.
-pub async fn run_mission(
+/// Preferencias del perfil local, para que el agente las conozca desde el primer mensaje.
+fn with_profile(app: &AppHandle, workspace: &str, message: String) -> String {
+    let snapshot = crate::user_profile::load(app, Some(workspace)).unwrap_or_default();
+    let context = crate::user_profile::prompt_context(&snapshot);
+    if context.trim().is_empty() {
+        message
+    } else {
+        format!("{message}\n\n(Perfil del usuario, tenlo en cuenta: {})", context.trim())
+    }
+}
+
+// ── Misión ──────────────────────────────────────────────────────────────────
+
+/// Ejecuta un mensaje del chat con Agente Local y devuelve la respuesta final en el formato de la interfaz.
+#[tauri::command]
+pub async fn process_user_prompt(
+    user_message: String,
+    workspace_path: String,
+    model: Option<String>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let Some(_lock) = MissionLock::try_lock() else {
+        return Ok(finish("FINISH", "⚠️ Ya hay una misión en curso. Espera a que termine o cancélala."));
+    };
+    CANCELLED.store(false, Ordering::SeqCst);
+    let mut message = user_message;
+    if message.to_lowercase().starts_with("[user]") {
+        message = message[6..].trim().to_string(); // historiales pegados por error
+    }
+    if let Some(idx) = message.find("[SYSTEM]") {
+        message.truncate(idx);
+    }
+    let dir = match installation(&app_handle) {
+        Ok(dir) => dir,
+        Err(reason) => return Ok(finish("ERROR", &reason)),
+    };
+    run_mission(&app_handle, dir, workspace_path, message.trim().to_string(), model.unwrap_or_default()).await
+}
+
+async fn run_mission(
     app: &AppHandle,
     dir: PathBuf,
     workspace: String,
@@ -376,6 +469,7 @@ pub async fn run_mission(
     let reusable = previous.as_mut().is_some_and(|s| {
         s.workspace == workspace && s.model == model && matches!(s.child.try_wait(), Ok(None))
     });
+    let new_session = !reusable;
     let mut current = match previous {
         Some(s) if reusable => s,
         previous => {
@@ -413,7 +507,8 @@ pub async fn run_mission(
         }
     };
 
-    send(&mut current, json!({"tipo": "tarea", "texto": message})).await?;
+    let text = if new_session && !is_resume(&message) { with_profile(app, &workspace, message) } else { message };
+    send(&mut current, json!({"tipo": "tarea", "texto": text})).await?;
     let mut step = 0;
     loop {
         match next(&mut current).await {
@@ -453,6 +548,7 @@ mod tests {
         assert_eq!(step_status("escribir", false), "SUCCESS");
         assert_eq!(step_status("escribir", true), "ERROR");
         assert_eq!(step_status("verificar", false), "VALIDATING");
+        assert_eq!(step_status("ver_pantalla", false), "VALIDATING");
         assert_eq!(step_status("plan", false), "DECISION");
         assert_eq!(step_status("leer", false), "ACTION");
     }
@@ -495,5 +591,22 @@ mod tests {
             {"type": "llm", "key": "b", "loaded_instances": [{"id": "b"}]}
         ]});
         assert_eq!(model_keys(&body), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn pending_mission_comes_from_the_agent_plan() {
+        let ws = std::env::temp_dir().join(format!("aura_pend_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(ws.join(".agente")).unwrap();
+        assert!(pending_mission(&ws).is_none());
+        std::fs::write(ws.join(".agente").join("plan.md"), "# Plan\n- [x] 1. Crear index.html\n- [ ] 2. Probar\n").unwrap();
+        std::fs::write(ws.join(".agente").join("registro.log"),
+                       "[10:00:00] USUARIO: crea un catálogo\n[10:05:00] USUARIO: continúa\n").unwrap();
+        let pending = pending_mission(&ws).unwrap();
+        assert_eq!(pending["objective"], "crea un catálogo");
+        assert_eq!(pending["step"], 1);
+        dismiss_pending_mission(ws.to_string_lossy().into_owned()).unwrap();
+        assert!(pending_mission(&ws).is_none());
+        let _ = std::fs::remove_dir_all(&ws);
     }
 }

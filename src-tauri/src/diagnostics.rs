@@ -15,7 +15,7 @@ pub fn start(app: &tauri::AppHandle, job_path: &str) -> Result<(), String> {
     let job: serde_json::Value = serde_json::from_slice(&std::fs::read(job_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let workspace = job["workspace"].as_str().ok_or("workspace required")?.to_string();
     let prompt = job["prompt"].as_str().ok_or("prompt required")?.to_string();
-    let model = job["model"].as_str().unwrap_or("qwen2.5-coder:7b").to_string();
+    let model = job["model"].as_str().map(str::to_string); // vacío = el modelo de agente.json
     let root = std::path::Path::new(&workspace).canonicalize().map_err(|e| e.to_string())?;
     let log_path = root.join(".aura/diagnostic-events.jsonl");
     std::fs::create_dir_all(log_path.parent().unwrap()).map_err(|e| e.to_string())?;
@@ -32,7 +32,7 @@ pub fn start(app: &tauri::AppHandle, job_path: &str) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let result = crate::llm::process_user_prompt(prompt, workspace, model.clone(), model, handle.clone()).await;
+        let result = crate::agent::process_user_prompt(prompt, workspace, model, handle.clone()).await;
         let exit_code = diagnostic_exit_code(&result);
         let report = serde_json::json!({"elapsed_ms":started.elapsed().as_millis(), "result": result});
         let _ = std::fs::write(root.join(".aura/diagnostic-result.json"), report.to_string());

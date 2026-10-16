@@ -1,3 +1,0 @@
-[submodule "src-tauri/memory_vfs"]
-	path = src-tauri/memory_vfs
-	url = https://github.com/yemsy26/Chronos-VFS.git

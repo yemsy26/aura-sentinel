@@ -1,2 +1,0 @@
-# Lista de dependencias para Python
-solana-py==0.2.5

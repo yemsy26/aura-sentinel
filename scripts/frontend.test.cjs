@@ -23,7 +23,7 @@ test('frontend sanitizes messages, queues workspaces and releases listeners on f
       if (name === 'get_current_directory') return '/initial';
       if (name === 'get_workspace_tree' || name === 'load_chat_history') return '[]';
       if (name === 'get_pending_mission') return { objective: 'Resume', workspace: '/resumed', step: 2 };
-      if (name === 'get_ollama_models' || name === 'get_background_tasks') return [];
+      if (name === 'get_models') return [];
       if (name === 'process_user_prompt') {
         missions.push(args); maximum = Math.max(maximum, ++active);
         if (missions.length === 2) {
@@ -47,11 +47,11 @@ test('frontend sanitizes messages, queues workspaces and releases listeners on f
     await pause(80);
     assert.equal(w.document.getElementById('mission-resume-banner').style.display, 'block');
     w.document.getElementById('resume-mission-btn').click();
-    for (const fn of handlers.get('scheduled-task-fire')) {
-      fn({ payload: { objective: 'Scheduled', workspace: '/scheduled' } });
-    }
+    w.document.getElementById('chat-input').value = 'Segunda tarea';
+    w.document.getElementById('chat-send-btn').click();  // se encola detrás de la reanudación
     await pause(150);
-    assert.deepEqual(missions.map(m => m.workspacePath), ['/resumed', '/scheduled']);
+    assert.deepEqual(missions.map(m => m.userMessage), ['continua', 'Segunda tarea']);
+    assert.equal(missions[0].workspacePath, '/resumed');
     assert.equal(maximum, 1);
     assert.equal(handlers.get('agent-step').size, 0);
     assert.equal(w.document.querySelectorAll('[onerror], a[href^="javascript:"]').length, 0);
@@ -61,9 +61,9 @@ test('frontend sanitizes messages, queues workspaces and releases listeners on f
     assert.equal(w.document.getElementById('mission-verification').textContent, '100% APROBADA');
     assert.equal(w.document.getElementById('mission-repairs').textContent, '1');
     assert.equal(w.document.getElementById('phase-progress-percentage').textContent, '100%');
-    assert.match(w.document.getElementById('ollama-connection-status').textContent, /Servicio disponible · sin modelos/);
+    assert.match(w.document.getElementById('ollama-connection-status').textContent, /Bionic disponible · sin modelos/);
     assert.equal(w.document.getElementById('ollama-connection-status').classList.contains('is-empty'), true);
-    assert.equal(w.document.getElementById('active-workspace-name').textContent, 'scheduled');
+    assert.equal(w.document.getElementById('active-workspace-name').textContent, 'initial');
     for (const fn of handlers.get('agent-ask-user')) fn({ payload: { id: 'review', question: 'Review', options: ['Approve'] } });
     assert.equal(w.document.getElementById('ask-user-modal').style.display, 'flex');
     for (const fn of handlers.get('agent-ask-user-closed')) fn({ payload: { id: 'review' } });
@@ -94,7 +94,7 @@ test('profile dialog loads Windows suggestion and saves personal and project set
       if (name === 'get_current_directory') return '/project-a';
       if (name === 'get_workspace_tree' || name === 'load_chat_history') return '[]';
       if (name === 'get_pending_mission') return null;
-      if (name === 'get_ollama_models' || name === 'get_background_tasks') return [];
+      if (name === 'get_models') return [];
       if (name === 'get_user_profile') return {
         profile: { displayName: 'Ana', homeCountry: 'BO', preferredLanguage: 'es', autoRememberFacts: false },
         windowsRegionSuggestion: 'BO', projectCountry: 'CL'

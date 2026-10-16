@@ -1,39 +1,36 @@
-Write-Host "🛡️ Bienvenido a la configuracion de Aura-Sentinel" -ForegroundColor Cyan
+Write-Host "Configuracion de Aura Sentinel" -ForegroundColor Cyan
 Write-Host "===============================================" -ForegroundColor Cyan
 
-# Verificando Node.js
-try {
-    $nodeVersion = node -v
-    Write-Host "✅ Node.js detectado: $nodeVersion" -ForegroundColor Green
-} catch {
-    Write-Host "❌ Node.js no esta instalado. Por favor instala Node.js (https://nodejs.org/) y reintenta." -ForegroundColor Red
+# Node.js y Rust compilan la interfaz Tauri
+foreach ($herramienta in @(@("node", "-v", "https://nodejs.org/"), @("cargo", "-V", "https://rustup.rs/"))) {
+    try {
+        $version = & $herramienta[0] $herramienta[1]
+        Write-Host "OK  $($herramienta[0]): $version" -ForegroundColor Green
+    } catch {
+        Write-Host "FALTA $($herramienta[0]). Instalalo desde $($herramienta[2]) y reintenta." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Agente Local es el motor de las misiones
+$candidatas = @($env:AGENTE_LOCAL_DIR, "$env:USERPROFILE\.gemini\antigravity\scratch\lm studio", "$env:USERPROFILE\AgenteLocal")
+$agente = $candidatas | Where-Object { $_ -and (Test-Path "$_\.venv\Scripts\python.exe") -and (Test-Path "$_\agente\__main__.py") } | Select-Object -First 1
+if ($agente) {
+    Write-Host "OK  Agente Local: $agente" -ForegroundColor Green
+} else {
+    Write-Host "FALTA Agente Local. Ejecuta instalar.bat en su carpeta o define AGENTE_LOCAL_DIR." -ForegroundColor Red
     exit 1
 }
 
-# Verificando Rust
+# Bionic (o LM Studio) sirve el modelo
 try {
-    $cargoVersion = cargo -V
-    Write-Host "✅ Rust/Cargo detectado: $cargoVersion" -ForegroundColor Green
+    Invoke-RestMethod -Uri "http://127.0.0.1:1235/api/v1/models" -TimeoutSec 4 | Out-Null
+    Write-Host "OK  Bionic responde en :1235" -ForegroundColor Green
 } catch {
-    Write-Host "❌ Rust no esta instalado. Por favor instala Rust (https://rustup.rs/) y reintenta." -ForegroundColor Red
-    exit 1
-}
-
-# Verificando Ollama
-try {
-    $ollamaVersion = ollama -v
-    Write-Host "✅ Ollama detectado. Descargando modelos requeridos (esto puede tomar varios minutos dependiendo de tu conexion)..." -ForegroundColor Green
-    ollama pull llama3.1:8b
-    ollama pull qwen2.5-coder:7b
-    ollama pull nomic-embed-text
-    Write-Host "✅ Modelos listos." -ForegroundColor Green
-} catch {
-    Write-Host "❌ Ollama no esta instalado. Por favor instala Ollama (https://ollama.com/) y reintenta." -ForegroundColor Red
-    exit 1
+    Write-Host "AVISO Bionic no responde en :1235. Abrelo antes de enviar misiones." -ForegroundColor Yellow
 }
 
 Write-Host "===============================================" -ForegroundColor Cyan
-Write-Host "Instalando dependencias del proyecto..." -ForegroundColor Yellow
+Write-Host "Instalando dependencias de la interfaz..." -ForegroundColor Yellow
 npm install
-
-Write-Host "🎉 ¡Todo listo! Puedes arrancar Aura-Sentinel ejecutando: npm run tauri dev" -ForegroundColor Green
+Write-Host "Listo. Arranca Aura Sentinel con start.bat (o npm run tauri dev)." -ForegroundColor Green

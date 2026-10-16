@@ -1,29 +1,22 @@
 const { invoke } = window.__TAURI__.core;
 const { open } = window.__TAURI__.dialog;
 
-// ─── MODEL MANAGEMENT & TURBO SWITCHER ───────────────────────────────────────
+// ─── MODELOS (Bionic / LM Studio) ────────────────────────────────────────────
 let availableModels = [];
-let mostPowerfulModel = null;
 
-async function loadOllamaModels() {
+async function loadModels() {
     try {
-        const rawModels = await invoke('get_ollama_models').then(list => list.map(name => ({ name })));
+        availableModels = (await invoke('get_models')).map(name => ({ name }));
         const serviceStatus = document.getElementById('ollama-connection-status');
         if (serviceStatus) {
-            serviceStatus.className = rawModels.length ? 'service-status is-connected' : 'service-status is-empty';
-            serviceStatus.innerHTML = `<i></i>${rawModels.length ? `Servicio disponible · ${rawModels.length} modelos` : 'Servicio disponible · sin modelos'}`;
-            serviceStatus.title = 'Estado obtenido desde el servicio local de modelos';
+            serviceStatus.className = availableModels.length ? 'service-status is-connected' : 'service-status is-empty';
+            serviceStatus.innerHTML = `<i></i>${availableModels.length ? `Bionic disponible · ${availableModels.length} modelos` : 'Bionic disponible · sin modelos'}`;
+            serviceStatus.title = 'Modelos de Bionic / LM Studio (el cargado aparece primero)';
         }
-        availableModels = rawModels.filter(m => {
-            const low = m.name.toLowerCase();
-            return !low.includes("embed") && !low.includes("minilm") && !low.includes("bge-");
-        });
 
         const agentModelSelect = document.getElementById('agent-model-select');
         if (!agentModelSelect) return;
-
         agentModelSelect.innerHTML = '';
-
         availableModels.forEach(m => {
             const opt = document.createElement('option');
             opt.value = m.name;
@@ -31,95 +24,29 @@ async function loadOllamaModels() {
             agentModelSelect.appendChild(opt);
         });
 
-        // Determine most powerful model (14b, 27b+, 70b, 34b, etc.)
-        const powerCandidate = availableModels.find(m => {
-            const n = m.name.toLowerCase();
-            return n.includes("14b") || n.includes("bonsai") || n.includes("27b") || n.includes("70b") || n.includes("34b");
-        });
-        mostPowerfulModel = powerCandidate ? powerCandidate.name : (availableModels[0] ? availableModels[0].name : null);
-
-        // Restore user choice from localStorage, or smart default
+        // Elección guardada o, si no, el modelo cargado (Bionic lo devuelve primero)
         const savedModel = localStorage.getItem('aura_active_model');
         if (savedModel && availableModels.some(m => m.name === savedModel)) {
             agentModelSelect.value = savedModel;
-        } else if (availableModels.some(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen2.5-coder"))) {
-            agentModelSelect.value = availableModels.find(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen2.5-coder")).name;
-        } else if (availableModels.some(m => m.name.includes("gemma4-e4b"))) {
-            agentModelSelect.value = availableModels.find(m => m.name.includes("gemma4-e4b")).name;
-        } else if (availableModels.some(m => m.name.includes("llama3.1"))) {
-            agentModelSelect.value = availableModels.find(m => m.name.includes("llama3.1")).name;
         } else if (availableModels.length > 0) {
             agentModelSelect.value = availableModels[0].name;
         }
-
         updateModelStatusUI();
 
         agentModelSelect.onchange = () => {
             localStorage.setItem('aura_active_model', agentModelSelect.value);
             updateModelStatusUI();
-            logSystemThought(`[CEREBRO] Modelo activo cambiado a: ${agentModelSelect.value}`, '#58a6ff');
+            logSystemThought(`[CEREBRO] Modelo activo: ${agentModelSelect.value} (se carga ajustado a la VRAM en la próxima misión)`, '#58a6ff');
         };
-
-        const turboBtn = document.getElementById('quick-turbo-btn');
-        if (turboBtn && mostPowerfulModel) {
-            turboBtn.onclick = () => {
-                if (agentModelSelect.value === mostPowerfulModel) {
-                    // Toggle back to standard model (qwen 7b, gemma, etc.)
-                    const standard = availableModels.find(m => m.name.includes("qwen2.5-coder:7b") || m.name.includes("qwen") || m.name.includes("gemma4-e4b") || m.name.includes("llama3.1"));
-                    if (standard) {
-                        agentModelSelect.value = standard.name;
-                        localStorage.setItem('aura_active_model', standard.name);
-                        turboBtn.classList.remove('turbo-active');
-                        turboBtn.textContent = '⚡ MÁXIMA POTENCIA';
-                        logSystemThought(`[MODO TURBO] Desactivado. Modelo estándar: ${standard.name}`, '#8b949e');
-                    }
-                } else {
-                    agentModelSelect.value = mostPowerfulModel;
-                    localStorage.setItem('aura_active_model', mostPowerfulModel);
-                    turboBtn.classList.add('turbo-active');
-                    turboBtn.textContent = `🚀 POTENCIA MÁXIMA (${mostPowerfulModel.split(':')[0]})`;
-                    logSystemThought(`[MODO TURBO ACTIVADO] Asignado cerebro de máxima potencia: ${mostPowerfulModel}`, '#a855f7');
-                }
-                updateModelStatusUI();
-            };
-        }
-
     } catch (e) {
         const serviceStatus = document.getElementById('ollama-connection-status');
         if (serviceStatus) {
             serviceStatus.className = 'service-status is-offline';
-            serviceStatus.innerHTML = '<i></i>Servicio sin conexión';
+            serviceStatus.innerHTML = '<i></i>Bionic sin conexión';
             serviceStatus.title = String(e);
         }
-        console.error("No se pudieron cargar los modelos de Ollama", e);
+        console.error("No se pudieron cargar los modelos de Bionic", e);
     }
-}
-
-// Motor de las misiones: Agente Local (Bionic/LM Studio) o el motor original de Aura (Ollama).
-async function loadEngineSelector() {
-    const engineSelect = document.getElementById('engine-select');
-    if (!engineSelect) return;
-    try {
-        const settings = await invoke('get_engine_settings');
-        if (settings && settings.motor) {
-            engineSelect.value = settings.motor;
-            engineSelect.title = settings.motor === 'agente-local'
-                ? `Agente Local: ${settings.carpeta || 'sin instalar'}`
-                : 'Motor original de Aura con Ollama';
-        }
-    } catch (e) {
-        console.error('No se pudo leer el motor', e);
-    }
-    engineSelect.onchange = async () => {
-        try {
-            await invoke('save_engine_settings', { motor: engineSelect.value });
-            logSystemThought(`[MOTOR] Misiones con: ${engineSelect.options[engineSelect.selectedIndex].text}`, '#58a6ff');
-        } catch (e) {
-            logSystemThought(`[MOTOR] ${e}`, '#f85149');
-            await loadEngineSelector();
-        }
-        await loadOllamaModels();
-    };
 }
 
 function updateModelStatusUI() {
@@ -959,15 +886,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             });
 
-            // Single unified model passed to both roles
             const agentModelSelect = document.getElementById('agent-model-select');
-            const chosenModel = agentModelSelect ? agentModelSelect.value || "qwen2.5-coder:7b" : "qwen2.5-coder:7b";
-
             const responseString = await invoke('process_user_prompt', {
                 userMessage: text,
                 workspacePath: currentWorkspace,
-                orchestratorModel: chosenModel,
-                programmerModel: chosenModel
+                model: agentModelSelect ? agentModelSelect.value : ''
             });
 
             resetInputState();
@@ -1058,8 +981,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initial setups
     renderTabs();
-    await loadEngineSelector();
-    await loadOllamaModels();
+    await loadModels();
 
     // Auto-restore workspace on startup
     let lastWs = localStorage.getItem('aura_last_workspace');
@@ -1173,64 +1095,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
-    // ─── BACKGROUND TASKS ────────────────────────────────────────────────────
-    const bgTasksSection = document.getElementById('bg-tasks-section');
-    const bgTasksList = document.getElementById('bg-tasks-list');
-
-    async function updateBackgroundTasks() {
-        try {
-            const tasks = await invoke('get_background_tasks');
-            if (tasks.length === 0) {
-                if (bgTasksSection) bgTasksSection.style.display = 'none';
-                if (bgTasksList) bgTasksList.innerHTML = '';
-            } else {
-                if (bgTasksSection) bgTasksSection.style.display = 'block';
-                if (bgTasksList) {
-                    bgTasksList.innerHTML = '';
-                    tasks.forEach(task => {
-                        const taskEl = document.createElement('div');
-                        taskEl.style.cssText = 'display:flex;justify-content:space-between;align-items:center;background:#161b22;padding:2px 6px;border-radius:4px;font-size:11px;';
-                        const cmdText = task.command.length > 40 ? task.command.substring(0, 37) + '...' : task.command;
-                        const span = document.createElement('span');
-                        span.style.color = '#8b949e';
-                        span.title = task.command;
-                        span.textContent = `[${task.id}] ${cmdText}`;
-
-                        const killBtn = document.createElement('button');
-                        killBtn.innerHTML = '✕';
-                        killBtn.style.cssText = 'background:transparent;border:none;color:#ff7b72;cursor:pointer;font-size:10px;padding:0 4px;';
-                        killBtn.title = 'Terminar proceso';
-                        killBtn.onclick = async () => {
-                            killBtn.disabled = true;
-                            killBtn.style.opacity = '0.5';
-                            try {
-                                await invoke('ui_kill_task', { taskId: task.id });
-                                setTimeout(updateBackgroundTasks, 500);
-                            } catch (e) {
-                                killBtn.disabled = false;
-                                killBtn.style.opacity = '1';
-                            }
-                        };
-
-                        taskEl.appendChild(span);
-                        taskEl.appendChild(killBtn);
-                        bgTasksList.appendChild(taskEl);
-                    });
-                }
-            }
-        } catch (e) { }
-    }
-
-    setInterval(updateBackgroundTasks, 5000);
-    setTimeout(updateBackgroundTasks, 1000);
-
     // ─── MISSION RESUME & AUTO-RECOVERY ──────────────────────────────────────
     const resumeBanner = document.getElementById('mission-resume-banner');
     const resumeStep = document.getElementById('mission-resume-step');
     const resumeObj = document.getElementById('mission-resume-obj');
     const resumeBtn = document.getElementById('resume-mission-btn');
     const dismissBtn = document.getElementById('dismiss-mission-btn');
-    const sanityIndicator = document.getElementById('sanity-indicator');
 
     let pendingResumeData = null;
 
@@ -1245,8 +1115,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         logSystemThought(`[AUTO-RESUME] Misión previa detectada: "${payload.objective}"`, '#58a6ff');
     }
-    await window.__TAURI__.event.listen('mission-resumed', event => showPendingMission(event.payload));
-    try { showPendingMission(await invoke('get_pending_mission')); }
+    // Misión a medio hacer en el último espacio de trabajo (plan de Agente Local con pasos pendientes)
+    try { showPendingMission(await invoke('get_pending_mission', { workspacePath: localStorage.getItem('aura_last_workspace') })); }
     catch (error) { logSystemThought(`[RESUME] ${error}`, '#d29922'); }
 
     if (resumeBtn) {
@@ -1272,35 +1142,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
     }
 
-    window.__TAURI__.event.listen('sanity-report', (event) => {
-        const report = event.payload;
-        if (!report || !sanityIndicator) return;
-
-        let icon = "🟢 OPTIMAL";
-        let color = "#3fb950";
-
-        if (report.level === "YELLOW") {
-            icon = "🟡 CAUTION";
-            color = "#d29922";
-            logSystemThought(`[CORDURA YELLOW] ${report.recommendation}`, '#d29922');
-        } else if (report.level === "RED") {
-            icon = "🔴 CRITICAL";
-            color = "#f85149";
-            logSystemThought(`[CORDURA ALERTA ROJA] ${report.recommendation}`, '#f85149');
-        }
-
-        sanityIndicator.textContent = icon;
-        sanityIndicator.style.color = color;
-        sanityIndicator.title = `Coherencia: ${(report.coherence_score * 100).toFixed(0)}% | RAM: ${report.ram_pressure_pct.toFixed(0)}% | Rec: ${report.recommendation}`;
-    });
-
-    window.__TAURI__.event.listen('scheduled-task-fire', async (event) => {
-        const task = event.payload;
-        if (!task) return;
-        logSystemThought(`⏰ [SCHEDULER DISPARADO] "${task.objective}" (${task.cron_expr})`, '#bc8cff');
-        appendMessageToDOM('system', `⏰ Tarea programada iniciada: **${task.description || task.objective}**`);
-        await dispatchPrompt(task.objective, task.workspace);
-    });
 
 });
 

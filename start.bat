@@ -1,32 +1,39 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal EnableExtensions
+chcp 65001 >nul
 color 0B
+title Aura Sentinel
 echo =======================================================
-echo          AURA-SENTINEL - INICIO COMPLETO
+echo          AURA SENTINEL - INICIO
 echo =======================================================
-echo.
-echo Cambiando al directorio del proyecto...
 cd /d "%~dp0"
 set "CARGO_TARGET_DIR=%CD%\target-audit"
-
-echo Forzando variables de entorno seguras...
-set "PATH=%USERPROFILE%\.cargo\bin;%LOCALAPPDATA%\Programs\Ollama;%PATH%"
+set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 
 echo.
-echo Comprobando servidor Ollama local...
-curl -s http://127.0.0.1:11434/api/tags >nul
-if %errorlevel% neq 0 (
-    echo [INFO] Servidor Ollama no detectado. Levantando motor de IA de forma independiente...
-    powershell -NoProfile -Command "Start-Process '%LOCALAPPDATA%\Programs\Ollama\ollama.exe' -ArgumentList 'serve' -WindowStyle Hidden"
-    
-    echo Esperando a que el motor Ollama inicialice...
-    timeout /t 3 /nobreak >nul
+echo Comprobando Bionic (LM Studio) en http://127.0.0.1:1235 ...
+curl -s -o nul http://127.0.0.1:1235/api/v1/models
+if errorlevel 1 (
+    echo [AVISO] Bionic no responde. Abrelo antes de enviar misiones: el modelo se carga alli.
+) else (
+    echo [OK] Bionic disponible.
+)
+
+if not exist "node_modules" (
+    echo.
+    echo Instalando dependencias de la interfaz...
+    call npm install
+    if errorlevel 1 goto :error
 )
 
 echo.
-echo Compilando e iniciando la interfaz tactica de Tauri...
-echo Por favor espera, esto puede tomar unos segundos...
-echo.
-
+echo Compilando e iniciando la interfaz de Tauri (la primera vez tarda unos minutos)...
 call npm run tauri dev
+goto :fin
+
+:error
+echo.
+echo [ERROR] No se pudieron instalar las dependencias (npm install).
+
+:fin
 pause

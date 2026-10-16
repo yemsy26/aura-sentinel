@@ -4,6 +4,19 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 
 ---
 
+## [4.0.0] — 2026-10-16 (Agente Local como único motor)
+
+- Las misiones las ejecuta Agente Local con el modelo de Bionic/LM Studio (`src-tauri/src/agent.rs`).
+- Retirado el motor original basado en Ollama (~49 000 líneas: `llm/`, `core/`, `memory/`, `net/`,
+  SpectraSAT, el submódulo Chronos-VFS, `Dockerfile`, `setup.sh`, `patch.py`, `data/`). Con él desaparecen
+  sus 6 pruebas que fallaban; quedan 14 pruebas Rust y 3 de interfaz, todas en verde.
+- Fuera el botón "Máxima potencia" y el selector de motor; el selector de modelos lista los de Bionic.
+- Reanudar ahora detecta planes de Agente Local con pasos pendientes; el árbol de archivos ya no se vacía
+  si una carpeta (p. ej. de OneDrive) no se puede leer.
+- `start.bat` y `setup.ps1` comprueban Bionic y Agente Local en vez de Ollama.
+
+---
+
 ## [3.0.0] — 2026-09-06 (Aura Sentinel v3.0 Enterprise Architecture)
 
 ### 🚀 Nivel Alcanzado: Agente Autónomo de Nivel Industrial (SWE-Agent / Devin 2.0 Standard)

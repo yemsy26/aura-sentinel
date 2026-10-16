@@ -52,7 +52,7 @@ pub async fn ask_user_async(
         tokio::select! {
             reply = &mut rx => break reply.map_err(|_| "Pregunta interrumpida".to_string()),
             _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
-                if crate::llm::is_agent_cancelled() {
+                if crate::agent::is_agent_cancelled() {
                     break Err("Misión cancelada mientras se esperaba una respuesta".to_string());
                 }
             }
