@@ -444,10 +444,12 @@ fn forward(app: &AppHandle, workspace: &str, event: &Value, step: &mut u32) {
     }
 }
 
-async fn confirm(app: &AppHandle, session: &mut Session, command: &str) -> Result<(), String> {
+async fn confirm(app: &AppHandle, session: &mut Session, command: &str, reason: &str) -> Result<(), String> {
+    // El motor dice por qué pide permiso (destructivo, o conectarse/publicar fuera del equipo).
+    let reason = if reason.is_empty() { "ejecutar un comando potencialmente destructivo" } else { reason };
     let answer = crate::ask_user::ask_user_async(
         app,
-        format!("El agente quiere ejecutar un comando potencialmente destructivo:\n{command}"),
+        format!("El agente quiere {reason}:\n{command}"),
         vec!["Permitir".into(), "Bloquear".into()],
         "Agente Local".into(),
     )
@@ -561,7 +563,8 @@ async fn run_order(
                 "confirmar" => {
                     let _ = app.emit("agent-event", &event);
                     let command = event["comando"].as_str().unwrap_or_default().to_string();
-                    confirm(app, &mut current, &command).await.map_err(|e| ("ERROR", e))?;
+                    let reason = event["motivo"].as_str().unwrap_or_default().to_string();
+                    confirm(app, &mut current, &command, &reason).await.map_err(|e| ("ERROR", e))?;
                 }
                 _ => forward(app, workspace, &event, &mut step),
             },

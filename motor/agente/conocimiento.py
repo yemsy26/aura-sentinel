@@ -8,7 +8,13 @@ from pathlib import Path
 DIR_GUIAS = Path(__file__).resolve().parent / "guias"
 ALIAS = {"juego": "pygame", "pygame-ce": "pygame", "canvas": "html-juego", "javascript": "html-juego", "js": "web",
          "html": "web", "css": "web", "flask": "api", "fastapi": "api", "rest": "api", "test": "tests",
-         "pytest": "tests", "junit": "tests", "py": "python", "bats": "bat", "cmd": "bat"}
+         "pytest": "tests", "junit": "tests", "py": "python", "bats": "bat", "cmd": "bat",
+         "rs": "rust", "cargo": "rust", "golang": "go", "typescript": "node", "ts": "node", "nodejs": "node",
+         "node.js": "node", "npm": "node", "express": "node", "csharp": "dotnet", "c#": "dotnet", ".net": "dotnet",
+         "net": "dotnet", "aspnet": "dotnet", "contenedor": "docker", "contenedores": "docker", "compose": "docker",
+         "docker-compose": "docker", "podman": "docker", "servidor": "despliegue", "servidores": "despliegue",
+         "deploy": "despliegue", "desplegar": "despliegue", "ssh": "despliegue", "kubernetes": "despliegue",
+         "k8s": "despliegue"}
 REEMPLAZOS = {"pygame": "pygame-ce", "pypdf2": "pypdf", "fuzzywuzzy": "rapidfuzz", "pycrypto": "pycryptodome",
               "sklearn": "scikit-learn", "bs4": "beautifulsoup4", "opencv": "opencv-python", "pil": "pillow"}
 

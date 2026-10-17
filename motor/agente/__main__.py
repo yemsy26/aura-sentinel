@@ -36,7 +36,7 @@ def modo_json(cfg: dict, carpeta: str) -> int:
 
     Órdenes: {"tipo": "tarea"|"regla"|"revisar", "texto": ...}, {"tipo": "nuevo"|"verificar"|"plan"|
     "procesos"|"salir"}, {"tipo": "detener", "id": N}, {"tipo": "restaurar", "numero": N} y
-    {"tipo": "respuesta", "si": bool} tras un evento "confirmar". Cada orden acaba con un evento "fin"
+    {"tipo": "respuesta", "si": bool} tras un evento "confirmar" (trae "comando" y "motivo"). Cada orden acaba con un evento "fin"
     (con "datos" estructurados en "procesos"); mientras tanto llegan "paso", "archivos", "progreso",
     "aviso" y "nota".
     """

@@ -5,9 +5,9 @@ Compara cada requisito con el código, busca lógica sin conectar y tests falsos
 import re
 from pathlib import Path
 
-from .verificacion import IGNORAR
+from .verificacion import IGNORAR, es_codigo
 
-EXT = {".py", ".js", ".mjs", ".ts", ".html", ".htm", ".css", ".java", ".bat", ".cmd", ".json", ".toml", ".txt", ".md"}
+BLOQUEOS = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.lock", "go.sum", "packages.lock.json"}
 
 SISTEMA = """Eres un revisor de código senior, exigente y concreto. No escribes código nuevo: encuentras lo que hará que el programa NO funcione o NO cumpla lo pedido.
 Comprueba, con el número de línea como prueba:
@@ -16,6 +16,9 @@ Comprueba, con el número de línea como prueba:
 3. Estados inalcanzables: menús que no se muestran, fin de partida que nunca ocurre, reinicio que no reinicia, pausa que no pausa.
 4. Errores en ejecución: nombres inexistentes, índices fuera de rango, None, rutas de archivos/recursos incorrectas, .bat que llama a archivos que no existen.
 5. Tests que no prueban el código del proyecto o que se debilitaron para pasar.
+6. Los requisitos que son ACCIONES (desplegar, copiar a un servidor, arrancar, publicar, comprobar que responde) se
+   juzgan con los COMANDOS EJECUTADOS y su resultado: si un comando lo hizo con exit=0 y la salida lo confirma, CUMPLE
+   (cita el comando). No exijas un script para eso salvo que el usuario lo pida.
 Ignora estilo y gustos. No inventes problemas: si no ves la línea que lo demuestra, no lo pongas.
 Responde EXACTAMENTE con este formato, en español:
 REQUISITOS:
@@ -27,14 +30,14 @@ VEREDICTO: APROBADO | CAMBIOS NECESARIOS"""
 
 
 def _fuentes(raiz: Path) -> list[Path]:
-    out = [p for p in raiz.rglob("*") if p.is_file() and p.suffix.lower() in EXT
+    out = [p for p in raiz.rglob("*") if p.is_file() and (es_codigo(p) or p.suffix.lower() in (".txt", ".md"))
            and not (IGNORAR & set(p.relative_to(raiz).parts[:-1])) and p.stat().st_size < 200_000
-           and p.name not in ("package-lock.json",)]
+           and p.name.lower() not in BLOQUEOS]
     # Primero el código (lo más reciente), al final la documentación.
     return sorted(out, key=lambda p: (p.suffix.lower() in (".md", ".txt", ".json"), -p.stat().st_mtime))
 
 
-def revisar(llm, raiz: Path, tarea: str, informe: str, enfoque: str = "") -> tuple[str, bool]:
+def revisar(llm, raiz: Path, tarea: str, informe: str, enfoque: str = "", evidencia: str = "") -> tuple[str, bool]:
     """Devuelve (texto de la revisión, aprobado)."""
     cupo = int(llm.contexto * 3.0 * 0.5)  # ~50 % del contexto para el código
     partes, usado = [], 0
@@ -51,6 +54,7 @@ def revisar(llm, raiz: Path, tarea: str, informe: str, enfoque: str = "") -> tup
         return "REVISIÓN: no hay archivos de código que revisar.", True
     usuario = (f"PETICIÓN DEL USUARIO:\n{tarea[:3000]}\n\n"
                f"RESULTADO DE LA VERIFICACIÓN AUTOMÁTICA:\n{informe[:2500] or '(no ejecutada)'}\n\n"
+               + (f"COMANDOS EJECUTADOS EN ESTA TAREA (con su resultado):\n{evidencia}\n\n" if evidencia else "")
                + (f"FÍJATE ESPECIALMENTE EN: {enfoque}\n\n" if enfoque else "")
                + "CÓDIGO:\n" + "\n\n".join(partes))
     r = llm.chat([{"role": "system", "content": SISTEMA}, {"role": "user", "content": usuario}], None, 1800, False)

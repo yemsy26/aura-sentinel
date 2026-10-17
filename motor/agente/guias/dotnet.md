@@ -1,0 +1,11 @@
+# .NET / C# (SDK 8 LTS, 2026)
+- Proyectos: `dotnet new console -n App`, `dotnet new webapi -n Api` (API mínima), `dotnet new classlib -n Nucleo`. Solución: `dotnet new sln -n Sistema` y `dotnet sln add App\App.csproj`.
+- Pruebas: `dotnet new xunit -n App.Tests`, `dotnet add App.Tests reference App`, `dotnet sln add App.Tests\App.Tests.csproj`; casos con `[Fact]` y `[Theory]` + `[InlineData]`. Ejecuta `dotnet test`.
+- Paquetes: `dotnet add package Nombre` (elige la última versión estable); `dotnet restore` los descarga.
+- C# moderno: `<Nullable>enable</Nullable>` (viene activado), `record`, `async`/`await` de punta a punta, `using var`, inyección de dependencias de `Microsoft.Extensions` y `ILogger<T>` en vez de `Console.WriteLine` en servicios.
+- API mínima: `app.MapGet("/health", () => Results.Ok())`, `app.MapPost("/items", (Item i) => ...)`; valida la entrada y devuelve `Results.BadRequest`, `Results.NotFound`, etc.
+- Configuración: `appsettings.json` + variables de entorno (`Seccion__Clave`). Credenciales en desarrollo: `dotnet user-secrets`; nunca en appsettings.json versionado.
+- Ejecutar: `dotnet run --project Api --urls http://localhost:5080` con `fondo=true` y comprobar con `curl -s http://localhost:5080/health`.
+- Publicar: `dotnet publish App -c Release -o publicado` (para Linux: `-r linux-x64 --self-contained false`).
+- run.bat: `crear_bat("run", ["dotnet run --project App"])`; test.bat: `crear_bat("test", ["dotnet test"])`.
+- `verificar` compila con `dotnet build` (errores y avisos con archivo:línea) y ejecuta `dotnet test` en los proyectos de pruebas.

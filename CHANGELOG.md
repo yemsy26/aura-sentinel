@@ -5,6 +5,32 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.3.0] — 2026-10-17 (Sistemas en cualquier lenguaje, contenedores y despliegue)
+
+- `verificar` comprueba también Rust (`cargo build`, `cargo test`, clippy), Go (`go vet`, `go test`, gofmt), .NET
+  (`dotnet build`/`test`), Node/TypeScript (dependencias, `tsc --noEmit`, `npm run build`, `npm test`), Dockerfile
+  (versiones fijas, `COPY` rotos, credenciales, usuario sin privilegios, `.dockerignore` y `docker build` con Docker en
+  marcha), `compose.yaml` y tabuladores en YAML. Antes, un proyecto Rust, Go o .NET salía como «sin código» y un
+  Dockerfile o un `npm test` rotos pasaban.
+- La revisión, el mapa del proyecto, la protección contra reescrituras y los puntos de restauración incluyen `.rs`,
+  `.go`, `.cs`, `.tsx`, `.yml`, Dockerfile, `go.mod`… (antes `restaurar` no podía devolver código Rust o Go).
+- La revisión independiente recibe los comandos ejecutados en la tarea y su resultado: los requisitos que son
+  acciones (desplegar, arrancar, comprobar) se juzgan con esa evidencia y no exige un script que nadie pidió.
+- Permiso del usuario para todo lo que sale del equipo: `ssh`, `scp`, `rsync`, `git push`, `docker push`/`login`,
+  `kubectl apply`, `helm`, `terraform apply`, publicar paquetes, nubes (`az`, `aws`, `gcloud`…) y peticiones HTTP que
+  escriben fuera de `localhost`, también cuando van dentro de un `.bat`, `.ps1` o `.sh` que se ejecuta. Aura muestra
+  el motivo en la ventana de permiso.
+- Aviso al escribir un archivo con una credencial real (clave privada, token, contraseña); reglas para leerlas de
+  variables de entorno o de un `.env` fuera de git.
+- El agente conoce el entorno al empezar (Rust, Go, .NET, Docker y si está en marcha, Podman, OpenSSH, kubectl) y las
+  compilaciones largas (`cargo`, `go`, `docker build`, `dotnet`, Maven/Gradle, `npx`) tienen al menos 5 minutos.
+- Guías nuevas: `rust`, `go`, `node` (y TypeScript), `dotnet`, `docker` y `despliegue` (SSH sin interacción, servicios,
+  contenedores, comprobación y vuelta atrás).
+- Comprobado con misiones reales del modelo local en 8 GB de VRAM: una CLI en Rust, una API REST en Go con imagen
+  Docker probada con curl y su despliegue por SSH en un servidor de prueba.
+
+---
+
 ## [4.2.0] — 2026-10-16 (Motor en el repositorio e instalación completa)
 
 - El motor (Agente Local) vive en `motor/`: clonar el repositorio trae todo lo necesario. No se suben su

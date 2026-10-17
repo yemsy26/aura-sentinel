@@ -120,7 +120,8 @@ def _revisor(requisitos: str, enfoque: str) -> tuple[str, bool]:
     base, modelo, ctx = llm.detectar(cfg)
     if not modelo:
         return "Revisión no disponible: no hay modelo cargado.", True
-    return revisar_codigo(llm.LLM(base, modelo, ctx, cfg), H.raiz, requisitos, H.verificacion["informe"], enfoque)
+    return revisar_codigo(llm.LLM(base, modelo, ctx, cfg), H.raiz, requisitos, H.verificacion["informe"], enfoque,
+                          H.evidencia_texto())
 
 
 @mcp.tool(description=D["revisar"] + " En 'requisitos' copia lo que pidió el usuario.")

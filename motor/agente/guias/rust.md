@@ -1,0 +1,12 @@
+# Rust (stable, edición 2024, 2026)
+- Proyecto: `cargo new nombre` (programa) o `cargo new --lib nombre`. Dependencias con `cargo add clap --features derive` (elige la última versión compatible); nunca edites versiones a mano sin comprobarlas.
+- Estructura: `src/main.rs` corto (lee argumentos, llama y traduce errores a mensaje + código de salida); la lógica en `src/lib.rs` y módulos (`mod parser;` -> `src/parser.rs`) para poder probarla.
+- Errores: funciones que devuelven `Result<T, E>` y el operador `?`. En programas, `anyhow::Result` con `.context("leyendo config")`; en librerías, un `enum` de error propio (o `thiserror`). Nada de `unwrap()`/`expect()` fuera de las pruebas.
+- Salida con error: `fn main() -> std::process::ExitCode` (o `std::process::exit(1)`) y el mensaje por `eprintln!`.
+- CLI: `clap` con `#[derive(Parser)]`. Archivos: `std::fs::read_to_string(&ruta)`, rutas con `PathBuf`. Servidores web: `tokio` + `axum` (consulta su API actual con investigar antes de escribir).
+- Pruebas: en cada módulo `#[cfg(test)] mod tests { use super::*; #[test] fn suma_basica() { assert_eq!(suma(2, 3), 5); } }`; de integración en `tests/*.rs`. Prueba también los casos de error.
+- Comandos: `cargo build`, `cargo test`, `cargo clippy --all-targets`, `cargo fmt`, `cargo run -- argumentos`. Versión final: `cargo build --release` -> `target\release\nombre.exe`.
+- La primera compilación descarga y compila dependencias (puede tardar minutos): es normal.
+- run.bat: `crear_bat("run", ["cargo run --release -- %*"])`; test.bat: `crear_bat("test", ["cargo test"])`.
+- Contenedor: build en varias etapas (`rust:<versión>-slim` para compilar, `debian:<versión>-slim` o distroless para ejecutar); ver `guia("docker")`.
+- `verificar` compila con `cargo build --all-targets` (errores y avisos con archivo:línea), pasa `cargo test` y muestra los avisos de clippy.

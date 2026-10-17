@@ -6,6 +6,7 @@ HTML/JS: referencias rotas, ids inexistentes, sintaxis JS (node --check) y prueb
          (errores de consola, 404, canvas vacío, animación, respuesta a teclado/ratón, capturas).
 Java:   javac -Xlint y ejecución del main en modo headless (o mvn test si hay pom.xml).
 .bat:   archivos llamados que no existen y falta de cd /d "%~dp0".
+Rust, Go, .NET, Node/TypeScript, Docker/Compose y YAML: en ecosistemas.py.
 """
 import ast
 import html.parser
@@ -26,7 +27,20 @@ from pathlib import Path
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
 SONDA_PYGAME = Path(__file__).resolve().parent / "sondas" / "pygame_sonda.py"
 IGNORAR = {".git", ".venv", "venv", "env", "node_modules", "__pycache__", "dist", "build", ".next", ".agente",
-           "target", "out", ".idea", ".vscode", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages"}
+           "target", "out", "obj", ".idea", ".vscode", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages"}
+# Lo que el agente trata como código (revisión, mapa, puntos de restauración, protección contra reescrituras).
+CODIGO = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".html", ".htm", ".css", ".scss",
+          ".java", ".kt", ".kts", ".gradle", ".rs", ".go", ".cs", ".fs", ".csproj", ".fsproj", ".sln", ".c", ".h",
+          ".cpp", ".hpp", ".bat", ".cmd", ".ps1", ".sh", ".sql", ".proto", ".json", ".yml", ".yaml", ".toml", ".xml"}
+NOMBRES_CODIGO = {"dockerfile", "makefile", "go.mod", ".dockerignore", ".gitignore", ".env.example", "procfile"}
+
+
+def es_codigo(p: Path) -> bool:
+    nombre = p.name.lower()
+    return (p.suffix.lower() in CODIGO or nombre in NOMBRES_CODIGO or nombre.startswith("dockerfile.")
+            or nombre.endswith(".dockerfile"))
+
+
 SIN_VENTANA = 0x08000000  # CREATE_NO_WINDOW
 # Atributos que leen las librerías (pygame Rect/Sprite, tkinter, unittest...), no el propio código: no son "código muerto".
 ATRIBUTOS_DE_LIBRERIA = {
@@ -635,6 +649,8 @@ def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maxim
         java(raiz, javas, inf, segundos)
     if bat:
         bats(raiz, bat, inf)
+    from . import ecosistemas  # aquí para evitar el import circular (ecosistemas usa las utilidades de este módulo)
+    ecosistemas.verificar_todos(base, raiz, inf)
     if not inf.tipos and not bat:
         inf.avisos.append(f"No encontré código que verificar en '{ruta}': nada se ha comprobado.")
     return inf.texto(maximo), len(inf.errores)
@@ -650,6 +666,9 @@ def chequeo_rapido(raiz: Path, p: Path) -> str:
         _node_check(raiz, p, _rel(p, raiz), inf)
     elif suf in (".bat", ".cmd"):
         bats(raiz, [p], inf)
+    elif suf in (".go", ".rs", ".yml", ".yaml") or p.name.lower() == "dockerfile" or ".dockerfile" in p.name.lower():
+        from . import ecosistemas
+        ecosistemas.chequeo_rapido(raiz, p, inf)
     elif suf in (".html", ".htm"):
         html_estatico(raiz, [p], [], inf)
         # Recién escrito el HTML, el JS y el CSS pueden estar aún por crear: se recuerdan, no son errores.

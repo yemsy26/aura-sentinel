@@ -120,7 +120,8 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
 ## Cómo detecta que algo está mal (como los agentes avanzados)
 
 1. **Al escribir cada archivo**: sintaxis + lint inmediato (`.py` con ruff: nombres sin definir, variables sin usar;
-   `.js` con `node --check`; `.html` referencias rotas; `.bat` archivos que no existen).
+   `.js` con `node --check`; `.go` con `gofmt -e`; `.rs` con rustfmt; `.html` referencias rotas; `.bat` archivos que
+   no existen; Dockerfile; tabuladores en YAML). Avisa si el archivo lleva una credencial escrita (clave, token).
 2. **`verificar`** (y automático antes de terminar):
    - Python: ruff, **vulture** (funciones/métodos que nunca se llaman = lógica sin conectar), tests (y detecta tests
      falsos que no importan el proyecto), ejecución del programa.
@@ -132,6 +133,15 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
    - **HTML/JS**: lo abre en **Edge sin ventana**: errores de consola/JS, 404, ids inexistentes, canvas vacío,
      si anima y si reacciona al teclado/ratón; capturas en `.agente\capturas\`.
    - **Java**: `javac -Xlint` con línea de cada error y ejecución del `main` (o `mvn test` si hay Maven).
+   - **Rust**: `cargo build --all-targets` (errores y avisos con archivo:línea), `cargo test` y avisos de clippy.
+   - **Go**: `go vet ./...` (compila y detecta fallos típicos), `go test ./...` y aviso si falta `gofmt`.
+   - **.NET**: `dotnet build` con archivo:línea de cada error y `dotnet test` en los proyectos de pruebas.
+   - **Node/TypeScript**: dependencias instaladas, `tsc --noEmit`, `npm run build` si existe y `npm test`.
+   - **Docker**: revisa el Dockerfile (versión fija de la imagen, `COPY` de archivos que no existen, credenciales en
+     `ENV`/`ARG`, usuario sin privilegios, `.dockerignore`), valida `compose.yaml` y, con Docker en marcha, construye
+     la imagen. Con Docker apagado lo dice para que el agente se lo pida al usuario.
+   - **YAML**: tabuladores (no válidos en YAML) en manifiestos y workflows.
+   - Si falta la herramienta de un lenguaje (cargo, go, dotnet, npm, docker), el informe dice dónde instalarla.
 3. **`revisar`** (automático una vez antes de terminar): el modelo revisa en un contexto limpio cada requisito contra
    el código, con número de línea. Con tu juego de naves detectó: `hits` sin efecto, `show_menu`/`reset` nunca
    llamados, pausa inexistente y test falso.
@@ -146,8 +156,11 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
 
 ## Orientación actualizada e internet
 
-- `guia(tema)`: prácticas actuales y cómo verificar (python, pygame, html-juego, web, api, java, tests, bat). Son
-  archivos en `agente\guias\*.md`: puedes editarlos o añadir los tuyos.
+- `guia(tema)`: prácticas actuales y cómo verificar (python, pygame, html-juego, web, api, java, rust, go, node,
+  dotnet, docker, despliegue, tests, bat). Son archivos en `agente\guias\*.md`: puedes editarlos o añadir los tuyos.
+- El agente conoce el entorno al empezar: versiones de Python, Node, Java, Rust, Go, .NET, si Docker está en marcha,
+  Podman, OpenSSH y kubectl. Las compilaciones e instalaciones largas (`cargo`, `go`, `docker build`, `dotnet`,
+  Maven/Gradle, `npm install`...) tienen al menos 5 minutos antes de cortarse.
 - `version(paquete)`: versión real en PyPI/npm/Maven y si hay wheel para tu Python (p. ej. `pygame` → usa `pygame-ce`
   porque `pygame` no tiene wheel para Python 3.14).
 - `investigar(pregunta)`: busca, lee las mejores páginas y devuelve solo los párrafos útiles con su fuente, en un paso.
@@ -158,7 +171,10 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
   ya y en todas las tareas (prioridad máxima). `/reglas` las muestra. También puedes editar `reglas.md` a mano.
 - El agente guarda sus propias lecciones con `aprender` en `lecciones.md` (máx. 40, las más recientes).
 - Por proyecto: crea `AGENTE.md` en la carpeta del proyecto con instrucciones específicas.
-Comandos destructivos (`rmdir /s`, `del /s`, `format`, `reg delete`, `git push`...) piden confirmación.
+Comandos destructivos (`rmdir /s`, `del /s`, `format`, `reg delete`...) piden confirmación. También lo que sale del
+equipo: `ssh`, `scp`, `sftp`, `rsync`, `git push`, `docker push`/`login`, `kubectl apply`/`delete`, `helm`,
+`terraform apply`, publicar paquetes (`npm`/`cargo publish`), nubes (`az`, `aws`, `gcloud`...) y peticiones
+HTTP que escriben (`curl -X POST`, `-d`...) a algo que no sea `localhost`. Sin tu permiso, se bloquea.
 **`ejecutar` no es un sandbox**: corre con tus permisos. Úsalo en carpetas de proyecto.
 
 ## Usarlo desde Bionic / LM Studio (MCP)
@@ -180,7 +196,8 @@ Si el modelo no está cargado, lo carga con el ajuste de VRAM.
   `{"tipo":"nuevo"}`, `{"tipo":"verificar"}`, `{"tipo":"plan"}`, `{"tipo":"salir"}`.
 - Eventos por la salida: `listo` (modelo, contexto), `paso` (herramienta, detalle, resultado, error, plan),
   `archivos` (rutas cambiadas; vacía = refrescar todo), `nota`, `aviso`, `progreso`, `error`.
-- `confirmar` (comando destructivo) espera `{"tipo":"respuesta","si":true|false}`.
+- `confirmar` (`comando` y `motivo`: destructivo, o conectarse o publicar fuera del equipo) espera
+  `{"tipo":"respuesta","si":true|false}`.
 - Cada orden termina con `fin` (`estado`: ok, incompleta o error; `respuesta`; `uso` del contexto).
 
 El proceso conserva la conversación entre tareas, como la consola. Todo lo que no es un evento va a stderr.

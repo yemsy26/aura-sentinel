@@ -13,15 +13,14 @@ from pathlib import Path
 
 from . import conocimiento, pantalla
 from .config import RAIZ_INSTALACION
-from .verificacion import chequeo_rapido, verificar
+from .verificacion import chequeo_rapido, es_codigo, verificar
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
           "what", "este", "esta", "esto", "hay", "hacer", "puedo", "cual", "cuál", "cómo", "qué", "use", "using"}
 LECCIONES = RAIZ_INSTALACION / "lecciones.md"
-CODIGO = {".py", ".js", ".mjs", ".ts", ".html", ".htm", ".css", ".java", ".bat", ".cmd", ".json"}
 
 IGNORAR = {".git", ".venv", "venv", "env", "node_modules", "__pycache__", "dist", "build", ".next", ".agente",
-           "target", ".idea", ".vscode", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages"}
+           "target", "obj", ".idea", ".vscode", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages"}
 # Git que pierde trabajo o reescribe historia (o publica: push).
 GIT_DESTRUCTIVO = (r"push|reset\s+--hard|clean\s+-\w*f|checkout\s+(-f\b|--\s|\.(\s|$))|restore\b(?!.*--staged)|"
                    r"branch\s+-D|stash\s+(drop|clear)|rebase|filter-branch|update-ref\s+-d|reflog\s+expire|rm\b|"
@@ -33,15 +32,59 @@ PELIGROSOS = re.compile(
 # Nunca se versionan (aunque falte .gitignore): estado del agente, entornos y cachés.
 NO_VERSIONAR = ["--", ".", ":(exclude).agente"] + [f":(exclude,glob)**/{d}/**" for d in (
     ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")]
-INSTALACIONES = re.compile(  # descargan e instalan: con poco tiempo se cortan a medias y dejan el entorno roto
-    r"\b(venv|virtualenv|pip3?(\.exe)?\s+install|npm\s+(install|ci|i)\b|uv\s+(pip|venv|sync|add)|playwright\s+install)",
+INSTALACIONES = re.compile(  # descargan, instalan o compilan: con poco tiempo se cortan a medias
+    r"\b(venv|virtualenv|pip3?(\.exe)?\s+install|npm\s+(install|ci|i)\b|npx\s|uv\s+(pip|venv|sync|add)|playwright\s+install|"
+    r"cargo\s+(build|test|run|install|check|clippy|fetch|update|add)|rustup\s|go\s+(build|test|run|get|install|mod|vet)\b|"
+    r"(docker|podman)\s+(build|pull|compose\s+(up|build|pull|run))|dotnet\s+(restore|build|test|publish|run|new|tool|add)|"
+    r"(mvnw?|gradlew?)(\.cmd|\.bat)?\s|(winget|choco|scoop)\s+install)",
     re.IGNORECASE)
+# Salen del equipo (servidores, registros de imágenes, clústeres, nubes, paquetes publicados): siempre con permiso.
+EXTERNOS = re.compile(
+    r"\b(ssh|scp|sftp|rsync|plink|pscp)(\.exe)?\s|\bgit\s+push\b|\b(docker|podman)\s+(push|login)\b|"
+    r"\bkubectl\s+(apply|create|delete|replace|patch|scale|rollout|edit|set|label|annotate|exec|cp|drain|cordon)\b|"
+    r"\bhelm\s+(install|upgrade|uninstall|rollback|push)\b|\bterraform\s+(apply|destroy|import)\b|"
+    r"\bpulumi\s+(up|destroy)\b|\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\bdotnet\s+nuget\s+push\b|"
+    r"\btwine\s+upload\b|\bgh\s+(release|repo|pr|gist|secret)\s+(create|delete|edit|merge|upload|set)\b|"
+    r"\b(az|aws|gcloud|flyctl|vercel|netlify|heroku|railway|doctl)\s", re.IGNORECASE)
+HTTP = re.compile(r"\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b", re.IGNORECASE)
+HTTP_ESCRIBE = re.compile(r"(-X\s*|--request\s+|-Method\s+)(POST|PUT|PATCH|DELETE)\b|(^|\s)(-d|--data(-raw|-binary)?|--json|"
+                          r"-F|--form|-T|--upload-file)\s", re.IGNORECASE)
+LOCALES = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"}
+# Scripts del proyecto que lanza un comando: lo que llevan dentro también necesita permiso.
+SCRIPT = re.compile(r'(?:^|[\s&|;(])"?((?:[\w.:-]+[\\/])*[\w.-]+\.(?:bat|cmd|ps1|sh))"?(?=$|[\s&|;)])', re.IGNORECASE)
+COMENTARIO = re.compile(r"\s*(rem\b|::|#|echo\b|@echo\b|write-host\b)", re.IGNORECASE)
+DESTRUCTIVO = "ejecutar un comando potencialmente destructivo"
+EXTERNO = "conectarse o publicar fuera de este equipo (servidor, registro de imágenes, clúster o nube)"
+# Credenciales reales escritas en un archivo: deben ir en variables de entorno o en un .env fuera de git.
+CREDENCIALES = re.compile(
+    r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36}\b|"
+    r"\bxox[baprs]-[A-Za-z0-9-]{10,}|\bsk_live_[A-Za-z0-9]{16,}|\bAIza[0-9A-Za-z_-]{35}\b|"
+    r"\b(password|passwd|secret|api_?key|token)\w*[\"']?\s*[:=]\s*[\"'][^\"'\s]{8,}[\"']", re.IGNORECASE)
+
+
+def externo(comando: str) -> bool:
+    """¿El comando actúa fuera del equipo? Las peticiones HTTP que escriben solo cuentan si no van a localhost."""
+    if EXTERNOS.search(comando):
+        return True
+    if HTTP.search(comando) and HTTP_ESCRIBE.search(comando):
+        return any(h.lower() not in LOCALES for h in re.findall(r"https?://([^/\s:'\"]+)", comando))
+    return False
 MIN_INSTALACION = 300  # segundos
 # Archivos que se nombran en un texto (petición del usuario o paso del plan); no las librerías como three.js.
 ARCHIVO_PEDIDO = r"\b[\w\-]+\.(?:py|bat|cmd|ps1|txt|json|md|js|ts|jsx|tsx|html|css|toml|ya?ml|ini|cfg|sql|csv|java|cs|go|rs|cpp|c|h)\b"
 NO_ARCHIVO = re.compile(r"(node|next|nuxt|vue|react|three|d3|express|chart|p5|phaser|pixi|babylon|anime|alpine|ember|"
                         r"socket|solid|svelte)\.js$", re.IGNORECASE)
 CREAR = re.compile(r"\b(crea|escrib|implement|añad|agreg|genera|construi)", re.IGNORECASE)
+
+
+PATRONES_MAPA = {
+    ".js": r"(?:^|\s)(?:class|function|interface|record)\s+(\w+)", ".mjs": r"(?:^|\s)(?:class|function)\s+(\w+)",
+    ".ts": r"(?:^|\s)(?:class|function|interface|type|enum)\s+(\w+)", ".tsx": r"(?:^|\s)(?:class|function|interface)\s+(\w+)",
+    ".jsx": r"(?:^|\s)(?:class|function)\s+(\w+)", ".java": r"(?:^|\s)(?:class|interface|record|enum)\s+(\w+)",
+    ".kt": r"(?:^|\s)(?:class|interface|object|fun)\s+(\w+)", ".cs": r"(?:^|\s)(?:class|interface|record|struct|enum)\s+(\w+)",
+    ".rs": r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|mod)\s+(\w+)",
+    ".go": r"^(?:func\s+(?:\([^)]*\)\s*)?|type\s+)(\w+)",
+}
 
 
 def archivos_pedidos(texto: str) -> set[str]:
@@ -118,9 +161,11 @@ class Herramientas:
         self.inicio_tarea = 0
         self.checkpoints: list[dict] = []   # estados que pasaron verificar sin errores
         self.fallos_desde_verde = 0
+        self.evidencia: list[str] = []      # comandos ejecutados en la tarea y su resultado (para revisar)
 
     def nueva_tarea(self, paso_inicio: int = 0) -> None:
         self.reescrituras.clear()
+        self.evidencia.clear()
         self.inicio_tarea = paso_inicio
 
     def python_proyecto(self) -> str:
@@ -152,6 +197,10 @@ class Herramientas:
             avisos.append(f"JSON INVÁLIDO: {e}. Corrígelo.")
         if PLACEHOLDERS.search(contenido):
             avisos.append("AVISO: parece haber marcadores incompletos (TODO/'...resto'). Escribe el código completo.")
+        nombre = p.name.lower()
+        if CREDENCIALES.search(contenido) and not any(x in nombre for x in (".example", ".sample", "test", ".env")):
+            avisos.append("AVISO: parece una credencial escrita en el archivo (clave, token o contraseña). Léela de una "
+                          "variable de entorno o de un .env incluido en .gitignore, y pide al usuario que la ponga.")
         if not avisos:
             try:
                 avisos.append(chequeo_rapido(self.raiz, p).strip())  # lint inmediato, como los agentes avanzados
@@ -163,7 +212,7 @@ class Herramientas:
     @staticmethod
     def _compila(p: Path, texto: str) -> bool:
         if p.suffix.lower() != ".py":
-            return p.suffix.lower() in CODIGO and len(texto.strip()) > 0
+            return es_codigo(p) and len(texto.strip()) > 0
         try:
             compile(texto, str(p), "exec")
             return True
@@ -253,14 +302,14 @@ class Herramientas:
         existia = p.exists()
         antes = p.read_text(encoding="utf-8", errors="replace") if existia else ""
         nota = ""
-        if "\n" not in contenido and contenido.count("\\n") >= 3 and p.suffix.lower() in CODIGO:
+        if "\n" not in contenido and contenido.count("\\n") >= 3 and es_codigo(p):
             # el modelo mandó el código con saltos de línea escapados: se reparan
             contenido = contenido.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
             nota = " (saltos de línea escapados corregidos)"
         if re.fullmatch(r"\s*[\[(<][^\])>\n]{0,80}[\])>]\s*", contenido) or re.fullmatch(r"\s*(\.\.\.|…)\s*", contenido):
             return (f"BLOQUEADO: el contenido para {self.rel(p)} es solo un marcador ({contenido.strip()[:60]!r}), no el "
                     "archivo. Escribe el contenido COMPLETO real (o usa editar para cambiar una parte).")
-        if (existia and p.suffix.lower() in CODIGO and len(antes) > 800 and len(contenido) < len(antes) * 0.15):
+        if (existia and es_codigo(p) and len(antes) > 800 and len(contenido) < len(antes) * 0.15):
             return (f"BLOQUEADO: el nuevo {self.rel(p)} tendría {len(contenido)} caracteres frente a {len(antes)} "
                     "actuales: parece truncado y destruiría el archivo. Usa editar para cambiar solo la parte necesaria.")
         veces = self.reescrituras.get(self.rel(p), 0)
@@ -318,12 +367,41 @@ class Herramientas:
             env["VIRTUAL_ENV"] = str(venv.parent)
         return env
 
+    def _scripts(self, comando: str) -> list[tuple[str, str]]:
+        """(ruta relativa, línea) de los scripts del proyecto que lanza el comando, sin comentarios ni echo."""
+        lineas = []
+        for nombre in SCRIPT.findall(comando):
+            try:
+                p = self.ruta(nombre)
+            except ValueError:
+                continue
+            if p.is_file() and p.stat().st_size < 200_000:
+                texto = p.read_text(encoding="utf-8", errors="replace")
+                lineas += [(self.rel(p), l.strip()) for l in texto.splitlines() if l.strip() and not COMENTARIO.match(l)]
+        return lineas
+
     def _permitido(self, comando: str) -> str | None:
-        if not PELIGROSOS.search(comando):
+        motivo, detalle = None, comando
+        for origen, linea in [("", comando), *self._scripts(comando)]:
+            if externo(linea):
+                motivo, detalle = EXTERNO, linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
+                break
+            if motivo is None and PELIGROSOS.search(linea):
+                motivo, detalle = DESTRUCTIVO, linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
+        if not motivo:
             return None
-        if self.confirmar and self.confirmar(comando):
+        if self.confirmar and self._pedir_permiso(detalle if detalle != comando else comando, motivo):
             return None
+        if motivo == EXTERNO:
+            return ("BLOQUEADO: conectarse o publicar fuera del equipo necesita el permiso del usuario y no lo dio. "
+                    "Explícale qué quieres hacer y por qué, o pídele que lo haga él.")
         return "BLOQUEADO: comando potencialmente destructivo no autorizado. Busca otra forma o pide al usuario que lo haga."
+
+    def _pedir_permiso(self, comando: str, motivo: str) -> bool:
+        try:
+            return bool(self.confirmar(comando, motivo))
+        except TypeError:  # confirmar(comando) de integraciones anteriores
+            return bool(self.confirmar(comando))
 
     def ejecutar(self, comando: str, segundos: int = 0, fondo: bool = False) -> str:
         if (bloqueo := self._permitido(comando)):
@@ -342,15 +420,25 @@ class Herramientas:
         except subprocess.TimeoutExpired:
             matar_arbol(proc.pid)
             salida, _ = proc.communicate()
+            self._anotar(comando, f"TIMEOUT {limite}s", decodificar(salida))
             return (f"TIMEOUT tras {limite}s (proceso detenido). Si es un servidor o programa que no termina, usa "
                     f"fondo=true. Salida parcial:\n{recortar(decodificar(salida), self.max_chars)}")
         codigo = proc.returncode
+        self._anotar(comando, f"exit={codigo}", decodificar(salida))
         if codigo == 0:
             self.paso_prueba = self.paso
         elif self.checkpoints:
             self.fallos_desde_verde += 1
         texto = decodificar(salida).strip() or "(sin salida)"
         return f"exit={codigo} ({time.time() - t0:.1f}s)\n{recortar(texto, self.max_chars)}" + (self._sugerir_restaurar() if codigo else "")
+
+    def _anotar(self, comando: str, estado: str, salida: str) -> None:
+        cola = " | ".join(l.strip() for l in salida.strip().splitlines()[-3:])[:240]
+        self.evidencia.append(f"{comando[:220]} -> {estado}{(': ' + cola) if cola else ''}")
+        del self.evidencia[:-25]
+
+    def evidencia_texto(self) -> str:
+        return "\n".join(f"- {e}" for e in self.evidencia)[-3000:]
 
     def _fondo(self, comando: str) -> str:
         n = max(self.procesos, default=0) + 1
@@ -362,6 +450,7 @@ class Herramientas:
                                 creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
         self.procesos[n] = {"proc": proc, "log": log, "archivo": f, "comando": comando}
         time.sleep(4)  # captura errores de arranque
+        self._anotar(comando, f"proceso #{n} en segundo plano" if proc.poll() is None else f"terminó exit={proc.returncode}", "")
         estado = f"TERMINÓ (exit={proc.returncode})" if proc.poll() is not None else "en ejecución"
         if proc.poll() is None:
             self.paso_prueba = self.paso
@@ -556,7 +645,7 @@ class Herramientas:
         return informe
 
     def _fuentes(self) -> list[Path]:
-        return [p for p in self.raiz.rglob("*") if p.is_file() and p.suffix.lower() in CODIGO | {".txt", ".md", ".toml", ".cfg", ".ini"}
+        return [p for p in self.raiz.rglob("*") if p.is_file() and (es_codigo(p) or p.suffix.lower() in (".txt", ".md", ".cfg", ".ini"))
                 and not (IGNORAR & set(p.relative_to(self.raiz).parts[:-1])) and p.stat().st_size < 500_000]
 
     @property
@@ -654,8 +743,8 @@ class Herramientas:
                             nombres.append(n.targets[0].id)
                 except SyntaxError:
                     nombres.append("(error de sintaxis)")
-            elif p.suffix in (".js", ".mjs", ".java"):
-                nombres = re.findall(r"(?:^|\s)(?:class|function|interface|record)\s+(\w+)", texto)[:10]
+            elif p.suffix.lower() in PATRONES_MAPA:
+                nombres = re.findall(PATRONES_MAPA[p.suffix.lower()], texto, re.MULTILINE)[:10]
             lineas.append(f"- {self.rel(p)}: {', '.join(nombres)[:220]}" if nombres else f"- {self.rel(p)}")
         return "\n".join(lineas)[:maximo]
 
@@ -742,13 +831,14 @@ ESQUEMAS = [
        {"url": S, "buscar": S}, ["url"]),
     _f("investigar", "Busca en internet y lee las mejores páginas en UN paso: devuelve los párrafos relevantes con su "
                      "fuente. Úsalo para APIs, errores o librerías que no conozcas bien.", {"pregunta": S}, ["pregunta"]),
-    _f("guia", "Buenas prácticas ACTUALES y cómo verificar para: python, pygame, html-juego, web, api, java, tests, bat. "
-               "Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
+    _f("guia", "Buenas prácticas ACTUALES y cómo verificar para: python, pygame, html-juego, web, api, java, rust, go, "
+               "node, dotnet, docker, despliegue, tests, bat. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
     _f("version", "Última versión real de un paquete y si es compatible con tu Python (evita librerías obsoletas).",
        {"paquete": S, "ecosistema": {"type": "string", "enum": ["pypi", "npm", "maven"]}}, ["paquete"]),
     _f("verificar", "Control de calidad de TODO el proyecto: errores, código que nunca se usa (funciones sin conectar), "
-                    "tests, y ejecución real (juego pygame sin ventana, web en navegador, Java). Úsalo tras construir y "
-                    "tras cada corrección.", {"ruta": S, "segundos": I}, []),
+                    "tests y ejecución real (Python y pygame sin ventana, web en navegador, Java, Rust, Go, .NET, "
+                    "Node/TypeScript, Dockerfile y Compose). Úsalo tras construir y tras cada corrección.",
+       {"ruta": S, "segundos": I}, []),
     _f("ver_pantalla", "Captura la interfaz (un .html, una URL http://localhost:PUERTO o el .py de un juego pygame) y "
                        "comprueba si se ve bien: texto cortado o sobre fondo cargado, elementos fuera de pantalla, "
                        "pantalla en negro. Si el "

@@ -1,0 +1,11 @@
+# Go (1.22+, 2026)
+- Proyecto: `go mod init ejemplo.com/app` y, tras añadir imports externos, `go mod tidy` (descarga y escribe go.sum). Programa pequeño: `main.go` en la raíz; varios binarios: `cmd\nombre\main.go`; código privado en `internal\`.
+- Errores: devuelve `error` y envuélvelo con contexto: `return fmt.Errorf("leyendo %s: %w", ruta, err)`; compara con `errors.Is` / `errors.As`. `panic` solo para fallos imposibles; en `main`, `fmt.Fprintln(os.Stderr, err); os.Exit(1)`.
+- API HTTP con la biblioteca estándar: `mux := http.NewServeMux(); mux.HandleFunc("GET /items/{id}", h)` y `r.PathValue("id")` (rutas con método desde Go 1.22). JSON con `encoding/json` y `w.Header().Set("Content-Type", "application/json")`. Añade `GET /health` que responda 200.
+- Servidor robusto: `srv := &http.Server{Addr: ":" + puerto, Handler: mux, ReadHeaderTimeout: 5 * time.Second}`; apagado limpio con `signal.NotifyContext` y `srv.Shutdown(ctx)`. Puerto desde `os.Getenv("PORT")` con valor por defecto.
+- Pruebas: archivos `*_test.go`, tablas de casos (`for _, c := range casos { t.Run(c.nombre, ...) }`), handlers con `httptest.NewRecorder()` o `httptest.NewServer`. `go test ./...` (sin `-race`: en Windows necesita gcc).
+- Formato y análisis: `gofmt -w .` y `go vet ./...` antes de terminar.
+- Ejecutar un servidor: `ejecutar("go run .", fondo=true)` y comprobar con `ejecutar("curl -s http://localhost:8080/health")`; detenlo con procesos al acabar.
+- Binario para Linux (servidor o contenedor), en cmd: `set CGO_ENABLED=0&& set GOOS=linux&& set GOARCH=amd64&& go build -o app .`
+- run.bat: `crear_bat("run", ["go run ."])`; test.bat: `crear_bat("test", ["go test ./..."])`.
+- `verificar` ejecuta `go vet ./...` (errores con archivo:línea), `go test ./...` y avisa si falta `gofmt`.

@@ -11,6 +11,7 @@ from .contexto import Contexto
 from .herramientas import ESQUEMAS, Herramientas, archivos_pedidos, despachar
 from .prompts import REGLAS_USUARIO, entorno, sistema
 from .revision import revisar
+from .verificacion import es_codigo
 
 TIPOS = {e["function"]["name"]: {k: v.get("type") for k, v in e["function"]["parameters"]["properties"].items()}
          for e in ESQUEMAS}
@@ -96,10 +97,10 @@ class Agente:
         self.responder = None  # modo --json: responder(tipo, **datos) espera la respuesta del usuario
 
     # ---------- utilidades de consola ----------
-    def _confirmar(self, comando: str) -> bool:
+    def _confirmar(self, comando: str, motivo: str = "ejecutar un comando potencialmente destructivo") -> bool:
         if self.responder:
-            return bool(self.responder("confirmar", comando=comando).get("si"))
-        print(color(f"\n  ¿Permitir comando potencialmente destructivo?\n    {comando}", "amarillo"))
+            return bool(self.responder("confirmar", comando=comando, motivo=motivo).get("si"))
+        print(color(f"\n  ¿Permitir {motivo}?\n    {comando}", "amarillo"))
         return input("  (s/n) > ").strip().lower() in ("s", "si", "sí", "y")
 
     def _progreso(self, razon: int, texto: int) -> None:
@@ -284,7 +285,8 @@ class Agente:
     def _revisar(self, requisitos: str = "", enfoque: str = "") -> tuple[str, bool]:
         self.revisiones += 1
         self._salida("nota", "(revisión independiente del código en curso...)", "gris")
-        texto, ok = revisar(self.llm, self.h.raiz, requisitos or self.ctx.tarea, self.h.verificacion["informe"], enfoque)
+        texto, ok = revisar(self.llm, self.h.raiz, requisitos or self.ctx.tarea, self.h.verificacion["informe"], enfoque,
+                            self.h.evidencia_texto())
         self.h.dir_agente.mkdir(exist_ok=True)
         (self.h.dir_agente / "revision.json").write_text(json.dumps(
             {"aprobado": ok, "fecha": time.time(), "texto": texto[:5000]}, ensure_ascii=False), encoding="utf-8")
@@ -347,8 +349,8 @@ class Agente:
         return f"\nEl estado final tenía errores: {r}"
 
     def _mtime_codigo(self) -> float:
-        fuentes = [p for p in self.h.raiz.rglob("*") if p.suffix.lower() in (".py", ".js", ".mjs", ".html", ".css", ".java")
-                   and not ({".venv", "node_modules", ".agente", ".git", "__pycache__"} & set(p.parts))]
+        fuentes = [p for p in self.h.raiz.rglob("*") if es_codigo(p) and p.suffix.lower() not in (".json", ".xml")
+                   and not ({".venv", "node_modules", ".agente", ".git", "__pycache__", "target", "obj"} & set(p.parts))]
         return max((p.stat().st_mtime for p in fuentes), default=0)
 
     def _revision_previa(self) -> dict | None:

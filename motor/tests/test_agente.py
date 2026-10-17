@@ -250,7 +250,8 @@ class TestModoJson(unittest.TestCase):
         self.assertTrue(pasos[1]["error"] and "aparece 2 veces" in pasos[1]["resultado"])  # no es un éxito
         self.assertTrue(pasos[2]["error"] and "BLOQUEADO" in pasos[2]["resultado"])
         self.assertIn({"tipo": "archivos", "rutas": ["notas.txt"]}, eventos)
-        self.assertIn({"tipo": "confirmar", "comando": "rmdir /s /q basura"}, eventos)
+        self.assertIn({"tipo": "confirmar", "comando": "rmdir /s /q basura",
+                       "motivo": "ejecutar un comando potencialmente destructivo"}, eventos)
         self.assertTrue((self.dir / "basura").is_dir())  # el usuario dijo que no
         fines = [e for e in eventos if e["tipo"] == "fin"]
         self.assertEqual([(f["orden"], f["estado"]) for f in fines], [("tarea", "ok"), ("plan", "ok")])

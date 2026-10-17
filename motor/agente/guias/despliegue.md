@@ -1,0 +1,14 @@
+# Despliegue y servidores (SSH, servicios, contenedores, 2026)
+- Pide al usuario el servidor (host, puerto, usuario) y cómo quiere desplegar; no inventes direcciones ni credenciales. Cada ssh, scp, docker push o kubectl apply le pedirá permiso: explica antes el plan en una frase.
+- Acceso con llave, nunca con contraseña escrita: si no la tiene, que la cree (`ssh-keygen -t ed25519`) y copie la pública al `~/.ssh/authorized_keys` del servidor.
+- Comandos sin interacción (aquí no hay teclado): `ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p 22 usuario@host "comando"`. Pon el comando remoto entre comillas dobles. Primero prueba la conexión con `"echo ok"`.
+- Copiar: `scp -o BatchMode=yes -P 22 -r dist usuario@host:/opt/app/` (ojo: scp usa `-P` mayúscula para el puerto). Para muchos archivos, empaqueta antes (`tar -czf app.tgz carpeta`, tar viene con Windows).
+- Binarios (Go, Rust, .NET): compílalos para Linux, cópialos a `/opt/app/` y crea un servicio systemd (`/etc/systemd/system/app.service` con `ExecStart`, `User=app`, `Restart=always`, `EnvironmentFile=/opt/app/app.env`); `sudo systemctl daemon-reload && sudo systemctl enable --now app`. Si sudo pide contraseña, pide al usuario que ejecute ese paso.
+- Arrancar en segundo plano para que siga al cerrar la sesión: `ssh ... "cd /opt/app && nohup ./app > app.log 2>&1 < /dev/null & echo $! > app.pid"` (sin `< /dev/null` y las redirecciones, ssh se queda esperando). Parar: `kill $(cat /opt/app/app.pid)` o `pkill -x app` (nombre exacto). NUNCA `pkill -f /opt/app/app`: ese texto está en tu propio comando ssh y mata la sesión (exit=255).
+- No hace falta un script de despliegue salvo que el usuario lo pida: basta con ejecutar los pasos y comprobar el resultado. Si lo pide, créalo y pruébalo una vez de principio a fin.
+- Contenedores: copia `compose.yaml` y ejecuta `docker compose up -d --build` en el servidor, o construye aquí y envía la imagen con `docker save app:1 | ssh usuario@host docker load`.
+- Kubernetes: manifiestos en `k8s\`; `kubectl apply -f k8s\` y después `kubectl rollout status deployment/app` y `kubectl get pods`.
+- Credenciales en el servidor: archivo `app.env` con permisos 600 (`chmod 600`), fuera del repositorio.
+- Después de desplegar, comprueba SIEMPRE: `curl -fsS http://host:puerto/health`, estado (`systemctl status app --no-pager` o `docker ps`) y registros (`journalctl -u app -n 50 --no-pager` o `docker logs app`). Sin esa prueba el despliegue no está hecho.
+- Vuelta atrás: conserva la versión anterior (`app.anterior` o la etiqueta de imagen previa) para restaurarla si la nueva falla.
+- Para probar sin un servidor real: un contenedor local con SSH en `localhost:2222`.
