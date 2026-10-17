@@ -12,6 +12,29 @@ Creado por **Ramón Antonio Burgos Jerez** ([@yemsy26](https://github.com/yemsy2
 
 ## Instalación en un equipo nuevo
 
+Hay dos formas: el **instalador ya compilado** (lo más sencillo) o **desde el código** con `setup.ps1` (para
+desarrollar o compilar tu propia versión). Los requisitos de la tabla valen para las dos; Node.js, Rust y las Build
+Tools solo hacen falta para compilar.
+
+### Con el instalador (sin compilar)
+
+1. Descarga `AuraSentinel_<versión>_x64-setup.exe` de la
+   [última versión publicada](https://github.com/yemsy26/aura-sentinel/releases/latest).
+2. Ejecútalo. El instalador no está firmado digitalmente, así que Windows SmartScreen puede mostrar «Windows
+   protegió su PC»: pulsa **Más información → Ejecutar de todas formas**. Para comprobar que el archivo es el
+   original, compara su huella con la SHA-256 de las notas de la versión:
+   `(Get-FileHash .\AuraSentinel_<versión>_x64-setup.exe).Hash`.
+3. Se instala en `%LOCALAPPDATA%\AuraSentinel`, sin permisos de administrador.
+4. Instala Bionic o LM Studio, `uv` o Python 3.11+ y, si no los tienes, Edge o Chrome (tabla de abajo).
+5. Abre Aura → **Configuración → Motor → Instalar motor**: crea el entorno de Python del motor, pasa sus pruebas
+   y lo registra en Bionic / LM Studio. Al terminar, pulsa **Comprobar de nuevo**.
+6. Descarga el modelo con `descargar_modelo.bat` (en `%LOCALAPPDATA%\AuraSentinel\motor`) y, con Bionic abierto,
+   ejecuta `cargar_modelo.bat` en esa misma carpeta para ajustarlo a tu VRAM.
+
+### Desde el código
+
+Sigue los pasos 1 a 4. La tabla de requisitos también vale para el instalador.
+
 ### 1. Requisitos
 
 | Qué | Para qué | Dónde |
@@ -81,7 +104,7 @@ ejecución anterior, compila (la primera vez unos minutos) y abre Aura. En **Con
 
 `git pull` y `start.bat` (instala solo lo que cambió). Si cambiaron las dependencias del motor, `motor\instalar.bat`.
 
-### Instalador de Windows (.exe)
+### Generar el instalador (.exe)
 
 ```sh
 npm run tauri build
