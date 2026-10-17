@@ -100,6 +100,28 @@ class Complementos(Temporal):
             complementos.activar("sat-hibrido", aviso=lambda _: None)
         self.assertIsNone(complementos.ruta("sat-hibrido"))
 
+    def test_al_instalar_se_activa_el_predeterminado_y_se_respeta_si_lo_desactivas(self):
+        activados = []
+
+        def activar(id_, aviso=print):
+            activados.append(id_)
+            return "activado"
+
+        with mock.patch.object(complementos, "activar", activar):
+            self.assertEqual(complementos.asegurar(), ["activado"])  # primera instalación
+            complementos.desactivar("sat-hibrido")
+            complementos._guardar({"sat-hibrido": {"activo": False}})
+            self.assertIn("desactivado por el usuario", complementos.asegurar()[0])  # reinstalar no lo reactiva
+        self.assertEqual(activados, ["sat-hibrido"])
+
+    def test_sin_red_la_instalacion_sigue(self):
+        with mock.patch.object(complementos, "_descargar", side_effect=urllib.error.URLError("sin red")), \
+                mock.patch.object(complementos.shutil, "which", return_value=None):
+            mensajes = complementos.asegurar(aviso=lambda _: None)
+        self.assertIn("no se pudo activar ahora", mensajes[0])
+        self.assertIn("Motores complementarios", mensajes[0])
+        self.assertIsNone(complementos.ruta("sat-hibrido"))
+
     def test_cli_en_json_para_aura(self):
         r = subprocess.run([sys.executable, "-m", "agente.complementos", "listar", "--json"], capture_output=True,
                            text=True, cwd=Path(__file__).resolve().parent.parent, check=True)

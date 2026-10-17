@@ -200,19 +200,21 @@ Usa la primera que esté instalada; si ninguna lo está, ofrece instalar la prim
 ## Motores complementarios
 
 Cerebros opcionales del autor que amplían al agente. Cada uno se desarrolla y versiona en su propio repositorio de
-GitHub; Aura no los incluye: los activas tú en **Configuración → Motor → Motores complementarios** (o con
-`motor\.venv\Scripts\python.exe -m agente.complementos activar ID`, y `listar` / `desactivar ID`).
+GitHub; Aura no los incluye, sino que los descarga de allí. Los que vienen marcados como predeterminados se activan
+solos al pulsar **Instalar motor** (si no hay conexión, la instalación sigue y se activan después). Se gestionan en
+**Configuración → Motor → Motores complementarios** (o con `motor\.venv\Scripts\python.exe -m agente.complementos`
+`listar`, `activar ID`, `desactivar ID`); si desactivas uno, reinstalar no lo vuelve a activar.
 
 | Motor | Qué aporta | Repositorio |
 | --- | --- | --- |
-| `sat-hibrido` (Sat-hibrido-rust) | Resolvedor SAT (CDCL con capa de paridad GF(2), ruptura de simetrías y varios hilos). Añade la herramienta `resolver_sat`: sudokus, horarios, coloreado, asignaciones y otros problemas de restricciones, con el modelo comprobado contra cada cláusula. | [yemsy26/Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust) |
+| `sat-hibrido` (Sat-hibrido-rust), predeterminado | Resolvedor SAT (CDCL con capa de paridad GF(2), ruptura de simetrías y varios hilos). Añade la herramienta `resolver_sat`: sudokus, horarios, coloreado, asignaciones y otros problemas de restricciones, con el modelo comprobado contra cada cláusula. | [yemsy26/Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust) |
 
 Sat-hibrido-rust usa [Chronos-VFS](https://github.com/yemsy26/Chronos-VFS) (anillo en memoria y compresión zstd para
 las trazas de prueba del resolvedor); no se activa por separado porque no añade ninguna herramienta al agente.
 
-Al activar un motor, Aura descarga el ejecutable de la última versión publicada en su repositorio si trae su
-`.sha256` (y comprueba la suma); si no hay versión publicada, clona el código y lo compila (hace falta Git y
-[Rust](https://rustup.rs/)). Antes de activarlo comprueba que resuelve dos fórmulas conocidas. Queda en
+Al activar un motor, Aura descarga el ejecutable de la última versión publicada en su repositorio con su
+`.sha256` y comprueba la suma (Sat-hibrido-rust: 657 KB, solo CPU, no usa VRAM); si no hay versión publicada, clona
+el código y lo compila (hace falta Git y [Rust](https://rustup.rs/)). Antes de activarlo comprueba que resuelve dos fórmulas conocidas. Queda en
 `motor\complementos\` (fuera de git); `AGENTE_HUNT` permite usar otro `hunt.exe`.
 
 Para añadir otro motor: una entrada en `CATALOGO` de `motor/agente/complementos.py` con su repositorio, el nombre del

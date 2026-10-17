@@ -5,6 +5,16 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.6.1] — 2026-10-17 (Sat-hibrido-rust activado por defecto)
+
+- Sat-hibrido-rust viene activado: `instalar.bat` (Configuración → Motor → Instalar motor) activa los motores
+  complementarios predeterminados descargando su versión publicada con la SHA-256 comprobada. Si lo desactivas,
+  reinstalar no lo reactiva; sin conexión, la instalación sigue y se activa después.
+- Al compilar un motor desde su código ya no se descarga Chronos-VFS aparte: llega como dependencia de git de
+  Sat-hibrido-rust.
+
+---
+
 ## [4.6.0] — 2026-10-17 (Motores complementarios, blockchain, Android, bases de datos y aprender)
 
 - **Motores complementarios:** los cerebros opcionales del autor se activan desde Configuración → Motor → Motores

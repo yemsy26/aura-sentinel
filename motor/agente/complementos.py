@@ -3,7 +3,10 @@
 Cada motor se desarrolla y versiona en su propio repositorio; aquí solo está cómo conseguirlo, cómo comprobar que
 funciona y qué herramienta añade al agente. Sin activarlo, el agente funciona igual, sin esa herramienta.
 
-Uso: python -m agente.complementos [listar | activar ID | desactivar ID] [--json] [--pausa]
+Los marcados como predeterminados se activan al instalar el motor (`asegurar`), salvo que el usuario los haya
+desactivado: esa decisión se respeta en las reinstalaciones.
+
+Uso: python -m agente.complementos [listar | asegurar | activar ID | desactivar ID] [--json] [--pausa]
 """
 import argparse
 import hashlib
@@ -31,10 +34,10 @@ CATALOGO = {
                    "herramienta resolver_sat: sudokus, horarios, coloreado, asignaciones y otros problemas de "
                    "restricciones, con el modelo comprobado contra cada cláusula."),
         "herramientas": ["resolver_sat"],
+        "predeterminado": True,  # CPU, sin VRAM, 657 KB: vale la pena tenerlo siempre
         "ejecutable": "hunt.exe",
         "binario_release": "hunt-x86_64-pc-windows-msvc.exe",  # con su .sha256 al lado en la release
-        "fuentes": [("https://github.com/yemsy26/Sat-hibrido-rust", ""),
-                    ("https://github.com/yemsy26/Chronos-VFS", "dpll_check/Chronos-VFS")],
+        "fuentes": [("https://github.com/yemsy26/Sat-hibrido-rust", "")],  # Chronos-VFS llega por cargo (git)
         "compilar": ("dpll_check", ["cargo", "build", "--release", "--bin", "hunt"], "target/release/hunt.exe"),
         "usa": [{"nombre": "Chronos-VFS", "repo": "https://github.com/yemsy26/Chronos-VFS",
                  "papel": "anillo en memoria y compresión zstd para las trazas de prueba del resolvedor"}],
@@ -154,6 +157,24 @@ def activar(id_: str, aviso=print) -> str:
     return f"{c['nombre']} activado ({origen}). Herramientas nuevas del agente: {', '.join(c['herramientas'])}."
 
 
+def asegurar(aviso=print) -> list[str]:
+    """Activa los predeterminados que nunca se han configurado (o cuyo ejecutable ya no está). Nunca falla: sin red,
+    el motor sigue funcionando sin ellos y se pueden activar después desde Aura."""
+    estado, mensajes = _estado(), []
+    for id_, c in CATALOGO.items():
+        if not c.get("predeterminado"):
+            continue
+        if id_ in estado and (not estado[id_].get("activo") or ruta(id_)):
+            mensajes.append(f"{c['nombre']}: {'activo' if ruta(id_) else 'desactivado por el usuario'}.")
+            continue
+        try:
+            mensajes.append(activar(id_, aviso))
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as e:
+            mensajes.append(f"{c['nombre']} no se pudo activar ahora ({e}). Actívalo después en Aura: Configuración "
+                            "→ Motor → Motores complementarios.")
+    return mensajes
+
+
 def desactivar(id_: str) -> str:
     if id_ not in CATALOGO:
         raise ValueError(f"No existe el complemento '{id_}'.")
@@ -166,7 +187,7 @@ def desactivar(id_: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Motores complementarios del agente")
-    ap.add_argument("accion", choices=["listar", "activar", "desactivar"])
+    ap.add_argument("accion", choices=["listar", "asegurar", "activar", "desactivar"])
     ap.add_argument("id", nargs="?")
     ap.add_argument("--json", action="store_true", help="salida JSON (para Aura)")
     ap.add_argument("--pausa", action="store_true", help="espera Intro al terminar (consola de Aura)")
@@ -177,6 +198,9 @@ def main() -> int:
             datos = listar()
             print(json.dumps(datos, ensure_ascii=False) if a.json else "\n".join(
                 f"{'[activo] ' if d['activo'] else '[ -- ]   '}{d['id']}: {d['nombre']} — {d['repo']}" for d in datos))
+        elif a.accion == "asegurar":
+            mensajes = asegurar(aviso=(lambda _: None) if a.json else print)
+            print(json.dumps(listar(), ensure_ascii=False) if a.json else "\n".join(f"[info] {m}" for m in mensajes))
         elif not a.id:
             ap.error("falta el ID del complemento")
         else:

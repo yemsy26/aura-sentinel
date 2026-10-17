@@ -116,9 +116,10 @@ abrir archivos, `eval`/`exec` y atributos internos.
 [Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust) (CDCL, capa de paridad GF(2), ruptura de simetrías y
 varios hilos) y comprueba el modelo contra cada cláusula antes de darlo por bueno. Para sudokus, horarios, coloreado o
 asignaciones, el agente codifica el problema con un script, lo resuelve y comprueba la solución decodificada (guía
-`matematicas`). Se activa aparte: `.venv\Scripts\python.exe -m agente.complementos activar sat-hibrido` (descarga su
-versión publicada con la SHA-256 comprobada o lo compila desde su repositorio); sin activarlo, el agente usa
-python-sat en el proyecto.
+`matematicas`). Es un motor complementario predeterminado: `instalar.bat` lo activa (descarga su versión
+publicada con la SHA-256 comprobada o lo compila desde su repositorio) salvo que lo hayas desactivado
+(`.venv\Scripts\python.exe -m agente.complementos desactivar sat-hibrido`); sin él, el agente usa python-sat en el
+proyecto.
 `experimentar(codigo, lenguaje)` prueba una API o una idea en `.agente\experimento` (python, node, powershell o bat),
 sin dejar archivos en el proyecto. `aprender(leccion, tema)` guarda la receta que funcionó en `aprendido\<tema>.md` y
 `guia(tema)` la añade a la guía del tema en las tareas siguientes.
