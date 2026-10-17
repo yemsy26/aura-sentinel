@@ -37,6 +37,9 @@ $bloquea = $false
 $node = Version node '-v'
 if ($node -and [version]($node.TrimStart('v')) -ge [version]'24.0.0') { Ok "Node.js $node" }
 else { Falta "Node.js 24 LTS o superior: https://nodejs.org/ (o: winget install OpenJS.NodeJS.LTS)"; $bloquea = $true }
+$git = Version git '--version'
+if ($git) { Ok $git } else { Aviso "Sin Git: el panel Git de Aura y la herramienta git del agente no funcionarán. "
+    + "https://git-scm.com/download/win (o: winget install Git.Git)" }
 $cargo = Version cargo '-V'
 if ($cargo) { Ok $cargo } else { Falta "Rust: https://rustup.rs/ (elige la opción por defecto, x86_64-pc-windows-msvc)"; $bloquea = $true }
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"

@@ -17,6 +17,7 @@ Creado por **Ramón Antonio Burgos Jerez** ([@yemsy26](https://github.com/yemsy2
 | Qué | Para qué | Dónde |
 |---|---|---|
 | Windows 10/11 x64 | | |
+| Git | clonar el repositorio, panel Git y herramienta `git` del agente | https://git-scm.com/download/win |
 | Node.js 24 LTS o superior | interfaz (Vite, React) | https://nodejs.org/ |
 | Rust (toolchain `x86_64-pc-windows-msvc`) | backend de Tauri | https://rustup.rs/ |
 | Build Tools de Visual Studio con «Desarrollo para el escritorio con C++» | compilar Rust en Windows | https://visualstudio.microsoft.com/visual-cpp-build-tools/ |
@@ -24,8 +25,8 @@ Creado por **Ramón Antonio Burgos Jerez** ([@yemsy26](https://github.com/yemsy2
 | `uv` (recomendado) o Python 3.11+ | entorno del motor | https://docs.astral.sh/uv/ |
 | Bionic o LM Studio | sirve el modelo (puertos 1235 / 1234) | https://lmstudio.ai/ |
 | Edge o Chrome | el agente prueba ahí las páginas web | ya instalado en Windows |
-| GPU NVIDIA (recomendado) y ~32 GB de RAM | velocidad del modelo | |
-| ~20 GB libres en disco | el modelo y su visión | |
+| GPU NVIDIA (recomendado) y ~32 GB de RAM | velocidad del modelo (con menos, ver abajo) | |
+| ~30 GB libres en disco | modelo y visión 17,7 GB, compilación de Rust ~8 GB, dependencias ~0,5 GB | |
 
 ### 2. Instalar
 
@@ -54,6 +55,21 @@ Qué cambia exactamente en Bionic/LM Studio y cómo deshacerlo: `motor\LEEME.md`
 - Activa su servidor local (puerto 1235; LM Studio usa 1234). Aura usa el que responda.
 - Desactiva la voz (Voxtral) si no la usas: ocupa 2-5 GB de VRAM que el modelo aprovecha para el contexto.
 - Si acabas de descargar el modelo y Bionic no lo ve, reinícialo y ejecuta `motor\cargar_modelo.bat`.
+
+### Equipos con menos memoria
+
+El modelo por defecto (Qwen3.6-35B-A3B) necesita ~32 GB de RAM: parte del modelo se queda en la RAM y el resto
+en la GPU. Con 16 GB de RAM o sin GPU NVIDIA, usa un modelo más pequeño con soporte de herramientas (por
+ejemplo Qwen3.5 9B, ~6 GB de VRAM con 64K de contexto):
+
+1. Instala sin el modelo grande: `powershell -ExecutionPolicy Bypass -File setup.ps1 -SinModelo`.
+2. Descarga el modelo pequeño desde la búsqueda de Bionic / LM Studio.
+3. En Aura, elígelo en el selector de la barra superior: se carga ajustado a tu VRAM. Para que sea el de
+   siempre, pon su clave (la que muestra el selector) en `"modelo"` de `motor\agente.json` y ejecuta
+   `motor\cargar_modelo.bat`.
+
+Los modelos pequeños resuelven tareas sencillas, pero se equivocan más en proyectos largos; las medidas de
+VRAM y velocidad de cada modelo están en `motor\LEEME.md`.
 
 ### 4. Arrancar
 

@@ -21,6 +21,8 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
   `README.md` y `motor/LEEME.md`.
 - Autoría y licencia MIT en `package.json`, `Cargo.toml` y el instalador (editor y copyright); guía de
   contribución, código de conducta, política de seguridad y plantillas de issues y pull requests en `.github/`.
+- Guía de instalación revisada desde un clon limpio: Git como requisito (`setup.ps1` avisa si falta), espacio
+  real en disco (~30 GB) y qué hacer en equipos con menos memoria.
 - La app ya no busca el motor en la carpeta de trabajo anterior a la unificación; eliminado `validate_project.rs`,
   que dependía del motor retirado.
 - Arreglo: la interfaz se quedaba en blanco al usar la Terminal. En WebView2 reciente `scrollIntoView()`
