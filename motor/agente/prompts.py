@@ -35,6 +35,28 @@ def _blockchain() -> list[str]:
     return partes
 
 
+def _android_y_bd() -> list[str]:
+    from . import android
+    partes = []
+    if (sdk := android.sdk()):
+        api, avd = android.plataformas(sdk), android.emuladores()
+        partes.append(f"Android SDK (plataformas {', '.join(map(str, api)) or 'ninguna'}; emuladores: "
+                      f"{', '.join(avd) or 'ninguno'})")
+    if android.android_studio():
+        partes.append("Android Studio")
+    if (gradle := android.gradle_local()):
+        partes.append(f"Gradle {gradle[0]} ya descargado")
+    partes.append("Flutter" if shutil.which("flutter") else "")
+    clientes = [c for c in ("psql", "mysql", "mongosh", "redis-cli", "sqlite3", "sqlcmd") if shutil.which(c)]
+    partes.append(f"clientes de bases de datos: {', '.join(clientes)}" if clientes else "")
+    return partes
+
+
+def _sat() -> str:
+    from .matematicas import ruta_hunt
+    return "resolvedor SAT activado (resolver_sat)" if ruta_hunt() else "resolvedor SAT NO activado"
+
+
 def entorno() -> str:
     """Herramientas instaladas, para que el modelo sepa qué puede usar (y que Docker apagado no sirve todavía)."""
     from .ecosistemas import docker_activo
@@ -48,13 +70,13 @@ def entorno() -> str:
               _corta(_version(["go", "version"]), 3).replace("go version go", "Go "),
               f".NET SDK {_version(['dotnet', '--version'])}" if shutil.which("dotnet") else "", docker,
               "Podman" if shutil.which("podman") else "", "OpenSSH (ssh/scp)" if shutil.which("ssh") else "",
-              "kubectl" if shutil.which("kubectl") else "", *_blockchain(),
+              "kubectl" if shutil.which("kubectl") else "", *_blockchain(), *_android_y_bd(), _sat(),
               "navegador para pruebas" if shutil.which("msedge") or Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe").exists() else ""]
     return ", ".join(p for p in partes if p) or "desconocido"
 
 
 METODO = """MÉTODO (síguelo siempre, paso a paso):
-1. ENTENDER Y ORIENTARTE: si hay archivos, usa listar y lee lo necesario. Llama a guia con el tipo de proyecto (python, pygame, html-juego, web, api, java, rust, go, node, dotnet, docker, despliegue, matematicas) y sigue sus prácticas actuales.
+1. ENTENDER Y ORIENTARTE: si hay archivos, usa listar y lee lo necesario. Llama a guia con el tipo de proyecto (python, pygame, html-juego, web, api, java, rust, go, node, dotnet, docker, despliegue, android, flutter, blockchain, evm, solana, mev, bases-de-datos, matematicas) y sigue sus prácticas actuales y lo aprendido en tareas anteriores.
 2. PLANIFICAR: plan con 3-10 pasos que incluyan CADA requisito del usuario (con sus nombres exactos de archivo), tests reales, verificar, revisar y el .bat.
 3. CONSTRUIR: un archivo por llamada con escribir. Código COMPLETO y funcional, sin '...' ni TODO; módulos pequeños (<250 líneas), manejo de errores, README.md. Antes de usar una librería: version(paquete). Si dudas de una API o de un error: investigar(pregunta).
 4. INSTALAR: en Python, ejecutar("python -m venv .venv") y ejecutar("python -m pip install -r requirements.txt") (el .venv se activa solo; una web estática no lleva requirements.txt). En Rust, Go, Node y .NET lo hace su herramienta (cargo build, go mod tidy, npm install, dotnet restore).
@@ -68,14 +90,16 @@ REGLAS:
 - Corrige con editar (cambios pequeños y concretos). Reescribir archivos enteros reintroduce errores.
 - Cuando verificar da 0 errores, NO toques lo que funciona: sigue con el plan. Si un cambio rompe algo que funcionaba y no lo arreglas pronto, usa restaurar.
 - Los tests deben importar tu código y probar los requisitos; nunca los debilites para que pasen.
-- Servidores, GUIs o bucles infinitos: ejecutar(..., fondo=true), revisa el log y deténlos con procesos al terminar.
+- Servidores, GUIs o bucles infinitos: ejecutar(..., fondo=true), revisa el log y deténlos con procesos al terminar (nunca taskkill /IM ni Stop-Process -Name: cierran los de todo el equipo).
 - La consola es cmd de Windows: usa dir, type, copy; rutas con \\ y comillas si hay espacios.
-- Tras resolver un error difícil, guarda la lección con aprender.
+- Si no sabes hacer algo o dudas de una API: investigar → experimentar (prueba mínima fuera del proyecto) → aplícalo. Si funcionó, guarda la receta con aprender(leccion, tema); tras resolver un error difícil, guarda la lección con aprender.
 - Sé breve. No pegues código en el chat: escríbelo en archivos.
 - Credenciales (contraseñas, tokens, claves): nunca en el código, en la imagen ni en git; léelas de variables de entorno o de un .env que esté en .gitignore, y pide al usuario que las ponga.
 - Conectarte o publicar fuera del equipo (ssh, scp, docker push, kubectl, nube) pide permiso al usuario: di antes qué vas a hacer y comprueba después que el servicio responde.
-- Blockchain: trabaja con un nodo local (anvil, solana-test-validator) y pon siempre la red en el comando (--rpc-url http://127.0.0.1:8545, --url localhost). Enviar transacciones o desplegar en otra red pide permiso. Nunca leas, muestres ni escribas claves privadas o keypairs.
-- Matemáticas: nunca calcules de memoria; usa calcular. Restricciones o combinatoria (sudoku, horarios, coloreado, asignaciones): codifícalas en CNF con un script, usa resolver_sat y comprueba la solución decodificada (guia("matematicas")).
+- Blockchain: trabaja con un nodo local (anvil, solana-test-validator) y pon siempre la red en el comando (--rpc-url http://127.0.0.1:8545, --url localhost). Enviar transacciones o desplegar en otra red pide permiso. Nunca leas, muestres ni escribas claves privadas o keypairs. Para contratos, programas, bots, DEX o MEV lee antes guia("blockchain") y la concreta (evm, solana o mev).
+- Matemáticas: nunca calcules de memoria; usa calcular. Restricciones o combinatoria (sudoku, horarios, coloreado, asignaciones): codifícalas en CNF con un script y, si el entorno dice "resolvedor SAT activado", usa resolver_sat; si no, python-sat en el proyecto. Comprueba la solución decodificada (guia("matematicas")).
+- Android: crea el proyecto (Flutter con flutter create o Kotlin según guia("android")), llama a abrir_android_studio para que instale lo que falte del SDK y compila con verificar. Aceptar licencias lo hace el usuario.
+- Bases de datos: en local con Docker (guia("bases-de-datos")); conectarte a una remota o borrar datos pide permiso.
 - Si falta un dato imprescindible o hay que elegir entre caminos, usa preguntar (con opciones). Lo demás, decídelo tú."""
 
 

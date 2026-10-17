@@ -5,7 +5,7 @@ Compara cada requisito con el código, busca lógica sin conectar y tests falsos
 import re
 from pathlib import Path
 
-from .verificacion import IGNORAR, es_codigo
+from .verificacion import es_codigo, ignorado
 
 BLOQUEOS = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.lock", "go.sum", "packages.lock.json"}
 
@@ -31,7 +31,7 @@ VEREDICTO: APROBADO | CAMBIOS NECESARIOS"""
 
 def _fuentes(raiz: Path) -> list[Path]:
     out = [p for p in raiz.rglob("*") if p.is_file() and (es_codigo(p) or p.suffix.lower() in (".txt", ".md"))
-           and not (IGNORAR & set(p.relative_to(raiz).parts[:-1])) and p.stat().st_size < 200_000
+           and not ignorado(p, raiz) and p.stat().st_size < 200_000
            and p.name.lower() not in BLOQUEOS]
     # Primero el código (lo más reciente), al final la documentación.
     return sorted(out, key=lambda p: (p.suffix.lower() in (".md", ".txt", ".json"), -p.stat().st_mtime))

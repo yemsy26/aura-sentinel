@@ -1,0 +1,14 @@
+# Android (Kotlin + Jetpack Compose)
+- Dos caminos: Flutter (`guia("flutter")`, `flutter create` genera todo, incluido el wrapper de Gradle) o Kotlin nativo con estos archivos:
+  - `settings.gradle.kts`: `pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }`, `dependencyResolutionManagement { repositories { google(); mavenCentral() } }`, `rootProject.name` e `include(":app")`.
+  - `gradle/libs.versions.toml` (catálogo de versiones) y `build.gradle.kts` raíz con los plugins y `apply false`.
+  - `app/build.gradle.kts`: `namespace`, `compileSdk` = una plataforma INSTALADA (el entorno las lista), `minSdk = 24`, `targetSdk = compileSdk`, `buildFeatures { compose = true }` y el plugin `org.jetbrains.kotlin.plugin.compose` (Kotlin 2.x).
+  - `app/src/main/AndroidManifest.xml`, `app/src/main/java/<paquete>/MainActivity.kt` (`ComponentActivity` + `setContent { ... }`), `res/values/strings.xml` y el tema.
+  - Wrapper: si no hay `gradlew.bat`, `verificar` da el comando exacto con el Gradle que ya está en el equipo (`"...\gradle.bat" wrapper --gradle-version X`); si no hay ninguno, `abrir_android_studio`.
+- Versiones reales antes de escribirlas: `version("com.android.tools.build:gradle", "google")` (plugin de Android), `version("androidx.compose:compose-bom", "google")`, `version("androidx.activity:activity-compose", "google")`, `version("org.jetbrains.kotlin:kotlin-gradle-plugin", "maven")`. El plugin de Android 8 o posterior necesita JDK 17 y una versión mínima de Gradle: compruébala con `investigar`.
+- Al crear el proyecto, llama a `abrir_android_studio(".")`: sincroniza Gradle y ofrece instalar las plataformas y herramientas del SDK que falten. Las licencias y descargas las acepta el usuario en su ventana (nunca `sdkmanager --licenses` por tu cuenta).
+- `verificar` ejecuta `gradlew.bat assembleDebug` y `testDebugUnitTest`, da los errores de Kotlin, Java y recursos con archivo:línea, y explica los fallos típicos (SDK, licencias, plataforma, Java, Gradle, repositorios). El APK queda en `app\build\outputs\apk\debug\app-debug.apk`.
+- Pruebas unitarias con JUnit en `app/src/test/java/<paquete>/` (lógica sin Android: ViewModel, casos de uso). La lógica fuera de las Activity para poder probarla.
+- Instalar y abrir en un dispositivo: `adb devices` (móvil con depuración USB o emulador), `adb install -r app\build\outputs\apk\debug\app-debug.apk`, `adb shell am start -n <paquete>/.MainActivity`. Emulador: `emulator -list-avds` y `emulator -avd NOMBRE` con fondo=true, luego `adb wait-for-device`. Si no hay ninguno, el usuario lo crea en Android Studio (Device Manager; descarga una imagen de 1-2 GB).
+- Versión firmada (`assembleRelease`/`bundleRelease`): el keystore y sus contraseñas fuera de git (`keystore.properties` en .gitignore o variables de entorno).
+- Permisos en el manifiesto solo los necesarios; en tiempo de ejecución con `rememberLauncherForActivityResult(RequestPermission())`.

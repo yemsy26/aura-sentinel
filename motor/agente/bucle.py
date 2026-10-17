@@ -11,7 +11,7 @@ from .contexto import Contexto
 from .herramientas import ESQUEMAS, Herramientas, archivos_pedidos, despachar
 from .prompts import REGLAS_USUARIO, entorno, sistema
 from .revision import revisar
-from .verificacion import es_codigo
+from .verificacion import es_codigo, ignorado
 
 TIPOS = {e["function"]["name"]: {k: v.get("type") for k, v in e["function"]["parameters"]["properties"].items()}
          for e in ESQUEMAS}
@@ -360,7 +360,7 @@ class Agente:
 
     def _mtime_codigo(self) -> float:
         fuentes = [p for p in self.h.raiz.rglob("*") if es_codigo(p) and p.suffix.lower() not in (".json", ".xml")
-                   and not ({".venv", "node_modules", ".agente", ".git", "__pycache__", "target", "obj"} & set(p.parts))]
+                   and not ignorado(p, self.h.raiz)]
         return max((p.stat().st_mtime for p in fuentes), default=0)
 
     def _revision_previa(self) -> dict | None:

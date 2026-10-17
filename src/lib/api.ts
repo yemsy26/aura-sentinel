@@ -16,6 +16,10 @@ export interface SearchHit { path: string; line: number; text: string }
 export interface CommandOutput { code: number; output: string; ms: number }
 export interface AgentProcess { id: number; vivo: boolean; comando: string }
 export interface AgentSettings { carpeta: string; instalado: boolean; motor: boolean }
+export interface Addon {
+  id: string; nombre: string; repo: string; aporta: string; herramientas: string[];
+  usa: { nombre: string; repo: string; papel: string }[]; activo: boolean; origen: string;
+}
 export interface UserProfile {
   displayName?: string | null; city?: string | null; homeCountry?: string | null; preferredLanguage?: string | null;
   timeZone?: string | null; responseStyle?: string | null; autoRememberFacts: boolean;
@@ -61,6 +65,10 @@ export const api = {
   agentSettings: () => invoke<AgentSettings>('get_agent_settings'),
   saveAgentSettings: (carpeta: string) => invoke<AgentSettings>('save_agent_settings', { carpeta }),
   installEngine: () => invoke<string>('install_engine'),
+  addons: () => invoke<Addon[]>('get_addons'),
+  activateAddon: (id: string) => invoke<void>('activate_addon', { id }),
+  deactivateAddon: (id: string) => invoke<Addon[]>('deactivate_addon', { id }),
+  openAddonRepo: (id: string) => invoke<void>('open_addon_repo', { id }),
   rules: () => invoke<{ reglas: string; lecciones: string }>('get_agent_rules'),
   pendingMission: (workspacePath: string) => invoke<PendingMission | null>('get_pending_mission', { workspacePath }),
   dismissPending: (workspacePath: string) => invoke<void>('dismiss_pending_mission', { workspacePath }),

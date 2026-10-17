@@ -1,17 +1,15 @@
-"""Matemáticas exactas para el agente: SAT con hunt (motor Sat-hibrido-rust) y cálculo simbólico con SymPy.
+"""Matemáticas exactas para el agente: cálculo simbólico con SymPy y SAT con hunt (complemento Sat-hibrido-rust).
 
 El modelo no calcula de memoria: escribe la fórmula (CNF) o el código SymPy y recibe un resultado comprobado.
 """
 import os
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from .config import RAIZ_INSTALACION
+from . import complementos
 
-HUNT = RAIZ_INSTALACION / "bin" / "hunt.exe"
 SONDA_CALCULO = Path(__file__).with_name("sondas") / "calculo.py"
 MAX_CNF = 50 * 1024 * 1024  # bytes: más no cabe cómodo en memoria para comprobar el modelo
 MAX_SAT = 600  # segundos
@@ -21,7 +19,9 @@ SIN_SYMPY = 3  # código de salida de la sonda
 
 
 def ruta_hunt() -> str | None:
-    return os.environ.get("AGENTE_HUNT") or (str(HUNT) if HUNT.is_file() else shutil.which("hunt"))
+    """El resolvedor del complemento Sat-hibrido-rust si está activado (AGENTE_HUNT lo sustituye)."""
+    exe = complementos.ruta("sat-hibrido")
+    return os.environ.get("AGENTE_HUNT") or (str(exe) if exe else None)
 
 
 def leer_dimacs(texto: str) -> tuple[int, list[list[int]], list[str]]:
@@ -74,8 +74,10 @@ def _incumplida(clausulas: list[list[int]], modelo: set[int]) -> int | None:
 def resolver_sat(h, archivo: str, segundos: int = 60, modelo: str = "") -> str:
     exe = ruta_hunt()
     if not exe:
-        return ("No está el resolvedor SAT (bin\\hunt.exe del motor). Reinstala Aura o pon su ruta en la variable "
-                "AGENTE_HUNT.")
+        return ("El resolvedor SAT es un motor complementario y no está activado (el usuario lo activa en Aura: "
+                "Configuración → Motor → Motores complementarios; repositorio "
+                f"{complementos.CATALOGO['sat-hibrido']['repo']}). Mientras tanto, resuelve el problema con un script "
+                "del proyecto que use python-sat (version('python-sat')).")
     p = h.ruta(archivo)
     if not p.is_file():
         return f"No existe {archivo}. Escribe antes la fórmula en DIMACS CNF (guia('matematicas'))."

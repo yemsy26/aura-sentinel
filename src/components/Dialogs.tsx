@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { confirmar } from '../lib/confirmar';
-import { api, errorText, type AgentSettings, type ProfileSnapshot, type UserProfile } from '../lib/api';
+import { api, errorText, type Addon, type AgentSettings, type ProfileSnapshot, type UserProfile } from '../lib/api';
 import { Icon, type IconName } from './Icon';
 
 export interface PaletteCommand { id: string; label: string; icon: IconName; hint?: string; run: () => void }
@@ -133,6 +133,7 @@ export function SettingsDialog({ initialTab, workspace, onClose, onToast, onEngi
               </div>
             )}
             {engine && !engine.motor && <div className="err">✗ Aquí no está Agente Local (falta agente\__main__.py).</div>}
+            {engine?.instalado && <Addons onToast={onToast} />}
           </div>
           <div className="dialog-foot"><button className="btn primary" onClick={saveEngine} disabled={!folder.trim()}>Guardar</button></div>
         </>}
@@ -179,6 +180,48 @@ export const SHORTCUTS: [string, string][] = [
   ['Ctrl+Shift+F', 'Buscar en el proyecto'], ['Ctrl+Shift+E', 'Explorador'], ['Ctrl+W', 'Cerrar pestaña'],
   ['Esc', 'Cerrar diálogos'],
 ];
+
+/** Motores complementarios: cada uno vive en su repositorio de GitHub y el usuario decide si lo activa. */
+function Addons({ onToast }: { onToast: (t: string, error?: boolean) => void }) {
+  const [addons, setAddons] = useState<Addon[] | null>(null);
+  const load = () => void api.addons().then(setAddons).catch((e) => onToast(errorText(e), true));
+  useEffect(load, []);
+  const activate = async (a: Addon) => {
+    try {
+      await api.activateAddon(a.id);
+      onToast(`Se abrió la activación de ${a.nombre} en otra ventana. Cuando termine, pulsa «Comprobar de nuevo».`);
+    } catch (e) { onToast(errorText(e), true); }
+  };
+  const deactivate = async (a: Addon) => {
+    try { setAddons(await api.deactivateAddon(a.id)); onToast(`${a.nombre} desactivado.`); } catch (e) { onToast(errorText(e), true); }
+  };
+  return (
+    <section className="card" aria-label="Motores complementarios">
+      <strong>Motores complementarios</strong>
+      <span className="muted">Cerebros opcionales: cada uno vive en su repositorio de GitHub. Al activarlo se descarga su
+        versión publicada (o se compila desde el código) y el agente gana sus herramientas.</span>
+      {addons?.map((a) => (
+        <div key={a.id} className="addon">
+          <div className="field-row">
+            <strong className="grow">{a.nombre}</strong>
+            {a.activo ? <span className="ok">✓ Activo</span> : <span className="muted">No activado</span>}
+          </div>
+          <span className="muted">{a.aporta}</span>
+          {a.usa.map((u) => <span key={u.nombre} className="muted">Usa {u.nombre}: {u.papel}.</span>)}
+          {a.origen && <span className="muted mono">{a.origen}</span>}
+          <div className="field-row">
+            {a.activo
+              ? <button className="btn" onClick={() => void deactivate(a)}>Desactivar</button>
+              : <button className="btn primary" onClick={() => void activate(a)}>Activar</button>}
+            <button className="btn" onClick={() => void api.openAddonRepo(a.id).catch((e) => onToast(errorText(e), true))}>
+              <Icon name="external" />Ver en GitHub</button>
+            <button className="btn" onClick={load}>Comprobar de nuevo</button>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
 
 export function Shortcuts() {
   return (

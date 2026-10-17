@@ -130,6 +130,8 @@ Desinstalar no borra tu perfil ni tus proyectos (tampoco el `.venv` del motor: b
 | «Docker está instalado pero NO en marcha» | abre Docker Desktop y pide al agente que vuelva a verificar |
 | El agente pide permiso para `ssh`, `scp`, `docker push`, `kubectl`… | es lo que sale de tu equipo: permítelo solo si es el servidor que le indicaste |
 | El agente pide permiso para `solana transfer`, `forge script --broadcast`, `anchor deploy`… | es una transacción en blockchain: si la ventana dice RED PRINCIPAL mueve fondos reales; para probar, pide que use un nodo local (anvil, solana-test-validator) |
+| «El resolvedor SAT es un motor complementario y no está activado» | Configuración → Motor → Motores complementarios → Activar |
+| «Faltan licencias del SDK» al compilar para Android | acéptalas en Android Studio (SDK Manager) y pide al agente que vuelva a verificar |
 | Va muy lento o se queda sin memoria | desactiva la voz de Bionic; `motor\vision.bat off` libera ~0,9 GB; `motor\cargar_modelo.bat --remedir` |
 
 Registro del motor: `%TEMP%\aura_agente_local.log`.
@@ -169,11 +171,22 @@ Cada mensaje del chat lo ejecuta Agente Local (`src-tauri/src/agent.rs`). Aura l
 - Las acciones rápidas usan órdenes del protocolo en la misma sesión (`agent_order`): verificar, revisar,
   procesos, detener, restaurar, regla y nuevo.
 - El agente planifica, escribe, ejecuta, verifica (Python, web en Edge sin ventana, Java, Rust, Go, .NET,
-  Node/TypeScript, Dockerfile y Compose, .bat), revisa el código y no termina con errores. El selector de modelos lista los de Bionic; elegir otro lo carga ajustado
+  Node/TypeScript, Solidity con Foundry o Hardhat, Anchor, Android con Gradle, Flutter, Dockerfile y Compose, .bat),
+  revisa el código y no termina con errores. El selector de modelos lista los de Bionic; elegir otro lo carga ajustado
   a la VRAM.
-- Las matemáticas no las hace de memoria: `calcular` (SymPy) para cálculo exacto y `resolver_sat` (el resolvedor
-  SAT `motor\bin\hunt.exe`, del motor Sat-hibrido-rust) para restricciones y combinatoria, con el resultado
-  comprobado.
+- Las matemáticas no las hace de memoria: `calcular` (SymPy) para cálculo exacto y, si activas el motor
+  complementario Sat-hibrido-rust, `resolver_sat` para restricciones y combinatoria, con el resultado comprobado.
+- **Blockchain**: contratos EVM (Ethereum, Arbitrum, Base, Optimism, Polygon, BSC, Avalanche) con Foundry o Hardhat,
+  programas de Solana con Anchor, clientes y bots, y sistemas MEV (arbitraje entre DEX, liquidaciones, backrun) con
+  simulación en un fork local. Desarrolla siempre en un nodo local (anvil, solana-test-validator); enviar
+  transacciones o desplegar en otra red pide tu permiso y la ventana dice si es la red principal.
+- **Android**: apps en Kotlin con Jetpack Compose o en Flutter. Al crear el proyecto abre Android Studio para que
+  instale los componentes del SDK que falten (las licencias las aceptas tú), compila el APK con Gradle, explica los
+  fallos típicos (SDK, plataforma, Java, Gradle) y lo instala en el móvil o el emulador con `adb`.
+- **Bases de datos**: PostgreSQL, MySQL, MongoDB, Redis o SQLite en Docker, migraciones y varias bases a la vez.
+  Conectarse a una base de otra máquina o borrar datos pide tu permiso.
+- **Aprende**: si no sabe algo, lo investiga, lo prueba con `experimentar` fuera del proyecto y guarda la receta que
+  funcionó con `aprender(leccion, tema)`; la próxima vez aparece en su guía de ese tema.
 - La conversación se conserva mientras no cambies de carpeta ni de modelo. Cancelar detiene el agente y todo
   lo que lanzó.
 - Si una misión queda a medias (plan con pasos sin marcar en `.agente/plan.md`), al abrir la app aparece
@@ -183,6 +196,27 @@ Cada mensaje del chat lo ejecuta Agente Local (`src-tauri/src/agent.rs`). Aura l
 Aura busca el motor en este orden: `AGENTE_LOCAL_DIR`, la carpeta guardada en Configuración → Motor
 (`motor.json`), `motor\` del repositorio, `motor\` dentro de la app instalada y, por compatibilidad, `%USERPROFILE%\AgenteLocal`.
 Usa la primera que esté instalada; si ninguna lo está, ofrece instalar la primera que encuentre.
+
+## Motores complementarios
+
+Cerebros opcionales del autor que amplían al agente. Cada uno se desarrolla y versiona en su propio repositorio de
+GitHub; Aura no los incluye: los activas tú en **Configuración → Motor → Motores complementarios** (o con
+`motor\.venv\Scripts\python.exe -m agente.complementos activar ID`, y `listar` / `desactivar ID`).
+
+| Motor | Qué aporta | Repositorio |
+| --- | --- | --- |
+| `sat-hibrido` (Sat-hibrido-rust) | Resolvedor SAT (CDCL con capa de paridad GF(2), ruptura de simetrías y varios hilos). Añade la herramienta `resolver_sat`: sudokus, horarios, coloreado, asignaciones y otros problemas de restricciones, con el modelo comprobado contra cada cláusula. | [yemsy26/Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust) |
+
+Sat-hibrido-rust usa [Chronos-VFS](https://github.com/yemsy26/Chronos-VFS) (anillo en memoria y compresión zstd para
+las trazas de prueba del resolvedor); no se activa por separado porque no añade ninguna herramienta al agente.
+
+Al activar un motor, Aura descarga el ejecutable de la última versión publicada en su repositorio si trae su
+`.sha256` (y comprueba la suma); si no hay versión publicada, clona el código y lo compila (hace falta Git y
+[Rust](https://rustup.rs/)). Antes de activarlo comprueba que resuelve dos fórmulas conocidas. Queda en
+`motor\complementos\` (fuera de git); `AGENTE_HUNT` permite usar otro `hunt.exe`.
+
+Para añadir otro motor: una entrada en `CATALOGO` de `motor/agente/complementos.py` con su repositorio, el nombre del
+binario en sus versiones publicadas, cómo compilarlo, cómo comprobarlo y la herramienta del agente que lo usa.
 
 ## Verificación
 
@@ -215,7 +249,7 @@ si la misión acaba en `FINISH`.
 - `setup.ps1`: instalación completa en un equipo nuevo; `start.bat`: arranque diario (con
   `scripts\preparar-inicio.ps1`).
 - `motor/`: Agente Local (Python): el agente, sus pruebas, el instalador, la descarga del modelo y el ajuste a la
-  VRAM. Su guía: `motor/LEEME.md`.
+  VRAM. Su guía: `motor/LEEME.md`. Los motores complementarios activados quedan en `motor/complementos/`.
 - `src/`: interfaz React. `App.tsx` (estado y conexiones), `components/` (barras, lateral, editor, panel
   inferior, agente, diálogos) y `lib/` (comandos de Tauri tipados, estado del agente, Monaco y utilidades).
 - `src-tauri/src/lib.rs`: inicialización de Tauri y comandos.

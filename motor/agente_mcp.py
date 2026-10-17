@@ -146,8 +146,18 @@ def resolver_sat(archivo: str, segundos: int = 60, modelo: str = "") -> str:
 
 
 @mcp.tool(description=D["aprender"])
-def aprender(leccion: str) -> str:
-    return H.aprender(leccion)
+def aprender(leccion: str, tema: str = "") -> str:
+    return H.aprender(leccion, tema)
+
+
+@mcp.tool(description=D["experimentar"])
+def experimentar(codigo: str, lenguaje: str = "python", segundos: int = 60) -> str:
+    return H.experimentar(codigo, lenguaje, segundos)
+
+
+@mcp.tool(description=D["abrir_android_studio"])
+def abrir_android_studio(ruta: str = ".") -> str:
+    return H.abrir_android_studio(ruta)
 
 
 @mcp.tool(description=D["ver_pantalla"])

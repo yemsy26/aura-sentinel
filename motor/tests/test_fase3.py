@@ -177,7 +177,7 @@ class ResolverSat(unittest.TestCase):
         with mock.patch.object(matematicas.subprocess, "run", side_effect=subprocess.TimeoutExpired("hunt", 1)):
             self.assertIn("SIN RESPUESTA en 5 s", self.h.resolver_sat("f.cnf", segundos=5))
         with mock.patch.object(matematicas, "ruta_hunt", return_value=None):
-            self.assertIn("No está el resolvedor", self.h.resolver_sat("f.cnf"))
+            self.assertIn("no está activado", self.h.resolver_sat("f.cnf"))
 
 
 @unittest.skipUnless(importlib.util.find_spec("sympy"), "falta SymPy")

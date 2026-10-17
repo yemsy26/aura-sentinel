@@ -42,7 +42,8 @@ refactor_*.py
 
 # Compiled test artifacts & scratch binaries
 *.exe
-!/motor/bin/hunt.exe
+# Motores complementarios que activa el usuario (se descargan o compilan de su repositorio)
+/motor/complementos/
 *.pdb
 test_*.rs
 test_*.py
@@ -80,4 +81,5 @@ motor/.ruff_cache/
 motor/.cache_modelos.json
 motor/reglas.md
 motor/lecciones.md
+/motor/aprendido/
 !motor/tests/test_*.py

@@ -164,7 +164,8 @@ const TOOL_LABEL: Record<string, string> = {
   leer: 'Leyó', escribir: 'Escribió', editar: 'Editó', ejecutar: 'Ejecutó', verificar: 'Verificó', revisar: 'Revisó',
   ver_pantalla: 'Vio la pantalla', plan: 'Planificó', paso_hecho: 'Completó un paso', buscar: 'Buscó', listar: 'Listó',
   web_leer: 'Leyó la web', web_buscar: 'Buscó en la web', git: 'Git', restaurar: 'Restauró', crear_bat: 'Creó lanzador',
-  procesos: 'Procesos', calcular: 'Calculó', resolver_sat: 'Resolvió SAT', terminar: 'Terminó',
+  procesos: 'Procesos', calcular: 'Calculó', resolver_sat: 'Resolvió SAT', experimentar: 'Experimentó',
+  abrir_android_studio: 'Abrió Android Studio', terminar: 'Terminó',
 };
 
 export function toolLabel(tool: string): string {

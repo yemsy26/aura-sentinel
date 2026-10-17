@@ -1,4 +1,5 @@
-"""verificar() para Rust, Go, .NET, Node/TypeScript, Docker/Compose y YAML.
+"""verificar() para Rust, Go, .NET, Node/TypeScript, Solidity (Foundry, Hardhat), Anchor, Android, Flutter/Dart,
+Docker/Compose y YAML.
 
 Cada proyecto se compila y pasa sus pruebas con su propia herramienta (cargo, go, dotnet, npm, docker). Si falta la
 herramienta, el informe dice cómo instalarla; si Docker está apagado, se revisa el Dockerfile sin construirlo.
@@ -10,20 +11,21 @@ import re
 import shutil
 from pathlib import Path
 
-from .verificacion import IGNORAR, Informe, _correr, _rel
+from . import android
+from .verificacion import Informe, _correr, _rel, ignorado
 
 COMPILAR = 600   # segundos: la primera compilación descarga dependencias
 CONSTRUIR = 900  # docker build
-ENTORNO = dict(os.environ, CARGO_TERM_COLOR="never", NO_COLOR="1", CI="1", DOTNET_CLI_TELEMETRY_OPTOUT="1",
-               DOTNET_NOLOGO="1", DOCKER_CLI_HINTS="false", BUILDKIT_PROGRESS="plain", GOFLAGS="-buildvcs=false")
+ENTORNO = android.con_android(dict(
+    os.environ, CARGO_TERM_COLOR="never", NO_COLOR="1", CI="1", DOTNET_CLI_TELEMETRY_OPTOUT="1", DOTNET_NOLOGO="1",
+    DOCKER_CLI_HINTS="false", BUILDKIT_PROGRESS="plain", GOFLAGS="-buildvcs=false", FLUTTER_SUPPRESS_ANALYTICS="true"))
 COMPOSE = {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
 CREDENCIAL = re.compile(r"\b(\w*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY)\w*)\s*[= ]\s*"
                         r"['\"]?([^\s'\"$]{4,})", re.IGNORECASE)
 
 
 def _buscar(base: Path, condicion) -> list[Path]:
-    return sorted(p for p in base.rglob("*") if p.is_file() and condicion(p)
-                  and not (IGNORAR & set(p.relative_to(base).parts[:-1])))
+    return sorted(p for p in base.rglob("*") if p.is_file() and condicion(p) and not ignorado(p, base))
 
 
 def _raices(archivos: list[Path]) -> list[Path]:
@@ -43,7 +45,7 @@ def _diagnosticos(salida: str, patron: str, cwd: Path, raiz: Path, inf: Informe,
         if detalle in vistos:
             continue
         vistos.add(detalle)
-        if (m.groupdict().get("tipo") or "error") == "error":
+        if (m.groupdict().get("tipo") or "error").lower() == "error":
             errores += 1
             inf.errores.append(detalle)
         elif len(inf.avisos) < 20:
@@ -62,7 +64,8 @@ CLIPPY = RUSTC.replace("(?P<tipo>error|warning)", "(?P<tipo>warning)")
 
 
 def rust(base: Path, raiz: Path, inf: Informe) -> None:
-    proyectos = _raices(_buscar(base, lambda p: p.name == "Cargo.toml"))
+    proyectos = [d for d in _raices(_buscar(base, lambda p: p.name == "Cargo.toml"))
+                 if not (d / "Anchor.toml").exists()]  # los workspaces de Anchor los compila anchor()
     if not proyectos:
         return
     inf.tipos.append("rust")
@@ -218,6 +221,8 @@ def node(base: Path, raiz: Path, inf: Informe) -> None:
                 continue
         prueba = scripts.get("test", "")
         if not prueba or TEST_POR_DEFECTO in prueba:
+            if any((d / n).exists() for n in HARDHAT_CONFIG):
+                continue  # las pruebas de Hardhat las ejecuta solidity()
             inf.avisos.append(f"{rel}: no hay pruebas: añade scripts.test en package.json (p. ej. \"node --test\").")
             continue
         codigo, salida = _correr("npm test --silent", d, COMPILAR, ENTORNO)
@@ -227,6 +232,276 @@ def node(base: Path, raiz: Path, inf: Informe) -> None:
             inf.errores.append(f"{rel}: npm test falla:\n    {_fallo(salida, r'fail|error|assert|expected|not ok')}")
         else:
             inf.ok.append(f"{rel}: npm test OK")
+
+
+# ---------------------------------------------------------------- Solidity (Foundry, Hardhat) y Anchor
+SOLC = (r"^(?:(?P<tipo>Warning)|\w*Error)(?: \(\d+\))?: (?P<texto>.+)\n\s*--> (?P<archivo>[^\n:]+?\.sol):"
+        r"(?P<linea>\d+):\d+:")
+RUSTC_LARGO = (r"^(?P<tipo>error|warning)(?:\[\w+\])?: (?P<texto>.+)\n\s*--> (?P<archivo>[^\n:]+?\.rs):"
+               r"(?P<linea>\d+):\d+")
+HARDHAT_CONFIG = ("hardhat.config.ts", "hardhat.config.js", "hardhat.config.cjs", "hardhat.config.mjs")
+
+
+def _foundry(d: Path, raiz: Path, inf: Informe) -> None:
+    rel = _rel(d, raiz)
+    codigo, salida = _correr(["forge", "build"], d, COMPILAR, ENTORNO)
+    if codigo is None:
+        inf.errores.append(f"{rel}: forge build no terminó en {COMPILAR} s.")
+        return
+    errores = _diagnosticos(salida, SOLC, d, raiz, inf)
+    if codigo != 0:
+        if not errores:
+            inf.errores.append(f"{rel}: forge build falla:\n    {_fallo(salida)}")
+        return
+    codigo, salida = _correr(["forge", "test"], d, COMPILAR, ENTORNO)
+    m = re.search(r"(\d+) tests? passed, (\d+) failed", salida)
+    pasadas, fallidas = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    if codigo is None:
+        inf.errores.append(f"{rel}: forge test no terminó en {COMPILAR} s (¿un fork sin RPC o un bucle?).")
+    elif "No tests found" in salida or codigo == 0 and pasadas == 0:
+        inf.avisos.append(f"{rel}: no hay pruebas: añade test/X.t.sol con forge-std (guia('evm')).")
+    elif codigo != 0 or fallidas:
+        fallos = sorted(set(re.findall(r"^\[FAIL[^\n]*", salida, re.MULTILINE)))[:10]
+        inf.errores.append(f"{rel}: forge test falla ({fallidas} de {pasadas + fallidas}):\n    "
+                           + ("\n    ".join(fallos) or _fallo(salida)))
+    else:
+        inf.ok.append(f"{rel}: compila y pasan {pasadas} pruebas (forge test)")
+
+
+def _hardhat(d: Path, raiz: Path, inf: Informe) -> None:
+    rel = _rel(d, raiz)
+    if not (d / "node_modules").is_dir():
+        return  # node() ya pide npm install
+    codigo, salida = _correr("npx --no-install hardhat compile", d, COMPILAR, ENTORNO)
+    errores = _diagnosticos(salida, SOLC, d, raiz, inf)
+    if codigo != 0:
+        if not errores:
+            inf.errores.append(f"{rel}: hardhat compile falla:\n    {_fallo(salida)}")
+        return
+    if not any((d / "test").glob("*.*")):
+        inf.avisos.append(f"{rel}: no hay pruebas en test/: añade tests de los contratos (npx hardhat test).")
+        return
+    codigo, salida = _correr("npx --no-install hardhat test", d, COMPILAR, ENTORNO)
+    pasadas = sum(int(n) for n in re.findall(r"(\d+) passing", salida))
+    if codigo is None:
+        inf.errores.append(f"{rel}: hardhat test no terminó en {COMPILAR} s.")
+    elif codigo != 0:
+        inf.errores.append(f"{rel}: hardhat test falla:\n    {_fallo(salida, r'fail|error|assert|expected')}")
+    else:
+        inf.ok.append(f"{rel}: compila y pasan las pruebas de Hardhat" + (f" ({pasadas})" if pasadas else ""))
+
+
+def solidity(base: Path, raiz: Path, inf: Informe) -> None:
+    foundry = _raices(_buscar(base, lambda p: p.name == "foundry.toml"))
+    hardhat = _raices(_buscar(base, lambda p: p.name in HARDHAT_CONFIG))
+    sueltos = [] if foundry or hardhat else _buscar(base, lambda p: p.suffix == ".sol")
+    if not (foundry or hardhat or sueltos):
+        return
+    inf.tipos.append("solidity")
+    if sueltos:
+        inf.avisos.append("Hay contratos .sol sin proyecto: crea uno con Foundry (forge init --force .) para compilarlos "
+                          "y probarlos (guia('evm')).")
+    if foundry and not shutil.which("forge"):
+        inf.errores.append("Hay foundry.toml pero Foundry no está instalado: https://getfoundry.sh/ (pide al usuario "
+                           "que lo instale).")
+        foundry = []
+    for d in foundry:
+        _foundry(d, raiz, inf)
+    for d in hardhat:
+        _hardhat(d, raiz, inf)
+
+
+def _version_de(cmd: list[str]) -> tuple[int, ...]:
+    codigo, salida = _correr(cmd, Path.cwd(), 30, ENTORNO)
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", salida) if codigo == 0 else None
+    return tuple(map(int, m.groups())) if m else ()
+
+
+def anchor(base: Path, raiz: Path, inf: Informe) -> None:
+    from .herramientas import transaccion  # aquí: herramientas importa este módulo al verificar
+    proyectos = _raices(_buscar(base, lambda p: p.name == "Anchor.toml"))
+    if not proyectos:
+        return
+    inf.tipos.append("anchor")
+    if not shutil.which("anchor"):
+        inf.errores.append("Hay Anchor.toml pero Anchor no está instalado: https://www.anchor-lang.com/docs/installation")
+        return
+    for d in proyectos:
+        rel = _rel(d, raiz)
+        codigo, salida = _correr(["anchor", "build"], d, CONSTRUIR, ENTORNO)
+        if codigo is None:
+            inf.errores.append(f"{rel}: anchor build no terminó en {CONSTRUIR} s (la primera vez descarga las "
+                               "herramientas de Solana).")
+            continue
+        errores = _diagnosticos(salida, RUSTC_LARGO, d, raiz, inf)
+        if codigo != 0:
+            if not errores:
+                inf.errores.append(f"{rel}: anchor build falla:\n    {_fallo(salida)}")
+            ancla, sol = _version_de(["anchor", "--version"]), _version_de(["solana", "--version"])
+            if ancla[:2] >= (0, 31) and sol and sol[0] < 2:
+                inf.avisos.append(f"Anchor {'.'.join(map(str, ancla))} espera Solana/Agave 2.x y la CLI de Solana es "
+                                  f"{'.'.join(map(str, sol))}: pide al usuario que la actualice o usa Anchor 0.30 (avm).")
+            continue
+        inf.ok.append(f"{rel}: anchor build OK (IDL en target/idl)")
+        if transaccion("anchor test", d):
+            inf.avisos.append(f"{rel}: Anchor.toml apunta a una red que no es local: anchor test desplegaría allí. Pon "
+                              "cluster = \"Localnet\" para probar.")
+        elif (d / "node_modules").is_dir() and any((d / "tests").glob("*.*")):
+            codigo, salida = _correr(["anchor", "test"], d, CONSTRUIR, ENTORNO)
+            if codigo == 0:
+                inf.ok.append(f"{rel}: anchor test OK (validador local)")
+            else:
+                inf.errores.append(f"{rel}: anchor test falla:\n    {_fallo(salida, r'fail|error|assert|expected')}")
+        else:
+            inf.avisos.append(f"{rel}: faltan tests/ o node_modules (npm install) para anchor test.")
+
+
+# ---------------------------------------------------------------- Android (Gradle) y Flutter/Dart
+KOTLIN = r"^(?:(?P<tipo>w)|e): (?:file:///)?(?P<archivo>[^\n]+?\.kts?):(?P<linea>\d+):\d+ (?P<texto>.+)$"
+KOTLIN_ANTIGUO = r"^(?:(?P<tipo>w)|e): (?P<archivo>[^\n]+?\.kts?): \((?P<linea>\d+), \d+\): (?P<texto>.+)$"
+JAVAC = r"^(?P<archivo>[^\n]+?\.java):(?P<linea>\d+): (?P<tipo>error|warning): (?P<texto>.+)$"
+AAPT = r"^ERROR: ?(?P<archivo>[^\n]+?\.xml):(?P<linea>\d+): AAPT: (?P<texto>.+)$"
+DART = r"^\s*(?P<tipo>error|warning|info) • (?P<texto>.+?) • (?P<archivo>[^\n•]+?\.dart):(?P<linea>\d+):\d+ • \S+\s*$"
+
+
+def pistas_gradle(salida: str) -> list[str]:
+    """Qué falta en el equipo o en el proyecto según los fallos típicos de Gradle y del plugin de Android."""
+    instaladas = ", ".join(f"android-{n}" for n in android.plataformas()) or "ninguna"
+    pistas = [
+        (r"SDK location not found", ("No encuentra el SDK de Android: abre el proyecto con abrir_android_studio o "
+                                     "crea local.properties con sdk.dir (barras dobles \\\\).")),
+        (r"licen[cs]es? .*not (been )?accepted|accept the SDK license",
+         "Faltan licencias del SDK: el usuario debe aceptarlas en Android Studio (SDK Manager); es su decisión."),
+        (r"Failed to find (?:target with hash string|Platform SDK with path)[^\n]*?android-(\d+)",
+         (f"Falta esa plataforma del SDK: usa en compileSdk una instalada ({instaladas}) o pide al usuario que la "
+          "instale en Android Studio.")),
+        (r"requires Java 17|Unsupported class file major version|Java 17|JAVA_HOME is not set",
+         "La versión de Java no vale: el plugin de Android 8 necesita JDK 17 o superior en JAVA_HOME."),
+        (r"Minimum supported Gradle version is ([\d.]+)",
+         "Sube distributionUrl en gradle/wrapper/gradle-wrapper.properties a esa versión de Gradle."),
+        (r"Plugin \[id: 'com\.android\.[a-z]+'[^\n]*not found",
+         "No encuentra el plugin de Android: añade google() en pluginManagement { repositories } de settings.gradle(.kts)."),
+        (r"Could not (?:resolve|GET|download)",
+         ("No pudo descargar una dependencia: revisa google() y mavenCentral() en settings.gradle(.kts) y la versión "
+          "(version('grupo:artefacto', 'google')).")),
+    ]
+    return [texto for patron, texto in pistas if re.search(patron, salida, re.IGNORECASE)]
+
+
+def _fallo_gradle(rel: str, tarea: str, salida: str, d: Path, raiz: Path, inf: Informe) -> None:
+    errores = sum(_diagnosticos(salida, p, d, raiz, inf) for p in (KOTLIN, KOTLIN_ANTIGUO, JAVAC, AAPT))
+    pistas = pistas_gradle(salida)
+    if pistas or not errores:
+        detalle = "\n    ".join(pistas) if pistas else _fallo(salida, r"error|fail|what went wrong|exception|>")
+        inf.errores.append(f"{rel}: {tarea} falla:\n    {detalle}")
+
+
+def _pruebas_junit(d: Path, rel: str, inf: Informe) -> None:
+    total = fallos = 0
+    nombres = []
+    for xml in d.glob("**/build/test-results/testDebugUnitTest/*.xml"):
+        texto = xml.read_text(encoding="utf-8", errors="replace")
+        if (m := re.search(r'<testsuite [^>]*tests="(\d+)"[^>]*failures="(\d+)"[^>]*errors="(\d+)"', texto)):
+            total += int(m.group(1))
+            fallos += int(m.group(2)) + int(m.group(3))
+        nombres += re.findall(r'<testcase name="([^"]+)"[^>]*>\s*<(?:failure|error)', texto)
+    if fallos:
+        inf.errores.append(f"{rel}: fallan {fallos} de {total} pruebas unitarias: {', '.join(nombres[:8])}")
+    elif total:
+        inf.ok.append(f"{rel}: pasan {total} pruebas unitarias (testDebugUnitTest)")
+    else:
+        inf.avisos.append(f"{rel}: no hay pruebas unitarias: añade app/src/test/java/.../XTest.kt con JUnit.")
+
+
+def android_gradle(base: Path, raiz: Path, inf: Informe) -> None:
+    def es_android(p: Path) -> bool:
+        return p.name in ("build.gradle", "build.gradle.kts") and "com.android" in p.read_text("utf-8", "replace")
+
+    proyectos = set()
+    for modulo in (p.parent for p in _buscar(base, es_android)):
+        dentro = [modulo, *(a for a in modulo.parents if a == base or base in a.parents)]
+        if any((a / "pubspec.yaml").exists() for a in dentro[:3]):
+            continue  # el android/ de Flutter lo compila flutter()
+        proyectos.add(next((a for a in dentro if (a / "settings.gradle").exists() or (a / "settings.gradle.kts").exists()),
+                           modulo))
+    if not proyectos:
+        return
+    inf.tipos.append("android")
+    if not android.sdk():
+        inf.errores.append("No encuentro el SDK de Android: instala Android Studio (https://developer.android.com/studio) "
+                           "y ábrelo una vez para que lo descargue.")
+        return
+    java = _version_de(["java", "-version"])
+    mayor = java[1] if java[:1] == (1,) else java[0] if java else 0  # Java 8 se anuncia como 1.8
+    if java and mayor < 17:
+        inf.errores.append(f"Java {mayor} no vale para el plugin de Android 8: hace falta JDK 17 o superior en JAVA_HOME.")
+        return
+    for d in sorted(set(proyectos)):
+        rel = _rel(d, raiz)
+        if not (d / "gradlew.bat").exists():
+            local = android.gradle_local()
+            orden = f'"{local[1]}" wrapper --gradle-version {local[0]}' if local else "abrir_android_studio"
+            inf.errores.append(f"{rel}: falta el Gradle wrapper (gradlew.bat). Créalo con: {orden}")
+            continue
+        codigo, salida = _correr("gradlew.bat assembleDebug --console=plain", d, CONSTRUIR, ENTORNO)
+        if codigo is None:
+            inf.errores.append(f"{rel}: assembleDebug no terminó en {CONSTRUIR} s (la primera vez descarga el plugin y "
+                               "las librerías; vuelve a verificar).")
+            continue
+        if codigo != 0:
+            _fallo_gradle(rel, "assembleDebug", salida, d, raiz, inf)
+            continue
+        apk = next(iter(sorted(d.glob("**/build/outputs/apk/debug/*.apk"))), None)
+        inf.ok.append(f"{rel}: compila (assembleDebug)" + (f"; APK en {_rel(apk, raiz)}" if apk else ""))
+        codigo, salida = _correr("gradlew.bat testDebugUnitTest --console=plain", d, CONSTRUIR, ENTORNO)
+        if codigo is None:
+            inf.errores.append(f"{rel}: testDebugUnitTest no terminó en {CONSTRUIR} s.")
+        else:
+            _pruebas_junit(d, rel, inf)
+
+
+def flutter(base: Path, raiz: Path, inf: Informe) -> None:
+    proyectos = _raices(_buscar(base, lambda p: p.name == "pubspec.yaml"))
+    if not proyectos:
+        return
+    inf.tipos.append("flutter")
+    for d in proyectos:
+        rel = _rel(d, raiz)
+        es_flutter = re.search(r"^\s*sdk:\s*flutter\b", (d / "pubspec.yaml").read_text("utf-8", "replace"), re.MULTILINE)
+        cli = "flutter" if es_flutter else "dart"
+        if not shutil.which(cli):
+            inf.errores.append(f"Hay pubspec.yaml pero falta {cli.capitalize()}: https://docs.flutter.dev/get-started/install")
+            continue
+        if not (d / ".dart_tool" / "package_config.json").exists():
+            codigo, salida = _correr(f"{cli} pub get", d, COMPILAR, ENTORNO)
+            if codigo != 0:
+                inf.errores.append(f"{rel}: {cli} pub get falla:\n    {_fallo(salida)}")
+                continue
+        analizar = "flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings" if es_flutter else "dart analyze"
+        _, salida = _correr(analizar, d, COMPILAR, ENTORNO)
+        if _diagnosticos(salida, DART, d, raiz, inf):
+            continue
+        if any((d / "test").glob("**/*_test.dart")):
+            codigo, salida = _correr(f"{cli} test" + (" --no-pub" if es_flutter else ""), d, COMPILAR, ENTORNO)
+            m = re.search(r"\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)", salida)
+            if codigo is None:
+                inf.errores.append(f"{rel}: {cli} test no terminó en {COMPILAR} s.")
+                continue
+            if codigo != 0:
+                inf.errores.append(f"{rel}: {cli} test falla:\n    {_fallo(salida, r'fail|error|expected|actual')}")
+                continue
+            inf.ok.append(f"{rel}: pasan {m.group(1) if m else 'las'} pruebas ({cli} test)")
+        else:
+            inf.avisos.append(f"{rel}: no hay pruebas: añade test/x_test.dart (flutter_test).")
+        if es_flutter and (d / "android").is_dir() and android.sdk():
+            codigo, salida = _correr("flutter build apk --debug --no-pub", d, CONSTRUIR, ENTORNO)
+            if codigo is None:
+                inf.errores.append(f"{rel}: flutter build apk no terminó en {CONSTRUIR} s (la primera vez descarga Gradle "
+                                   "y el plugin de Android; vuelve a verificar).")
+            elif codigo != 0:
+                _fallo_gradle(rel, "flutter build apk", salida, d, raiz, inf)
+            else:
+                inf.ok.append(f"{rel}: compila para Android (build/app/outputs/flutter-apk/app-debug.apk)")
 
 
 # ---------------------------------------------------------------- Docker / Compose / YAML
@@ -365,7 +640,7 @@ def yaml(base: Path, raiz: Path, inf: Informe) -> None:
 
 # ---------------------------------------------------------------- entrada
 def verificar_todos(base: Path, raiz: Path, inf: Informe) -> None:
-    for comprobar in (rust, go, dotnet, node, docker, yaml):
+    for comprobar in (rust, go, dotnet, node, solidity, anchor, android_gradle, flutter, docker, yaml):
         comprobar(base, raiz, inf)
 
 

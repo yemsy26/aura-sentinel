@@ -166,6 +166,74 @@ pub fn install_engine(app: AppHandle) -> Result<String, String> {
     Ok(dir)
 }
 
+/// `python -m agente.complementos <args> --json` en la instalación del motor: catálogo de motores complementarios
+/// con su estado (o el resultado de desactivar uno).
+async fn run_addons(app: &AppHandle, args: &[&str]) -> Result<Value, String> {
+    let dir = installation(app)?;
+    let mut command = Command::new(dir.join(".venv").join("Scripts").join("python.exe"));
+    command.current_dir(&dir).env("PYTHONUTF8", "1").args(["-m", "agente.complementos"]).args(args).arg("--json");
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = command.output().await.map_err(|e| format!("No pude consultar los motores complementarios: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Respuesta no válida de los motores complementarios: {e}"))
+}
+
+fn valid_addon(id: &str) -> Result<(), String> {
+    let ok = !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err("Identificador de motor complementario no válido.".into())
+    }
+}
+
+#[tauri::command]
+pub async fn get_addons(app: AppHandle) -> Result<Value, String> {
+    run_addons(&app, &["listar"]).await
+}
+
+/// Abre en una consola visible la activación (descarga la versión publicada o compila desde el repositorio).
+#[tauri::command]
+pub fn activate_addon(app: AppHandle, id: String) -> Result<(), String> {
+    valid_addon(&id)?;
+    let dir = installation(&app)?;
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "Activar motor complementario", "/D"])
+        .arg(&dir)
+        .args([".venv\\Scripts\\python.exe", "-m", "agente.complementos", "activar", &id, "--pausa"])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("No pude abrir la activación: {e}"))
+}
+
+#[tauri::command]
+pub async fn deactivate_addon(app: AppHandle, id: String) -> Result<Value, String> {
+    valid_addon(&id)?;
+    run_addons(&app, &["desactivar", &id]).await
+}
+
+/// Abre en el navegador el repositorio del motor (solo los de GitHub que lista el catálogo).
+#[tauri::command]
+pub async fn open_addon_repo(app: AppHandle, id: String) -> Result<(), String> {
+    let list = run_addons(&app, &["listar"]).await?;
+    let repo = list
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["id"] == id.as_str()))
+        .and_then(|item| item["repo"].as_str())
+        .filter(|repo| repo.starts_with("https://github.com/"))
+        .ok_or("Ese motor complementario no tiene repositorio en GitHub.")?
+        .to_string();
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &repo])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn save_agent_settings(app: AppHandle, carpeta: String) -> Result<Value, String> {
     if !has_engine(Path::new(&carpeta)) {

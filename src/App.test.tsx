@@ -26,6 +26,11 @@ const responses: Record<string, (args?: Record<string, unknown>) => unknown> = {
     respuesta: 'VERIFICACIÓN (web): 0 ERRORES, 0 AVISOS', uso: '', datos: [] }),
   submit_user_answer: () => null,
   run_command: (args) => ({ code: 0, output: `salida de ${args?.command}\n`, ms: 30 }),
+  get_agent_settings: () => ({ carpeta: 'C:\\motor', instalado: true, motor: true }),
+  get_addons: () => [{ id: 'sat-hibrido', nombre: 'Sat-hibrido-rust', repo: 'https://github.com/yemsy26/Sat-hibrido-rust',
+    aporta: 'Resolvedor SAT.', herramientas: ['resolver_sat'], usa: [{ nombre: 'Chronos-VFS', repo: '', papel: 'trazas' }],
+    activo: false, origen: '' }],
+  deactivate_addon: () => [],
 };
 let respuestaAsk = false;
 vi.mock('@tauri-apps/plugin-dialog', () => ({  // la confirmación nativa de Windows
@@ -156,6 +161,19 @@ describe('Aura Sentinel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
     await waitFor(() => expect(called('clear_chat_history')).toHaveLength(1));
     await waitFor(() => expect(screen.queryByText('anterior')).toBeNull());
+  });
+
+  it('los motores complementarios se activan desde Configuración y enlazan a su repositorio', async () => {
+    render(<App />);
+    await screen.findByText('index.html');
+    fireEvent.click(screen.getByRole('button', { name: 'Configuración' }));
+    const seccion = await screen.findByRole('region', { name: 'Motores complementarios' });
+    expect(seccion.textContent).toContain('Sat-hibrido-rust');
+    expect(seccion.textContent).toContain('Usa Chronos-VFS');
+    fireEvent.click(screen.getByRole('button', { name: 'Activar' }));
+    await waitFor(() => expect(called('activate_addon')).toEqual([{ id: 'sat-hibrido' }]));
+    fireEvent.click(screen.getByRole('button', { name: /Ver en GitHub/ }));
+    await waitFor(() => expect(called('open_addon_repo')).toEqual([{ id: 'sat-hibrido' }]));
   });
 
   it('la terminal no tumba la interfaz aunque scrollIntoView devuelva una Promise (WebView2 reciente)', async () => {

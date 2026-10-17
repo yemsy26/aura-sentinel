@@ -31,7 +31,8 @@ IGNORAR = {".git", ".venv", "venv", "env", "node_modules", "__pycache__", "dist"
 # Lo que el agente trata como código (revisión, mapa, puntos de restauración, protección contra reescrituras).
 CODIGO = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".html", ".htm", ".css", ".scss",
           ".java", ".kt", ".kts", ".gradle", ".rs", ".go", ".cs", ".fs", ".csproj", ".fsproj", ".sln", ".c", ".h",
-          ".cpp", ".hpp", ".bat", ".cmd", ".ps1", ".sh", ".sql", ".proto", ".json", ".yml", ".yaml", ".toml", ".xml"}
+          ".cpp", ".hpp", ".bat", ".cmd", ".ps1", ".sh", ".sql", ".proto", ".json", ".yml", ".yaml", ".toml", ".xml",
+          ".sol", ".dart"}
 NOMBRES_CODIGO = {"dockerfile", "makefile", "go.mod", ".dockerignore", ".gitignore", ".env.example", "procfile"}
 
 
@@ -71,12 +72,18 @@ class Informe:
         return txt if len(txt) <= maximo else txt[:maximo - 40] + "\n[... informe recortado]"
 
 
+def ignorado(p: Path, raiz: Path) -> bool:
+    """Carpetas que no son código del proyecto: entornos, compilados y dependencias (también lib/ de Foundry, con
+    forge-std y OpenZeppelin, que traen sus propios scripts y package.json, y sus cache/ y broadcast/)."""
+    partes = p.relative_to(raiz).parts[:-1]
+    if IGNORAR & set(partes):
+        return True
+    return any(parte in ("lib", "cache", "broadcast") and (raiz.joinpath(*partes[:i]) / "foundry.toml").exists()
+               for i, parte in enumerate(partes))
+
+
 def archivos(raiz: Path, *exts: str) -> list[Path]:
-    out = []
-    for p in raiz.rglob("*"):
-        if p.suffix.lower() in exts and p.is_file() and not (IGNORAR & set(p.relative_to(raiz).parts[:-1])):
-            out.append(p)
-    return sorted(out)
+    return sorted(p for p in raiz.rglob("*") if p.suffix.lower() in exts and p.is_file() and not ignorado(p, raiz))
 
 
 def _rel(p: Path, raiz: Path) -> str:
@@ -86,17 +93,30 @@ def _rel(p: Path, raiz: Path) -> str:
         return str(p)
 
 
+def correr(cmd, cwd, timeout, entorno=None) -> tuple[int | None, bytes]:
+    """(código o None si se pasó del tiempo, salida en bruto). Mata el árbol de procesos si se pasa del tiempo.
+
+    La salida va a un archivo temporal y no a una tubería: si el comando deja algo en segundo plano (`start /b`, un
+    servidor), ese proceso hereda la salida y con una tubería la espera no acabaría nunca."""
+    with tempfile.TemporaryFile() as archivo:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=entorno, stdin=subprocess.DEVNULL, stdout=archivo,
+                                stderr=subprocess.STDOUT, creationflags=SIN_VENTANA, shell=isinstance(cmd, str))
+        try:
+            codigo = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            codigo = None
+        archivo.seek(0)
+        return codigo, archivo.read()
+
+
 def _correr(cmd, cwd, timeout=60, entorno=None) -> tuple[int | None, str]:
-    """(código o None si timeout, salida). Mata el árbol de procesos si se pasa del tiempo."""
-    proc = subprocess.Popen(cmd, cwd=cwd, env=entorno, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, creationflags=SIN_VENTANA, shell=isinstance(cmd, str))
-    try:
-        salida, _ = proc.communicate(timeout=timeout)
-        codigo = proc.returncode
-    except subprocess.TimeoutExpired:
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
-        salida, _ = proc.communicate()
-        codigo = None
+    """(código o None si timeout, salida como texto)."""
+    codigo, salida = correr(cmd, cwd, timeout, entorno)
     try:
         texto = salida.decode("utf-8")
     except UnicodeDecodeError:
@@ -547,6 +567,17 @@ def navegador(raiz: Path, htmls: list[Path], inf: Informe) -> None:
 
 
 # ---------------------------------------------------------------- Java
+def _de_android(p: Path, base: Path) -> bool:
+    """¿El .java es de un proyecto Android o de la carpeta android/ de Flutter? (javac solo no tiene sus librerías)."""
+    for d in (a for a in p.parents if a == base or base in a.parents):
+        if (d / "pubspec.yaml").exists():
+            return True
+        for nombre in ("build.gradle", "build.gradle.kts"):
+            if (d / nombre).is_file() and "com.android" in (d / nombre).read_text("utf-8", "replace"):
+                return True
+    return False
+
+
 def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
     if (raiz / "pom.xml").exists():
         if shutil.which("mvn"):
@@ -644,6 +675,7 @@ def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maxim
         librerias_cdn(raiz, htmls, inf)
         if htmls:
             navegador(raiz, htmls, inf)
+    javas = [p for p in javas if not _de_android(p, base)]  # esos los compila Gradle (android_gradle, flutter)
     if javas:
         inf.tipos.append("java")
         java(raiz, javas, inf, segundos)

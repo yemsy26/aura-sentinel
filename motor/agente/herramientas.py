@@ -4,6 +4,7 @@ import html.parser
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -11,9 +12,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import conocimiento, matematicas, pantalla
+from . import android, conocimiento, matematicas, pantalla
 from .config import RAIZ_INSTALACION
-from .verificacion import chequeo_rapido, es_codigo, verificar
+from .verificacion import chequeo_rapido, correr, es_codigo, ignorado, verificar
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
           "what", "este", "esta", "esto", "hay", "hacer", "puedo", "cual", "cuál", "cómo", "qué", "use", "using"}
@@ -27,7 +28,15 @@ GIT_DESTRUCTIVO = (r"push|reset\s+--hard|clean\s+-\w*f|checkout\s+(-f\b|--\s|\.(
                    r"commit\b.*--amend|switch\b.*(\s-f\b|--discard-changes)")
 PELIGROSOS = re.compile(
     r"\b(format\s+[a-z]:|diskpart|shutdown|bcdedit|cipher\s+/w|takeown|icacls|reg\s+(delete|add)|"
-    rf"rd\s+/s|rmdir\s+/s|del\s+.*/[sq]|remove-item\b.*-recurse|rm\s+-r|git\s+({GIT_DESTRUCTIVO}))",
+    rf"rd\s+/s|rmdir\s+/s|del\s+.*/[sq]|remove-item\b.*-recurse|rm\s+-r|git\s+({GIT_DESTRUCTIVO}))|"
+    # bases de datos: borrar tablas, bases o todos los datos, y los volúmenes donde Docker los guarda
+    r"\bdrop\s+(table|database|schema|collection|view)\b|\btruncate\s+(table\s+)?[\w\"`]|\bdropdb\b|"
+    r"\.dropDatabase\(|\bflush(all|db)\b|\bdelete\s+from\s+[\w\"`.]+\s*(;|\"|'|$)|"
+    r"\bdocker\s+volume\s+(rm|prune)\b|\bdocker[\s-]+compose\s+down\b[^&|]*\s(-v|--volumes)\b|"
+    r"\bdocker\s+system\s+prune\b|"
+    # matar procesos por nombre cierra los de todo el equipo (consolas, el IDE...): los propios se paran con procesos
+    r"\btaskkill\b[^&|]*\s/IM\s|\bstop-process\b[^&|]*-name\b|\b(pkill|killall)\b|"
+    r"\bwmic\s+process\b.*\b(delete|terminate)\b",
     re.IGNORECASE)
 # Nunca se versionan (aunque falte .gitignore): estado del agente, entornos y cachés.
 NO_VERSIONAR = ["--", ".", ":(exclude).agente"] + [f":(exclude,glob)**/{d}/**" for d in (
@@ -36,7 +45,8 @@ INSTALACIONES = re.compile(  # descargan, instalan o compilan: con poco tiempo s
     r"\b(venv|virtualenv|pip3?(\.exe)?\s+install|npm\s+(install|ci|i)\b|npx\s|uv\s+(pip|venv|sync|add)|playwright\s+install|"
     r"cargo\s+(build|test|run|install|check|clippy|fetch|update|add)|rustup\s|go\s+(build|test|run|get|install|mod|vet)\b|"
     r"(docker|podman)\s+(build|pull|compose\s+(up|build|pull|run))|dotnet\s+(restore|build|test|publish|run|new|tool|add)|"
-    r"(mvnw?|gradlew?)(\.cmd|\.bat)?\s|(winget|choco|scoop)\s+install)",
+    r"(mvnw?|gradlew?)(\.cmd|\.bat)?\s|(winget|choco|scoop)\s+install|(flutter|dart)\s+(pub|create|build|test)\b|"
+    r"sdkmanager|anchor\s+(build|test|init)\b|forge\s+(init|install|build|test)\b)",
     re.IGNORECASE)
 # Salen del equipo (servidores, registros de imágenes, clústeres, nubes, paquetes publicados): siempre con permiso.
 EXTERNOS = re.compile(
@@ -51,6 +61,15 @@ HTTP = re.compile(r"\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b"
 HTTP_ESCRIBE = re.compile(r"(-X\s*|--request\s+|-Method\s+)(POST|PUT|PATCH|DELETE)\b|(^|\s)(-d|--data(-raw|-binary)?|--json|"
                           r"-F|--form|-T|--upload-file)\s", re.IGNORECASE)
 LOCALES = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"}
+# Aceptar licencias (SDK de Android) es decisión del usuario.
+LICENCIAS = re.compile(r"\bsdkmanager(\.bat)?\b.*--licenses|\bflutter\s+doctor\s+--android-licenses", re.IGNORECASE)
+LICENCIA = "aceptar licencias del SDK de Android (lo decide el usuario)"
+# Bases de datos en otra máquina (servidor, nube): conectarse a ellas cuenta como salir del equipo.
+CLIENTE_BD = re.compile(r"\b(psql|pg_dump|pg_dumpall|pg_restore|mysql|mysqldump|mariadb|mongosh|mongo|mongodump|"
+                        r"mongorestore|mongoimport|redis-cli|sqlcmd|cqlsh|clickhouse-client)(\.exe)?\b", re.IGNORECASE)
+HOST_BD = re.compile(r"(?:^|\s)(?:-h\s*|--host[=\s]+|-S\s+)([^\s\"',;]+)")
+URL_BD = re.compile(r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(\+srv)?|rediss?|sqlserver)://(?:[^@/\s]+@)?([^/:\s,?\"']+)",
+                    re.IGNORECASE)
 # Scripts del proyecto que lanza un comando: lo que llevan dentro también necesita permiso.
 SCRIPT = re.compile(r'(?:^|[\s&|;(])"?((?:[\w.:-]+[\\/])*[\w.-]+\.(?:bat|cmd|ps1|sh))"?(?=$|[\s&|;)])', re.IGNORECASE)
 COMENTARIO = re.compile(r"\s*(rem\b|::|#|echo\b|@echo\b|write-host\b)", re.IGNORECASE)
@@ -152,9 +171,23 @@ def transaccion(comando: str, raiz: Path | None = None) -> str | None:
     return None if red == "local" else CRIPTO + SUFIJO_RED[red]
 
 
+def _host_remoto(host: str) -> bool:
+    """Un nombre sin punto (servicio de Docker Compose, contenedor) o localhost es local; lo demás, otra máquina."""
+    host = host.lower().strip("[]")
+    if host.startswith(("/", "\\")):  # socket o tubería local (mysql -S /tmp/mysql.sock)
+        return False
+    return host not in LOCALES and not host.startswith("127.") and ("." in host or ":" in host)
+
+
+def bd_remota(comando: str) -> bool:
+    if any(m.group(1) or _host_remoto(m.group(2)) for m in URL_BD.finditer(comando)):  # mongodb+srv: siempre nube
+        return True
+    return bool(CLIENTE_BD.search(comando)) and any(_host_remoto(h) for h in HOST_BD.findall(comando))
+
+
 def externo(comando: str) -> bool:
     """¿El comando actúa fuera del equipo? Las peticiones HTTP que escriben solo cuentan si no van a localhost."""
-    if EXTERNOS.search(comando):
+    if EXTERNOS.search(comando) or bd_remota(comando):
         return True
     if HTTP.search(comando) and HTTP_ESCRIBE.search(comando):
         return any(h.lower() not in LOCALES for h in re.findall(r"https?://([^/\s:'\"]+)", comando))
@@ -175,6 +208,8 @@ PATRONES_MAPA = {
     ".kt": r"(?:^|\s)(?:class|interface|object|fun)\s+(\w+)", ".cs": r"(?:^|\s)(?:class|interface|record|struct|enum)\s+(\w+)",
     ".rs": r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|mod)\s+(\w+)",
     ".go": r"^(?:func\s+(?:\([^)]*\)\s*)?|type\s+)(\w+)",
+    ".sol": r"^\s*(?:abstract\s+)?(?:contract|interface|library|function|event|error)\s+(\w+)",
+    ".dart": r"^\s*(?:abstract\s+)?(?:class|mixin|enum|extension)\s+(\w+)",
 }
 
 
@@ -379,7 +414,7 @@ class Herramientas:
         for f in archivos:
             if len(hallados) >= 50:
                 break
-            if not f.is_file() or any(x in IGNORAR for x in f.relative_to(self.raiz).parts) or f.stat().st_size > 1_000_000:
+            if not f.is_file() or ignorado(f, self.raiz) or f.stat().st_size > 1_000_000:
                 continue
             try:
                 for n, linea in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
@@ -459,7 +494,49 @@ class Herramientas:
         if venv.is_dir():  # el venv del proyecto tiene prioridad
             env["PATH"] = f"{venv}{os.pathsep}{env.get('PATH', '')}"
             env["VIRTUAL_ENV"] = str(venv.parent)
-        return env
+        return android.con_android(env)
+
+    def abrir_android_studio(self, ruta: str = ".") -> str:
+        """Abre el proyecto en Android Studio, que sincroniza Gradle e instala lo que falte del SDK."""
+        exe = android.android_studio()
+        if not exe:
+            return ("No encuentro Android Studio. Pide al usuario que lo instale (https://developer.android.com/studio) "
+                    "y lo abra una vez.")
+        p = self.ruta(ruta)
+        subprocess.Popen([str(exe), str(p)], cwd=p if p.is_dir() else p.parent, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        self._anotar(f"abrir_android_studio {self.rel(p)}", "abierto", "")
+        return (f"Android Studio se está abriendo con {self.rel(p)}: sincronizará Gradle y ofrecerá instalar los "
+                "componentes del SDK que falten (las licencias y descargas las acepta el usuario en su ventana). "
+                "Cuando termine, compila con verificar.")
+
+    def experimentar(self, codigo: str, lenguaje: str = "python", segundos: int = 60) -> str:
+        """Prueba mínima en .agente/experimento (fuera del proyecto entregable) para comprobar una API o una idea."""
+        extension = {"python": ".py", "node": ".js", "javascript": ".js", "powershell": ".ps1", "bat": ".bat",
+                     "cmd": ".bat"}.get(lenguaje.strip().lower())
+        if not extension:
+            return "Lenguajes de experimentar: python, node, powershell, bat. Para otros, usa un proyecto temporal."
+        carpeta = self.dir_agente / "experimento"
+        shutil.rmtree(carpeta, ignore_errors=True)
+        carpeta.mkdir(parents=True)
+        archivo = carpeta / f"prueba{extension}"
+        archivo.write_text(codigo, encoding="utf-8")
+        if extension in (".ps1", ".bat"):
+            for linea in (l.strip() for l in codigo.splitlines()):
+                if linea and not COMENTARIO.match(linea) and (bloqueo := self._permitido(linea)):
+                    return bloqueo
+        orden = {".py": f'"{self.python_proyecto()}" prueba.py', ".js": "node prueba.js",
+                 ".ps1": "powershell -NoProfile -ExecutionPolicy Bypass -File prueba.ps1", ".bat": "cmd /c prueba.bat"}
+        limite = max(5, min(int(segundos or 60), 300))
+        codigo, salida = correr(orden[extension], carpeta, limite, self._entorno())
+        if codigo is None:
+            self._anotar(f"experimentar {lenguaje}", f"TIMEOUT {limite}s", decodificar(salida))
+            return f"TIMEOUT tras {limite} s (¿espera datos o no termina?):\n{recortar(decodificar(salida), 2000)}"
+        texto = decodificar(salida).strip() or "(sin salida)"
+        self._anotar(f"experimentar {lenguaje}", f"exit={codigo}", texto)
+        return (f"exit={codigo} (experimento en .agente\\experimento, fuera del proyecto)\n"
+                f"{recortar(texto, self.max_chars)}")
 
     def _scripts(self, comando: str) -> list[tuple[str, str]]:
         """(ruta relativa, línea) de los scripts del proyecto que lanza el comando, sin comentarios ni echo."""
@@ -483,8 +560,8 @@ class Herramientas:
     def _permitido(self, comando: str) -> str | None:
         motivo, detalle = None, comando
         for origen, linea in [("", comando), *self._scripts(comando)]:
-            if (cripto := transaccion(linea, self.raiz)) or externo(linea):
-                motivo = cripto or EXTERNO
+            if (cripto := transaccion(linea, self.raiz)) or externo(linea) or LICENCIAS.search(linea):
+                motivo = cripto or (LICENCIA if LICENCIAS.search(linea) else EXTERNO)
                 detalle = linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
                 break
             if motivo is None and PELIGROSOS.search(linea):
@@ -497,6 +574,9 @@ class Herramientas:
             return ("BLOQUEADO: enviar transacciones, desplegar o cambiar la red de una blockchain necesita el permiso "
                     "del usuario y no lo dio. Trabaja con un nodo local (anvil, solana-test-validator) y la red "
                     "explícita, o explícale qué quieres hacer, en qué red y con qué cartera.")
+        if motivo == LICENCIA:
+            return ("BLOQUEADO: aceptar licencias lo decide el usuario. Pídele que las acepte en Android Studio (SDK "
+                    "Manager) y vuelve a verificar.")
         if motivo == EXTERNO:
             return ("BLOQUEADO: conectarse o publicar fuera del equipo necesita el permiso del usuario y no lo dio. "
                     "Explícale qué quieres hacer y por qué, o pídele que lo haga él.")
@@ -517,18 +597,11 @@ class Herramientas:
         if INSTALACIONES.search(comando):
             limite = max(limite, MIN_INSTALACION)
         t0 = time.time()
-        proc = subprocess.Popen(comando, shell=True, cwd=self.raiz, env=self._entorno(), stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
-        try:
-            salida, _ = proc.communicate(timeout=limite)
-        except subprocess.TimeoutExpired:
-            matar_arbol(proc.pid)
-            salida, _ = proc.communicate()
+        codigo, salida = correr(comando, self.raiz, limite, self._entorno())
+        if codigo is None:
             self._anotar(comando, f"TIMEOUT {limite}s", decodificar(salida))
             return (f"TIMEOUT tras {limite}s (proceso detenido). Si es un servidor o programa que no termina, usa "
                     f"fondo=true. Salida parcial:\n{recortar(decodificar(salida), self.max_chars)}")
-        codigo = proc.returncode
         self._anotar(comando, f"exit={codigo}", decodificar(salida))
         if codigo == 0:
             self.paso_prueba = self.paso
@@ -591,6 +664,7 @@ class Herramientas:
         if isinstance(comandos, str):
             comandos = [c for c in comandos.splitlines() if c.strip()]
         lineas = ["@echo off", "setlocal EnableExtensions", "chcp 65001 >nul", 'cd /d "%~dp0"',
+                  'set "PYTHONUTF8=1"',  # tildes y símbolos sin error aunque la salida vaya a un archivo o una tubería
                   f"title {Path(nombre).stem}", 'set "RC=0"']
         if descripcion:
             lineas.append(f"echo {descripcion}")
@@ -751,7 +825,7 @@ class Herramientas:
 
     def _fuentes(self) -> list[Path]:
         return [p for p in self.raiz.rglob("*") if p.is_file() and (es_codigo(p) or p.suffix.lower() in (".txt", ".md", ".cfg", ".ini"))
-                and not (IGNORAR & set(p.relative_to(self.raiz).parts[:-1])) and p.stat().st_size < 500_000]
+                and not ignorado(p, self.raiz) and p.stat().st_size < 500_000]
 
     @property
     def archivo_checkpoints(self) -> Path:
@@ -839,7 +913,9 @@ class Herramientas:
     def resolver_sat(self, archivo: str, segundos: int = 60, modelo: str = "") -> str:
         return matematicas.resolver_sat(self, archivo, segundos, modelo)
 
-    def aprender(self, leccion: str) -> str:
+    def aprender(self, leccion: str, tema: str = "") -> str:
+        if tema.strip():
+            return conocimiento.aprender_tema(tema, leccion)
         leccion = " ".join(leccion.split())[:220]
         if len(leccion) < 15:
             return "La lección debe ser una frase concreta (qué pasó y cómo evitarlo)."
@@ -968,11 +1044,14 @@ ESQUEMAS = [
                        "modelo comprobado (en el .modelo) o INSATISFACIBLE (no hay solución).",
        {"archivo": S, "segundos": I, "modelo": S}, ["archivo"]),
     _f("guia", "Buenas prácticas ACTUALES y cómo verificar para: python, pygame, html-juego, web, api, java, rust, go, "
-               "node, dotnet, docker, despliegue, matematicas, tests, bat. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
+               "node, dotnet, docker, despliegue, android, flutter, blockchain, evm, solana, mev, bases-de-datos, "
+               "matematicas, tests, bat. Incluye lo aprendido en tareas anteriores. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
     _f("version", "Última versión real de un paquete o imagen (evita librerías obsoletas): pypi (y si hay wheel para tu "
                   "Python), npm, maven, crates (Rust), go (ruta del módulo, p. ej. github.com/gin-gonic/gin), nuget "
-                  "(.NET) o docker (imagen de Docker Hub, p. ej. python o node:alpine).",
-       {"paquete": S, "ecosistema": {"type": "string", "enum": ["pypi", "npm", "maven", "crates", "go", "nuget", "docker"]}},
+                  "(.NET), docker (imagen de Docker Hub, p. ej. python o node:alpine), google (Maven de Google para Android, "
+                  "grupo:artefacto, p. ej. com.android.tools.build:gradle) o pub (Dart/Flutter).",
+       {"paquete": S, "ecosistema": {"type": "string", "enum": ["pypi", "npm", "maven", "crates", "go", "nuget", "docker",
+                                                                 "google", "pub"]}},
        ["paquete"]),
     _f("verificar", "Control de calidad de TODO el proyecto: errores, código que nunca se usa (funciones sin conectar), "
                     "tests y ejecución real (Python y pygame sin ventana, web en navegador, Java, Rust, Go, .NET, "
@@ -987,8 +1066,15 @@ ESQUEMAS = [
                   "no funciona. 'enfoque' = qué mirar con más cuidado.", {"requisitos": S, "enfoque": S}, []),
     _f("restaurar", "Vuelve a la última versión que pasó verificar sin errores (checkpoint). Úsalo si tus cambios "
                     "rompieron algo que funcionaba y no consigues arreglarlo.", {"checkpoint": I}, []),
-    _f("aprender", "Guarda una lección de una frase tras resolver un error no obvio, para no repetirlo en el futuro.",
-       {"leccion": S}, ["leccion"]),
+    _f("aprender", "Guarda lo aprendido para futuras tareas: una lección de una frase tras resolver un error no obvio, "
+                   "o con 'tema' (android, evm, docker...) una receta COMPROBADA que se añadirá a guia(tema).",
+       {"leccion": S, "tema": S}, ["leccion"]),
+    _f("experimentar", "Prueba mínima fuera del proyecto (.agente/experimento) para comprobar una API, una librería o "
+                       "una idea antes de usarla: python, node, powershell o bat. Si funciona, aplícalo y guárdalo con "
+                       "aprender(leccion, tema).", {"codigo": S, "lenguaje": S, "segundos": I}, ["codigo"]),
+    _f("abrir_android_studio", "Abre un proyecto Android o Flutter en Android Studio para que sincronice Gradle e "
+                               "instale los componentes del SDK que falten. Úsalo al crear el proyecto o si verificar "
+                               "dice que falta el SDK, una plataforma o el wrapper.", {"ruta": S}, []),
     _f("git", "Git del proyecto (local, nunca push): estado, diff (cambios sin commit), log, commit (añade todo y "
               "confirma; 'mensaje' obligatorio), rama (crea o cambia a 'nombre'), otro ('comando' tras 'git'; lo "
               "destructivo pide confirmación). 'ruta' limita a un archivo o carpeta.",
@@ -1010,7 +1096,8 @@ def despachar(h: Herramientas, nombre: str, args: dict) -> str:
              "calcular": h.calcular, "resolver_sat": h.resolver_sat,
              "guia": h.guia, "version": h.version, "verificar": h.verificar_cmd, "revisar": h.revisar_cmd,
              "aprender": h.aprender, "restaurar": h.restaurar, "ver_pantalla": h.ver_pantalla, "git": h.git,
-             "preguntar": h.preguntar}
+             "preguntar": h.preguntar, "experimentar": h.experimentar,
+             "abrir_android_studio": h.abrir_android_studio}
     if nombre not in tabla:
         return f"Herramienta desconocida: {nombre}. Disponibles: {', '.join(tabla)}, terminar."
     try:

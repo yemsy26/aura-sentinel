@@ -107,15 +107,23 @@ Windows puede liberar esa RAM si otro programa la necesita, en vez de bloquear u
 `plan`, `paso_hecho`, `listar`, `leer`, `buscar`, `escribir`, `editar`, `ejecutar` (con `fondo=true` para servidores;
 crear un venv o `pip`/`npm`/`uv install` tiene siempre al menos 300 s para no dejar el entorno a medias),
 `procesos`, `crear_bat`, `web_buscar` (DuckDuckGo, Bing de respaldo), `web_leer`, `investigar`, `guia`, `version`,
-`calcular`, `resolver_sat`, `verificar`, `revisar`, `aprender`, `preguntar`, `terminar`.
+`calcular`, `resolver_sat`, `experimentar`, `abrir_android_studio`, `verificar`, `revisar`, `aprender`, `preguntar`,
+`terminar`.
 `calcular(codigo)` hace cálculo exacto con SymPy (ecuaciones, derivadas, integrales, límites, matrices, primos, decimales
 con la precisión pedida) en un proceso aparte y con tiempo límite. Solo calcula: rechaza importar módulos del sistema,
 abrir archivos, `eval`/`exec` y atributos internos.
-`resolver_sat(archivo)` resuelve una fórmula DIMACS CNF con `bin\hunt.exe` (motor
-[Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust): CDCL, capa de paridad GF(2), ruptura de simetrías y
+`resolver_sat(archivo)` resuelve una fórmula DIMACS CNF con el motor complementario
+[Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust) (CDCL, capa de paridad GF(2), ruptura de simetrías y
 varios hilos) y comprueba el modelo contra cada cláusula antes de darlo por bueno. Para sudokus, horarios, coloreado o
 asignaciones, el agente codifica el problema con un script, lo resuelve y comprueba la solución decodificada (guía
-`matematicas`). Origen y SHA-256 del ejecutable en `bin\LEEME.md`.
+`matematicas`). Se activa aparte: `.venv\Scripts\python.exe -m agente.complementos activar sat-hibrido` (descarga su
+versión publicada con la SHA-256 comprobada o lo compila desde su repositorio); sin activarlo, el agente usa
+python-sat en el proyecto.
+`experimentar(codigo, lenguaje)` prueba una API o una idea en `.agente\experimento` (python, node, powershell o bat),
+sin dejar archivos en el proyecto. `aprender(leccion, tema)` guarda la receta que funcionó en `aprendido\<tema>.md` y
+`guia(tema)` la añade a la guía del tema en las tareas siguientes.
+`abrir_android_studio(ruta)` abre el proyecto en Android Studio para que sincronice Gradle e instale lo que falte del
+SDK (las licencias las acepta el usuario).
 `preguntar(pregunta, opciones)` pide un dato imprescindible o una decisión al usuario (2-5 opciones y respuesta libre)
 y espera la respuesta; como mucho 3 veces por tarea. Sin usuario (MCP, `--tarea`), el agente decide y lo explica.
 `ver_pantalla` captura la página (`.html` o `http://localhost:PUERTO`) o el juego pygame y señala texto cortado,
@@ -147,6 +155,13 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
    - **Go**: `go vet ./...` (compila y detecta fallos típicos), `go test ./...` y aviso si falta `gofmt`.
    - **.NET**: `dotnet build` con archivo:línea de cada error y `dotnet test` en los proyectos de pruebas.
    - **Node/TypeScript**: dependencias instaladas, `tsc --noEmit`, `npm run build` si existe y `npm test`.
+   - **Solidity**: `forge build` y `forge test` (foundry.toml) o `npx hardhat compile` y `test`, con archivo:línea de
+     cada error y el nombre de cada test que falla. **Anchor**: `anchor build` (avisa si la versión de Anchor no casa
+     con la CLI de Solana) y `anchor test` solo si `Anchor.toml` apunta a Localnet.
+   - **Android**: `gradlew.bat assembleDebug` y `testDebugUnitTest`, con errores de Kotlin, Java y recursos con
+     archivo:línea y explicación de los fallos típicos (SDK, licencias, plataforma no instalada, Java, Gradle,
+     repositorios). Si falta el wrapper, da el comando con el Gradle que ya hay en el equipo.
+   - **Flutter/Dart**: `flutter pub get`, `flutter analyze`, `flutter test` y `flutter build apk --debug`.
    - **Docker**: revisa el Dockerfile (versión fija de la imagen, `COPY` de archivos que no existen, credenciales en
      `ENV`/`ARG`, usuario sin privilegios, `.dockerignore`), valida `compose.yaml` y, con Docker en marcha, construye
      la imagen. Con Docker apagado lo dice para que el agente se lo pida al usuario.
@@ -167,13 +182,17 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
 ## Orientación actualizada e internet
 
 - `guia(tema)`: prácticas actuales y cómo verificar (python, pygame, html-juego, web, api, java, rust, go, node,
-  dotnet, docker, despliegue, matematicas, tests, bat). Son archivos en `agente\guias\*.md`: puedes editarlos o añadir los tuyos.
+  dotnet, docker, despliegue, android, flutter, blockchain, evm, solana, mev, bases-de-datos, matematicas, tests, bat),
+  más lo que el agente aprendió de ese tema. Son archivos en `agente\guias\*.md`: puedes editarlos o añadir los tuyos.
 - El agente conoce el entorno al empezar: versiones de Python, Node, Java, Rust, Go, .NET, si Docker está en marcha,
-  Podman, OpenSSH, kubectl, Foundry, Anchor y la red por defecto de la CLI de Solana (si es mainnet, se le avisa de
-  que ponga siempre `--url`). Las compilaciones e instalaciones largas (`cargo`, `go`, `docker build`, `dotnet`,
+  Podman, OpenSSH, kubectl, Foundry, Anchor, la red por defecto de la CLI de Solana (si es mainnet, se le avisa de
+  que ponga siempre `--url`), el SDK de Android (plataformas y emuladores), Android Studio, el Gradle ya descargado,
+  Flutter, los clientes de bases de datos y si el resolvedor SAT está activado. Los comandos reciben `ANDROID_HOME` y
+  las herramientas del SDK (`adb`, `emulator`, `sdkmanager`) aunque no estén en el PATH. Las compilaciones e instalaciones largas (`cargo`, `go`, `docker build`, `dotnet`,
   Maven/Gradle, `npm install`...) tienen al menos 5 minutos antes de cortarse.
 - `version(paquete, ecosistema)`: versión real en PyPI, npm, Maven, crates.io (Rust), el proxy de Go (avisa si el
-  módulo está obsoleto), NuGet (.NET) y Docker Hub (etiquetas para `FROM`, sin `latest`); en PyPI, si hay wheel para tu Python (p. ej. `pygame` → usa `pygame-ce`
+  módulo está obsoleto), NuGet (.NET), Docker Hub (etiquetas para `FROM`, sin `latest`), el Maven de Google (Android:
+  plugin de Android, AndroidX, Compose) y pub.dev (Dart/Flutter); en PyPI, si hay wheel para tu Python (p. ej. `pygame` → usa `pygame-ce`
   porque `pygame` no tiene wheel para Python 3.14).
 - `investigar(pregunta)`: busca, lee las mejores páginas y devuelve solo los párrafos útiles con su fuente, en un paso.
 
@@ -181,9 +200,11 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
 
 - En la consola del agente: `/regla nunca uses emojis en los textos del juego` → se guarda en `reglas.md` y se aplica
   ya y en todas las tareas (prioridad máxima). `/reglas` las muestra. También puedes editar `reglas.md` a mano.
-- El agente guarda sus propias lecciones con `aprender` en `lecciones.md` (máx. 40, las más recientes).
+- El agente guarda sus propias lecciones con `aprender` en `lecciones.md` (máx. 40, las más recientes) y las recetas
+  de un tema en `aprendido\<tema>.md` (máx. 60 por tema).
 - Por proyecto: crea `AGENTE.md` en la carpeta del proyecto con instrucciones específicas.
-Comandos destructivos (`rmdir /s`, `del /s`, `format`, `reg delete`...) piden confirmación. También lo que sale del
+Comandos destructivos (`rmdir /s`, `del /s`, `format`, `reg delete`, matar procesos por nombre con `taskkill /IM`,
+`Stop-Process -Name` o `pkill`...) piden confirmación. También lo que sale del
 equipo: `ssh`, `scp`, `sftp`, `rsync`, `git push`, `docker push`/`login`, `kubectl apply`/`delete`, `helm`,
 `terraform apply`, publicar paquetes (`npm`/`cargo publish`), nubes (`az`, `aws`, `gcloud`...) y peticiones
 HTTP que escriben (`curl -X POST`, `-d`...) a algo que no sea `localhost`. Sin tu permiso, se bloquea.
@@ -194,6 +215,10 @@ En blockchain, enviar transacciones o desplegar (`solana transfer`, `solana prog
 `defaultNetwork` de Hardhat). Sin red en el comando no se supone local, porque la CLI de Solana puede apuntar a mainnet:
 la ventana de permiso dice si es la RED PRINCIPAL o una red de prueba. También se revisan los scripts de
 `package.json` que lanza `npm run`.
+Bases de datos: conectarse a una de otra máquina (`psql -h`, `mysql -h`, `mongosh`, `redis-cli -h`, `sqlcmd -S` o una
+URL `postgres://`, `mysql://`, `mongodb+srv://`... que no sea local ni un servicio de Docker Compose) cuenta como salir
+del equipo; `DROP`, `TRUNCATE`, `DELETE` sin `WHERE`, `FLUSHALL`, `docker compose down -v` y `docker volume rm` piden
+confirmación. Aceptar las licencias del SDK de Android (`sdkmanager --licenses`) lo decide el usuario.
 **`ejecutar` no es un sandbox**: corre con tus permisos. Úsalo en carpetas de proyecto.
 
 ## Usarlo desde Bionic / LM Studio (MCP)

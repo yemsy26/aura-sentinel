@@ -5,6 +5,30 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.6.0] — 2026-10-17 (Motores complementarios, blockchain, Android, bases de datos y aprender)
+
+- **Motores complementarios:** los cerebros opcionales del autor se activan desde Configuración → Motor → Motores
+  complementarios (o `python -m agente.complementos`), con enlace a su repositorio. El primero es Sat-hibrido-rust
+  (`resolver_sat`), que usa Chronos-VFS. Al activarlo se descarga su versión publicada con la SHA-256 comprobada o se
+  compila desde su repositorio, y se comprueba con dos fórmulas conocidas. `hunt.exe` ya no va dentro de Aura.
+- **Blockchain:** guías `blockchain`, `evm` (Solidity con Foundry o Hardhat, varias redes EVM), `solana` (Anchor) y
+  `mev` (arbitraje, liquidaciones y backrun con simulación en fork local). `verificar` compila y prueba con Foundry,
+  Hardhat y Anchor (archivo:línea de cada error, tests que fallan, aviso de versiones de Anchor y Solana que no casan;
+  `anchor test` solo contra Localnet).
+- **Android y Flutter:** detecta el SDK, Android Studio, el Gradle descargado y los emuladores; los comandos reciben
+  `ANDROID_HOME` y las herramientas del SDK. `verificar` ejecuta `assembleDebug` y las pruebas unitarias (o
+  `flutter analyze`, `flutter test` y `flutter build apk`) y explica los fallos típicos. Nueva herramienta
+  `abrir_android_studio` (si hay varias instalaciones, elige una completa); aceptar licencias pide permiso. `version` consulta el Maven de Google y pub.dev.
+- **Bases de datos:** guía `bases-de-datos` (Docker, migraciones, varias bases); conectarse a una base de otra máquina
+  pide permiso y borrar datos (`DROP`, `TRUNCATE`, `DELETE` sin `WHERE`, `down -v`...) pide confirmación.
+- **Seguridad:** matar procesos por nombre (`taskkill /IM`, `Stop-Process -Name`, `pkill`, `killall`) pide
+  confirmación: cierra los de todo el equipo (consolas, el IDE). Lo que lanza el agente se para con `procesos`.
+- **Arreglos que destaparon las misiones reales:** un `.bat` que deja un proceso en segundo plano (`start /b`, un nodo local) ya no deja colgado al agente: la salida de los comandos va a un archivo temporal y no a una tubería. La verificación ignora las dependencias de Foundry (`lib/`, `cache/`, `broadcast/`) y no compila con javac el Java de los proyectos Android ni el que genera Flutter. Los `.bat` que crea el agente fijan `PYTHONUTF8=1`.
+- **Aprender:** nueva herramienta `experimentar` (prueba mínima fuera del proyecto) y `aprender(leccion, tema)` guarda
+  recetas comprobadas que `guia(tema)` muestra en las tareas siguientes.
+
+---
+
 ## [4.5.0] — 2026-10-17 (Permiso para blockchain y matemáticas exactas)
 
 - **Seguridad:** enviar transacciones o desplegar en una blockchain (`solana transfer`/`program deploy`, `spl-token`,

@@ -1,0 +1,10 @@
+# Solana: programas en Rust con Anchor
+- Proyecto: `anchor init NOMBRE` (programs/NOMBRE/src/lib.rs, tests/ en TypeScript, Anchor.toml). En Anchor.toml deja `[provider] cluster = "Localnet"` para desarrollar.
+- Versiones: Anchor y la CLI de Solana deben ser compatibles (Anchor 0.30 con Solana 1.18; Anchor 0.31 o posterior con Solana/Agave 2.x). Compruébalo con `anchor --version` y `solana --version`; si no casan, `anchor build` falla al compilar: díselo al usuario (avm instala otra versión de Anchor).
+- Programa: `declare_id!`, `#[program] pub mod nombre { pub fn iniciar(ctx: Context<Iniciar>, ...) -> Result<()> }`, cuentas con `#[derive(Accounts)]`: `#[account(init, payer = usuario, space = 8 + Estado::INIT_SPACE, seeds = [b"estado", usuario.key().as_ref()], bump)]`, `Signer<'info>`, `Program<'info, System>`.
+- Seguridad: cada cuenta con su restricción (`has_one`, `seeds`/`bump`, `constraint = ...`), firmantes como `Signer`, aritmética con `checked_add`/`checked_sub` y errores con `#[error_code]`. Nunca confíes en una cuenta que no compruebas.
+- Compilar: `anchor build` (genera el IDL en target/idl). Probar: `anchor test` arranca un validador local, despliega y ejecuta tests/ (`--skip-local-validator` si ya tienes uno con `solana-test-validator`). Tests unitarios de Rust: `cargo test` en programs/NOMBRE.
+- Cliente TypeScript: `@coral-xyz/anchor` (Program con el IDL) y `@solana/web3.js`; PDAs con `PublicKey.findProgramAddressSync`. Versiones con `version(..., "npm")`.
+- CLI siempre con red explícita: `solana balance --url localhost`, `solana airdrop 2 --url localhost`, `solana program show ID -ul`. Devnet (`-ud`) y mainnet piden permiso para enviar o desplegar.
+- Cartera de desarrollo: `solana-keygen new -o .agente\localnet.json --no-bip39-passphrase --silent` y `--keypair .agente\localnet.json` en los comandos locales; no uses ni leas la cartera por defecto del usuario.
+- Tokens SPL: `spl-token create-token --url localhost`; en programas, `anchor_spl::token` / `token_interface` para Token-2022.

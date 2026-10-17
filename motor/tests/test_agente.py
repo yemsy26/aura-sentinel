@@ -62,12 +62,11 @@ class TestHerramientas(unittest.TestCase):
         for c in ("python main.py", "npm run build", "npm init -y", "echo pipeline"):
             self.assertFalse(INSTALACIONES.search(c), c)
         with mock.patch("agente.herramientas.subprocess.Popen") as popen:
-            popen.return_value.communicate.return_value = (b"", None)
-            popen.return_value.returncode = 0
+            popen.return_value.wait.return_value = 0
             self.h.ejecutar("python -m pip install pygame", segundos=10)
-            self.assertEqual(popen.return_value.communicate.call_args.kwargs["timeout"], MIN_INSTALACION)
+            self.assertEqual(popen.return_value.wait.call_args.kwargs["timeout"], MIN_INSTALACION)
             self.h.ejecutar("python main.py", segundos=10)
-            self.assertEqual(popen.return_value.communicate.call_args.kwargs["timeout"], 10)
+            self.assertEqual(popen.return_value.wait.call_args.kwargs["timeout"], 10)
 
     def test_ejecutar_peligroso_bloqueado(self):
         self.assertIn("BLOQUEADO", self.h.ejecutar("rmdir /s /q C:\\algo"))

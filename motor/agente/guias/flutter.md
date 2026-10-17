@@ -1,0 +1,11 @@
+# Flutter / Dart
+- Crear: `flutter create --org com.ejemplo --project-name mi_app mi_app` (o `flutter create --org com.ejemplo .` en la carpeta del proyecto). Plataformas concretas: `--platforms android,windows,web`.
+- Paquetes: `version("nombre", "pub")` y `flutter pub add nombre`. Estructura: `lib/main.dart` mínimo, el resto en `lib/src/` (modelos, servicios, pantallas), pruebas en `test/`.
+- Estado: `setState` para lo local; `provider` o `riverpod` para estado compartido. Llamadas de red con `http` o `dio`, en servicios separados de los widgets.
+- Pruebas: unitarias con `test()` y de widgets con `testWidgets` (`await tester.pumpWidget(...)`, `find.text`, `await tester.tap(...)`, `await tester.pump()`).
+- `verificar` hace `flutter pub get` si falta, `flutter analyze` (errores con archivo:línea), `flutter test` y, si hay carpeta android y SDK, `flutter build apk --debug` (la primera vez tarda: descarga Gradle y el plugin de Android).
+- Android: tras crear el proyecto, `abrir_android_studio(".")` para que instale lo que falte del SDK. El APK queda en `build\app\outputs\flutter-apk\app-debug.apk`; instálalo con `adb install -r` o `flutter install -d ID` (`flutter devices` lista los dispositivos).
+- Windows: `flutter build windows` necesita Visual Studio con «Desarrollo para el escritorio con C++». Web: `flutter build web` (sale en build\web).
+- No edites ni borres lo que genera Flutter (`android\app\src\main\java\...\GeneratedPluginRegistrant.java`, `gradlew.bat`, `.dart_tool`): se regenera al compilar. Tu código va en `lib/` y `test/`.
+- No uses `flutter run` para comprobar (es interactivo): compila y ejecuta el resultado, o usa las pruebas.
+- Versión firmada: `key.properties` y el keystore fuera de git.
