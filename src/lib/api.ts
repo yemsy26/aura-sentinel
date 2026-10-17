@@ -15,7 +15,7 @@ export interface SystemStats {
 export interface SearchHit { path: string; line: number; text: string }
 export interface CommandOutput { code: number; output: string; ms: number }
 export interface AgentProcess { id: number; vivo: boolean; comando: string }
-export interface AgentSettings { carpeta: string; instalado: boolean }
+export interface AgentSettings { carpeta: string; instalado: boolean; motor: boolean }
 export interface UserProfile {
   displayName?: string | null; city?: string | null; homeCountry?: string | null; preferredLanguage?: string | null;
   timeZone?: string | null; responseStyle?: string | null; autoRememberFacts: boolean;
@@ -59,6 +59,7 @@ export const api = {
   models: () => invoke<string[]>('get_models'),
   agentSettings: () => invoke<AgentSettings>('get_agent_settings'),
   saveAgentSettings: (carpeta: string) => invoke<AgentSettings>('save_agent_settings', { carpeta }),
+  installEngine: () => invoke<string>('install_engine'),
   rules: () => invoke<{ reglas: string; lecciones: string }>('get_agent_rules'),
   pendingMission: (workspacePath: string) => invoke<PendingMission | null>('get_pending_mission', { workspacePath }),
   dismissPending: (workspacePath: string) => invoke<void>('dismiss_pending_mission', { workspacePath }),

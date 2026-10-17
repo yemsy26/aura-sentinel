@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AuraSentinel",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "identifier": "com.yemsy.aurasentinel",
   "build": {
     "frontendDist": "../dist",
@@ -38,6 +38,27 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "resources": {
+      "../motor/agente/*.py": "motor/agente/",
+      "../motor/agente/guias/*.md": "motor/agente/guias/",
+      "../motor/agente/sondas/*.py": "motor/agente/sondas/",
+      "../motor/tests/*.py": "motor/tests/",
+      "../motor/agente.json": "motor/agente.json",
+      "../motor/agente_mcp.py": "motor/agente_mcp.py",
+      "../motor/PROMPT_SISTEMA_MCP.txt": "motor/PROMPT_SISTEMA_MCP.txt",
+      "../motor/LEEME.md": "motor/LEEME.md",
+      "../motor/agente.bat": "motor/agente.bat",
+      "../motor/cargar_modelo.bat": "motor/cargar_modelo.bat",
+      "../motor/descargar_modelo.bat": "motor/descargar_modelo.bat",
+      "../motor/instalar.bat": "motor/instalar.bat",
+      "../motor/probar.bat": "motor/probar.bat",
+      "../motor/vision.bat": "motor/vision.bat"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
     }
   }
 }

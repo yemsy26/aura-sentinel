@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Icono de Aura Sentinel: el cubo hexagonal del logotipo con el núcleo del agente. Fuente de `npx tauri icon`. -->
+  <defs>
+    <linearGradient id="fondo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1C2230"/>
+      <stop offset="1" stop-color="#0A0C11"/>
+    </linearGradient>
+    <linearGradient id="trazo" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#8BE3D7"/>
+      <stop offset="1" stop-color="#25A493"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3FC1B0" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#3FC1B0" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#3FC1B0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="24" y="24" width="976" height="976" rx="224" fill="url(#fondo)"/>
+  <rect x="24" y="24" width="976" height="976" rx="224" fill="none" stroke="#2E4B4A" stroke-width="8"/>
+  <circle cx="512" cy="528" r="420" fill="url(#halo)"/>
+  <path d="M512 176 L803 344 L803 680 L512 848 L221 680 L221 344 Z" fill="none" stroke="url(#trazo)"
+        stroke-width="76" stroke-linejoin="round"/>
+  <path d="M512 520 L512 780 M512 520 L284 388 M512 520 L740 388" fill="none" stroke="url(#trazo)"
+        stroke-width="64" stroke-linecap="round"/>
+  <circle cx="512" cy="520" r="74" fill="#0E1015"/>
+  <circle cx="512" cy="520" r="50" fill="#E9FFFB"/>
+</svg>

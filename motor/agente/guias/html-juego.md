@@ -1,0 +1,12 @@
+# Juegos HTML5 / Canvas (2026)
+- Archivos: `index.html`, `style.css`, `js/main.js` (+ `js/entidades.js` etc.). Con varios archivos JS usa módulos: `<script type="module" src="js/main.js"></script>` y `import`/`export`. Los módulos NO funcionan abriendo el archivo con doble clic (file://): sirve la carpeta con `python -m http.server 8000`.
+- `<canvas id="juego" width="800" height="600">` y en JS `const ctx = canvas.getContext("2d")`. Comprueba que cada `getElementById("x")` tenga un elemento `id="x"` en el HTML.
+- Bucle: `function bucle(t) { const dt = (t - ultimo) / 1000; ultimo = t; actualizar(dt); dibujar(); requestAnimationFrame(bucle); }` e inicia con `requestAnimationFrame(bucle)`. Nunca `setInterval` para el bucle.
+- Estados en una variable (`"menu" | "jugando" | "pausa" | "fin"`), todos alcanzables, con `reiniciar()` que restablece todo.
+- Teclado: `const teclas = new Set(); addEventListener("keydown", e => { teclas.add(e.code); if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault(); }); addEventListener("keyup", e => teclas.delete(e.code));` Usa `e.code` ("ArrowLeft", "KeyA", "Space"); `keyCode` está obsoleto.
+- JS moderno: `const`/`let` (no `var`), clases, `addEventListener` (no `onclick=""` en el HTML), sin jQuery.
+- Colisiones AABB: `a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y`. Al chocar: aplica el efecto (puntos, vidas) y elimina con `filter`, no con `splice` dentro de un `forEach`.
+- Sonido: `new Audio("sonidos/x.mp3")` solo tras una interacción del usuario (los navegadores bloquean el autoplay). Imágenes: espera `img.onload` o `await img.decode()` antes de dibujar.
+- Récord: `localStorage.getItem("record")` / `setItem`.
+- run.bat: `crear_bat("run", ["start \"\" http://localhost:8000", "python -m http.server 8000"])` (el servidor queda abierto; al probar desde el agente usa fondo=true).
+- `verificar` abre la página en Edge sin ventana: informa errores de consola/JS, recursos 404, si el canvas se dibuja, si hay animación y si reacciona al teclado/ratón. Guarda capturas en `.agente/capturas/`.

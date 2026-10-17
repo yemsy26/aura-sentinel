@@ -62,6 +62,7 @@ pub fn run() {
             agent::dismiss_pending_mission,
             agent::agent_order,
             agent::get_agent_rules,
+            agent::install_engine,
             ask_user::submit_user_answer,
             ide::get_system_stats,
             ide::get_git_info,

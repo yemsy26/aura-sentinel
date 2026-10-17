@@ -1,0 +1,16 @@
+# Páginas y apps web (HTML/CSS/JS, 2026)
+- `index.html` con `<!doctype html>`, `<meta charset="utf-8">`, `<meta name="viewport" content="width=device-width, initial-scale=1">`, HTML semántico (`header`, `main`, `section`, `button`, `label`).
+- CSS: variables `:root { --color: ... }`, Flexbox/Grid para maquetar, diseño adaptable con `@media`. Nada de tablas para maquetar.
+- JS en archivo aparte con `<script type="module" src="js/app.js"></script>` (o `defer`). `const`/`let`, `addEventListener`, `async/await` con `fetch` y manejo de errores (`if (!r.ok) throw ...`). Sin jQuery, sin `document.write`, sin `onclick=""` en el HTML.
+- Cada `document.getElementById("x")` / `querySelector("#x")` necesita su `id="x"` en el HTML; comprueba `null` cuando el elemento es opcional.
+- Formularios: `<form>` + `submit` con `e.preventDefault()`, validación (`required`, `type="email"`) y mensajes visibles.
+- Datos locales: `localStorage` con `JSON.stringify`/`JSON.parse`.
+- Módulos y `fetch` de archivos locales requieren servidor: `python -m http.server 8000` (run.bat: `start "" http://localhost:8000` + `python -m http.server 8000`).
+- 3D: Three.js como módulo ES con la versión actual (`version three`): `<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@VERSION/build/three.module.js"}}</script>` y `import * as THREE from "three"`. Nada de `three.min.js` global (versión de 2021, retirada en r160).
+- Texto sobre fondos animados o 3D: capa o degradado oscuro detrás del texto para que se lea; las figuras no tapan títulos.
+- Filtros y categorías: cada opción corresponde a un campo real de los datos (p. ej. `deporte: "running"`), nunca un mapeo forzado a otra categoría.
+- Avisos (toast) arriba o lejos de paneles abiertos: no deben tapar botones como "Finalizar compra".
+- Paneles cerrados (carrito, menú) fuera de pantalla con `transform: translateX(100%)` son correctos: no los "arregles".
+- `<link rel="icon" href="data:,">` si no hay favicon (evita un 404 en la consola).
+- Accesibilidad básica: `alt` en imágenes, contraste suficiente, botones de verdad (`<button>`), foco visible.
+- `verificar` abre la página en Edge sin ventana: errores de consola, recursos 404, ids inexistentes, texto visible y capturas en `.agente/capturas/`.

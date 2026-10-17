@@ -74,6 +74,13 @@ export function SettingsDialog({ initialTab, workspace, onClose, onToast, onEngi
     const dir = await open({ directory: true, defaultPath: folder || undefined });
     if (typeof dir === 'string') setFolder(dir);
   };
+  const recheck = () => void api.agentSettings().then((s) => { setEngine(s); setFolder(s.carpeta); });
+  const installEngine = async () => {
+    try {
+      await api.installEngine();
+      onToast('Se abrió el instalador del motor en otra ventana. Cuando termine, pulsa «Comprobar de nuevo».');
+    } catch (e) { onToast(errorText(e), true); }
+  };
   const saveEngine = async () => {
     try {
       setEngine(await api.saveAgentSettings(folder));
@@ -113,8 +120,18 @@ export function SettingsDialog({ initialTab, workspace, onClose, onToast, onEngi
                 <button className="btn" onClick={pickFolder}><Icon name="folder" />Elegir</button>
               </div>
             </label>
-            {engine && <div className={engine.instalado ? 'ok' : 'err'}>
-              {engine.instalado ? '✓ Instalación encontrada' : '✗ No es una instalación válida (necesita .venv y agente\\__main__.py; ejecuta instalar.bat)'}</div>}
+            {engine?.instalado && <div className="ok">✓ Motor instalado y listo</div>}
+            {engine && !engine.instalado && engine.motor && (
+              <div className="card" style={{ borderColor: 'var(--warn-line)' }}>
+                <span className="warn">El motor está en esta carpeta pero falta instalarlo (su entorno de Python, las dependencias
+                  y el registro en Bionic). Tarda unos minutos y solo se hace una vez.</span>
+                <div className="field-row">
+                  <button className="btn primary" onClick={installEngine}>Instalar motor</button>
+                  <button className="btn" onClick={recheck}>Comprobar de nuevo</button>
+                </div>
+              </div>
+            )}
+            {engine && !engine.motor && <div className="err">✗ Aquí no está Agente Local (falta agente\__main__.py).</div>}
           </div>
           <div className="dialog-foot"><button className="btn primary" onClick={saveEngine} disabled={!folder.trim()}>Guardar</button></div>
         </>}

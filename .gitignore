@@ -72,3 +72,11 @@ data/learning/learning_experiences.jsonl
 /src/vendor/
 /work/
 /.npm-audit-cache/
+
+# Motor (Agente Local): lo que es de cada equipo o del usuario no se sube
+motor/.venv/
+motor/.ruff_cache/
+motor/.cache_modelos.json
+motor/reglas.md
+motor/lecciones.md
+!motor/tests/test_*.py

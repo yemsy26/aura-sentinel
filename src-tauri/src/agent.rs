@@ -76,19 +76,41 @@ fn settings_path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("motor.json"))
 }
 
-pub fn is_installation(dir: &Path) -> bool {
-    dir.join(".venv").join("Scripts").join("python.exe").is_file()
-        && dir.join("agente").join("__main__.py").is_file()
+/// Hay código de Agente Local (puede faltar su entorno de Python).
+pub fn has_engine(dir: &Path) -> bool {
+    dir.join("agente").join("__main__.py").is_file()
 }
 
-fn default_installation() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("USERPROFILE")?);
-    [
-        home.join(".gemini").join("antigravity").join("scratch").join("lm studio"),
-        home.join("AgenteLocal"),
-    ]
-    .into_iter()
-    .find(|dir| is_installation(dir))
+/// Código y entorno listos para ejecutar `python -m agente`.
+pub fn is_installation(dir: &Path) -> bool {
+    has_engine(dir) && dir.join(".venv").join("Scripts").join("python.exe").is_file()
+}
+
+/// Dónde puede estar el motor, por orden: `motor/` del repositorio (se busca hacia arriba desde la carpeta de
+/// trabajo y desde el ejecutable: sirve con `tauri dev`, start.bat y las carpetas target), `motor/` dentro de la
+/// app instalada y las carpetas de antes de unificar el motor con Aura.
+fn engine_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let starts = [std::env::current_dir().ok(), std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf))];
+    let mut found: Vec<PathBuf> = starts
+        .into_iter()
+        .flatten()
+        .flat_map(|start| start.ancestors().take(6).map(|a| a.join("motor")).collect::<Vec<_>>())
+        .collect();
+    if let Ok(resources) = app.path().resource_dir() {
+        found.push(resources.join("motor"));
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+        found.push(home.join(".gemini").join("antigravity").join("scratch").join("lm studio"));
+        found.push(home.join("AgenteLocal"));
+    }
+    found
+}
+
+/// La primera instalación lista o, si ninguna lo está, el primer motor sin instalar (para ofrecer instalarlo).
+fn default_installation(app: &AppHandle) -> Option<PathBuf> {
+    let candidates = engine_candidates(app);
+    let installed = candidates.iter().find(|dir| is_installation(dir));
+    installed.or_else(|| candidates.iter().find(|dir| has_engine(dir))).cloned()
 }
 
 /// Carpeta de Agente Local: `AGENTE_LOCAL_DIR`, la guardada en motor.json o la ubicación por defecto.
@@ -101,7 +123,7 @@ pub fn installation_dir(app: &AppHandle) -> String {
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|value| value["carpeta"].as_str().map(str::to_string))
         .filter(|dir| !dir.is_empty())
-        .or_else(|| default_installation().map(|dir| dir.to_string_lossy().into_owned()))
+        .or_else(|| default_installation(app).map(|dir| dir.to_string_lossy().into_owned()))
         .unwrap_or_default()
 }
 
@@ -109,6 +131,11 @@ fn installation(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = installation_dir(app);
     if is_installation(Path::new(&dir)) {
         Ok(PathBuf::from(dir))
+    } else if has_engine(Path::new(&dir)) {
+        Err(format!(
+            "Agente Local está en '{dir}' pero falta instalarlo (su entorno de Python). Abre Configuración → Motor → \
+             Instalar motor, o ejecuta setup.ps1 (o {dir}\\instalar.bat)."
+        ))
     } else {
         Err(format!(
             "No encuentro Agente Local en '{dir}'. Debe contener .venv\\Scripts\\python.exe y agente\\__main__.py \
@@ -120,13 +147,29 @@ fn installation(app: &AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn get_agent_settings(app: AppHandle) -> Value {
     let dir = installation_dir(&app);
-    json!({"carpeta": dir, "instalado": is_installation(Path::new(&dir))})
+    let path = Path::new(&dir);
+    json!({"carpeta": dir, "instalado": is_installation(path), "motor": has_engine(path)})
+}
+
+/// Abre en una consola visible el instalador del motor (crea su .venv, instala dependencias, pasa sus pruebas y
+/// lo registra en Bionic/LM Studio). Termina con una pausa para que el usuario lea el resultado.
+#[tauri::command]
+pub fn install_engine(app: AppHandle) -> Result<String, String> {
+    let dir = installation_dir(&app);
+    if !has_engine(Path::new(&dir)) {
+        return Err(format!("No hay código de Agente Local en '{dir}'."));
+    }
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "Instalar Agente Local", "/D", &dir, "instalar.bat"])
+        .spawn()
+        .map_err(|e| format!("No pude abrir el instalador: {e}"))?;
+    Ok(dir)
 }
 
 #[tauri::command]
 pub async fn save_agent_settings(app: AppHandle, carpeta: String) -> Result<Value, String> {
-    if !is_installation(Path::new(&carpeta)) {
-        return Err(format!("'{carpeta}' no es una instalación de Agente Local."));
+    if !has_engine(Path::new(&carpeta)) {
+        return Err(format!("'{carpeta}' no contiene Agente Local (falta agente\\__main__.py)."));
     }
     let path = settings_path(&app).ok_or("No hay carpeta de configuración de la app.")?;
     if let Some(parent) = path.parent() {

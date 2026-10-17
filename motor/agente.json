@@ -1,0 +1,24 @@
+{
+  "servidor": "auto",
+  "modelo": "qwen3.6-35b-a3b",
+  "razonamiento": "auto",
+  "max_pasos": 100,
+  "max_chars_resultado": 0,
+  "timeout_comando": 120,
+  "confirmar_peligrosos": true,
+  "muestreo": {
+    "temperature": 0.6,
+    "top_p": 0.9,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repeat_penalty": 1.05
+  },
+  "carga": {
+    "kv_cache": "q8_0",
+    "flash_attention": true,
+    "contexto_min": 8192,
+    "contexto_max": 65536,
+    "margen_vram_mib": 450
+  }
+}

@@ -4,6 +4,21 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 
 ---
 
+## [4.2.0] — 2026-10-16 (Motor en el repositorio e instalación completa)
+
+- El motor (Agente Local) vive en `motor/`: clonar el repositorio trae todo lo necesario. No se suben su
+  `.venv`, las medidas de VRAM de cada equipo ni las reglas y lecciones del usuario.
+- `setup.ps1` instala un equipo nuevo de principio a fin: requisitos, interfaz, motor (entorno de Python,
+  pruebas, registro MCP en Bionic/LM Studio), descarga verificada del modelo y ajuste a la VRAM en Bionic
+  (contexto, capas de expertos en RAM/CPU, ajustes de chat). Se puede repetir.
+- `motor\descargar_modelo.bat`: baja Qwen3.6-35B-A3B y su visión desde Hugging Face, reanuda los cortes y
+  comprueba el SHA-256 publicado.
+- Aura encuentra el motor del repositorio o el incluido en el instalador; si falta su entorno, Configuración →
+  Motor ofrece **Instalar motor**. El instalador de Windows lleva el motor dentro.
+- Icono propio (el cubo hexagonal de Aura) en la app, el instalador y la pestaña.
+- Guía de instalación, integración con Bionic (qué cambia y cómo deshacerlo) y solución de problemas en
+  `README.md` y `motor/LEEME.md`.
+
 ## [4.1.0] — 2026-10-16 (Interfaz nueva)
 
 - Interfaz reescrita en React + TypeScript con Vite (antes un `main.js` de 1 200 líneas). Monaco 0.57,
@@ -70,19 +85,18 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 
 #### Zero-Hint Router
 - El Planificador ahora deduce semánticamente qué herramienta usar sin que el usuario la mencione.
-- Vocabulario matemático añadido al clasificador de intenciones: uditoría, satisfacibilidad, SAT, lógica.
+- Vocabulario matemático añadido al clasificador de intenciones: auditoría, satisfacibilidad, SAT, lógica.
 - Misiones matemáticas ahora clasificadas como ANÁLISIS, evitando el protocolo de fases de construcción.
 
 #### Mission Persistence (core/mission_persist.rs)
 - Checkpoint de FSM (contexto, rol, paso) guardado a disco cada 3 pasos.
-- uto_resume_if_needed() en setup() detecta misiones interrumpidas al reiniciar la aplicación.
+- auto_resume_if_needed() en setup() detecta misiones interrumpidas al reiniciar la aplicación.
 - Evento mission-resumed emitido al frontend para notificar al usuario.
 
 #### TOOL_CONTAINER (core/container.rs)
 - Soporte nativo para Docker y Podman mediante auto-detección de runtime.
-- Acciones: 
-un, exec, stop, logs, ctivate_env.
-- ctivate_env detecta tipo de proyecto (Node, Python, Rust) y activa el entorno virtual correcto.
+- Acciones: run, exec, stop, logs, activate_env.
+- activate_env detecta tipo de proyecto (Node, Python, Rust) y activa el entorno virtual correcto.
 - Handler TOOL_CONTAINER integrado en la FSM del Ejecutor.
 
 #### Memoria Episódica Multi-Sesión (core/episodic_memory.rs)
@@ -110,14 +124,13 @@ o reactor running). Cambiado a 	auri::async_runtime::spawn.
 - Bug: Extractor de cláusulas usaba 
 find("]]") frágil. Reemplazado por contador de profundidad de corchetes.
 - Bug: Planificador clasificaba auditorías matemáticas como misiones de Construcción, activando protocolo PESP de 4 fases y causando pausas interactivas innecesarias.
-- Bug: Variables 
-etry_tracker y gent_workspace eliminadas accidentalmente de scope en refactor anterior.
+- Bug: Variables retry_tracker y agent_workspace eliminadas accidentalmente de scope en refactor anterior.
 
 ### Modificado
-- session_journal.rs: Campos sm_context, sm_role, sm_step, interrupted añadidos.
+- session_journal.rs: Campos fsm_context, fsm_role, fsm_step, interrupted añadidos.
 - core/mod.rs: Registrados los 5 módulos nuevos del Sprint 4.
-- main.rs: start_scheduler() y uto_resume_if_needed() integrados en setup().
-- gent.rs: Prompts del Planificador y Ejecutor actualizados con catálogo completo de herramientas.
+- main.rs: start_scheduler() y auto_resume_if_needed() integrados en setup().
+- agent.rs: Prompts del Planificador y Ejecutor actualizados con catálogo completo de herramientas.
 - .gitignore: Excluidos binarios de prueba, Modelfiles, archivos de sesión runtime.
 
 ---
