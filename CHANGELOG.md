@@ -15,6 +15,8 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
   pregunta» con botones y respuesta libre; en consola, opciones numeradas; en el protocolo, evento `pregunta`.
 - La ventana de permiso muestra también el motivo (destructivo, o conectarse o publicar fuera del equipo).
 - Guías de Rust, Go, .NET y Docker con la consulta de versiones de su ecosistema.
+- Arreglo: la guía de Docker no llegaba a GitHub (una regla antigua del .gitignore ignoraba `docker.*` en
+  todo el repositorio); ahora esas reglas solo valen en la raíz.
 
 ---
 

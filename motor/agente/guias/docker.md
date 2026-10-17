@@ -1,0 +1,12 @@
+# Docker y Compose (2026)
+- Antes de nada mira el Entorno: si dice "Docker (APAGADO...)", pide al usuario que abra Docker Desktop; sin el servicio no se pueden construir ni ejecutar contenedores.
+- Imagen base oficial con versión fija, nunca `latest`: `python:3.12-slim`, `node:24-alpine`; para Go y Rust la misma versión que la instalada. Las etiquetas reales: `version("golang:alpine", "docker")`.
+- Orden para aprovechar la caché: primero los archivos de dependencias (`requirements.txt`, `package*.json`, `go.mod`/`go.sum`, `Cargo.toml`/`Cargo.lock`), instala, y después `COPY . .`.
+- Lenguajes compilados en varias etapas: `FROM golang:<v>-alpine AS build` ... `RUN CGO_ENABLED=0 go build -o /app .` y `FROM alpine:<v>` (o distroless) con `COPY --from=build /app /app`.
+- Seguridad: `.dockerignore` con `.git`, `.env`, `node_modules`, `.venv`, `target`, `bin`, `obj`; usuario sin privilegios (`RUN adduser -D app` en alpine / `useradd` en debian, y `USER app`); nada de contraseñas en `ENV` ni `ARG`: se pasan al ejecutar (`-e`, `--env-file`) o como secrets.
+- `CMD ["./app"]` en forma JSON (recibe bien las señales), `EXPOSE 8080` y `HEALTHCHECK CMD wget -qO- http://localhost:8080/health || exit 1` (alpine trae wget).
+- Scripts .sh copiados a la imagen: con finales de línea LF (en Windows añade `*.sh text eol=lf` a .gitattributes) o fallarán con "not found".
+- Probar: `docker build -t app:dev .`, `docker run -d --name app -p 8080:8080 app:dev`, `curl -s http://localhost:8080/health`, `docker logs app`; al acabar `docker rm -f app`.
+- Compose v2: archivo `compose.yaml` sin la clave `version:`; `services`, `ports`, `environment` / `env_file`, volúmenes con nombre para datos y `depends_on` con `condition: service_healthy`. `docker compose up -d --build`, `docker compose ps`, `docker compose logs`, `docker compose down`.
+- `docker push` y `docker login` publican fuera del equipo: piden permiso al usuario.
+- `verificar` revisa el Dockerfile (versiones, COPY que no existen, credenciales, USER, .dockerignore), valida compose.yaml y, con Docker en marcha, construye la imagen.

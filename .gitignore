@@ -32,12 +32,12 @@ patch_*.py
 fix_*.py
 refactor_*.py
 
-# Aura-Sentinel Generated
-run_tests.*
-build.*
-dev.*
-lint.*
-docker.*
+# Scripts que generaba el motor antiguo en la raiz (solo ahi: no confundir con motor/agente/guias/docker.md)
+/run_tests.*
+/build.*
+/dev.*
+/lint.*
+/docker.*
 .aura_command_trail.json
 
 # Compiled test artifacts & scratch binaries
