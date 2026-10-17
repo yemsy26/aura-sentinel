@@ -106,6 +106,26 @@ describe('Aura Sentinel', () => {
     expect(called('save_chat_message').map((a) => (a?.message as { sender: string }).sender)).toEqual(['user', 'agent']);
   });
 
+  it('las preguntas del agente aceptan una opción o una respuesta libre, y el permiso muestra su motivo', async () => {
+    render(<App />);
+    await screen.findByText('index.html');
+    await waitFor(() => expect(listeners.has('agent-ask-user')).toBe(true));
+    emit('agent-ask-user', { id: 'p1', question: '¿En qué lenguaje?', options: ['Go', 'Rust'], context: 'pregunta' });
+    expect(screen.getByText('El agente pregunta')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Rust' }));
+    expect(called('submit_user_answer')[0]).toEqual({ id: 'p1', answer: 'Rust' });
+    emit('agent-ask-user', { id: 'p2', question: '¿Puerto?', options: [], context: 'pregunta' });
+    const caja = screen.getByLabelText('Respuesta al agente');
+    fireEvent.change(caja, { target: { value: '9090' } });
+    fireEvent.keyDown(caja, { key: 'Enter' });
+    expect(called('submit_user_answer')[1]).toEqual({ id: 'p2', answer: '9090' });
+    emit('agent-ask-user', { id: 'c1', question: 'El agente quiere conectarse o publicar fuera de este equipo:\nssh u@h "ls"',
+      options: ['Permitir', 'Bloquear'], context: 'Agente Local' });
+    expect(screen.getByText('¿Permitir este comando?')).toBeTruthy();
+    expect(screen.getByText(/conectarse o publicar fuera de este equipo/)).toBeTruthy();
+    expect(screen.getByText('ssh u@h "ls"')).toBeTruthy();
+  });
+
   it('las acciones rápidas usan las órdenes del agente', async () => {
     render(<App />);
     await screen.findByText('index.html');

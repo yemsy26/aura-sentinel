@@ -111,7 +111,7 @@ function onEvent(state: AgentState, event: AgentEvent): AgentState {
       return { ...state, items: withRun(state.items, { kind: 'note', note: { level: event.tipo, text: event.texto } }) };
     case 'archivos': // las rutas absolutas llegan con file-updated (acción 'changed')
       return state;
-    case 'confirmar':
+    case 'confirmar': case 'pregunta':
       return { ...state, phase: 'waiting' };
     case 'fin': {
       const usage = parseUsage(event.uso);

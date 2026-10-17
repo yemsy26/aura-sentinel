@@ -1,5 +1,5 @@
 # Go (1.22+, 2026)
-- Proyecto: `go mod init ejemplo.com/app` y, tras añadir imports externos, `go mod tidy` (descarga y escribe go.sum). Programa pequeño: `main.go` en la raíz; varios binarios: `cmd\nombre\main.go`; código privado en `internal\`.
+- Proyecto: `go mod init ejemplo.com/app` y, tras añadir imports externos, `go mod tidy` (descarga y escribe go.sum). Antes de usar un módulo: `version("github.com/gin-gonic/gin", "go")` (dice si está obsoleto). Programa pequeño: `main.go` en la raíz; varios binarios: `cmd\nombre\main.go`; código privado en `internal\`.
 - Errores: devuelve `error` y envuélvelo con contexto: `return fmt.Errorf("leyendo %s: %w", ruta, err)`; compara con `errors.Is` / `errors.As`. `panic` solo para fallos imposibles; en `main`, `fmt.Fprintln(os.Stderr, err); os.Exit(1)`.
 - API HTTP con la biblioteca estándar: `mux := http.NewServeMux(); mux.HandleFunc("GET /items/{id}", h)` y `r.PathValue("id")` (rutas con método desde Go 1.22). JSON con `encoding/json` y `w.Header().Set("Content-Type", "application/json")`. Añade `GET /health` que responda 200.
 - Servidor robusto: `srv := &http.Server{Addr: ":" + puerto, Handler: mux, ReadHeaderTimeout: 5 * time.Second}`; apagado limpio con `signal.NotifyContext` y `srv.Shutdown(ctx)`. Puerto desde `os.Getenv("PORT")` con valor por defecto.

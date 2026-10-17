@@ -107,7 +107,9 @@ Windows puede liberar esa RAM si otro programa la necesita, en vez de bloquear u
 `plan`, `paso_hecho`, `listar`, `leer`, `buscar`, `escribir`, `editar`, `ejecutar` (con `fondo=true` para servidores;
 crear un venv o `pip`/`npm`/`uv install` tiene siempre al menos 300 s para no dejar el entorno a medias),
 `procesos`, `crear_bat`, `web_buscar` (DuckDuckGo, Bing de respaldo), `web_leer`, `investigar`, `guia`, `version`,
-`verificar`, `revisar`, `aprender`, `terminar`.
+`verificar`, `revisar`, `aprender`, `preguntar`, `terminar`.
+`preguntar(pregunta, opciones)` pide un dato imprescindible o una decisión al usuario (2-5 opciones y respuesta libre)
+y espera la respuesta; como mucho 3 veces por tarea. Sin usuario (MCP, `--tarea`), el agente decide y lo explica.
 `ver_pantalla` captura la página (`.html` o `http://localhost:PUERTO`) o el juego pygame y señala texto cortado,
 elementos fuera de pantalla o pantalla en negro; si el modelo cargado ve imágenes, la juzga él con su
 `mmproj-F16.gguf` (Qwen3.6: 6-7 s por captura). Su juicio es indulgente: puede dar OK a un título tapado por
@@ -161,7 +163,8 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
 - El agente conoce el entorno al empezar: versiones de Python, Node, Java, Rust, Go, .NET, si Docker está en marcha,
   Podman, OpenSSH y kubectl. Las compilaciones e instalaciones largas (`cargo`, `go`, `docker build`, `dotnet`,
   Maven/Gradle, `npm install`...) tienen al menos 5 minutos antes de cortarse.
-- `version(paquete)`: versión real en PyPI/npm/Maven y si hay wheel para tu Python (p. ej. `pygame` → usa `pygame-ce`
+- `version(paquete, ecosistema)`: versión real en PyPI, npm, Maven, crates.io (Rust), el proxy de Go (avisa si el
+  módulo está obsoleto), NuGet (.NET) y Docker Hub (etiquetas para `FROM`, sin `latest`); en PyPI, si hay wheel para tu Python (p. ej. `pygame` → usa `pygame-ce`
   porque `pygame` no tiene wheel para Python 3.14).
 - `investigar(pregunta)`: busca, lee las mejores páginas y devuelve solo los párrafos útiles con su fuente, en un paso.
 
@@ -198,6 +201,7 @@ Si el modelo no está cargado, lo carga con el ajuste de VRAM.
   `archivos` (rutas cambiadas; vacía = refrescar todo), `nota`, `aviso`, `progreso`, `error`.
 - `confirmar` (`comando` y `motivo`: destructivo, o conectarse o publicar fuera del equipo) espera
   `{"tipo":"respuesta","si":true|false}`.
+- `pregunta` (`pregunta` y `opciones`) espera `{"tipo":"respuesta","texto":"..."}`.
 - Cada orden termina con `fin` (`estado`: ok, incompleta o error; `respuesta`; `uso` del contexto).
 
 El proceso conserva la conversación entre tareas, como la consola. Todo lo que no es un evento va a stderr.

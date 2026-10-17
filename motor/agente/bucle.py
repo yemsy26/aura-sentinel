@@ -93,6 +93,7 @@ class Agente:
         self.inicio_tarea = 0
         self.revisiones = 0
         self.h.revisar_cb = self._revisar
+        self.h.preguntar_cb = self._preguntar if interactivo else None
         self.emitir = None  # modo --json: emitir(tipo, **datos) publica un evento para el IDE
         self.responder = None  # modo --json: responder(tipo, **datos) espera la respuesta del usuario
 
@@ -102,6 +103,15 @@ class Agente:
             return bool(self.responder("confirmar", comando=comando, motivo=motivo).get("si"))
         print(color(f"\n  ¿Permitir {motivo}?\n    {comando}", "amarillo"))
         return input("  (s/n) > ").strip().lower() in ("s", "si", "sí", "y")
+
+    def _preguntar(self, pregunta: str, opciones: list[str]) -> str:
+        if self.responder:
+            return str(self.responder("pregunta", pregunta=pregunta, opciones=opciones).get("texto", ""))
+        print(color(f"\n  El agente pregunta: {pregunta}", "amarillo"))
+        for i, o in enumerate(opciones, 1):
+            print(f"    {i}. {o}")
+        respuesta = input("  (número u otra respuesta) > ").strip()
+        return opciones[int(respuesta) - 1] if respuesta.isdigit() and 0 < int(respuesta) <= len(opciones) else respuesta
 
     def _progreso(self, razon: int, texto: int) -> None:
         ahora = time.time()

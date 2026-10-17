@@ -92,9 +92,11 @@ export function AgentPanel(p: Props) {
           <div className="thinking"><span className="pulse" />{PHASE_LABEL[state.phase]}
             {state.chars > 0 && <span className="dim">· {state.chars.toLocaleString('es')} caracteres</span>}</div>
         )}
-        {state.ask && (
+        {state.ask?.context === 'pregunta' && <Question ask={state.ask} onAnswer={p.onAnswer} />}
+        {state.ask && state.ask.context !== 'pregunta' && (
           <section className="card confirm" aria-label="Confirmación pendiente">
             <strong>¿Permitir este comando?</strong>
+            {state.ask.question.includes(':\n') && <span className="dim">{state.ask.question.split(':\n')[0]}</span>}
             <code>{state.ask.question.replace(/^.*?:\n/s, '')}</code>
             <div className="field-row">
               {state.ask.options.map((o, i) => (
@@ -119,6 +121,30 @@ export function AgentPanel(p: Props) {
       <Composer {...p} />
       {lightbox && <div className="lightbox" onClick={() => setLightbox(null)} role="dialog" aria-label="Captura"><img src={lightbox} alt="Captura de pantalla" /></div>}
     </aside>
+  );
+}
+
+/** Pregunta del agente: botones para sus opciones y una respuesta libre. */
+function Question({ ask, onAnswer }: { ask: { question: string; options: string[] }; onAnswer: (text: string) => void }) {
+  const [text, setText] = useState('');
+  const send = () => { if (text.trim()) onAnswer(text.trim()); };
+  return (
+    <section className="card question" aria-label="Pregunta del agente">
+      <strong>El agente pregunta</strong>
+      <div>{ask.question}</div>
+      {ask.options.length > 0 && (
+        <div className="field-row">
+          {ask.options.map((o, i) => (
+            <button key={o} className={`btn ${i === 0 ? 'primary' : ''}`} onClick={() => onAnswer(o)}>{o}</button>
+          ))}
+        </div>
+      )}
+      <div className="field-row">
+        <input className="input" aria-label="Respuesta al agente" placeholder={ask.options.length ? 'U otra respuesta…' : 'Tu respuesta…'}
+          value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') send(); }} />
+        <button className="btn" onClick={send} disabled={!text.trim()}>Responder</button>
+      </div>
+    </section>
   );
 }
 

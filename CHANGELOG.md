@@ -5,6 +5,19 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.4.0] — 2026-10-17 (Versiones de todos los ecosistemas y preguntas al usuario)
+
+- `version` consulta también crates.io (Rust), el proxy de Go (con aviso si el módulo está obsoleto y explicación
+  si es de la biblioteca estándar), NuGet (.NET, la mayor versión estable) y Docker Hub (etiquetas reales para `FROM`,
+  sin `tip`, Windows ni `latest`, con filtro de variante como `golang:alpine`).
+- Nueva herramienta `preguntar`: el agente pide un dato imprescindible o una decisión con 2-5 opciones y espera la
+  respuesta (como mucho 3 veces por tarea; sin usuario, decide y lo explica). En Aura aparece la tarjeta «El agente
+  pregunta» con botones y respuesta libre; en consola, opciones numeradas; en el protocolo, evento `pregunta`.
+- La ventana de permiso muestra también el motivo (destructivo, o conectarse o publicar fuera del equipo).
+- Guías de Rust, Go, .NET y Docker con la consulta de versiones de su ecosistema.
+
+---
+
 ## [4.3.0] — 2026-10-17 (Sistemas en cualquier lenguaje, contenedores y despliegue)
 
 - `verificar` comprueba también Rust (`cargo build`, `cargo test`, clippy), Go (`go vet`, `go test`, gofmt), .NET

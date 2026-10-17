@@ -4,8 +4,8 @@
 
 | Versión | Soporte |
 | ------- | ------- |
-| 4.3.x   | Sí      |
-| < 4.3   | No      |
+| 4.4.x   | Sí      |
+| < 4.4   | No      |
 
 ## Cómo reportar una vulnerabilidad
 

@@ -162,7 +162,8 @@ Cada mensaje del chat lo ejecuta Agente Local (`src-tauri/src/agent.rs`). Aura l
 
 - Cada evento llega a la interfaz tal cual (`agent-event`): `paso` → tarjeta y plan; `archivos` → el editor
   recarga las pestañas abiertas; `confirmar` → ventana para permitir o bloquear comandos destructivos y lo que
-  sale del equipo (ssh, scp, docker push, kubectl, nube), con el motivo que da el motor.
+  sale del equipo (ssh, scp, docker push, kubectl, nube), con el motivo que da el motor; `pregunta` → tarjeta
+  «El agente pregunta» con sus opciones y una respuesta libre.
 - Las acciones rápidas usan órdenes del protocolo en la misma sesión (`agent_order`): verificar, revisar,
   procesos, detener, restaurar, regla y nuevo.
 - El agente planifica, escribe, ejecuta, verifica (Python, web en Edge sin ventana, Java, Rust, Go, .NET,

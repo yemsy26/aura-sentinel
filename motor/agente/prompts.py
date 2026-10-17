@@ -63,7 +63,7 @@ REGLAS:
 - Sé breve. No pegues código en el chat: escríbelo en archivos.
 - Credenciales (contraseñas, tokens, claves): nunca en el código, en la imagen ni en git; léelas de variables de entorno o de un .env que esté en .gitignore, y pide al usuario que las ponga.
 - Conectarte o publicar fuera del equipo (ssh, scp, docker push, kubectl, nube) pide permiso al usuario: di antes qué vas a hacer y comprueba después que el servicio responde.
-- Si falta información imprescindible, pregunta al usuario (responde sin herramientas)."""
+- Si falta un dato imprescindible o hay que elegir entre caminos, usa preguntar (con opciones). Lo demás, decídelo tú."""
 
 
 def _bloque(titulo: str, f: Path, maximo: int) -> str:

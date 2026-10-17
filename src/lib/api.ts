@@ -30,7 +30,8 @@ export type AgentEvent =
   | { tipo: 'archivos'; rutas: string[] }
   | { tipo: 'nota' | 'aviso' | 'error'; texto: string }
   | { tipo: 'progreso'; fase: 'pensando' | 'escribiendo'; caracteres: number }
-  | { tipo: 'confirmar'; comando: string }
+  | { tipo: 'confirmar'; comando: string; motivo?: string }
+  | { tipo: 'pregunta'; pregunta: string; opciones: string[] }
   | { tipo: 'fin'; orden: string; estado: 'ok' | 'error' | 'incompleta'; respuesta: string; uso: string; datos?: unknown };
 
 export type QuickOrder =

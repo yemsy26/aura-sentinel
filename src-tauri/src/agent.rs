@@ -458,6 +458,17 @@ async fn confirm(app: &AppHandle, session: &mut Session, command: &str, reason: 
     send(session, json!({"tipo": "respuesta", "si": answer == "Permitir"})).await
 }
 
+/// Pregunta del agente (herramienta `preguntar`): opciones y respuesta libre en la interfaz.
+async fn answer_question(app: &AppHandle, session: &mut Session, event: &Value) -> Result<(), String> {
+    let question = event["pregunta"].as_str().unwrap_or_default().to_string();
+    let options = event["opciones"]
+        .as_array()
+        .map(|o| o.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let answer = crate::ask_user::ask_user_async(app, question, options, "pregunta".into()).await.unwrap_or_default();
+    send(session, json!({"tipo": "respuesta", "texto": answer})).await
+}
+
 /// Preferencias del perfil local, para que el agente las conozca desde el primer mensaje.
 fn with_profile(app: &AppHandle, workspace: &str, message: String) -> String {
     let snapshot = crate::user_profile::load(app, Some(workspace)).unwrap_or_default();
@@ -565,6 +576,10 @@ async fn run_order(
                     let command = event["comando"].as_str().unwrap_or_default().to_string();
                     let reason = event["motivo"].as_str().unwrap_or_default().to_string();
                     confirm(app, &mut current, &command, &reason).await.map_err(|e| ("ERROR", e))?;
+                }
+                "pregunta" => {
+                    let _ = app.emit("agent-event", &event);
+                    answer_question(app, &mut current, &event).await.map_err(|e| ("ERROR", e))?;
                 }
                 _ => forward(app, workspace, &event, &mut step),
             },

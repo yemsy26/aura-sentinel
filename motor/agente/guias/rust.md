@@ -1,5 +1,5 @@
 # Rust (stable, edición 2024, 2026)
-- Proyecto: `cargo new nombre` (programa) o `cargo new --lib nombre`. Dependencias con `cargo add clap --features derive` (elige la última versión compatible); nunca edites versiones a mano sin comprobarlas.
+- Proyecto: `cargo new nombre` (programa) o `cargo new --lib nombre`. Dependencias con `cargo add clap --features derive` (elige la última versión compatible); para ver la versión actual: `version("clap", "crates")`.
 - Estructura: `src/main.rs` corto (lee argumentos, llama y traduce errores a mensaje + código de salida); la lógica en `src/lib.rs` y módulos (`mod parser;` -> `src/parser.rs`) para poder probarla.
 - Errores: funciones que devuelven `Result<T, E>` y el operador `?`. En programas, `anyhow::Result` con `.context("leyendo config")`; en librerías, un `enum` de error propio (o `thiserror`). Nada de `unwrap()`/`expect()` fuera de las pruebas.
 - Salida con error: `fn main() -> std::process::ExitCode` (o `std::process::exit(1)`) y el mensaje por `eprintln!`.

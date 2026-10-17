@@ -70,6 +70,7 @@ def externo(comando: str) -> bool:
         return any(h.lower() not in LOCALES for h in re.findall(r"https?://([^/\s:'\"]+)", comando))
     return False
 MIN_INSTALACION = 300  # segundos
+MAX_PREGUNTAS = 3  # por tarea: más es pedir al usuario lo que el agente puede decidir
 # Archivos que se nombran en un texto (petición del usuario o paso del plan); no las librerías como three.js.
 ARCHIVO_PEDIDO = r"\b[\w\-]+\.(?:py|bat|cmd|ps1|txt|json|md|js|ts|jsx|tsx|html|css|toml|ya?ml|ini|cfg|sql|csv|java|cs|go|rs|cpp|c|h)\b"
 NO_ARCHIVO = re.compile(r"(node|next|nuxt|vue|react|three|d3|express|chart|p5|phaser|pixi|babylon|anime|alpine|ember|"
@@ -162,10 +163,13 @@ class Herramientas:
         self.checkpoints: list[dict] = []   # estados que pasaron verificar sin errores
         self.fallos_desde_verde = 0
         self.evidencia: list[str] = []      # comandos ejecutados en la tarea y su resultado (para revisar)
+        self.preguntar_cb = None            # preguntar_cb(pregunta, opciones) -> respuesta; lo conecta el bucle
+        self.preguntas = 0
 
     def nueva_tarea(self, paso_inicio: int = 0) -> None:
         self.reescrituras.clear()
         self.evidencia.clear()
+        self.preguntas = 0
         self.inicio_tarea = paso_inicio
 
     def python_proyecto(self) -> str:
@@ -698,6 +702,21 @@ class Herramientas:
     def ver_pantalla(self, ruta: str = "", pregunta: str = "", segundos: int = 2) -> str:
         return pantalla.ver(self, ruta, pregunta, segundos)
 
+    def preguntar(self, pregunta: str, opciones: list | None = None) -> str:
+        pregunta = (pregunta or "").strip()
+        opciones = [str(o).strip() for o in (opciones or []) if str(o).strip()][:5]
+        if not pregunta:
+            return "Indica 'pregunta' (una frase clara) y, si hay varias posibilidades, 'opciones' (2-5)."
+        if self.preguntar_cb is None:
+            return ("No hay nadie a quien preguntar ahora: elige la opción más razonable, dilo en el resumen y sigue. "
+                    "Si de verdad no puedes seguir, termina explicando qué dato falta.")
+        if self.preguntas >= MAX_PREGUNTAS:
+            return (f"Ya preguntaste {MAX_PREGUNTAS} veces en esta tarea: decide tú con la opción más razonable y "
+                    "explícalo en el resumen.")
+        self.preguntas += 1
+        respuesta = str(self.preguntar_cb(pregunta, opciones) or "").strip()
+        return f"Respuesta del usuario: {respuesta}" if respuesta else "El usuario no respondió: elige la opción más razonable."
+
     def revisar_cmd(self, requisitos: str = "", enfoque: str = "") -> str:
         if not self.revisar_cb:
             return "Revisión no disponible (sin conexión con el modelo)."
@@ -833,8 +852,11 @@ ESQUEMAS = [
                      "fuente. Úsalo para APIs, errores o librerías que no conozcas bien.", {"pregunta": S}, ["pregunta"]),
     _f("guia", "Buenas prácticas ACTUALES y cómo verificar para: python, pygame, html-juego, web, api, java, rust, go, "
                "node, dotnet, docker, despliegue, tests, bat. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
-    _f("version", "Última versión real de un paquete y si es compatible con tu Python (evita librerías obsoletas).",
-       {"paquete": S, "ecosistema": {"type": "string", "enum": ["pypi", "npm", "maven"]}}, ["paquete"]),
+    _f("version", "Última versión real de un paquete o imagen (evita librerías obsoletas): pypi (y si hay wheel para tu "
+                  "Python), npm, maven, crates (Rust), go (ruta del módulo, p. ej. github.com/gin-gonic/gin), nuget "
+                  "(.NET) o docker (imagen de Docker Hub, p. ej. python o node:alpine).",
+       {"paquete": S, "ecosistema": {"type": "string", "enum": ["pypi", "npm", "maven", "crates", "go", "nuget", "docker"]}},
+       ["paquete"]),
     _f("verificar", "Control de calidad de TODO el proyecto: errores, código que nunca se usa (funciones sin conectar), "
                     "tests y ejecución real (Python y pygame sin ventana, web en navegador, Java, Rust, Go, .NET, "
                     "Node/TypeScript, Dockerfile y Compose). Úsalo tras construir y tras cada corrección.",
@@ -855,6 +877,10 @@ ESQUEMAS = [
               "destructivo pide confirmación). 'ruta' limita a un archivo o carpeta.",
        {"accion": {"type": "string", "enum": ["estado", "diff", "log", "commit", "rama", "otro"]}, "mensaje": S,
         "nombre": S, "ruta": S, "comando": S}, ["accion"]),
+    _f("preguntar", "Pregunta al usuario y espera su respuesta. Solo si falta un dato imprescindible (servidor, "
+                    "credencial, una decisión que cambia el resultado) o hay que elegir entre caminos: da 2-5 'opciones' "
+                    "cortas. No preguntes lo que puedes decidir tú con una opción razonable.",
+       {"pregunta": S, "opciones": LISTA}, ["pregunta"]),
     _f("terminar", "Termina la tarea cuando todo está hecho, verificado y revisado. Resume qué se hizo y cómo usarlo.",
        {"resumen": S}, ["resumen"]),
 ]
@@ -865,7 +891,8 @@ def despachar(h: Herramientas, nombre: str, args: dict) -> str:
              "escribir": h.escribir, "editar": h.editar, "ejecutar": h.ejecutar, "procesos": h.procesos_cmd,
              "crear_bat": h.crear_bat, "web_buscar": h.web_buscar, "web_leer": h.web_leer, "investigar": h.investigar,
              "guia": h.guia, "version": h.version, "verificar": h.verificar_cmd, "revisar": h.revisar_cmd,
-             "aprender": h.aprender, "restaurar": h.restaurar, "ver_pantalla": h.ver_pantalla, "git": h.git}
+             "aprender": h.aprender, "restaurar": h.restaurar, "ver_pantalla": h.ver_pantalla, "git": h.git,
+             "preguntar": h.preguntar}
     if nombre not in tabla:
         return f"Herramienta desconocida: {nombre}. Disponibles: {', '.join(tabla)}, terminar."
     try:
