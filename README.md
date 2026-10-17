@@ -70,7 +70,9 @@ Deja `AuraSentinel_<versión>_x64-setup.exe` (NSIS, por usuario, sin administrad
 `src-tauri\target\release\bundle\` (o en `%CARGO_TARGET_DIR%\release\bundle\`). El instalador incluye el motor:
 la primera vez, **Configuración → Motor → Instalar motor** crea su entorno de Python (necesita `uv` o Python).
 El modelo se instala aparte (`descargar_modelo.bat` dentro de la carpeta `motor` de la app, o desde LM Studio).
-Desinstalar no borra tu perfil ni tus proyectos. Identificador de la app: `com.yemsy.aurasentinel`.
+Usa el **`setup.exe`**: instala en `%LOCALAPPDATA%\AuraSentinel`, donde el motor puede crear su `.venv`. El `.msi`
+instala en `Program Files` y ahí «Instalar motor» solo funciona ejecutándolo como administrador.
+Desinstalar no borra tu perfil ni tus proyectos (tampoco el `.venv` del motor: bórralo a mano si quieres). Identificador de la app: `com.yemsy.aurasentinel`.
 
 ### Si algo falla
 
