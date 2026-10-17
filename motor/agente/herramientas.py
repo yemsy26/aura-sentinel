@@ -40,12 +40,12 @@ MIN_INSTALACION = 300  # segundos
 # Archivos que se nombran en un texto (petición del usuario o paso del plan); no las librerías como three.js.
 ARCHIVO_PEDIDO = r"\b[\w\-]+\.(?:py|bat|cmd|ps1|txt|json|md|js|ts|jsx|tsx|html|css|toml|ya?ml|ini|cfg|sql|csv|java|cs|go|rs|cpp|c|h)\b"
 NO_ARCHIVO = re.compile(r"(node|next|nuxt|vue|react|three|d3|express|chart|p5|phaser|pixi|babylon|anime|alpine|ember|"
-                        r"socket|solid|svelte)\.js$", re.I)
-CREAR = re.compile(r"\b(crea|escrib|implement|añad|agreg|genera|construi)", re.I)
+                        r"socket|solid|svelte)\.js$", re.IGNORECASE)
+CREAR = re.compile(r"\b(crea|escrib|implement|añad|agreg|genera|construi)", re.IGNORECASE)
 
 
 def archivos_pedidos(texto: str) -> set[str]:
-    return {f for f in re.findall(ARCHIVO_PEDIDO, texto, re.I) if not NO_ARCHIVO.match(f)}
+    return {f for f in re.findall(ARCHIVO_PEDIDO, texto, re.IGNORECASE) if not NO_ARCHIVO.match(f)}
 
 
 PLACEHOLDERS = re.compile(r"(\.\.\.\s*(resto|rest of|existing|código anterior|mismo)|# *(TODO|implementar aquí)|"
@@ -69,12 +69,13 @@ def decodificar(datos: bytes) -> str:
 
 
 def matar_arbol(pid: int) -> None:
-    subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+    subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False)
 
 
 class _HtmlATexto(html.parser.HTMLParser):
-    OMITIR = {"script", "style", "noscript", "svg", "nav", "footer", "header", "form", "iframe"}
-    BLOQUE = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "pre", "section", "article", "table"}
+    OMITIR = frozenset({"script", "style", "noscript", "svg", "nav", "footer", "header", "form", "iframe"})
+    BLOQUE = frozenset({"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "pre", "section", "article",
+                        "table"})
 
     def __init__(self):
         super().__init__()
@@ -271,7 +272,7 @@ class Herramientas:
         n = contenido.count("\n") + 1
         txt = f"OK {'reemplazado' if existia else 'creado'}: {self.rel(p)} ({n} líneas){nota}.{self._validar(p, contenido)}"
         if existia and re.match(r"(test_|.*_test\.|.*\.test\.)", p.name):
-            contar = lambda t: len(re.findall(r"^\s*(?:async\s+)?def test|@Test\b|^\s*(?:test|it)\(", t, re.M))
+            contar = lambda t: len(re.findall(r"^\s*(?:async\s+)?def test|@Test\b|^\s*(?:test|it)\(", t, re.MULTILINE))
             n_antes, n_ahora = contar(antes), contar(contenido)
             if n_antes >= 3 and n_ahora < n_antes * 0.7:
                 txt += (f"\n[CONDUCTA: los tests bajaron de {n_antes} a {n_ahora}. No borres ni debilites tests para que "
@@ -355,13 +356,13 @@ class Herramientas:
         n = max(self.procesos, default=0) + 1
         self.dir_agente.mkdir(exist_ok=True)
         log = self.dir_agente / f"proceso_{n}.log"
-        f = open(log, "wb")
+        f = open(log, "wb")  # noqa: SIM115 -- abierto mientras viva el proceso; se cierra al detenerlo
         proc = subprocess.Popen(comando, shell=True, cwd=self.raiz, env=self._entorno(), stdin=subprocess.DEVNULL,
                                 stdout=f, stderr=subprocess.STDOUT,
                                 creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
         self.procesos[n] = {"proc": proc, "log": log, "archivo": f, "comando": comando}
         time.sleep(4)  # captura errores de arranque
-        estado = "TERMINÓ (exit=%s)" % proc.returncode if proc.poll() is not None else "en ejecución"
+        estado = f"TERMINÓ (exit={proc.returncode})" if proc.poll() is not None else "en ejecución"
         if proc.poll() is None:
             self.paso_prueba = self.paso
         return f"Proceso #{n} {estado}. Log inicial:\n{self._cola_log(n)}\nUsa procesos(accion='ver', id={n}) o 'detener'."
@@ -407,10 +408,10 @@ class Herramientas:
                        "if exist requirements.txt (",
                        "  python -m pip install -q -r requirements.txt || (set \"RC=1\" & goto :error)", ")"]
         reales = [c.strip() for c in comandos if c.strip()]
-        total = sum(1 for c in reales if not re.match(r"(echo|rem|cls|title)\b", c, re.I))
+        total = sum(1 for c in reales if not re.match(r"(echo|rem|cls|title)\b", c, re.IGNORECASE))
         i = 0
         for c in reales:
-            if re.match(r"(echo|rem|cls|title)\b", c, re.I):  # mensajes: tal cual, sin numerar ni comprobar
+            if re.match(r"(echo|rem|cls|title)\b", c, re.IGNORECASE):  # mensajes: tal cual, sin numerar ni comprobar
                 lineas.append(c)
                 continue
             i += 1
@@ -432,7 +433,7 @@ class Herramientas:
         base = ["git", "--no-pager", "-c", "color.ui=false", "-c", "core.quotepath=false"]
         r = subprocess.run(subprocess.list2cmdline(base) + " " + linea if linea else base + list(args), cwd=self.raiz,
                            env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
-                           creationflags=subprocess.CREATE_NO_WINDOW)
+                           creationflags=subprocess.CREATE_NO_WINDOW, check=False)
         return r.returncode, decodificar(r.stdout + r.stderr).strip()
 
     def git(self, accion: str = "estado", mensaje: str = "", nombre: str = "", ruta: str = "", comando: str = "") -> str:
@@ -464,7 +465,7 @@ class Herramientas:
             comando = re.sub(r"^\s*git\s+", "", comando or "").strip()
             if not comando:
                 return "Indica 'comando' (lo que va tras 'git', p. ej. 'init' o 'show HEAD')."
-            if re.search(r"\bpush\b", comando, re.I):
+            if re.search(r"\bpush\b", comando, re.IGNORECASE):
                 return "BLOQUEADO: el agente nunca hace push. Súbelo tú cuando hayas revisado los commits."
             if (bloqueo := self._permitido("git " + comando)):
                 return bloqueo
@@ -491,7 +492,7 @@ class Herramientas:
             pagina, _ = self._descargar("https://html.duckduckgo.com/html/",
                                         urllib.parse.urlencode({"q": consulta}).encode())
             for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</a>',
-                                 pagina, re.S):
+                                 pagina, re.DOTALL):
                 url = m.group(1)
                 if "uddg=" in url:
                     url = urllib.parse.unquote(url.split("uddg=")[1].split("&")[0])
@@ -501,15 +502,15 @@ class Herramientas:
         if not res:  # 2) Bing como respaldo
             try:
                 pagina, _ = self._descargar("https://www.bing.com/search?" + urllib.parse.urlencode({"q": consulta, "setlang": "es"}))
-                for bloque in re.findall(r'<li class="b_algo"(.*?)</li>', pagina, re.S):
-                    a = re.search(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', bloque, re.S)
+                for bloque in re.findall(r'<li class="b_algo"(.*?)</li>', pagina, re.DOTALL):
+                    a = re.search(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', bloque, re.DOTALL)
                     if not a:
                         continue
                     url = html.unescape(a.group(1))
                     if "bing.com/ck/a" in url and (u := re.search(r"[?&]u=a1([^&]+)", url)):
                         cod = u.group(1)
                         url = base64.urlsafe_b64decode(cod + "=" * (-len(cod) % 4)).decode("utf-8", "replace")
-                    snip = re.search(r"<p[^>]*>(.*?)</p>", bloque, re.S)
+                    snip = re.search(r"<p[^>]*>(.*?)</p>", bloque, re.DOTALL)
                     res.append((limpiar(a.group(2)), url, limpiar(snip.group(1)) if snip else ""))
             except Exception as e:
                 fallos.append(f"Bing: {e}")
@@ -596,7 +597,7 @@ class Herramientas:
         cp = self.checkpoints[n - 1]
         for rel, texto in cp["archivos"].items():
             self._guardar(self.raiz / rel, texto)
-        nuevos = sorted(set(self.rel(p) for p in self._fuentes()) - set(cp["archivos"]))
+        nuevos = sorted({self.rel(p) for p in self._fuentes()} - set(cp["archivos"]))
         self.reescrituras.clear()
         self.fallos_desde_verde = 0
         self.verificacion = {"paso": self.paso, "errores": 0, "informe": f"restaurado checkpoint #{n}"}
@@ -681,7 +682,7 @@ class Herramientas:
         patron = re.compile(rf"^- \[[ x!]\] {int(numero)}\. ")
         for i, l in enumerate(lineas):
             if patron.match(l):
-                if (re.search(r"prob|test|verific|ejecut|comprob|revis", l, re.I)
+                if (re.search(r"prob|test|verific|ejecut|comprob|revis", l, re.IGNORECASE)
                         and self.paso_prueba < max(self.paso_escritura, self.inicio_tarea)):
                     return (f"RECHAZADO: el paso {numero} es de prueba/verificación y no hay ninguna ejecución con éxito "
                             "después de tu último cambio. Ejecuta la prueba (o verificar) y luego márcalo.")

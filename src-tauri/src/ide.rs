@@ -84,10 +84,8 @@ pub async fn get_git_info(workspace_path: String) -> Value {
 #[tauri::command]
 pub fn list_checkpoints(workspace_path: String) -> Vec<Value> {
     let path = Path::new(&workspace_path).join(".agente").join("checkpoints.json");
-    let list: Vec<Value> = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default();
+    let list: Vec<Value> =
+        std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
     list.iter()
         .enumerate()
         .map(|(i, cp)| {
@@ -123,7 +121,8 @@ pub fn read_image_data_url(path: String) -> Result<String, String> {
 pub(crate) fn is_local_url(url: &str) -> bool {
     let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")).unwrap_or_default();
     let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let host = host.rsplit_once(':').filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit())).map_or(host, |(h, _)| h);
+    let host =
+        host.rsplit_once(':').filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit())).map_or(host, |(h, _)| h);
     matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
@@ -243,9 +242,12 @@ mod tests {
         let ws = std::env::temp_dir().join(format!("aura_ide_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ws);
         std::fs::create_dir_all(ws.join(".agente")).unwrap();
-        std::fs::write(ws.join(".agente").join("checkpoints.json"),
+        std::fs::write(
+            ws.join(".agente").join("checkpoints.json"),
             r#"[{"paso": 4, "fecha": "2026-10-16 10:00", "archivos": {"a.py": "x"}},
-                {"paso": 9, "fecha": "2026-10-16 10:30", "archivos": {"a.py": "y", "b.py": "z"}}]"#).unwrap();
+                {"paso": 9, "fecha": "2026-10-16 10:30", "archivos": {"a.py": "y", "b.py": "z"}}]"#,
+        )
+        .unwrap();
         let list = list_checkpoints(ws.to_string_lossy().into_owned());
         assert_eq!(list[0]["numero"], 2);
         assert_eq!(list[0]["archivos"], json!(["a.py", "b.py"]));

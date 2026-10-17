@@ -2,6 +2,16 @@
   "name": "aurasentinel",
   "version": "4.2.0",
   "private": true,
+  "description": "IDE de escritorio para Windows con un agente de programación que funciona en local.",
+  "author": "Ramón Antonio Burgos Jerez (yemsy26) (https://github.com/yemsy26)",
+  "homepage": "https://github.com/yemsy26/aura-sentinel#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yemsy26/aura-sentinel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yemsy26/aura-sentinel/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +21,7 @@
     "test": "tsc --noEmit && vitest run && cargo test --manifest-path src-tauri/Cargo.toml --all-targets",
     "tauri": "tauri"
   },
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@tauri-apps/api": "~2.11.0",
     "@tauri-apps/plugin-dialog": "~2.7.1",

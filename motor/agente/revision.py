@@ -57,5 +57,5 @@ def revisar(llm, raiz: Path, tarea: str, informe: str, enfoque: str = "") -> tup
     texto = r["content"].strip()
     if not texto:
         return "REVISIÓN: el revisor no respondió.", True
-    aprobado = bool(re.search(r"VEREDICTO:\s*APROBADO", texto, re.I)) and not re.search(r"\[CRITICO\]", texto, re.I)
+    aprobado = bool(re.search(r"VEREDICTO:\s*APROBADO", texto, re.IGNORECASE)) and not re.search(r"\[CRITICO\]", texto, re.IGNORECASE)
     return "REVISIÓN:\n" + texto, aprobado

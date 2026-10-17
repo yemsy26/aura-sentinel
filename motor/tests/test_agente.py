@@ -7,13 +7,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agente.bucle import archivos_pedidos, coaccionar, llamadas_en_texto  # noqa: E402
-from agente.contexto import Contexto  # noqa: E402
-from agente.herramientas import INSTALACIONES, MIN_INSTALACION, Herramientas, despachar, recortar  # noqa: E402
-from agente.modelo import fraccion_expertos, guardar_config, leer_gguf  # noqa: E402
+from agente.bucle import archivos_pedidos, coaccionar, llamadas_en_texto
+from agente.contexto import Contexto
+from agente.herramientas import INSTALACIONES, MIN_INSTALACION, Herramientas, despachar, recortar
+from agente.modelo import fraccion_expertos, guardar_config, leer_gguf
 
 
 class TestHerramientas(unittest.TestCase):
@@ -196,7 +197,7 @@ class TestModelo(unittest.TestCase):
 
 class LLMGuion:
     """Modelo falso: devuelve en orden las respuestas preparadas."""
-    respuestas: list = []
+    respuestas: ClassVar[list] = []
 
     def __init__(self, base, modelo, contexto, cfg):
         self.base, self.modelo, self.contexto, self.cfg = base, modelo, contexto, cfg
@@ -233,7 +234,7 @@ class TestModoJson(unittest.TestCase):
                    {"tipo": "plan"}, {"tipo": "salir"}]
         entrada = io.TextIOWrapper(io.BytesIO("".join(json.dumps(o) + "\n" for o in ordenes).encode()), encoding="utf-8")
         salida, real = io.StringIO(), sys.stdout
-        falso = lambda cfg: ("http://falso", "falso", 32768)  # noqa: E731
+        falso = lambda cfg: ("http://falso", "falso", 32768)
         with mock.patch.object(cli, "detectar", falso), mock.patch("agente.bucle.cliente.detectar", falso), \
                 mock.patch("agente.bucle.cliente.LLM", LLMGuion), mock.patch("agente.bucle.entorno", lambda: "prueba"), \
                 mock.patch.object(sys, "stdin", entrada), mock.patch.object(sys, "stdout", salida):
@@ -264,7 +265,7 @@ class TestModoJson(unittest.TestCase):
         ordenes = [{"tipo": "procesos"}, {"tipo": "detener", "id": 7}, {"tipo": "restaurar"}, {"tipo": "salir"}]
         entrada = io.TextIOWrapper(io.BytesIO("".join(json.dumps(o) + "\n" for o in ordenes).encode()), encoding="utf-8")
         salida = io.StringIO()
-        falso = lambda cfg: ("http://falso", "falso", 32768)  # noqa: E731
+        falso = lambda cfg: ("http://falso", "falso", 32768)
         with mock.patch.object(cli, "detectar", falso), mock.patch("agente.bucle.cliente.detectar", falso), \
                 mock.patch("agente.bucle.cliente.LLM", LLMGuion), mock.patch("agente.bucle.entorno", lambda: "prueba"), \
                 mock.patch.object(sys, "stdin", entrada), mock.patch.object(sys, "stdout", salida):

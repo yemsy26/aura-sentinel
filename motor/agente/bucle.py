@@ -54,10 +54,10 @@ def coaccionar(nombre: str, args: dict) -> dict:
 def llamadas_en_texto(texto: str) -> list:
     """Respaldo para modelos/servidores que escriben la llamada como texto en vez de usar tool_calls."""
     out = []
-    for bloque in re.findall(r"<tool_call>(.*?)(?:</tool_call>|$)", texto, re.S):
-        m = re.search(r"<function=([\w.-]+)>(.*?)(?:</function>|$)", bloque, re.S)
+    for bloque in re.findall(r"<tool_call>(.*?)(?:</tool_call>|$)", texto, re.DOTALL):
+        m = re.search(r"<function=([\w.-]+)>(.*?)(?:</function>|$)", bloque, re.DOTALL)
         if m:
-            args = {p: v.strip("\n") for p, v in re.findall(r"<parameter=([\w-]+)>\n?(.*?)\n?</parameter>", m.group(2), re.S)}
+            args = {p: v.strip("\n") for p, v in re.findall(r"<parameter=([\w-]+)>\n?(.*?)\n?</parameter>", m.group(2), re.DOTALL)}
             out.append({"name": m.group(1), "arguments": json.dumps(args, ensure_ascii=False)})
             continue
         try:
@@ -158,7 +158,7 @@ class Agente:
         self.ctx.usuario(texto)
         self._log(f"USUARIO: {texto}")
         nuevos = archivos_pedidos(texto)
-        if nuevos or not re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.I):
+        if nuevos or not re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.IGNORECASE):
             self.requeridos = nuevos  # 'continúa' conserva los de la tarea en curso
         self.h.nueva_tarea(self.pasos_totales + 1)
         self.inicio_tarea, self.revisiones = self.pasos_totales + 1, 0
@@ -186,7 +186,7 @@ class Agente:
             self._limpiar_linea()
             self.ctx.calibrar((r["usage"] or {}).get("prompt_tokens", 0), enviados)
             llamadas = r["tool_calls"] or llamadas_en_texto(r["content"])
-            contenido = re.sub(r"<tool_call>.*?(</tool_call>|$)", "", r["content"], flags=re.S).strip()
+            contenido = re.sub(r"<tool_call>.*?(</tool_call>|$)", "", r["content"], flags=re.DOTALL).strip()
             razonar = modo == "on"
 
             if not llamadas:

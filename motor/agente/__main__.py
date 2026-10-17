@@ -114,7 +114,7 @@ def _protocolo(cfg: dict, carpeta: str, canal) -> int:
                     emitir("archivos", rutas=[])
                 else:
                     respuesta, estado = f"Orden desconocida: {tipo}", "error"
-            except Exception as e:  # noqa: BLE001 - el proceso sigue vivo para la siguiente orden
+            except Exception as e:
                 agente.ctx.reparar()
                 respuesta, estado = f"Error interno: {type(e).__name__}: {e}", "error"
             emitir("fin", orden=tipo, estado=estado, respuesta=respuesta, uso=agente.ctx.uso(), datos=datos)

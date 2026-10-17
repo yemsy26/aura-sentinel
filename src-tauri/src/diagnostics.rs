@@ -1,5 +1,5 @@
-use tauri::{Listener, Manager};
 use std::io::Write;
+use tauri::{Listener, Manager};
 
 fn diagnostic_exit_code(result: &Result<String, String>) -> i32 {
     let finished = result
@@ -8,11 +8,16 @@ fn diagnostic_exit_code(result: &Result<String, String>) -> i32 {
         .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
         .and_then(|value| value.get("status").and_then(|status| status.as_str()).map(str::to_string))
         .is_some_and(|status| status == "FINISH");
-    if finished { 0 } else { 1 }
+    if finished {
+        0
+    } else {
+        1
+    }
 }
 
 pub fn start(app: &tauri::AppHandle, job_path: &str) -> Result<(), String> {
-    let job: serde_json::Value = serde_json::from_slice(&std::fs::read(job_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let job: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(job_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let workspace = job["workspace"].as_str().ok_or("workspace required")?.to_string();
     let prompt = job["prompt"].as_str().ok_or("prompt required")?.to_string();
     let model = job["model"].as_str().map(str::to_string); // vacío = el modelo de agente.json
@@ -26,10 +31,15 @@ pub fn start(app: &tauri::AppHandle, job_path: &str) -> Result<(), String> {
         app.listen(event_name, move |event| {
             let record = serde_json::json!({"elapsed_ms": started.elapsed().as_millis(), "event": event_name,
                 "payload": serde_json::from_str::<serde_json::Value>(event.payload()).unwrap_or_default()});
-            if let Ok(mut writer) = file.lock() { let _ = writeln!(writer, "{}", record); let _ = writer.flush(); }
+            if let Ok(mut writer) = file.lock() {
+                let _ = writeln!(writer, "{}", record);
+                let _ = writer.flush();
+            }
         });
     }
-    if let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = crate::agent::process_user_prompt(prompt, workspace, model, handle.clone()).await;

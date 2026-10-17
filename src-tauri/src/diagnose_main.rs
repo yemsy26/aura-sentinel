@@ -1,1 +1,3 @@
-fn main() { app_lib::run(); }
+fn main() {
+    app_lib::run();
+}

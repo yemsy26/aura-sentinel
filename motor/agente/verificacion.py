@@ -80,7 +80,7 @@ def _correr(cmd, cwd, timeout=60, entorno=None) -> tuple[int | None, str]:
         salida, _ = proc.communicate(timeout=timeout)
         codigo = proc.returncode
     except subprocess.TimeoutExpired:
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
         salida, _ = proc.communicate()
         codigo = None
     try:
@@ -127,7 +127,7 @@ def lint_python(raiz: Path, rutas: list[Path], inf: Informe, rapido: bool = Fals
             continue
         archivo, num, codigo, msg = m.groups()
         detalle = f"{_rel(Path(archivo), raiz)}:{num} {TEXTO_RUFF.get(codigo, '')} [{codigo}: {msg}]".replace("  ", " ")
-        if codigo.startswith("E9") or codigo in RUFF_ERRORES or codigo.startswith("PLE"):
+        if codigo.startswith(("E9", "PLE")) or codigo in RUFF_ERRORES:
             inf.errores.append(detalle)
         elif codigo != "F401":  # imports sin usar: inofensivos, y "arreglarlos" rompe código que funciona
             inf.avisos.append(detalle)
@@ -243,7 +243,7 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
         for semilla in (1, 2, 3):  # tres partidas distintas pero reproducibles
             codigo, salida = _correr([python, str(SONDA_PYGAME), str(entrada), str(tramo)], entrada.parent, tramo + 25,
                                      dict(env, SONDA_SEMILLA=str(semilla)))
-            m = re.search(r"^SONDA (\{.*\})$", salida, re.M)
+            m = re.search(r"^SONDA (\{.*\})$", salida, re.MULTILINE)
             if codigo is None or not m:
                 if "No module named 'pygame'" in salida:
                     inf.errores.append("pygame no está instalado en el entorno del proyecto: añade pygame-ce a "
@@ -295,8 +295,8 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
 
 # ---------------------------------------------------------------- HTML / JS
 class _HtmlInfo(html.parser.HTMLParser):
-    VACIOS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
-              "param", "!doctype"}
+    VACIOS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source",
+                        "track", "wbr", "param", "!doctype"})
 
     def __init__(self):
         super().__init__()
@@ -364,7 +364,7 @@ def librerias_cdn(raiz: Path, htmls: list[Path], inf: Informe) -> None:
                 continue
             vistas.add((nombre, usada))
             # cdnjs "three.js" es npm "three" (en npm hay un "three.js" abandonado): gana la versión más alta
-            candidatos = [(p, v) for p in dict.fromkeys((nombre, re.sub(r"\.js$", "", nombre, flags=re.I).lower()))
+            candidatos = [(p, v) for p in dict.fromkeys((nombre, re.sub(r"\.js$", "", nombre, flags=re.IGNORECASE).lower()))
                           if (v := ultima_npm(p))]
             paquete, actual = max(candidatos, key=lambda c: [int(x) for x in re.findall(r"\d+", c[1])],
                                   default=(None, None))
@@ -468,11 +468,11 @@ def navegador(raiz: Path, htmls: list[Path], inf: Informe) -> None:
                 rel = _rel(h, raiz).replace("\\", "/")
                 pag = nav.new_page(viewport={"width": 1024, "height": 768})
                 problemas = []
-                pag.on("pageerror", lambda e: problemas.append(("error", f"EXCEPCIÓN JS: {e}")))
-                pag.on("console", lambda m: problemas.append(("error" if m.type == "error" else "aviso", f"consola.{m.type}: {m.text[:200]}"))
+                pag.on("pageerror", lambda e, problemas=problemas: problemas.append(("error", f"EXCEPCIÓN JS: {e}")))
+                pag.on("console", lambda m, problemas=problemas: problemas.append(("error" if m.type == "error" else "aviso", f"consola.{m.type}: {m.text[:200]}"))
                        if m.type in ("error", "warning") else None)
-                pag.on("requestfailed", lambda r: problemas.append(("error", f"no cargó {r.url.split('/', 3)[-1]}")))
-                pag.on("response", lambda r: problemas.append(("error", f"HTTP {r.status}: {r.url.split('/', 3)[-1]}"))
+                pag.on("requestfailed", lambda r, problemas=problemas: problemas.append(("error", f"no cargó {r.url.split('/', 3)[-1]}")))
+                pag.on("response", lambda r, problemas=problemas: problemas.append(("error", f"HTTP {r.status}: {r.url.split('/', 3)[-1]}"))
                        if r.status >= 400 and not r.url.endswith("favicon.ico") else None)
                 try:
                     pag.goto(f"http://127.0.0.1:{servidor.server_port}/{rel}", wait_until="load", timeout=20000)
@@ -550,7 +550,7 @@ def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
     lista = raiz / ".agente" / "java_fuentes.txt"
     lista.write_text("\n".join(f'"{f.as_posix()}"' for f in principales), encoding="utf-8")
     codigo, salida = _correr(["javac", "-encoding", "UTF-8", "-Xlint:all", "-d", str(salida_dir), f"@{lista}"], raiz, 180)
-    for m in re.finditer(r"^(.+?\.java):(\d+): (error|warning): (.+)$", salida, re.M):
+    for m in re.finditer(r"^(.+?\.java):(\d+): (error|warning): (.+)$", salida, re.MULTILINE):
         detalle = f"{_rel(Path(m.group(1)), raiz)}:{m.group(2)} {m.group(4)}"
         (inf.errores if m.group(3) == "error" else inf.avisos).append(detalle)
     if codigo != 0:
@@ -561,7 +561,7 @@ def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
     for f in principales:
         texto = f.read_text(encoding="utf-8", errors="replace")
         if re.search(r"static\s+void\s+main\s*\(", texto):
-            paquete = re.search(r"^\s*package\s+([\w.]+)\s*;", texto, re.M)
+            paquete = re.search(r"^\s*package\s+([\w.]+)\s*;", texto, re.MULTILINE)
             clase = f"{paquete.group(1)}.{f.stem}" if paquete else f.stem
             codigo, salida = _correr(["java", "-Djava.awt.headless=true", "-cp", str(salida_dir), clase], raiz, segundos)
             if codigo is None:
@@ -582,18 +582,18 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
     for b in lista:
         texto = b.read_text(encoding="utf-8", errors="replace")
         rel = _rel(b, raiz)
-        if not re.search(r'cd\s+/d\s+"?%~dp0', texto, re.I) and re.search(r"\b(python|py|node|java|javac)\b", texto, re.I):
+        if not re.search(r'cd\s+/d\s+"?%~dp0', texto, re.IGNORECASE) and re.search(r"\b(python|py|node|java|javac)\b", texto, re.IGNORECASE):
             inf.avisos.append(f"{rel}: no hace cd /d \"%~dp0\": fallará si se abre desde otra carpeta.")
         lineas = [l.strip() for l in texto.splitlines()]
         for i, l in enumerate(lineas):
-            if re.search(r"(http\.server|flask\s+run|uvicorn|npm\s+(run\s+)?(start|dev)|npx\s+serve|live-server)", l, re.I) \
+            if re.search(r"(http\.server|flask\s+run|uvicorn|npm\s+(run\s+)?(start|dev)|npx\s+serve|live-server)", l, re.IGNORECASE) \
                     and not re.match(r"(?i)(echo|rem|start)\b", l):
                 despues = [x for x in lineas[i + 1:] if x and not re.match(r"(?i)(echo|rem|::|if |goto|exit|pause|:|\))", x)]
                 if despues:
                     inf.errores.append(f"{rel}: '{l[:60]}' bloquea (el servidor no termina) y las líneas siguientes "
                                        f"('{despues[0][:40]}') nunca se ejecutan. Pon 'start \"\" http://...' ANTES del servidor.")
         patron = r'\b(?:python|py(?: -3\.\d+)?|node|java -jar)\s+(?:"([^"]+\.(?:py|js|mjs|jar))"|(?!-)([^\s"&|<>]+\.(?:py|js|mjs|jar))\b)'
-        for m in re.finditer(patron, texto, re.I):
+        for m in re.finditer(patron, texto, re.IGNORECASE):
             destino = (m.group(1) or m.group(2)).strip()
             if "%" not in destino and not (b.parent / destino).exists():
                 inf.errores.append(f"{rel} ejecuta '{destino}' y ese archivo NO existe junto al .bat.")

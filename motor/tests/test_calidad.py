@@ -8,9 +8,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agente import conocimiento, herramientas  # noqa: E402
-from agente.herramientas import Herramientas  # noqa: E402
-from agente.verificacion import verificar  # noqa: E402
+from agente import conocimiento, herramientas
+from agente.herramientas import Herramientas
+from agente.verificacion import verificar
 
 HAY_NAVEGADOR = importlib.util.find_spec("playwright") is not None
 HAY_JAVA = shutil.which("javac") is not None
@@ -41,7 +41,7 @@ class TestVerificarPython(Base):
             "def main():\n    j = Juego()\n    j.colisiones([1], [1])\n    print(j.puntos)\n\n"
             "if __name__ == '__main__':\n    main()\n"))
         self.escribir("test_main.py", "import os\n\ndef test_nada():\n    assert os.sep\n")
-        informe, errores = verificar(self.dir, sys.executable, segundos=6)
+        informe, _errores = verificar(self.dir, sys.executable, segundos=6)
         self.assertIn("golpes", informe)                     # ruff F841
         self.assertIn("mostrar_menu", informe)               # vulture: método nunca usado
         self.assertIn("NO prueba tu código", informe)        # test falso
@@ -50,7 +50,7 @@ class TestVerificarPython(Base):
     def test_clase_nunca_usada_es_error_y_decorada_no(self):
         self.escribir("app.py", "def ruta(f):\n    return f\n\n@ruta\ndef listar():\n    return []\n\n"
                                 "class Jugador:\n    pass\n\nif __name__ == '__main__':\n    print(ruta)\n")
-        informe, errores = verificar(self.dir, sys.executable)
+        informe, _errores = verificar(self.dir, sys.executable)
         self.assertIn("clase 'Jugador' NUNCA se usa", informe)
         self.assertNotIn("'listar'", informe)
 
@@ -64,7 +64,7 @@ class TestVerificarPython(Base):
         self.escribir("calc.py", "def suma(a, b):\n    return a - b\n")
         self.escribir("test_calc.py", "import unittest\nfrom calc import suma\n\nclass T(unittest.TestCase):\n"
                                       "    def test_suma(self):\n        self.assertEqual(suma(2, 2), 4)\n")
-        informe, errores = verificar(self.dir, sys.executable)
+        informe, _errores = verificar(self.dir, sys.executable)
         self.assertIn("Tests FALLAN", informe)
 
 
@@ -93,7 +93,7 @@ class TestVerificarWeb(Base):
                                     "</body></html>")
         self.escribir("app.js", 'const m = document.getElementById("marcador");\nfunction bucle(){ dibujar(); '
                                 "requestAnimationFrame(bucle); }\nrequestAnimationFrame(bucle);\n")
-        informe, errores = verificar(self.dir, sys.executable)
+        informe, _errores = verificar(self.dir, sys.executable)
         for esperado in ("no.css", "id='marcador'", "dibujar is not defined", "VACÍO"):
             self.assertIn(esperado, informe)
 

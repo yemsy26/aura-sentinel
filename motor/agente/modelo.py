@@ -36,7 +36,7 @@ def vram() -> tuple[int, int] | None:
     if not shutil.which("nvidia-smi"):
         return None
     r = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     try:
         usada, total = map(int, r.stdout.strip().splitlines()[0].split(","))
         return usada, total
@@ -196,7 +196,7 @@ def argumento_llama(nombre: str) -> str | None:
     """Valor de un argumento en la línea de comandos de llama-server: lo que la app aplicó de verdad."""
     ps = "(Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\").CommandLine"
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=40)
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=40, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
     m = re.search(rf"{re.escape(nombre)}\s+(\S+)", r.stdout)
@@ -257,7 +257,7 @@ def memoria_procesos() -> dict[int, list] | None:
     ps = ("foreach($c in 'Dedicated','Shared'){(Get-Counter \"\\GPU Process Memory(*)\\$c Usage\" -EA Stop)."
           "CounterSamples | % { \"$c|$($_.InstanceName)|$([int64]$_.CookedValue)\" }}")
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=40)
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=40, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
     datos: dict[int, list] = {}
@@ -270,7 +270,7 @@ def memoria_procesos() -> dict[int, list] | None:
 
 
 def nombre_proceso(pid: int) -> str:
-    r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True)
+    r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True, check=False)
     return r.stdout.split(",")[0].strip('"') if r.stdout.startswith('"') else str(pid)
 
 

@@ -27,22 +27,12 @@ pub struct UserProfile {
     pub auto_remember_facts: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileSnapshot {
     pub profile: UserProfile,
     pub windows_region_suggestion: Option<String>,
     pub project_country: Option<String>,
-}
-
-impl Default for ProfileSnapshot {
-    fn default() -> Self {
-        Self {
-            profile: UserProfile::default(),
-            windows_region_suggestion: None,
-            project_country: None,
-        }
-    }
 }
 
 fn storage_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -51,8 +41,7 @@ fn storage_root(app: &AppHandle) -> Result<PathBuf, String> {
         .local_data_dir()
         .map_err(|error| format!("No se pudo localizar el almacenamiento local: {error}"))?
         .join("AuraSentinel");
-    std::fs::create_dir_all(&root)
-        .map_err(|error| format!("No se pudo preparar el perfil local: {error}"))?;
+    std::fs::create_dir_all(&root).map_err(|error| format!("No se pudo preparar el perfil local: {error}"))?;
     Ok(root)
 }
 
@@ -64,11 +53,7 @@ pub fn load(app: &AppHandle, workspace: Option<&str>) -> Result<ProfileSnapshot,
         .map(|path| load_project_country(&root, path))
         .transpose()?
         .flatten();
-    Ok(ProfileSnapshot {
-        profile,
-        windows_region_suggestion: windows_home_region(),
-        project_country,
-    })
+    Ok(ProfileSnapshot { profile, windows_region_suggestion: windows_home_region(), project_country })
 }
 
 pub fn save(app: &AppHandle, profile: UserProfile) -> Result<UserProfile, String> {
@@ -81,28 +66,19 @@ pub fn save(app: &AppHandle, profile: UserProfile) -> Result<UserProfile, String
 pub fn clear(app: &AppHandle) -> Result<(), String> {
     let path = storage_root(app)?.join(PROFILE_FILE);
     if path.exists() {
-        std::fs::remove_file(path)
-            .map_err(|error| format!("No se pudo borrar el perfil: {error}"))?;
+        std::fs::remove_file(path).map_err(|error| format!("No se pudo borrar el perfil: {error}"))?;
     }
     Ok(())
 }
 
-pub fn save_project_country(
-    app: &AppHandle,
-    workspace: &str,
-    country: Option<String>,
-) -> Result<(), String> {
+pub fn save_project_country(app: &AppHandle, workspace: &str, country: Option<String>) -> Result<(), String> {
     if workspace.trim().is_empty() {
         return Err("Selecciona un espacio de trabajo para guardar su país objetivo.".into());
     }
     save_project_country_at(&storage_root(app)?, workspace, country)
 }
 
-fn save_project_country_at(
-    root: &Path,
-    workspace: &str,
-    country: Option<String>,
-) -> Result<(), String> {
+fn save_project_country_at(root: &Path, workspace: &str, country: Option<String>) -> Result<(), String> {
     let path = root.join(PROJECT_FILE);
     let mut contexts = read_json::<HashMap<String, String>>(&path)?.unwrap_or_default();
     let key = workspace_key(workspace);
@@ -162,17 +138,9 @@ pub fn remember_explicit_facts(profile: &mut UserProfile, message: &str) -> bool
         return false;
     }
     let mut changed = false;
-    if let Some(value) = capture_after_any(
-        message,
-        &[
-            "me llamo ",
-            "mi nombre es ",
-            "llámame ",
-            "llamame ",
-            "my name is ",
-            "call me ",
-        ],
-    ) {
+    if let Some(value) =
+        capture_after_any(message, &["me llamo ", "mi nombre es ", "llámame ", "llamame ", "my name is ", "call me "])
+    {
         if let Some(value) = clean_value(&value, 60) {
             if profile.display_name.as_deref() != Some(&value) {
                 profile.display_name = Some(value);
@@ -180,9 +148,7 @@ pub fn remember_explicit_facts(profile: &mut UserProfile, message: &str) -> bool
             }
         }
     }
-    if let Some(value) =
-        capture_sentence_after_any(message, &["mi ciudad es ", "vivo en ", "i live in "])
-    {
+    if let Some(value) = capture_sentence_after_any(message, &["mi ciudad es ", "vivo en ", "i live in "]) {
         let mut parts = value.split(',').map(str::trim);
         let first = parts.next().unwrap_or_default();
         if let Some(country) = country_name_to_code(first) {
@@ -205,9 +171,7 @@ pub fn remember_explicit_facts(profile: &mut UserProfile, message: &str) -> bool
             }
         }
     }
-    if let Some(value) =
-        capture_sentence_after_any(message, &["mi país es ", "mi pais es ", "my country is "])
-    {
+    if let Some(value) = capture_sentence_after_any(message, &["mi país es ", "mi pais es ", "my country is "]) {
         if let Some(value) = country_name_to_code(&value) {
             if profile.home_country.as_deref() != Some(value) {
                 profile.home_country = Some(value.into());
@@ -219,26 +183,16 @@ pub fn remember_explicit_facts(profile: &mut UserProfile, message: &str) -> bool
 }
 
 fn capture_after_any(message: &str, phrases: &[&str]) -> Option<String> {
-    capture_sentence_after_any(message, phrases).map(|value| {
-        value
-            .split(',')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    })
+    capture_sentence_after_any(message, phrases)
+        .map(|value| value.split(',').next().unwrap_or_default().trim().to_string())
 }
 
 fn capture_sentence_after_any(message: &str, phrases: &[&str]) -> Option<String> {
     let lower = message.to_lowercase();
     for phrase in phrases {
         if let Some(start) = lower.find(phrase).map(|i| i + phrase.len()) {
-            let value = message
-                .get(start..)?
-                .split(['.', ';', '\n', '!', '?'])
-                .next()?
-                .trim()
-                .trim_matches(['"', '\'', '`']);
+            let value =
+                message.get(start..)?.split(['.', ';', '\n', '!', '?']).next()?.trim().trim_matches(['"', '\'', '`']);
             if !value.is_empty() {
                 return Some(value.to_string());
             }
@@ -248,13 +202,7 @@ fn capture_sentence_after_any(message: &str, phrases: &[&str]) -> Option<String>
 }
 
 fn clean_value(value: &str, max_chars: usize) -> Option<String> {
-    let value = value
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take(max_chars)
-        .collect::<String>()
-        .trim()
-        .to_string();
+    let value = value.chars().filter(|ch| !ch.is_control()).take(max_chars).collect::<String>().trim().to_string();
     if value.is_empty() {
         None
     } else {
@@ -338,17 +286,16 @@ fn validate_country(country: &str) -> Result<String, String> {
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>, String> {
     match std::fs::read_to_string(path) {
-        Ok(value) => serde_json::from_str(&value)
-            .map(Some)
-            .map_err(|e| format!("No se pudo leer la configuración local: {e}")),
+        Ok(value) => {
+            serde_json::from_str(&value).map(Some).map_err(|e| format!("No se pudo leer la configuración local: {e}"))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("No se pudo abrir la configuración local: {e}")),
     }
 }
 
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    let bytes =
-        serde_json::to_vec_pretty(value).map_err(|e| format!("No se pudo serializar: {e}"))?;
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("No se pudo serializar: {e}"))?;
     let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     std::fs::write(&temp, bytes).map_err(|e| format!("No se pudo escribir el temporal: {e}"))?;
     replace_file(&temp, path).map_err(|e| {
@@ -377,12 +324,7 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
         fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
         fn GetLastError() -> u32;
     }
-    let wide = |path: &Path| {
-        path.as_os_str()
-            .encode_wide()
-            .chain(Some(0))
-            .collect::<Vec<_>>()
-    };
+    let wide = |path: &Path| path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
     let source_wide = wide(source);
     let destination_wide = wide(destination);
     let replacement_ok = unsafe {
@@ -405,13 +347,7 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     if error != 2 && error != 3 {
         return Err(std::io::Error::from_raw_os_error(error as i32));
     }
-    let move_ok = unsafe {
-        MoveFileExW(
-            source_wide.as_ptr(),
-            destination_wide.as_ptr(),
-            0x0000_0001 | 0x0000_0008,
-        )
-    };
+    let move_ok = unsafe { MoveFileExW(source_wide.as_ptr(), destination_wide.as_ptr(), 0x0000_0001 | 0x0000_0008) };
     if move_ok != 0 {
         Ok(())
     } else {
@@ -425,9 +361,7 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
 }
 
 fn workspace_key(workspace: &str) -> String {
-    let path = Path::new(workspace)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(workspace));
+    let path = Path::new(workspace).canonicalize().unwrap_or_else(|_| PathBuf::from(workspace));
     let mut normalized = path.to_string_lossy().trim().to_string();
     #[cfg(windows)]
     {
@@ -437,8 +371,7 @@ fn workspace_key(workspace: &str) -> String {
 }
 
 fn load_project_country(root: &Path, workspace: &str) -> Result<Option<String>, String> {
-    let contexts =
-        read_json::<HashMap<String, String>>(&root.join(PROJECT_FILE))?.unwrap_or_default();
+    let contexts = read_json::<HashMap<String, String>>(&root.join(PROJECT_FILE))?.unwrap_or_default();
     Ok(contexts.get(&workspace_key(workspace)).cloned())
 }
 
@@ -455,9 +388,7 @@ fn windows_home_region() -> Option<String> {
     if length <= 1 || length as usize > buffer.len() {
         return None;
     }
-    let code = std::ffi::OsString::from_wide(&buffer[..length as usize - 1])
-        .to_string_lossy()
-        .to_ascii_uppercase();
+    let code = std::ffi::OsString::from_wide(&buffer[..length as usize - 1]).to_string_lossy().to_ascii_uppercase();
     validate_country(&code).ok()
 }
 
@@ -479,24 +410,18 @@ mod tests {
     fn profile_round_trips_only_the_allowlisted_personal_fields() {
         let root = temp_root();
         let profile = sanitize(UserProfile {
-            display_name: Some("Yemsy".into()),
+            display_name: Some("Usuario de prueba".into()),
             home_country: Some("bo".into()),
             preferred_language: Some("es".into()),
             ..Default::default()
         })
         .unwrap();
         write_json_atomic(&root.join(PROFILE_FILE), &profile).unwrap();
-        let updated = UserProfile {
-            display_name: Some("Ana María".into()),
-            ..profile.clone()
-        };
+        let updated = UserProfile { display_name: Some("Ana María".into()), ..profile.clone() };
         write_json_atomic(&root.join(PROFILE_FILE), &updated).unwrap();
         let raw = std::fs::read_to_string(root.join(PROFILE_FILE)).unwrap();
         assert!(!raw.contains("historial"));
-        assert_eq!(
-            read_json::<UserProfile>(&root.join(PROFILE_FILE)).unwrap(),
-            Some(updated)
-        );
+        assert_eq!(read_json::<UserProfile>(&root.join(PROFILE_FILE)).unwrap(), Some(updated));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -509,15 +434,9 @@ mod tests {
         assert_eq!(profile.display_name.as_deref(), Some("Ana"));
         assert!(remember_explicit_facts(&mut profile, "Mi país es Bolivia."));
         assert_eq!(profile.home_country.as_deref(), Some("BO"));
-        assert!(remember_explicit_facts(
-            &mut profile,
-            "Vivo en Santa Cruz, Bolivia."
-        ));
+        assert!(remember_explicit_facts(&mut profile, "Vivo en Santa Cruz, Bolivia."));
         assert_eq!(profile.city.as_deref(), Some("Santa Cruz"));
-        assert!(!remember_explicit_facts(
-            &mut profile,
-            "Crea esta app para Chile."
-        ));
+        assert!(!remember_explicit_facts(&mut profile, "Crea esta app para Chile."));
         assert_eq!(profile.home_country.as_deref(), Some("BO"));
     }
 
@@ -527,12 +446,7 @@ mod tests {
         save_project_country_at(&root, r"C:\work\app", Some("CL".into())).unwrap();
         let raw = std::fs::read_to_string(root.join(PROJECT_FILE)).unwrap();
         assert!(!raw.contains(r"C:\work\app"));
-        assert_eq!(
-            load_project_country(&root, r"C:\work\app")
-                .unwrap()
-                .as_deref(),
-            Some("CL")
-        );
+        assert_eq!(load_project_country(&root, r"C:\work\app").unwrap().as_deref(), Some("CL"));
         save_project_country_at(&root, r"C:\work\app", None).unwrap();
         assert_eq!(load_project_country(&root, r"C:\work\app").unwrap(), None);
         std::fs::remove_dir_all(root).unwrap();
@@ -541,20 +455,13 @@ mod tests {
     #[test]
     fn invalid_profile_fields_are_rejected() {
         assert!(validate_country("BOL").is_err());
-        assert!(sanitize(UserProfile {
-            preferred_language: Some("xx".into()),
-            ..Default::default()
-        })
-        .is_err());
+        assert!(sanitize(UserProfile { preferred_language: Some("xx".into()), ..Default::default() }).is_err());
     }
 
     #[test]
     fn windows_region_is_only_a_suggestion_and_project_country_is_separate() {
         let context = prompt_context(&ProfileSnapshot {
-            profile: UserProfile {
-                home_country: Some("BO".into()),
-                ..Default::default()
-            },
+            profile: UserProfile { home_country: Some("BO".into()), ..Default::default() },
             windows_region_suggestion: Some("CL".into()),
             project_country: Some("PE".into()),
         });

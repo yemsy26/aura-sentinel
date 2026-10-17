@@ -1,0 +1,39 @@
+name: Reporte de fallo
+description: Algo no funciona como se espera.
+labels: ["fallo"]
+body:
+  - type: textarea
+    id: que_pasa
+    attributes:
+      label: Qué ocurre
+      description: Describe el fallo y lo que esperabas que pasara.
+    validations:
+      required: true
+  - type: textarea
+    id: pasos
+    attributes:
+      label: Pasos para reproducirlo
+      placeholder: |
+        1. Abrir la carpeta...
+        2. Pedir al agente...
+        3. Ver el error...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versión de Aura Sentinel
+      placeholder: "4.2.0"
+    validations:
+      required: true
+  - type: input
+    id: entorno
+    attributes:
+      label: Windows, GPU y modelo
+      placeholder: "Windows 11 24H2, RTX 4060 8 GB, qwen3.6-35b-a3b"
+  - type: textarea
+    id: registro
+    attributes:
+      label: Registro o mensaje de error
+      description: Texto del panel Problemas, la Terminal o la consola. Quita datos personales antes de pegarlo.
+      render: text

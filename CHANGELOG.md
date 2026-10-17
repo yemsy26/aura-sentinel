@@ -1,6 +1,7 @@
-# Changelog — Aura-Sentinel
+# Registro de cambios — Aura Sentinel
 
-Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fecha.
+Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versión] — fecha`, con
+[versionado semántico](https://semver.org/lang/es/).
 
 ---
 
@@ -18,6 +19,10 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 - Icono propio (el cubo hexagonal de Aura) en la app, el instalador y la pestaña.
 - Guía de instalación, integración con Bionic (qué cambia y cómo deshacerlo) y solución de problemas en
   `README.md` y `motor/LEEME.md`.
+- Autoría y licencia MIT en `package.json`, `Cargo.toml` y el instalador (editor y copyright); guía de
+  contribución, código de conducta, política de seguridad y plantillas de issues y pull requests en `.github/`.
+- La app ya no busca el motor en la carpeta de trabajo anterior a la unificación; eliminado `validate_project.rs`,
+  que dependía del motor retirado.
 - Arreglo: la interfaz se quedaba en blanco al usar la Terminal. En WebView2 reciente `scrollIntoView()`
   devuelve una Promise y un efecto de React la devolvía como si fuera su limpieza. Ningún efecto devuelve ya
   valores, y un límite de errores muestra «Recargar la interfaz» en vez de una ventana vacía (con prueba).
@@ -53,29 +58,32 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 
 ---
 
-## [3.0.0] — 2026-09-06 (Aura Sentinel v3.0 Enterprise Architecture)
+## [3.0.0] — 2026-09-06 (Arquitectura v3)
 
-### 🚀 Nivel Alcanzado: Agente Autónomo de Nivel Industrial (SWE-Agent / Devin 2.0 Standard)
+### Selector de modelo unificado y modo turbo
+- **Selector unificado**: un único selector de modelo en la barra superior, sincronizado con el backend de Tauri; se
+  eliminaron los controles redundantes.
+- **Modo turbo** («Máxima potencia»): omite micrometas redundantes y acelera los bucles de ejecución directa.
+- **Indicador de estado**: temperatura, descarga en GPU y estado de compilación en tiempo real.
 
-#### 🧠 Unified Brain Selector & Turbo Mode (`⚡ MÁXIMA POTENCIA`)
-- **Selector Unificado**: Consolidado un selector de modelo único e intuitivo en la barra superior del UI, eliminando controles redundantes y sincronizando el estado con el backend de Tauri.
-- **Modo Turbo**: Activación de 1 clic para bypass de micro-metas redundantes y aceleración de bucles de ejecución directa.
-- **Indicador HUD**: Telemetría visual en tiempo real de temperatura, GPU offload y estado de compilación.
+### Control de fases dinámico (PESP v2) y detección de entregables
+- Los proyectos web ya no exigen `index.html`: se detectan los archivos HTML (`has_html_files`) y los entregables con
+  otros nombres (`cyber_sentinel.html`, `dashboard.html`, etc.).
+- El control de fases comprueba que los entregables existen y tienen contenido antes de pasar de fase.
+- Si un script de verificación (p. ej. `verify_*.py`) termina con código 0 y todo en verde, la misión termina
+  (`TOOL_FINISH`) en lugar de seguir consumiendo pasos.
 
-#### 🛡️ Dynamic Phase Gatekeeper (PESP v2) & Smart Alias Matching
-- Eliminadas las suposiciones rígidas que exigían `index.html` para proyectos web; ahora utiliza resolución dinámica (`has_html_files` y detección de alias de entrega como `cyber_sentinel.html`, `dashboard.html`, etc.).
-- Verificación semántica de entregables: el Gatekeeper valida la existencia física y semántica de archivos antes de permitir transiciones de fase.
-- Auto-convergencia en tests exitosos: cuando un script de verificación (ej. `verify_*.py`) retorna exit code 0 con éxito al 100%, el agente fuerza inmediatamente `TOOL_FINISH` previniendo loops y agotamiento de pasos.
+### Subsistema AutoValidator reconectado
+- `core::auto_validator::AutoValidator` vuelve a formar parte de la validación del espacio de trabajo
+  (`validate_workspace`).
+- Comprueba las etiquetas `<script src="...">`, `<link href="...">` y los recursos locales antes de la verificación
+  final.
+- Evita insertar código incompatible al generar recursos de aplicaciones web puras.
 
-#### 🔧 AutoValidator Subsystem Reconnected
-- Conectado el subsistema `core::auto_validator::AutoValidator` al ciclo de vida de validación del workspace (`validate_workspace`).
-- Validación proactiva de etiquetas `<script src="...">`, `<link href="...">` y assets locales antes de la verificación final.
-- Protección inteligente en generación de assets: salvaguarda contra inyecciones de código incompatibles en aplicaciones web puras.
-
-#### 🧹 Context Sanitizer Dinámico & Limpieza de Reliquias
-- Eliminación de todas las rutas y marcadores obsoletos hardcodeados (`proxy-stack-windows`).
-- Sanitizador de contexto multi-sesión dinámico que filtra rutas foráneas entre proyectos en disco.
-- Resolución de compilación en Rust Tauri con **0 errores y 0 warnings** (`cargo check` en sub-4 segundos).
+### Saneador de contexto y limpieza
+- Eliminadas las rutas y marcadores obsoletos escritos a mano (`proxy-stack-windows`).
+- El contexto de cada sesión filtra las rutas de otros proyectos del disco.
+- La compilación de Rust queda con 0 errores y 0 avisos (`cargo check` en menos de 4 s).
 
 ---
 
@@ -114,10 +122,9 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 
 #### Scheduler Autónomo (core/scheduler.rs)
 - Motor de tareas programadas usando cron expressions estándar (5 campos).
-- Loop Tokio con tick cada 60 segundos, ejecutado en el runtime de Tauri (	auri::async_runtime::spawn).
+- Loop Tokio con tick cada 60 segundos, ejecutado en el runtime de Tauri (`tauri::async_runtime::spawn`).
 - Herramienta TOOL_SCHEDULER disponible para el Planificador.
-- Comandos Tauri: schedule_task, list_scheduled_tasks, 
-emove_scheduled_task.
+- Comandos Tauri: schedule_task, list_scheduled_tasks, remove_scheduled_task.
 
 #### Sanity Monitor (core/sanity_monitor.rs)
 - Evaluación de salud del agente cada 5 pasos de ejecución.
@@ -126,10 +133,8 @@ emove_scheduled_task.
 - Evento sanity-report emitido al frontend para el panel de telemetría.
 
 ### Corregido
-- Bug: 	okio::spawn en el scheduler causaba pánico al inicio (
-o reactor running). Cambiado a 	auri::async_runtime::spawn.
-- Bug: Extractor de cláusulas usaba 
-find("]]") frágil. Reemplazado por contador de profundidad de corchetes.
+- Bug: `tokio::spawn` en el scheduler causaba pánico al inicio (`no reactor running`). Cambiado a `tauri::async_runtime::spawn`.
+- Bug: Extractor de cláusulas usaba `rfind("]]")` frágil. Reemplazado por contador de profundidad de corchetes.
 - Bug: Planificador clasificaba auditorías matemáticas como misiones de Construcción, activando protocolo PESP de 4 fases y causando pausas interactivas innecesarias.
 - Bug: Variables retry_tracker y agent_workspace eliminadas accidentalmente de scope en refactor anterior.
 

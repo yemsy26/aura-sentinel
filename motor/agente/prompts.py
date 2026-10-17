@@ -14,7 +14,7 @@ def _version(cmd: list) -> str:
     if not shutil.which(cmd[0]):
         return ""
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=8, creationflags=subprocess.CREATE_NO_WINDOW)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=8, creationflags=subprocess.CREATE_NO_WINDOW, check=False)
         return (r.stdout or r.stderr).strip().splitlines()[0][:40]
     except (OSError, subprocess.SubprocessError, IndexError):
         return ""

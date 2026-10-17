@@ -289,7 +289,7 @@ def capturar_pygame(entrada: Path, python: str, png: Path, espera: float) -> lis
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy",
                SONDA_CAPTURA=str(png), SONDA_SEMILLA="1")
     codigo, salida = _correr([python, str(SONDA_PYGAME), str(entrada), str(espera)], entrada.parent, espera + 25, env)
-    m = re.search(r"^SONDA (\{.*\})$", salida, re.M)
+    m = re.search(r"^SONDA (\{.*\})$", salida, re.MULTILINE)
     if not m:
         if "No module named 'pygame'" in salida:
             raise RuntimeError("pygame no está instalado en el entorno del proyecto (.venv)")
@@ -336,11 +336,11 @@ def evaluar(png: bytes, que: str, pregunta: str = "", cfg: dict | None = None) -
     try:
         r = llm.http_json(f"{base}/v1/chat/completions", cuerpo, timeout=300)
     except llm.ErrorLLM as e:
-        if re.search(r"image|imagen|vision", str(e), re.I):
+        if re.search(r"image|imagen|vision", str(e), re.IGNORECASE):
             return None, f"sin visión: el modelo cargado ({modelo}) no acepta imágenes"
         return None, f"sin visión: falló la consulta al modelo: {str(e)[:200]}"
     texto = (((r.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-    texto = re.sub(r"<think>.*?</think>", "", texto, flags=re.S).strip()
+    texto = re.sub(r"<think>.*?</think>", "", texto, flags=re.DOTALL).strip()
     return (texto, f"revisado por {modelo}") if texto else (None, f"sin visión: {modelo} no respondió")
 
 
@@ -385,7 +385,7 @@ def ver(h, ruta: str = "", pregunta: str = "", segundos: float = 2) -> str:
         return f"ERROR: no se pudo capturar {que}: {e}"
     juicio, fuente = evaluar(png.read_bytes(), f"{'la página web' if tipo == 'web' else 'el juego pygame'} {que}",
                              pregunta, getattr(h, "cfg_llm", None))
-    mal = bool(problemas) or bool(juicio and re.search(r"VISUAL:\s*PROBLEMAS", juicio, re.I))
+    mal = bool(problemas) or bool(juicio and re.search(r"VISUAL:\s*PROBLEMAS", juicio, re.IGNORECASE))
     partes = [f"VISUAL: {'PROBLEMAS' if mal else 'OK'} en {que} ({fuente})", f"Captura: {h.rel(png)}"]
     if problemas:
         partes.append("Comprobación automática:\n" + "\n".join(f"- {x}" for x in problemas))

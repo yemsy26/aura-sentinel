@@ -11,13 +11,13 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agente import llm, pantalla  # noqa: E402
-from agente.bucle import ICONOS, coaccionar  # noqa: E402
-from agente.herramientas import ESQUEMAS, PELIGROSOS, Herramientas, despachar  # noqa: E402
+from agente import llm, pantalla
+from agente.bucle import ICONOS, coaccionar
+from agente.herramientas import ESQUEMAS, PELIGROSOS, Herramientas, despachar
 
 HAY_GIT = shutil.which("git") is not None
 HAY_NAVEGADOR = importlib.util.find_spec("playwright") is not None
-HAY_PYGAME = subprocess.run(["python", "-c", "import pygame"], capture_output=True).returncode == 0
+HAY_PYGAME = subprocess.run(["python", "-c", "import pygame"], capture_output=True, check=False).returncode == 0
 HAY_MCP = importlib.util.find_spec("mcp") is not None
 IDENTIDAD = {"GIT_AUTHOR_NAME": "Prueba", "GIT_AUTHOR_EMAIL": "prueba@local", "GIT_COMMITTER_NAME": "Prueba",
              "GIT_COMMITTER_EMAIL": "prueba@local"}
@@ -118,7 +118,7 @@ class TestGit(Base):
         self.assertIn("app.py", self.h.git("diff"))  # repo sin commits: lista los nuevos
         self.assertIn("mensaje", self.h.git("commit"))
         self.assertIn("primer commit", self.h.git("commit", mensaje="primer commit"))
-        archivos = subprocess.run(["git", "ls-files"], cwd=self.dir, capture_output=True, text=True).stdout.split()
+        archivos = subprocess.run(["git", "ls-files"], cwd=self.dir, capture_output=True, text=True, check=False).stdout.split()
         self.assertEqual(archivos, ["app.py"])  # ni .agente ni cachés ni .venv
         self.assertIn("mejora/menu", self.h.git("rama", nombre="mejora/menu"))
         self.escribir("app.py", "print(2)\n")
@@ -165,7 +165,7 @@ class TestVision(unittest.TestCase):
                    {"key": "g", "loaded_instances": [{"id": "g"}], "capabilities": {"vision": True}}]
         with mock.patch.object(llm, "listar_modelos", return_value=modelos):
             with mock.patch.object(llm, "detectar", return_value=("http://s", "q", 8192)):
-                base, modelo, motivo = pantalla.modelo_vision({})
+                base, _modelo, motivo = pantalla.modelo_vision({})
                 self.assertIsNone(base)
                 self.assertIn("no acepta imágenes", motivo)
             with mock.patch.object(llm, "detectar", return_value=("http://s", "g", 8192)):
@@ -204,8 +204,9 @@ class TestFondoCargado(unittest.TestCase):
         malo = {"texto": "Ropa Premium", "debajo": ["canvas"],
                 "palabras": [_palabra("Ropa", bordes=0.3), _palabra("Premium", mezcla=0.5, cubierta=0.6)]}
         problemas, peor = pantalla._juzgar_fondo([[limpio], [malo]])
-        self.assertEqual(problemas, ["texto sobre fondo cargado: «Ropa Premium» (canvas detrás; se confunde con el fondo: "
-                                     "«Premium»; líneas/bordes detrás de «Ropa»; en 1 de 2 instantes: la escena se mueve)"])
+        self.assertEqual(problemas, [("texto sobre fondo cargado: «Ropa Premium» (canvas detrás; se confunde con el "
+                                      "fondo: «Premium»; líneas/bordes detrás de «Ropa»; en 1 de 2 instantes: la escena "
+                                      "se mueve)")])
         self.assertEqual(peor, 1)  # se guarda la captura del instante en que se ve mal
         self.assertEqual(pantalla._juzgar_fondo([[limpio]]), ([], 0))
 

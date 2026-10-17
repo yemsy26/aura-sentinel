@@ -1,4 +1,4 @@
-"""Cliente mínimo (solo stdlib) para el servidor OpenAI-compatible de LM Studio / Bionic."""
+"""Cliente mínimo (solo stdlib) para la API de chat de LM Studio / Bionic (`/v1/chat/completions`)."""
 import json
 import urllib.error
 import urllib.request

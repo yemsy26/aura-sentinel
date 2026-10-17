@@ -1,0 +1,7 @@
+# Reglas de estilo del motor (ruff 0.17 o superior; usa sus reglas por defecto).
+line-length = 120
+target-version = "py311"
+
+[lint]
+# Capturas amplias intencionadas: una herramienta que falla devuelve el error al modelo en vez de detener la misión.
+ignore = ["BLE001", "S110", "S112"]

@@ -29,7 +29,7 @@ def guia(tema: str) -> str:
 def _etiqueta_python(python: str) -> str:
     try:
         r = subprocess.run([python, "-c", "import sys; print(f'cp{sys.version_info[0]}{sys.version_info[1]}')"],
-                           capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+                           capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW, check=False)
         return r.stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -57,7 +57,7 @@ def version(h, paquete: str, ecosistema: str = "pypi") -> str:
             for g, a in coordenadas[:4]:
                 meta = h._descargar(f"https://repo1.maven.org/maven2/{g.replace('.', '/')}/{a}/maven-metadata.xml")[0]
                 versiones = re.findall(r"<version>([^<]+)</version>", meta)
-                estables = [v for v in versiones if not re.search(r"(alpha|beta|rc|m\d|snapshot|cr\d|ea)", v, re.I)]
+                estables = [v for v in versiones if not re.search(r"(alpha|beta|rc|m\d|snapshot|cr\d|ea)", v, re.IGNORECASE)]
                 ultima = (estables or versiones or ["?"])[-1]
                 lineas.append(f"- {g}:{a}:{ultima}   (pom.xml: <groupId>{g}</groupId><artifactId>{a}</artifactId><version>{ultima}</version>)")
             return "\n".join(lineas)
@@ -66,8 +66,8 @@ def version(h, paquete: str, ecosistema: str = "pypi") -> str:
     except Exception as e:
         return f"No pude consultar {paquete} ({eco}): {e}"
     info = d["info"]
-    lineas = [f"PyPI {info['name']} {info['version']} (requiere Python {info.get('requires_python') or '?'}): "
-              f"{(info.get('summary') or '')[:150]}"]
+    lineas = [(f"PyPI {info['name']} {info['version']} (requiere Python {info.get('requires_python') or '?'}): "
+               f"{(info.get('summary') or '')[:150]}")]
     if nombre != paquete:
         lineas.insert(0, f"'{paquete}' está desaconsejado hoy: usa '{nombre}'.")
     etiqueta = _etiqueta_python(h.python_proyecto())
@@ -77,7 +77,7 @@ def version(h, paquete: str, ecosistema: str = "pypi") -> str:
         compatible = puro or any(f"-{etiqueta}-" in f and "win_amd64" in f for f in archivos)
         lineas.append(f"Wheel para tu Python ({etiqueta}, Windows): {'SÍ' if compatible else 'NO -> la instalación probablemente fallará; usa otra librería o py -3.12 -m venv .venv'}")
     urls = info.get("project_urls") or {}
-    docs = next((v for k, v in urls.items() if re.search(r"doc", k, re.I)), info.get("home_page") or "")
+    docs = next((v for k, v in urls.items() if re.search(r"doc", k, re.IGNORECASE)), info.get("home_page") or "")
     if docs:
         lineas.append(f"Documentación: {docs}")
     lineas.append(f"requirements.txt: {info['name']}>={info['version'].split('.')[0]}.{info['version'].split('.')[1] if '.' in info['version'] else '0'}")
@@ -87,7 +87,7 @@ def version(h, paquete: str, ecosistema: str = "pypi") -> str:
 def investigar(h, pregunta: str, max_paginas: int = 3) -> str:
     """Busca, lee las mejores páginas y devuelve solo los párrafos relevantes, con fuentes."""
     resultados = h.web_buscar(pregunta)
-    urls = re.findall(r"^\s+(https?://\S+)", resultados, re.M)
+    urls = re.findall(r"^\s+(https?://\S+)", resultados, re.MULTILINE)
     urls = [u for u in urls if not re.search(r"youtube\.com|tiktok\.com|facebook\.com|pinterest\.|instagram\.", u)]
     if not urls:
         return resultados

@@ -1,6 +1,6 @@
-mod diagnostics;
 pub mod agent;
 pub mod ask_user;
+mod diagnostics;
 pub mod ide;
 pub mod user_profile;
 pub mod workspace;
@@ -14,7 +14,10 @@ fn get_user_profile(
 }
 
 #[tauri::command]
-fn save_user_profile(app: tauri::AppHandle, profile: user_profile::UserProfile) -> Result<user_profile::UserProfile, String> {
+fn save_user_profile(
+    app: tauri::AppHandle,
+    profile: user_profile::UserProfile,
+) -> Result<user_profile::UserProfile, String> {
     user_profile::save(&app, profile)
 }
 

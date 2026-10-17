@@ -35,12 +35,7 @@ pub async fn ask_user_async(
         map.insert(id.clone(), tx);
     }
 
-    let event = AskEvent {
-        id: id.clone(),
-        question,
-        options,
-        context,
-    };
+    let event = AskEvent { id: id.clone(), question, options, context };
 
     if let Err(error) = app.emit("agent-ask-user", event) {
         pending_prompts().lock().unwrap().remove(&id);

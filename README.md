@@ -1,9 +1,14 @@
 # Aura Sentinel
 
+[![Licencia MIT](https://img.shields.io/badge/licencia-MIT-green.svg)](LICENSE)
+![Plataforma](https://img.shields.io/badge/plataforma-Windows%2010%20%7C%2011-0078D6.svg)
+![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB.svg)
+
 Entorno de desarrollo con agente: interfaz Tauri (React + TypeScript), editor Monaco y **Agente Local** como
 motor de las misiones (carpeta `motor/`), con el modelo servido por Bionic (LM Studio) en tu equipo. Todo es
 local: el código, el modelo y tus proyectos no salen del ordenador.
-Desarrollado por Ramón Antonio Burgos Jerez.
+
+Creado por **Ramón Antonio Burgos Jerez** ([@yemsy26](https://github.com/yemsy26)), Licenciado en Informática.
 
 ## Instalación en un equipo nuevo
 
@@ -128,8 +133,7 @@ Cada mensaje del chat lo ejecuta Agente Local (`src-tauri/src/agent.rs`). Aura l
 - El perfil del usuario (nombre, país, idioma) se envía al agente en el primer mensaje de cada sesión.
 
 Aura busca el motor en este orden: `AGENTE_LOCAL_DIR`, la carpeta guardada en Configuración → Motor
-(`motor.json`), `motor\` del repositorio, `motor\` dentro de la app instalada y, por compatibilidad, las carpetas
-de antes de unificarlo (`%USERPROFILE%\.gemini\antigravity\scratch\lm studio`, `%USERPROFILE%\AgenteLocal`).
+(`motor.json`), `motor\` del repositorio, `motor\` dentro de la app instalada y, por compatibilidad, `%USERPROFILE%\AgenteLocal`.
 Usa la primera que esté instalada; si ninguna lo está, ofrece instalar la primera que encuentre.
 
 ## Verificación
@@ -173,3 +177,22 @@ si la misión acaba en `FINISH`.
   del proyecto al empezar cada misión (base de "Ver cambios").
 - `src-tauri/src/ask_user.rs` y `user_profile.rs`: preguntas al usuario y perfil local.
 - `src-tauri/src/diagnostics.rs`: misión real sin ventana (`aura-diagnostics`).
+
+## Contribuir
+
+Las propuestas y los reportes de fallos son bienvenidos. Antes de abrir un *pull request*, lee la
+[guía de contribución](.github/CONTRIBUTING.md) y el [código de conducta](.github/CODE_OF_CONDUCT.md). Los fallos de
+seguridad se comunican en privado, como indica la [política de seguridad](.github/SECURITY.md).
+
+## Autor
+
+**Ramón Antonio Burgos Jerez** (alias **yemsy26**), Licenciado en Informática. Creador y responsable de Aura Sentinel
+y de su motor, Agente Local. GitHub: [@yemsy26](https://github.com/yemsy26).
+
+## Licencia
+
+Aura Sentinel se distribuye bajo la [licencia MIT](LICENSE). © 2026 Ramón Antonio Burgos Jerez.
+
+Las dependencias (Tauri, React, Monaco Editor y los paquetes de Python del motor) mantienen sus propias licencias.
+Los modelos de lenguaje no forman parte del repositorio: se descargan aparte y se rigen por la licencia publicada en
+su página de Hugging Face.

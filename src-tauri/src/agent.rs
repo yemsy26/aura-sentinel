@@ -88,9 +88,10 @@ pub fn is_installation(dir: &Path) -> bool {
 
 /// Dónde puede estar el motor, por orden: `motor/` del repositorio (se busca hacia arriba desde la carpeta de
 /// trabajo y desde el ejecutable: sirve con `tauri dev`, start.bat y las carpetas target), `motor/` dentro de la
-/// app instalada y las carpetas de antes de unificar el motor con Aura.
+/// app instalada y `%USERPROFILE%\AgenteLocal` (instalaciones antiguas).
 fn engine_candidates(app: &AppHandle) -> Vec<PathBuf> {
-    let starts = [std::env::current_dir().ok(), std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf))];
+    let starts =
+        [std::env::current_dir().ok(), std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf))];
     let mut found: Vec<PathBuf> = starts
         .into_iter()
         .flatten()
@@ -100,7 +101,6 @@ fn engine_candidates(app: &AppHandle) -> Vec<PathBuf> {
         found.push(resources.join("motor"));
     }
     if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
-        found.push(home.join(".gemini").join("antigravity").join("scratch").join("lm studio"));
         found.push(home.join("AgenteLocal"));
     }
     found
@@ -189,10 +189,7 @@ pub async fn save_agent_settings(app: AppHandle, carpeta: String) -> Result<Valu
 
 /// Modelos LLM de Bionic o LM Studio; los cargados primero.
 pub async fn list_models() -> Result<Vec<String>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(4))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(4)).build().map_err(|e| e.to_string())?;
     for base in SERVERS {
         let Ok(response) = client.get(format!("{base}/api/v1/models")).send().await else {
             continue;
@@ -306,9 +303,7 @@ async fn spawn(dir: &Path, workspace: &str, model: &str) -> Result<Session, Stri
         .kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("No pude iniciar Agente Local ({}): {e}", python.display()))?;
+    let mut child = command.spawn().map_err(|e| format!("No pude iniciar Agente Local ({}): {e}", python.display()))?;
     let stdin = child.stdin.take().ok_or("Agente Local sin entrada estándar")?;
     let stdout = child.stdout.take().ok_or("Agente Local sin salida estándar")?;
     let (sender, events) = mpsc::unbounded_channel();
@@ -481,7 +476,11 @@ type Halt = (&'static str, String);
 async fn known_model(model: Option<String>) -> String {
     let model = model.unwrap_or_default();
     let known = list_models().await.unwrap_or_default();
-    if known.contains(&model) { model } else { String::new() }
+    if known.contains(&model) {
+        model
+    } else {
+        String::new()
+    }
 }
 
 fn reusable(session: &mut Session, workspace: &str, model: Option<&str>) -> bool {
@@ -506,7 +505,12 @@ async fn ready_session(
         stop(old).await;
     }
     let dir = installation(app).map_err(|reason| ("ERROR", reason))?;
-    emit_event(app, 0, "[AGENTE LOCAL] Iniciando el motor (si el modelo no está cargado, tarda un minuto)...", "PLANNING");
+    emit_event(
+        app,
+        0,
+        "[AGENTE LOCAL] Iniciando el motor (si el modelo no está cargado, tarda un minuto)...",
+        "PLANNING",
+    );
     let mut fresh = spawn(&dir, workspace, model.unwrap_or_default()).await.map_err(|e| ("ERROR", e))?;
     let mut step = 0;
     loop {
@@ -640,7 +644,8 @@ pub async fn agent_order(order: Value, workspace_path: String, app_handle: AppHa
         let text = if kind == "nuevo" { "Conversación nueva." } else { "No hay procesos del agente en marcha." };
         return Ok(json!({"tipo": "fin", "orden": kind, "estado": "ok", "datos": [], "respuesta": text}));
     }
-    let (current, _) = ready_session(&app_handle, &workspace_path, None, slot.take()).await.map_err(|(_, text)| text)?;
+    let (current, _) =
+        ready_session(&app_handle, &workspace_path, None, slot.take()).await.map_err(|(_, text)| text)?;
     run_order(&app_handle, &workspace_path, current, order, &mut slot).await.map_err(|(_, text)| text)
 }
 
@@ -673,7 +678,8 @@ mod tests {
         assert_eq!(step_message(&event, "C:\\ws"), "Plan generado: Fase 1: Crear juego.py | Fase 2: Tests");
         let done = json!({"herramienta": "paso_hecho", "plan": plan, "resultado": "Paso 1 hecho"});
         assert_eq!(step_message(&done, "C:\\ws"), "[FASE 1 COMPLETADA] Paso 1 hecho");
-        let rejected = json!({"herramienta": "paso_hecho", "plan": plan, "error": true, "resultado": "RECHAZADO: falta"});
+        let rejected =
+            json!({"herramienta": "paso_hecho", "plan": plan, "error": true, "resultado": "RECHAZADO: falta"});
         assert_eq!(step_message(&rejected, "C:\\ws"), "[PASO_HECHO] → RECHAZADO: falta");
     }
 
@@ -712,9 +718,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
         std::fs::create_dir_all(ws.join(".agente")).unwrap();
         assert!(pending_mission(&ws).is_none());
-        std::fs::write(ws.join(".agente").join("plan.md"), "# Plan\n- [x] 1. Crear index.html\n- [ ] 2. Probar\n").unwrap();
-        std::fs::write(ws.join(".agente").join("registro.log"),
-                       "[10:00:00] USUARIO: crea un catálogo\n[10:05:00] USUARIO: continúa\n").unwrap();
+        std::fs::write(ws.join(".agente").join("plan.md"), "# Plan\n- [x] 1. Crear index.html\n- [ ] 2. Probar\n")
+            .unwrap();
+        std::fs::write(
+            ws.join(".agente").join("registro.log"),
+            "[10:00:00] USUARIO: crea un catálogo\n[10:05:00] USUARIO: continúa\n",
+        )
+        .unwrap();
         let pending = pending_mission(&ws).unwrap();
         assert_eq!(pending["objective"], "crea un catálogo");
         assert_eq!(pending["step"], 1);

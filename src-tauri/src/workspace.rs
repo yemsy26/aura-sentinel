@@ -22,9 +22,8 @@ pub struct ChatMessage {
 }
 
 const IGNORED: [&str; 5] = [".git", "node_modules", "__pycache__", ".venv", ".agente"];
-const BINARY: [&str; 15] = [
-    "pyc", "exe", "dll", "bin", "iso", "png", "jpg", "jpeg", "gif", "ico", "wasm", "pdf", "zip", "tar", "gz",
-];
+const BINARY: [&str; 15] =
+    ["pyc", "exe", "dll", "bin", "iso", "png", "jpg", "jpeg", "gif", "ico", "wasm", "pdf", "zip", "tar", "gz"];
 
 /// Marca el archivo como oculto en Windows (el historial no debe ensuciar la carpeta del usuario).
 fn hide_file(path: &Path) {
@@ -86,7 +85,8 @@ pub fn get_current_directory() -> String {
     // El espacio por defecto vive en <proyecto>/workspace, fuera de src-tauri, para que el
     // vigilante de Tauri no reinicie la app cuando el agente crea archivos.
     let current = std::env::current_dir().unwrap_or_else(|_| "C:\\".into());
-    let root = if current.ends_with("src-tauri") { current.parent().unwrap_or(&current).to_path_buf() } else { current };
+    let root =
+        if current.ends_with("src-tauri") { current.parent().unwrap_or(&current).to_path_buf() } else { current };
     let workspace = root.join("workspace");
     let _ = std::fs::create_dir_all(&workspace);
     workspace.to_string_lossy().into_owned()
@@ -109,11 +109,8 @@ pub async fn load_chat_history(workspace_path: String) -> Result<String, String>
 #[tauri::command]
 pub async fn save_chat_message(workspace_path: String, message: ChatMessage) -> Result<(), String> {
     let file = Path::new(&workspace_path).join(".fenix_chat.json");
-    let mut messages: Vec<ChatMessage> = fs::read_to_string(&file)
-        .await
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default();
+    let mut messages: Vec<ChatMessage> =
+        fs::read_to_string(&file).await.ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
     messages.push(message);
     let json = serde_json::to_string_pretty(&messages).map_err(|e| e.to_string())?;
     fs::write(&file, json).await.map_err(|e| format!("Error guardando chat: {e}"))?;
@@ -176,6 +173,6 @@ mod tests {
     #[test]
     fn system_paths_are_refused() {
         assert!(is_system_path(Path::new("C:\\Windows\\System32\\drivers")));
-        assert!(!is_system_path(Path::new("C:\\Users\\yemsy\\Proyectos\\web")));
+        assert!(!is_system_path(Path::new("C:\\Users\\usuario\\Proyectos\\web")));
     }
 }

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(destino))
 sys.argv = [destino]
 random.seed(int(os.environ.get("SONDA_SEMILLA", "7")))
 
-import pygame  # noqa: E402
+import pygame
 
 TECLAS = [pygame.K_RETURN, pygame.K_SPACE, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN,
           pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s, pygame.K_p, pygame.K_r, pygame.K_1]
@@ -222,7 +222,7 @@ pygame.time.Clock = RelojRapido
 pygame.time.delay = pygame.time.wait = lambda ms: 0
 pygame.quit = _quit_capturando
 if CAPTURA:
-    import pygame.sysfont  # noqa: E402
+    import pygame.sysfont
     pygame.font.Font = pygame.sysfont.Font = FuenteSonda  # SysFont crea la fuente con pygame.sysfont.Font
     pygame.display.set_mode, pygame.display.get_surface = set_mode, get_surface
     pygame.display.flip, pygame.display.update = flip, update

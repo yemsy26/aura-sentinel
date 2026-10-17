@@ -28,6 +28,13 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Ramón Antonio Burgos Jerez (yemsy26)",
+    "copyright": "© 2026 Ramón Antonio Burgos Jerez (yemsy26). Licencia MIT.",
+    "license": "MIT",
+    "homepage": "https://github.com/yemsy26/aura-sentinel",
+    "category": "DeveloperTool",
+    "shortDescription": "IDE con agente de programación local",
+    "longDescription": "Entorno de desarrollo para Windows con editor Monaco y un agente que planifica, escribe, ejecuta y verifica código usando un modelo local servido por LM Studio.",
     "targets": "all",
     "icon": [
       "icons/32x32.png",
