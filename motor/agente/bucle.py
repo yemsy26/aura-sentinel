@@ -233,7 +233,13 @@ class Agente:
                 try:
                     args = coaccionar(c["name"], json.loads(c["arguments"] or "{}", strict=False))
                 except ValueError as e:
-                    resultado = f"Argumentos JSON inválidos ({e}). Repite la llamada con JSON válido."
+                    if r["finish_reason"] == "length":  # se acabó el máximo de una respuesta en mitad de la llamada
+                        resultado = (f"Tu llamada a {c['name']} se CORTÓ: superó el máximo de una respuesta. No la repitas "
+                                     "igual. Escribe el archivo en partes: la primera con escribir y el resto con "
+                                     "escribir(ruta, contenido, anadir=true), cada parte de unas 150 líneas como mucho; "
+                                     "o divídelo en archivos más pequeños (p. ej. css/base.css, css/productos.css).")
+                    else:
+                        resultado = f"Argumentos JSON inválidos ({e}). Repite la llamada con JSON válido."
                     self.ctx.herramienta(c["id"], resultado)
                     self._mostrar(paso, c["name"], {}, resultado)
                     hubo_error = True

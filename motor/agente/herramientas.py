@@ -426,10 +426,15 @@ class Herramientas:
                 continue
         return recortar("\n".join(hallados), self.max_chars) if hallados else f"Sin coincidencias para '{patron}'."
 
-    def escribir(self, ruta: str, contenido: str) -> str:
+    def escribir(self, ruta: str, contenido: str, anadir: bool = False) -> str:
         p = self.ruta(ruta)
         existia = p.exists()
         antes = p.read_text(encoding="utf-8", errors="replace") if existia else ""
+        if anadir:  # archivo largo por partes: cada parte cabe en una respuesta del modelo
+            completo = antes + ("" if not antes or antes.endswith("\n") else "\n") + contenido
+            self._guardar(p, completo)
+            return (f"OK añadido a {self.rel(p)}: ahora tiene {completo.count(chr(10)) + 1} líneas. Sigue con la "
+                    "siguiente parte; cuando esté completo, verifica.")
         nota = ""
         if "\n" not in contenido and contenido.count("\\n") >= 3 and es_codigo(p):
             # el modelo mandó el código con saltos de línea escapados: se reparan
@@ -1016,8 +1021,10 @@ ESQUEMAS = [
     _f("listar", "Lista archivos y carpetas del proyecto.", {"ruta": S, "profundidad": I}, []),
     _f("leer", "Lee un archivo con números de línea (por bloques).", {"ruta": S, "desde": I, "lineas": I}, ["ruta"]),
     _f("buscar", "Busca texto o regex en los archivos del proyecto.", {"patron": S, "ruta": S, "extension": S}, ["patron"]),
-    _f("escribir", "Crea o reemplaza un archivo con su contenido COMPLETO (sin '...' ni TODO). Valida sintaxis .py/.json.",
-       {"ruta": S, "contenido": S}, ["ruta", "contenido"]),
+    _f("escribir", "Crea o reemplaza un archivo con su contenido COMPLETO (sin '...' ni TODO). Valida sintaxis .py/.json. "
+                   "Archivo largo (más de ~250 líneas): escríbelo en partes; la primera normal y las siguientes con "
+                   "anadir=true, que las añade al final.",
+       {"ruta": S, "contenido": S, "anadir": B}, ["ruta", "contenido"]),
     _f("editar", "Reemplaza un fragmento exacto de un archivo existente (copia el texto tal cual de leer).",
        {"ruta": S, "buscar": S, "reemplazar": S}, ["ruta", "buscar", "reemplazar"]),
     _f("ejecutar", "Ejecuta un comando de Windows (cmd) en la carpeta del proyecto. Usa fondo=true para servidores "

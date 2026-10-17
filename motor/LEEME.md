@@ -104,7 +104,7 @@ Windows puede liberar esa RAM si otro programa la necesita, en vez de bloquear u
 
 ## Herramientas
 
-`plan`, `paso_hecho`, `listar`, `leer`, `buscar`, `escribir`, `editar`, `ejecutar` (con `fondo=true` para servidores;
+`plan`, `paso_hecho`, `listar`, `leer`, `buscar`, `escribir` (con `anadir=true` para archivos largos por partes), `editar`, `ejecutar` (con `fondo=true` para servidores;
 crear un venv o `pip`/`npm`/`uv install` tiene siempre al menos 300 s para no dejar el entorno a medias),
 `procesos`, `crear_bat`, `web_buscar` (DuckDuckGo, Bing de respaldo), `web_leer`, `investigar`, `guia`, `version`,
 `calcular`, `resolver_sat`, `experimentar`, `abrir_android_studio`, `verificar`, `revisar`, `aprender`, `preguntar`,

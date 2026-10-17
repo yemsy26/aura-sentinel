@@ -5,6 +5,15 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.6.2] — 2026-10-17 (archivos largos sin cortes ni HTTP 500)
+
+- Arreglo: si el modelo escribía un archivo tan largo que la respuesta se cortaba a mitad de la llamada, el motor
+  guardaba esa llamada con el JSON roto y el servidor del modelo contestaba «HTTP 500» a todo lo siguiente (también a
+  «continúa»). Ahora la conversación nunca lleva JSON roto, el agente sabe que se cortó y escribe el archivo en partes
+  con `escribir(..., anadir=true)`. El máximo por respuesta sube de 8.192 a 16.384 tokens.
+
+---
+
 ## [4.6.1] — 2026-10-17 (Sat-hibrido-rust activado por defecto)
 
 - Sat-hibrido-rust viene activado: `instalar.bat` (Configuración → Motor → Instalar motor) activa los motores

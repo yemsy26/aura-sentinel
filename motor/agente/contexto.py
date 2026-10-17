@@ -10,6 +10,19 @@ import json
 
 from .prompts import RESUMIR
 
+MAX_SALIDA = 16384  # tokens por respuesta (razonamiento incluido): un archivo grande en una sola llamada cabe
+
+
+def json_valido(argumentos: str | None) -> str:
+    """Los argumentos tal cual si son JSON; si no (llamada cortada por longitud), "{}". El servidor del modelo
+    responde HTTP 500 a todo historial que lleve una llamada con JSON roto, y la conversación quedaría inservible."""
+    try:
+        json.loads(argumentos or "{}", strict=False)
+    except ValueError:
+        return "{}"
+    return argumentos or "{}"
+
+
 COLA = 6  # mensajes recientes que nunca se tocan
 
 
@@ -41,7 +54,7 @@ class Contexto:
 
     def max_salida(self) -> int:
         libre = self.ventana - self.tokens() - 256
-        return max(256, min(8192, libre))
+        return max(256, min(MAX_SALIDA, libre))
 
     def uso(self) -> str:
         t = self.tokens()
@@ -56,7 +69,8 @@ class Contexto:
         m = {"role": "assistant", "content": contenido or ""}
         if llamadas:
             m["tool_calls"] = [{"id": c["id"], "type": "function",
-                                "function": {"name": c["name"], "arguments": c["arguments"]}} for c in llamadas]
+                                "function": {"name": c["name"], "arguments": json_valido(c["arguments"])}}
+                               for c in llamadas]
         self.mensajes.append(m)
 
     def herramienta(self, id_llamada: str, resultado: str) -> None:

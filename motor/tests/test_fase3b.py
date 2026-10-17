@@ -124,7 +124,7 @@ class Complementos(Temporal):
 
     def test_cli_en_json_para_aura(self):
         r = subprocess.run([sys.executable, "-m", "agente.complementos", "listar", "--json"], capture_output=True,
-                           text=True, cwd=Path(__file__).resolve().parent.parent, check=True)
+                           encoding="utf-8", cwd=Path(__file__).resolve().parent.parent, check=True)
         self.assertEqual(json.loads(r.stdout)[0]["id"], "sat-hibrido")
 
 
@@ -411,6 +411,52 @@ class Aprender(Temporal):
         h.confirmar = lambda c, m: vistos.append(c) or False
         self.assertIn("BLOQUEADO", h.experimentar("@echo off\nrmdir /s /q C:\\datos", "bat"))
         self.assertEqual(vistos, ["rmdir /s /q C:\\datos"])
+
+
+class LlamadaCortada(Temporal):
+    """Un archivo grande cortado por el máximo de la respuesta dejaba la conversación con JSON roto y el servidor del
+    modelo contestaba HTTP 500 a todo lo siguiente."""
+
+    def test_el_historial_queda_valido_y_el_archivo_se_escribe_por_partes(self):
+        import io
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from test_agente import LLMGuion, llamada
+
+        from agente import __main__ as cli
+        from agente import config
+        enviados = []
+
+        class Grabadora(LLMGuion):
+            def chat(self, mensajes, herramientas, max_tokens, razonar, al_progreso=None):
+                enviados.append(json.loads(json.dumps(mensajes)))
+                return super().chat(mensajes, herramientas, max_tokens, razonar, al_progreso)
+
+        LLMGuion.respuestas = [
+            {"content": "Creo la página.", "finish_reason": "length", "usage": {},
+             "tool_calls": [{"id": "c1", "name": "escribir", "arguments": '{"ruta": "index.html", "contenido": "<!DOCTYPE'}]},
+            llamada("escribir", ruta="index.html", contenido="<p>1</p>"),
+            llamada("escribir", ruta="index.html", contenido="<p>2</p>", anadir=True),
+            {"content": "Listo.", "tool_calls": [], "finish_reason": "stop", "usage": {}},
+        ]
+        ordenes = [{"tipo": "tarea", "texto": "crea un catálogo"}, {"tipo": "salir"}]
+        entrada = io.TextIOWrapper(io.BytesIO("".join(json.dumps(o) + "\n" for o in ordenes).encode()), encoding="utf-8")
+        salida = io.StringIO()
+        falso = lambda cfg: ("http://falso", "falso", 32768)
+        with mock.patch.object(cli, "detectar", falso), mock.patch("agente.bucle.cliente.detectar", falso), \
+                mock.patch("agente.bucle.cliente.LLM", Grabadora), mock.patch("agente.bucle.entorno", lambda: "prueba"), \
+                mock.patch.object(sys, "stdin", entrada), mock.patch.object(sys, "stdout", salida):
+            self.assertEqual(cli.modo_json(config.cargar(), str(self.dir)), 0)
+        cortada = next(m for m in enviados[1] if m.get("tool_calls"))
+        self.assertEqual(cortada["tool_calls"][0]["function"]["arguments"], "{}")
+        for mensajes in enviados:  # nunca se manda al servidor una llamada con JSON roto
+            for m in mensajes:
+                for tc in m.get("tool_calls") or []:
+                    json.loads(tc["function"]["arguments"])
+        aviso = next(m["content"] for m in enviados[1] if m["role"] == "tool")
+        self.assertIn("se CORTÓ", aviso)
+        self.assertIn("anadir=true", aviso)
+        self.assertEqual((self.dir / "index.html").read_text(encoding="utf-8"), "<p>1</p>\n<p>2</p>")
 
 
 class GuiasYVersiones(unittest.TestCase):

@@ -186,6 +186,8 @@ def desactivar(id_: str) -> str:
 
 
 def main() -> int:
+    for flujo in (sys.stdout, sys.stderr):  # tildes en el JSON aunque la salida vaya a una tubería
+        flujo.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="Motores complementarios del agente")
     ap.add_argument("accion", choices=["listar", "asegurar", "activar", "desactivar"])
     ap.add_argument("id", nargs="?")
