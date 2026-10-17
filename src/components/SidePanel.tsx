@@ -139,7 +139,7 @@ function SearchView({ workspace, onSearch, onOpen }: {
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => input.current?.focus(), []);
+  useEffect(() => { input.current?.focus(); }, []);
   useEffect(() => {
     if (query.trim().length < 2) { setHits(null); return; }
     let live = true;

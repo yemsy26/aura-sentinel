@@ -11,6 +11,7 @@ import {
   api, errorText, onAgentEvent, onAsk, onAskClosed, onFileUpdated,
   type AgentProcess, type Checkpoint, type FileNode, type GitInfo, type PendingMission, type QuickOrder, type SystemStats,
 } from './lib/api';
+import { confirmar } from './lib/confirmar';
 import { relativePath, samePath, serverUrl } from './lib/text';
 
 // Monaco pesa ~4 MB: se carga aparte para que la ventana aparezca antes.
@@ -67,11 +68,11 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  useEffect(() => store('aura_side_width', sideWidth), [sideWidth]);
-  useEffect(() => store('aura_agent_width', agentWidth), [agentWidth]);
-  useEffect(() => store('aura_bottom_open', bottomOpen), [bottomOpen]);
-  useEffect(() => store('aura_bottom_height', bottomHeight), [bottomHeight]);
-  useEffect(() => store('aura_model', model), [model]);
+  useEffect(() => { store('aura_side_width', sideWidth); }, [sideWidth]);
+  useEffect(() => { store('aura_agent_width', agentWidth); }, [agentWidth]);
+  useEffect(() => { store('aura_bottom_open', bottomOpen); }, [bottomOpen]);
+  useEffect(() => { store('aura_bottom_height', bottomHeight); }, [bottomHeight]);
+  useEffect(() => { store('aura_model', model); }, [model]);
 
   // ── Datos del proyecto ──────────────────────────────────────────────────
   const refreshTree = useCallback(async () => {
@@ -241,12 +242,12 @@ export default function App() {
     if (kind === 'continuar') void runMission('continúa');
     if (kind === 'verificar') { setBottomOpen(true); setBottomTab('problems'); void runOrder({ tipo: 'verificar' }, 'Verificar el proyecto'); }
     if (kind === 'revisar') void runOrder({ tipo: 'revisar', texto: lastObjective }, 'Revisar el código');
-    if (kind === 'nuevo') {
-      if (!window.confirm('¿Empezar una conversación nueva? El agente olvida el historial; los archivos y el plan se conservan.')) return;
+    if (kind === 'nuevo') void (async () => {
+      if (!(await confirmar('¿Empezar una conversación nueva? El agente olvida el historial; los archivos y el plan se conservan.', false))) return;
       void api.order({ tipo: 'nuevo' }, ws).catch(() => undefined);
       void api.clearChat(ws).catch(() => undefined);
       dispatch({ type: 'reset' });
-    }
+    })();
   }, [runMission, runOrder, lastObjective]);
 
   const openUrl = useCallback((url: string) => {
@@ -264,8 +265,8 @@ export default function App() {
     dispatch({ type: 'ask', ask: null });
   }, [agent.ask, notify]);
 
-  const restore = useCallback((numero: number) => {
-    if (!window.confirm(`¿Volver al punto de restauración #${numero}? Los archivos que guardó se reescriben.`)) return;
+  const restore = useCallback(async (numero: number) => {
+    if (!(await confirmar(`¿Volver al punto de restauración #${numero}? Los archivos que guardó se reescriben.`))) return;
     void runOrder({ tipo: 'restaurar', numero }, `Volver al punto de restauración #${numero}`).then(() => editor.current?.reloadAll());
   }, [runOrder]);
 
@@ -295,11 +296,15 @@ export default function App() {
       else if (k === 'f' && e.shiftKey) act(() => setView('search'));
       else if (k === 'e' && e.shiftKey) act(() => setView('explorer'));
       else if (k === 'l') act(() => document.getElementById('composer')?.focus());
-      else if (k === 'w' && active) act(() => closeTab(active));
+      else if (k === 'w' && active) act(() => void (async () => {
+        const sinGuardar = dirty.some((d) => samePath(d, active));
+        if (sinGuardar && !(await confirmar(`${active.split(/[\\/]/).pop()} tiene cambios sin guardar. ¿Cerrar igualmente?`))) return;
+        closeTab(active);
+      })());
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [active, closeTab]);
+  }, [active, closeTab, dirty]);
 
   const commands: PaletteCommand[] = [
     { id: 'open', label: 'Abrir carpeta…', icon: 'folder', run: () => void pickFolder() },

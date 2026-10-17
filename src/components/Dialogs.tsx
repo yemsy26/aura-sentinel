@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { confirmar } from '../lib/confirmar';
 import { api, errorText, type AgentSettings, type ProfileSnapshot, type UserProfile } from '../lib/api';
 import { Icon, type IconName } from './Icon';
 
@@ -20,7 +21,7 @@ export function CommandPalette({ commands, files, onOpenFile, onClose }: {
       .map((f) => ({ key: f.path, label: f.label, icon: 'file' as IconName, hint: 'archivo', run: () => onOpenFile(f.path) }));
     return q ? [...fs, ...cmds] : [...cmds, ...fs];
   }, [query, commands, files, onOpenFile]);
-  useEffect(() => setIndex(0), [query]);
+  useEffect(() => { setIndex(0); }, [query]);
   useEffect(() => {
     list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' });
   }, [index]);
@@ -160,7 +161,7 @@ export function SettingsDialog({ initialTab, workspace, onClose, onToast, onEngi
           </div>
           <div className="dialog-foot">
             <button className="btn danger" onClick={async () => {
-              if (!window.confirm('¿Borrar el perfil local?')) return;
+              if (!(await confirmar('¿Borrar el perfil local?'))) return;
               await api.clearProfile(); setProfile({ autoRememberFacts: false }); onToast('Perfil borrado.');
             }}>Borrar perfil</button>
             <button className="btn primary" onClick={saveProfile}>Guardar</button>

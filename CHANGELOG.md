@@ -18,6 +18,13 @@ Todos los cambios significativos se documentan aquí. Formato: [Versión] — Fe
 - Icono propio (el cubo hexagonal de Aura) en la app, el instalador y la pestaña.
 - Guía de instalación, integración con Bionic (qué cambia y cómo deshacerlo) y solución de problemas en
   `README.md` y `motor/LEEME.md`.
+- Arreglo: la interfaz se quedaba en blanco al usar la Terminal. En WebView2 reciente `scrollIntoView()`
+  devuelve una Promise y un efecto de React la devolvía como si fuera su limpieza. Ningún efecto devuelve ya
+  valores, y un límite de errores muestra «Recargar la interfaz» en vez de una ventana vacía (con prueba).
+- Arreglo: las confirmaciones no esperaban respuesta. En Tauri `window.confirm` devuelve una Promise, así que
+  «Nueva conversación», «Restaurar», «Deshacer cambios del agente», «Borrar perfil» y cerrar una pestaña sin
+  guardar se ejecutaban sin preguntar. Ahora usan el diálogo nativo de Windows (`ask` con el permiso
+  `dialog:allow-ask`), y Ctrl+W también pregunta si la pestaña tiene cambios (con prueba).
 
 ## [4.1.0] — 2026-10-16 (Interfaz nueva)
 

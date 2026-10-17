@@ -25,7 +25,13 @@ const responses: Record<string, (args?: Record<string, unknown>) => unknown> = {
   agent_order: (args) => ({ tipo: 'fin', orden: (args?.order as { tipo: string }).tipo, estado: 'ok',
     respuesta: 'VERIFICACIÓN (web): 0 ERRORES, 0 AVISOS', uso: '', datos: [] }),
   submit_user_answer: () => null,
+  run_command: (args) => ({ code: 0, output: `salida de ${args?.command}\n`, ms: 30 }),
 };
+let respuestaAsk = false;
+vi.mock('@tauri-apps/plugin-dialog', () => ({  // la confirmación nativa de Windows
+  ask: vi.fn(async (texto: string) => { calls.push(['plugin:dialog|ask', { texto }]); return respuestaAsk; }),
+  open: vi.fn(async () => null),
+}));
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
@@ -116,5 +122,38 @@ describe('Aura Sentinel', () => {
     fireEvent.change(input, { target: { value: 'app' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(screen.getByTestId('editor').textContent).toBe('C:\\ws\\js\\app.js');
+  });
+
+  it('nueva conversación pregunta antes y no borra nada si el usuario cancela', async () => {
+    render(<App />);
+    await screen.findByText('anterior');
+    respuestaAsk = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
+    await waitFor(() => expect(called('plugin:dialog|ask')).toHaveLength(1));
+    expect(called('clear_chat_history')).toHaveLength(0);
+    expect(screen.getByText('anterior')).toBeTruthy();
+    respuestaAsk = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
+    await waitFor(() => expect(called('clear_chat_history')).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByText('anterior')).toBeNull());
+  });
+
+  it('la terminal no tumba la interfaz aunque scrollIntoView devuelva una Promise (WebView2 reciente)', async () => {
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn(() => Promise.resolve()) as never;
+    try {
+      render(<App />);
+      await screen.findByText('index.html');
+      fireEvent.click(screen.getByRole('tab', { name: 'Terminal' }));
+      for (const comando of ['python saludo.py', 'git status']) {
+        const caja = screen.getByLabelText('Comando');
+        fireEvent.change(caja, { target: { value: comando } });
+        fireEvent.submit(caja.closest('form')!);
+        expect(await screen.findByText(new RegExp(`salida de ${comando}`))).toBeTruthy();
+      }
+      expect(screen.getAllByText(/código 0/)).toHaveLength(2);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 });

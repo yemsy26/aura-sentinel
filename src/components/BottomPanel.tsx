@@ -94,7 +94,7 @@ function Terminal({ workspace, onRun }: { workspace: string | null; onRun: (c: s
   const [history, setHistory] = useState<string[]>([]);
   const [cursor, setCursor] = useState(-1);
   const end = useRef<HTMLDivElement>(null);
-  useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [log]);
+  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [log]);
   const running = log.some((e) => !e.result);
   const run = async () => {
     const c = command.trim();
@@ -136,7 +136,7 @@ function Terminal({ workspace, onRun }: { workspace: string | null; onRun: (c: s
 function Preview({ url, onUrl, onOpenExternal }: { url: string; onUrl: (u: string) => void; onOpenExternal: (u: string) => void }) {
   const [draft, setDraft] = useState(url);
   const [key, setKey] = useState(0);
-  useEffect(() => setDraft(url), [url]);
+  useEffect(() => { setDraft(url); }, [url]);
   return (
     <div className="preview">
       <form className="preview-bar" onSubmit={(e) => { e.preventDefault(); onUrl(draft.trim()); setKey((k) => k + 1); }}>

@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { api, errorText } from '../lib/api';
+import { confirmar } from '../lib/confirmar';
 import { monaco } from '../lib/monaco';
 import { baseName, diffCounts, languageOf, relativePath, samePath } from '../lib/text';
 import { Icon } from './Icon';
@@ -197,7 +198,7 @@ export const EditorArea = forwardRef<EditorHandle, Props>(function EditorArea(p,
 
   const undoAgent = async () => {
     if (!p.active || typeof baseline !== 'string') return;
-    if (!window.confirm(`¿Devolver ${baseName(p.active)} a como estaba antes de la misión?`)) return;
+    if (!(await confirmar(`¿Devolver ${baseName(p.active)} a como estaba antes de la misión?`))) return;
     const entry = entries.current.get(key(p.active));
     if (!entry) return;
     replace(entry, baseline);
@@ -216,8 +217,8 @@ export const EditorArea = forwardRef<EditorHandle, Props>(function EditorArea(p,
     p.onDirty(p.active, false);
   };
 
-  const closeTab = (path: string) => {
-    if (p.dirty.some((d) => samePath(d, path)) && !window.confirm(`${baseName(path)} tiene cambios sin guardar. ¿Cerrar igualmente?`)) return;
+  const closeTab = async (path: string) => {
+    if (p.dirty.some((d) => samePath(d, path)) && !(await confirmar(`${baseName(path)} tiene cambios sin guardar. ¿Cerrar igualmente?`))) return;
     p.onClose(path);
   };
 
