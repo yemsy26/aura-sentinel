@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import conocimiento, pantalla
+from . import conocimiento, matematicas, pantalla
 from .config import RAIZ_INSTALACION
 from .verificacion import chequeo_rapido, es_codigo, verificar
 
@@ -45,7 +45,8 @@ EXTERNOS = re.compile(
     r"\bhelm\s+(install|upgrade|uninstall|rollback|push)\b|\bterraform\s+(apply|destroy|import)\b|"
     r"\bpulumi\s+(up|destroy)\b|\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\bdotnet\s+nuget\s+push\b|"
     r"\btwine\s+upload\b|\bgh\s+(release|repo|pr|gist|secret)\s+(create|delete|edit|merge|upload|set)\b|"
-    r"\b(az|aws|gcloud|flyctl|vercel|netlify|heroku|railway|doctl)\s", re.IGNORECASE)
+    r"\b(az|aws|gcloud|flyctl|vercel|netlify|heroku|railway|doctl)\s|\bhardhat\s+verify\b|\bforge\s+verify-contract\b",
+    re.IGNORECASE)
 HTTP = re.compile(r"\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b", re.IGNORECASE)
 HTTP_ESCRIBE = re.compile(r"(-X\s*|--request\s+|-Method\s+)(POST|PUT|PATCH|DELETE)\b|(^|\s)(-d|--data(-raw|-binary)?|--json|"
                           r"-F|--form|-T|--upload-file)\s", re.IGNORECASE)
@@ -53,6 +54,7 @@ LOCALES = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"}
 # Scripts del proyecto que lanza un comando: lo que llevan dentro también necesita permiso.
 SCRIPT = re.compile(r'(?:^|[\s&|;(])"?((?:[\w.:-]+[\\/])*[\w.-]+\.(?:bat|cmd|ps1|sh))"?(?=$|[\s&|;)])', re.IGNORECASE)
 COMENTARIO = re.compile(r"\s*(rem\b|::|#|echo\b|@echo\b|write-host\b)", re.IGNORECASE)
+NPM_SCRIPT = re.compile(r"\b(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:run(?:-script)?\s+)?([\w:.-]+)", re.IGNORECASE)
 DESTRUCTIVO = "ejecutar un comando potencialmente destructivo"
 EXTERNO = "conectarse o publicar fuera de este equipo (servidor, registro de imágenes, clúster o nube)"
 # Credenciales reales escritas en un archivo: deben ir en variables de entorno o en un .env fuera de git.
@@ -60,6 +62,94 @@ CREDENCIALES = re.compile(
     r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36}\b|"
     r"\bxox[baprs]-[A-Za-z0-9-]{10,}|\bsk_live_[A-Za-z0-9]{16,}|\bAIza[0-9A-Za-z_-]{35}\b|"
     r"\b(password|passwd|secret|api_?key|token)\w*[\"']?\s*[:=]\s*[\"'][^\"'\s]{8,}[\"']", re.IGNORECASE)
+# Blockchain: firman o envían transacciones o despliegan. Fuera de un nodo local, siempre con permiso: sin red
+# explícita no se supone local, porque la CLI puede apuntar por defecto a mainnet con una cartera con fondos.
+CRIPTO = "enviar una transacción o desplegar en una blockchain fuera de un nodo local (puede mover fondos reales)"
+CRIPTO_CONFIG = "cambiar la red o la cartera por defecto de la CLI de Solana (afecta a todo el equipo)"
+SOLANA = re.compile(
+    r"\bsolana(?:\.exe)?\s+(?:transfer|airdrop|deploy|program\s+(?:deploy|write-buffer|upgrade|close|extend|set-\S+)|"
+    r"(?:create|delegate|deactivate|withdraw|split|merge|redelegate|authorize)-\S+|stake-\S+|vote-\S+|"
+    r"close-vote-account|new-nonce)\b|\bspl-token(?:\.exe)?\s+"
+    r"(?!(?:balance|accounts|supply|account-info|display|address|help|-h|--help|-V|--version)\b)\S", re.IGNORECASE)
+SOLANA_CONFIG = re.compile(r"\bsolana(?:\.exe)?\s+config\s+set\b", re.IGNORECASE)
+ANCHOR = re.compile(r"\banchor\s+(?:deploy|upgrade|migrate|idl\s+(?:init|upgrade|erase-authority|set-authority|close|"
+                    r"write-buffer|set-buffer))\b|\banchor\s+(test|run)\b", re.IGNORECASE)
+EVM = re.compile(r"\bforge\s+(?:script\b.*--broadcast|create)\b|\bcast\s+(?:send|publish)\b|\bcast\s+rpc\s+eth_send",
+                 re.IGNORECASE)
+HARDHAT = re.compile(r"\bhardhat\s+(?:run|test|console|deploy|ignition\s+deploy)\b", re.IGNORECASE)
+OTRAS_CADENAS = re.compile(
+    r"\bsui\s+client\s+(?:call|publish|upgrade|transfer\S*|pay\S*|merge-coin|split-coin|ptb)\b|\baptos\s+(?:move\s+"
+    r"(?:publish|run|run-script|deploy-object|upgrade-object)|account\s+(?:transfer|create|fund-with-faucet))\b",
+    re.IGNORECASE)
+URL_SOLANA = re.compile(r"(?:^|\s)(?:--url|-u)(?:\s+|=)?([^\s\"']+)")
+CLUSTER_ANCHOR = re.compile(r"--provider\.cluster(?:\s+|=)([^\s\"']+)")
+RPC_EVM = re.compile(r"(?:^|\s)(?:--rpc-url|-r|--fork-url)(?:\s+|=)([^\s\"']+)")
+RED_HARDHAT = re.compile(r"--network(?:\s+|=)([^\s\"']+)")
+SUFIJO_RED = {"principal": " — RED PRINCIPAL (mainnet)", "prueba": " — red de prueba",
+              "desconocida": ""}
+
+
+def _red(valor: str | None) -> str:
+    """local, prueba, principal o desconocida para una URL o un nombre de red (Solana, Anchor, Foundry, Hardhat)."""
+    if not valor:
+        return "desconocida"
+    v = valor.lower().strip("\"'")
+    host = (re.match(r"\w+://([^/:]+)", v) or [None, ""])[1]
+    if v in ("l", "localhost", "localnet", "hardhat") or host in LOCALES:
+        return "local"
+    if re.search(r"mainnet|^m$|^main$|^mainnet-beta$", v):
+        return "principal"
+    if re.search(r"devnet|testnet|sepolia|holesky|hoodi|amoy|goerli|fuji|^d$|^t$", v):
+        return "prueba"
+    return "desconocida"
+
+
+def _red_solana_por_defecto() -> str:
+    config = Path(os.environ.get("USERPROFILE", Path.home())) / ".config" / "solana" / "cli" / "config.yml"
+    try:
+        m = re.search(r"^json_rpc_url:\s*['\"]?([^'\"\s]+)", config.read_text(encoding="utf-8"), re.MULTILINE)
+    except OSError:
+        return "desconocida"
+    return _red(m.group(1)) if m else "desconocida"
+
+
+def _en_archivo(raiz: Path | None, nombres: tuple[str, ...], patron: str) -> str | None:
+    for nombre in nombres:
+        try:
+            m = re.search(patron, (raiz / nombre).read_text(encoding="utf-8", errors="replace"), re.MULTILINE)
+        except (OSError, TypeError):
+            continue
+        if m:
+            return m.group(1)
+    return None
+
+
+def transaccion(comando: str, raiz: Path | None = None) -> str | None:
+    """Motivo si el comando firma o envía una transacción, despliega o cambia la red de una blockchain fuera de un nodo
+    local; None si no. Las lecturas (saldo, estado) no cuentan."""
+    if SOLANA_CONFIG.search(comando):
+        return CRIPTO_CONFIG
+    if SOLANA.search(comando):
+        m = URL_SOLANA.search(comando)
+        red = _red(m.group(1)) if m else _red_solana_por_defecto()
+    elif (m := ANCHOR.search(comando)):
+        c = CLUSTER_ANCHOR.search(comando)
+        valor = c.group(1) if c else _en_archivo(raiz, ("Anchor.toml",), r"^\s*cluster\s*=\s*['\"]([^'\"]+)")
+        red = "local" if valor is None and m.group(1) else _red(valor)  # test/run sin Anchor.toml: no despliega
+    elif EVM.search(comando):
+        m = RPC_EVM.search(comando)
+        red = _red(m.group(1) if m else os.environ.get("ETH_RPC_URL"))
+    elif HARDHAT.search(comando):
+        m = RED_HARDHAT.search(comando)
+        valor = m.group(1) if m else os.environ.get("HARDHAT_NETWORK") or _en_archivo(
+            raiz, ("hardhat.config.ts", "hardhat.config.js", "hardhat.config.cjs", "hardhat.config.mjs"),
+            r"defaultNetwork\s*:\s*['\"]([^'\"]+)")
+        red = _red(valor or "hardhat")
+    elif OTRAS_CADENAS.search(comando):
+        red = "desconocida"
+    else:
+        return None
+    return None if red == "local" else CRIPTO + SUFIJO_RED[red]
 
 
 def externo(comando: str) -> bool:
@@ -382,13 +472,20 @@ class Herramientas:
             if p.is_file() and p.stat().st_size < 200_000:
                 texto = p.read_text(encoding="utf-8", errors="replace")
                 lineas += [(self.rel(p), l.strip()) for l in texto.splitlines() if l.strip() and not COMENTARIO.match(l)]
+        if (nombres := NPM_SCRIPT.findall(comando)) and (self.raiz / "package.json").is_file():
+            try:
+                scripts = json.loads((self.raiz / "package.json").read_text(encoding="utf-8")).get("scripts") or {}
+            except (OSError, ValueError, AttributeError):
+                scripts = {}
+            lineas += [(f"package.json ({n})", str(scripts[n])) for n in nombres if n in scripts]
         return lineas
 
     def _permitido(self, comando: str) -> str | None:
         motivo, detalle = None, comando
         for origen, linea in [("", comando), *self._scripts(comando)]:
-            if externo(linea):
-                motivo, detalle = EXTERNO, linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
+            if (cripto := transaccion(linea, self.raiz)) or externo(linea):
+                motivo = cripto or EXTERNO
+                detalle = linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
                 break
             if motivo is None and PELIGROSOS.search(linea):
                 motivo, detalle = DESTRUCTIVO, linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
@@ -396,6 +493,10 @@ class Herramientas:
             return None
         if self.confirmar and self._pedir_permiso(detalle if detalle != comando else comando, motivo):
             return None
+        if motivo.startswith((CRIPTO, CRIPTO_CONFIG)):
+            return ("BLOQUEADO: enviar transacciones, desplegar o cambiar la red de una blockchain necesita el permiso "
+                    "del usuario y no lo dio. Trabaja con un nodo local (anvil, solana-test-validator) y la red "
+                    "explícita, o explícale qué quieres hacer, en qué red y con qué cartera.")
         if motivo == EXTERNO:
             return ("BLOQUEADO: conectarse o publicar fuera del equipo necesita el permiso del usuario y no lo dio. "
                     "Explícale qué quieres hacer y por qué, o pídele que lo haga él.")
@@ -732,6 +833,12 @@ class Herramientas:
     def investigar(self, pregunta: str) -> str:
         return conocimiento.investigar(self, pregunta)
 
+    def calcular(self, codigo: str, segundos: int = 30) -> str:
+        return matematicas.calcular(self, codigo, segundos)
+
+    def resolver_sat(self, archivo: str, segundos: int = 60, modelo: str = "") -> str:
+        return matematicas.resolver_sat(self, archivo, segundos, modelo)
+
     def aprender(self, leccion: str) -> str:
         leccion = " ".join(leccion.split())[:220]
         if len(leccion) < 15:
@@ -850,8 +957,18 @@ ESQUEMAS = [
        {"url": S, "buscar": S}, ["url"]),
     _f("investigar", "Busca en internet y lee las mejores páginas en UN paso: devuelve los párrafos relevantes con su "
                      "fuente. Úsalo para APIs, errores o librerías que no conozcas bien.", {"pregunta": S}, ["pregunta"]),
+    _f("calcular", "Cálculo matemático EXACTO con SymPy (nunca calcules de memoria): álgebra, ecuaciones (solve), "
+                   "derivadas, integrales, límites, series, matrices, factorización, primos, fracciones y decimales "
+                   "con la precisión que pidas (N(expr, 50)). 'codigo' es Python con todo SymPy importado y x, y, z, t "
+                   "ya definidos; se muestra el valor de la última línea. Ej.: solve(x**2 - 5*x + 6, x)",
+       {"codigo": S, "segundos": I}, ["codigo"]),
+    _f("resolver_sat", "Resuelve una fórmula booleana en DIMACS CNF (un .cnf del proyecto) con el resolvedor SAT del "
+                       "motor. Para restricciones y combinatoria (sudoku, horarios, coloreado, asignaciones, "
+                       "planificación): codifícalas con un script (guia('matematicas')). Devuelve SATISFACIBLE con el "
+                       "modelo comprobado (en el .modelo) o INSATISFACIBLE (no hay solución).",
+       {"archivo": S, "segundos": I, "modelo": S}, ["archivo"]),
     _f("guia", "Buenas prácticas ACTUALES y cómo verificar para: python, pygame, html-juego, web, api, java, rust, go, "
-               "node, dotnet, docker, despliegue, tests, bat. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
+               "node, dotnet, docker, despliegue, matematicas, tests, bat. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
     _f("version", "Última versión real de un paquete o imagen (evita librerías obsoletas): pypi (y si hay wheel para tu "
                   "Python), npm, maven, crates (Rust), go (ruta del módulo, p. ej. github.com/gin-gonic/gin), nuget "
                   "(.NET) o docker (imagen de Docker Hub, p. ej. python o node:alpine).",
@@ -890,6 +1007,7 @@ def despachar(h: Herramientas, nombre: str, args: dict) -> str:
     tabla = {"plan": h.plan, "paso_hecho": h.paso_hecho, "listar": h.listar, "leer": h.leer, "buscar": h.buscar,
              "escribir": h.escribir, "editar": h.editar, "ejecutar": h.ejecutar, "procesos": h.procesos_cmd,
              "crear_bat": h.crear_bat, "web_buscar": h.web_buscar, "web_leer": h.web_leer, "investigar": h.investigar,
+             "calcular": h.calcular, "resolver_sat": h.resolver_sat,
              "guia": h.guia, "version": h.version, "verificar": h.verificar_cmd, "revisar": h.revisar_cmd,
              "aprender": h.aprender, "restaurar": h.restaurar, "ver_pantalla": h.ver_pantalla, "git": h.git,
              "preguntar": h.preguntar}

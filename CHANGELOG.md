@@ -5,6 +5,26 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.5.0] — 2026-10-17 (Permiso para blockchain y matemáticas exactas)
+
+- **Seguridad:** enviar transacciones o desplegar en una blockchain (`solana transfer`/`program deploy`, `spl-token`,
+  `anchor deploy`/`upgrade`/`idl`, `forge script --broadcast`, `forge create`, `cast send`, `hardhat run --network`,
+  `sui client`, `aptos move publish`) y `solana config set` piden permiso salvo contra un nodo local explícito. Sin red
+  en el comando no se supone local: se lee la red por defecto de la CLI de Solana, el `cluster` de `Anchor.toml` y el
+  `defaultNetwork` de Hardhat, y la ventana de permiso dice si es la RED PRINCIPAL o una red de prueba. Antes, estos
+  comandos se ejecutaban sin preguntar.
+- `hardhat verify` y `forge verify-contract` cuentan como publicar fuera del equipo. Los scripts de `package.json` que
+  lanza `npm run` se revisan como los `.bat`.
+- Nueva herramienta `calcular`: cálculo exacto con SymPy en un proceso aparte, con tiempo límite y solo cálculo.
+  `instalar.bat` instala SymPy.
+- Nueva herramienta `resolver_sat`: resuelve fórmulas DIMACS CNF con `motor\bin\hunt.exe` (motor Sat-hibrido-rust) y
+  comprueba el modelo contra cada cláusula; errores de formato con su línea.
+- Guía `matematicas` (SymPy y cómo codificar sudokus, horarios o coloreado en CNF) y reglas del agente para no
+  calcular de memoria y trabajar con nodos locales en blockchain. El entorno indica Foundry, Anchor y la red por
+  defecto de Solana.
+
+---
+
 ## [4.4.0] — 2026-10-17 (Versiones de todos los ecosistemas y preguntas al usuario)
 
 - `version` consulta también crates.io (Rust), el proxy de Go (con aviso si el módulo está obsoleto y explicación

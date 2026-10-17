@@ -42,6 +42,7 @@ refactor_*.py
 
 # Compiled test artifacts & scratch binaries
 *.exe
+!/motor/bin/hunt.exe
 *.pdb
 test_*.rs
 test_*.py

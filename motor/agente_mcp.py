@@ -135,6 +135,16 @@ def restaurar(checkpoint: int = 0) -> str:
     return H.restaurar(checkpoint)
 
 
+@mcp.tool(description=D["calcular"])
+def calcular(codigo: str, segundos: int = 30) -> str:
+    return H.calcular(codigo, segundos)
+
+
+@mcp.tool(description=D["resolver_sat"])
+def resolver_sat(archivo: str, segundos: int = 60, modelo: str = "") -> str:
+    return H.resolver_sat(archivo, segundos, modelo)
+
+
 @mcp.tool(description=D["aprender"])
 def aprender(leccion: str) -> str:
     return H.aprender(leccion)

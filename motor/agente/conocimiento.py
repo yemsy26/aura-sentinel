@@ -14,7 +14,11 @@ ALIAS = {"juego": "pygame", "pygame-ce": "pygame", "canvas": "html-juego", "java
          "net": "dotnet", "aspnet": "dotnet", "contenedor": "docker", "contenedores": "docker", "compose": "docker",
          "docker-compose": "docker", "podman": "docker", "servidor": "despliegue", "servidores": "despliegue",
          "deploy": "despliegue", "desplegar": "despliegue", "ssh": "despliegue", "kubernetes": "despliegue",
-         "k8s": "despliegue"}
+         "k8s": "despliegue", "matematica": "matematicas", "matemática": "matematicas", "matemáticas": "matematicas",
+         "mates": "matematicas", "math": "matematicas", "sat": "matematicas", "cnf": "matematicas",
+         "dimacs": "matematicas", "sympy": "matematicas", "algebra": "matematicas", "álgebra": "matematicas",
+         "calculo": "matematicas", "cálculo": "matematicas", "ecuaciones": "matematicas",
+         "restricciones": "matematicas", "combinatoria": "matematicas", "sudoku": "matematicas"}
 REEMPLAZOS = {"pygame": "pygame-ce", "pypdf2": "pypdf", "fuzzywuzzy": "rapidfuzz", "pycrypto": "pycryptodome",
               "sklearn": "scikit-learn", "bs4": "beautifulsoup4", "opencv": "opencv-python", "pil": "pillow"}
 

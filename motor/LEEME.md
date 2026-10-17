@@ -107,7 +107,15 @@ Windows puede liberar esa RAM si otro programa la necesita, en vez de bloquear u
 `plan`, `paso_hecho`, `listar`, `leer`, `buscar`, `escribir`, `editar`, `ejecutar` (con `fondo=true` para servidores;
 crear un venv o `pip`/`npm`/`uv install` tiene siempre al menos 300 s para no dejar el entorno a medias),
 `procesos`, `crear_bat`, `web_buscar` (DuckDuckGo, Bing de respaldo), `web_leer`, `investigar`, `guia`, `version`,
-`verificar`, `revisar`, `aprender`, `preguntar`, `terminar`.
+`calcular`, `resolver_sat`, `verificar`, `revisar`, `aprender`, `preguntar`, `terminar`.
+`calcular(codigo)` hace cálculo exacto con SymPy (ecuaciones, derivadas, integrales, límites, matrices, primos, decimales
+con la precisión pedida) en un proceso aparte y con tiempo límite. Solo calcula: rechaza importar módulos del sistema,
+abrir archivos, `eval`/`exec` y atributos internos.
+`resolver_sat(archivo)` resuelve una fórmula DIMACS CNF con `bin\hunt.exe` (motor
+[Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust): CDCL, capa de paridad GF(2), ruptura de simetrías y
+varios hilos) y comprueba el modelo contra cada cláusula antes de darlo por bueno. Para sudokus, horarios, coloreado o
+asignaciones, el agente codifica el problema con un script, lo resuelve y comprueba la solución decodificada (guía
+`matematicas`). Origen y SHA-256 del ejecutable en `bin\LEEME.md`.
 `preguntar(pregunta, opciones)` pide un dato imprescindible o una decisión al usuario (2-5 opciones y respuesta libre)
 y espera la respuesta; como mucho 3 veces por tarea. Sin usuario (MCP, `--tarea`), el agente decide y lo explica.
 `ver_pantalla` captura la página (`.html` o `http://localhost:PUERTO`) o el juego pygame y señala texto cortado,
@@ -159,9 +167,10 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
 ## Orientación actualizada e internet
 
 - `guia(tema)`: prácticas actuales y cómo verificar (python, pygame, html-juego, web, api, java, rust, go, node,
-  dotnet, docker, despliegue, tests, bat). Son archivos en `agente\guias\*.md`: puedes editarlos o añadir los tuyos.
+  dotnet, docker, despliegue, matematicas, tests, bat). Son archivos en `agente\guias\*.md`: puedes editarlos o añadir los tuyos.
 - El agente conoce el entorno al empezar: versiones de Python, Node, Java, Rust, Go, .NET, si Docker está en marcha,
-  Podman, OpenSSH y kubectl. Las compilaciones e instalaciones largas (`cargo`, `go`, `docker build`, `dotnet`,
+  Podman, OpenSSH, kubectl, Foundry, Anchor y la red por defecto de la CLI de Solana (si es mainnet, se le avisa de
+  que ponga siempre `--url`). Las compilaciones e instalaciones largas (`cargo`, `go`, `docker build`, `dotnet`,
   Maven/Gradle, `npm install`...) tienen al menos 5 minutos antes de cortarse.
 - `version(paquete, ecosistema)`: versión real en PyPI, npm, Maven, crates.io (Rust), el proxy de Go (avisa si el
   módulo está obsoleto), NuGet (.NET) y Docker Hub (etiquetas para `FROM`, sin `latest`); en PyPI, si hay wheel para tu Python (p. ej. `pygame` → usa `pygame-ce`
@@ -178,6 +187,13 @@ Comandos destructivos (`rmdir /s`, `del /s`, `format`, `reg delete`...) piden co
 equipo: `ssh`, `scp`, `sftp`, `rsync`, `git push`, `docker push`/`login`, `kubectl apply`/`delete`, `helm`,
 `terraform apply`, publicar paquetes (`npm`/`cargo publish`), nubes (`az`, `aws`, `gcloud`...) y peticiones
 HTTP que escriben (`curl -X POST`, `-d`...) a algo que no sea `localhost`. Sin tu permiso, se bloquea.
+En blockchain, enviar transacciones o desplegar (`solana transfer`, `solana program deploy`, `spl-token`,
+`anchor deploy`, `forge script --broadcast`, `forge create`, `cast send`, `hardhat run --network`, `sui`, `aptos`) y
+`solana config set` piden permiso salvo contra un nodo local escrito en el comando (`--url localhost`,
+`--rpc-url http://127.0.0.1:8545`, `--network localhost`) o en el proyecto (`cluster = "Localnet"` en `Anchor.toml`,
+`defaultNetwork` de Hardhat). Sin red en el comando no se supone local, porque la CLI de Solana puede apuntar a mainnet:
+la ventana de permiso dice si es la RED PRINCIPAL o una red de prueba. También se revisan los scripts de
+`package.json` que lanza `npm run`.
 **`ejecutar` no es un sandbox**: corre con tus permisos. Úsalo en carpetas de proyecto.
 
 ## Usarlo desde Bionic / LM Studio (MCP)
@@ -199,7 +215,8 @@ Si el modelo no está cargado, lo carga con el ajuste de VRAM.
   `{"tipo":"nuevo"}`, `{"tipo":"verificar"}`, `{"tipo":"plan"}`, `{"tipo":"salir"}`.
 - Eventos por la salida: `listo` (modelo, contexto), `paso` (herramienta, detalle, resultado, error, plan),
   `archivos` (rutas cambiadas; vacía = refrescar todo), `nota`, `aviso`, `progreso`, `error`.
-- `confirmar` (`comando` y `motivo`: destructivo, o conectarse o publicar fuera del equipo) espera
+- `confirmar` (`comando` y `motivo`: destructivo, conectarse o publicar fuera del equipo, o una transacción en
+  blockchain) espera
   `{"tipo":"respuesta","si":true|false}`.
 - `pregunta` (`pregunta` y `opciones`) espera `{"tipo":"respuesta","texto":"..."}`.
 - Cada orden termina con `fin` (`estado`: ok, incompleta o error; `respuesta`; `uso` del contexto).

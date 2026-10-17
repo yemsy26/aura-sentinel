@@ -7,10 +7,10 @@ echo === Agente Local: instalacion ===
 where uv >nul 2>nul
 if %errorlevel%==0 (
   if not exist ".venv\Scripts\python.exe" uv venv .venv --python 3.12 -q || goto :error
-  uv pip install --python .venv\Scripts\python.exe -q "mcp>=1.2" ruff vulture playwright || goto :error
+  uv pip install --python .venv\Scripts\python.exe -q "mcp>=1.2" ruff vulture playwright "sympy>=1.13" || goto :error
 ) else (
   if not exist ".venv\Scripts\python.exe" python -m venv .venv || goto :error
-  ".venv\Scripts\python.exe" -m pip install -q "mcp>=1.2" ruff vulture playwright || goto :error
+  ".venv\Scripts\python.exe" -m pip install -q "mcp>=1.2" ruff vulture playwright "sympy>=1.13" || goto :error
 )
 echo [info] Las pruebas web usan Edge o Chrome ya instalados (sin descargas extra).
 echo [1/2] Pruebas internas...

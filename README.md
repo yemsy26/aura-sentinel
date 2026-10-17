@@ -129,6 +129,7 @@ Desinstalar no borra tu perfil ni tus proyectos (tampoco el `.venv` del motor: b
 | El modelo no aparece en la barra superior | reinicia Bionic tras la descarga y ejecuta `motor\cargar_modelo.bat` |
 | «Docker está instalado pero NO en marcha» | abre Docker Desktop y pide al agente que vuelva a verificar |
 | El agente pide permiso para `ssh`, `scp`, `docker push`, `kubectl`… | es lo que sale de tu equipo: permítelo solo si es el servidor que le indicaste |
+| El agente pide permiso para `solana transfer`, `forge script --broadcast`, `anchor deploy`… | es una transacción en blockchain: si la ventana dice RED PRINCIPAL mueve fondos reales; para probar, pide que use un nodo local (anvil, solana-test-validator) |
 | Va muy lento o se queda sin memoria | desactiva la voz de Bionic; `motor\vision.bat off` libera ~0,9 GB; `motor\cargar_modelo.bat --remedir` |
 
 Registro del motor: `%TEMP%\aura_agente_local.log`.
@@ -162,13 +163,17 @@ Cada mensaje del chat lo ejecuta Agente Local (`src-tauri/src/agent.rs`). Aura l
 
 - Cada evento llega a la interfaz tal cual (`agent-event`): `paso` → tarjeta y plan; `archivos` → el editor
   recarga las pestañas abiertas; `confirmar` → ventana para permitir o bloquear comandos destructivos y lo que
-  sale del equipo (ssh, scp, docker push, kubectl, nube), con el motivo que da el motor; `pregunta` → tarjeta
+  sale del equipo (ssh, scp, docker push, kubectl, nube, transacciones en blockchain fuera de un nodo local), con
+  el motivo que da el motor; `pregunta` → tarjeta
   «El agente pregunta» con sus opciones y una respuesta libre.
 - Las acciones rápidas usan órdenes del protocolo en la misma sesión (`agent_order`): verificar, revisar,
   procesos, detener, restaurar, regla y nuevo.
 - El agente planifica, escribe, ejecuta, verifica (Python, web en Edge sin ventana, Java, Rust, Go, .NET,
   Node/TypeScript, Dockerfile y Compose, .bat), revisa el código y no termina con errores. El selector de modelos lista los de Bionic; elegir otro lo carga ajustado
   a la VRAM.
+- Las matemáticas no las hace de memoria: `calcular` (SymPy) para cálculo exacto y `resolver_sat` (el resolvedor
+  SAT `motor\bin\hunt.exe`, del motor Sat-hibrido-rust) para restricciones y combinatoria, con el resultado
+  comprobado.
 - La conversación se conserva mientras no cambies de carpeta ni de modelo. Cancelar detiene el agente y todo
   lo que lanzó.
 - Si una misión queda a medias (plan con pasos sin marcar en `.agente/plan.md`), al abrir la app aparece

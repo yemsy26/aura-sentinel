@@ -24,6 +24,17 @@ def _corta(texto: str, palabras: int = 2) -> str:
     return " ".join(texto.split()[:palabras])
 
 
+def _blockchain() -> list[str]:
+    """Herramientas de blockchain y la red por defecto de Solana (si es mainnet, cada comando debe llevar --url)."""
+    from .herramientas import _red_solana_por_defecto
+    partes = ["Foundry (forge, cast, anvil)" if shutil.which("forge") else "", "Anchor" if shutil.which("anchor") else ""]
+    if shutil.which("solana"):
+        red = _red_solana_por_defecto()
+        partes.append("Solana CLI (red por defecto: MAINNET; pasa siempre --url localhost o -ud)" if red == "principal"
+                      else f"Solana CLI (red por defecto: {red})")
+    return partes
+
+
 def entorno() -> str:
     """Herramientas instaladas, para que el modelo sepa qué puede usar (y que Docker apagado no sirve todavía)."""
     from .ecosistemas import docker_activo
@@ -37,13 +48,13 @@ def entorno() -> str:
               _corta(_version(["go", "version"]), 3).replace("go version go", "Go "),
               f".NET SDK {_version(['dotnet', '--version'])}" if shutil.which("dotnet") else "", docker,
               "Podman" if shutil.which("podman") else "", "OpenSSH (ssh/scp)" if shutil.which("ssh") else "",
-              "kubectl" if shutil.which("kubectl") else "",
+              "kubectl" if shutil.which("kubectl") else "", *_blockchain(),
               "navegador para pruebas" if shutil.which("msedge") or Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe").exists() else ""]
     return ", ".join(p for p in partes if p) or "desconocido"
 
 
 METODO = """MÉTODO (síguelo siempre, paso a paso):
-1. ENTENDER Y ORIENTARTE: si hay archivos, usa listar y lee lo necesario. Llama a guia con el tipo de proyecto (python, pygame, html-juego, web, api, java, rust, go, node, dotnet, docker, despliegue) y sigue sus prácticas actuales.
+1. ENTENDER Y ORIENTARTE: si hay archivos, usa listar y lee lo necesario. Llama a guia con el tipo de proyecto (python, pygame, html-juego, web, api, java, rust, go, node, dotnet, docker, despliegue, matematicas) y sigue sus prácticas actuales.
 2. PLANIFICAR: plan con 3-10 pasos que incluyan CADA requisito del usuario (con sus nombres exactos de archivo), tests reales, verificar, revisar y el .bat.
 3. CONSTRUIR: un archivo por llamada con escribir. Código COMPLETO y funcional, sin '...' ni TODO; módulos pequeños (<250 líneas), manejo de errores, README.md. Antes de usar una librería: version(paquete). Si dudas de una API o de un error: investigar(pregunta).
 4. INSTALAR: en Python, ejecutar("python -m venv .venv") y ejecutar("python -m pip install -r requirements.txt") (el .venv se activa solo; una web estática no lleva requirements.txt). En Rust, Go, Node y .NET lo hace su herramienta (cargo build, go mod tidy, npm install, dotnet restore).
@@ -63,6 +74,8 @@ REGLAS:
 - Sé breve. No pegues código en el chat: escríbelo en archivos.
 - Credenciales (contraseñas, tokens, claves): nunca en el código, en la imagen ni en git; léelas de variables de entorno o de un .env que esté en .gitignore, y pide al usuario que las ponga.
 - Conectarte o publicar fuera del equipo (ssh, scp, docker push, kubectl, nube) pide permiso al usuario: di antes qué vas a hacer y comprueba después que el servicio responde.
+- Blockchain: trabaja con un nodo local (anvil, solana-test-validator) y pon siempre la red en el comando (--rpc-url http://127.0.0.1:8545, --url localhost). Enviar transacciones o desplegar en otra red pide permiso. Nunca leas, muestres ni escribas claves privadas o keypairs.
+- Matemáticas: nunca calcules de memoria; usa calcular. Restricciones o combinatoria (sudoku, horarios, coloreado, asignaciones): codifícalas en CNF con un script, usa resolver_sat y comprueba la solución decodificada (guia("matematicas")).
 - Si falta un dato imprescindible o hay que elegir entre caminos, usa preguntar (con opciones). Lo demás, decídelo tú."""
 
 
