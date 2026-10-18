@@ -13,7 +13,9 @@ import urllib.request
 from pathlib import Path
 
 from . import android, conocimiento, matematicas, pantalla
+from . import mapa as mapa_repo
 from .config import RAIZ_INSTALACION
+from .mapa import PATRONES_MAPA
 from .verificacion import chequeo_rapido, correr, es_codigo, ignorado, verificar
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
@@ -201,18 +203,6 @@ NO_ARCHIVO = re.compile(r"(node|next|nuxt|vue|react|three|d3|express|chart|p5|ph
 CREAR = re.compile(r"\b(crea|escrib|implement|añad|agreg|genera|construi)", re.IGNORECASE)
 
 
-PATRONES_MAPA = {
-    ".js": r"(?:^|\s)(?:class|function|interface|record)\s+(\w+)", ".mjs": r"(?:^|\s)(?:class|function)\s+(\w+)",
-    ".ts": r"(?:^|\s)(?:class|function|interface|type|enum)\s+(\w+)", ".tsx": r"(?:^|\s)(?:class|function|interface)\s+(\w+)",
-    ".jsx": r"(?:^|\s)(?:class|function)\s+(\w+)", ".java": r"(?:^|\s)(?:class|interface|record|enum)\s+(\w+)",
-    ".kt": r"(?:^|\s)(?:class|interface|object|fun)\s+(\w+)", ".cs": r"(?:^|\s)(?:class|interface|record|struct|enum)\s+(\w+)",
-    ".rs": r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|mod)\s+(\w+)",
-    ".go": r"^(?:func\s+(?:\([^)]*\)\s*)?|type\s+)(\w+)",
-    ".sol": r"^\s*(?:abstract\s+)?(?:contract|interface|library|function|event|error)\s+(\w+)",
-    ".dart": r"^\s*(?:abstract\s+)?(?:class|mixin|enum|extension)\s+(\w+)",
-}
-
-
 def archivos_pedidos(texto: str) -> set[str]:
     return {f for f in re.findall(ARCHIVO_PEDIDO, texto, re.IGNORECASE) if not NO_ARCHIVO.match(f)}
 
@@ -290,6 +280,8 @@ class Herramientas:
         self.evidencia: list[str] = []      # comandos ejecutados en la tarea y su resultado (para revisar)
         self.preguntar_cb = None            # preguntar_cb(pregunta, opciones) -> respuesta; lo conecta el bucle
         self.preguntas = 0
+        self.errores_previos: set[str] | None = None  # modo grande: errores que ya estaban (no cuentan)
+        self.idiomas_parcial: list[str] | None = None  # modo grande: archivos de la parte en curso (idiomas a medias)
 
     def nueva_tarea(self, paso_inicio: int = 0) -> None:
         self.reescrituras.clear()
@@ -815,8 +807,10 @@ class Herramientas:
 
     # ---------- calidad y conocimiento ----------
     def verificar_cmd(self, ruta: str = ".", segundos: int = 8) -> str:
-        informe, errores = verificar(self.raiz, self.python_proyecto(), ruta, max(4, min(int(segundos), 60)), self.max_chars)
-        self.verificacion = {"paso": self.paso, "errores": errores, "informe": informe}
+        informe, errores = verificar(self.raiz, self.python_proyecto(), ruta, max(4, min(int(segundos), 60)), self.max_chars,
+                                     previos=self.errores_previos, idiomas_parcial=self.idiomas_parcial)
+        subcarpeta = ruta not in ("", ".") and (self.raiz / ruta).is_dir()  # un archivo verifica todo el proyecto
+        self.verificacion = {"paso": self.paso, "errores": errores, "informe": informe, "ruta": ruta if subcarpeta else "."}
         if errores == 0:
             self.paso_prueba = self.paso
             n = self._checkpoint()
@@ -954,6 +948,10 @@ class Herramientas:
                 nombres = re.findall(PATRONES_MAPA[p.suffix.lower()], texto, re.MULTILINE)[:10]
             lineas.append(f"- {self.rel(p)}: {', '.join(nombres)[:220]}" if nombres else f"- {self.rel(p)}")
         return "\n".join(lineas)[:maximo]
+
+    def mapa_cmd(self, ruta: str = "") -> str:
+        from .idiomas import resumen_idiomas
+        return mapa_repo.texto(self.raiz, ruta, self.max_chars, "" if ruta else resumen_idiomas(self.raiz))
 
     # ---------- plan ----------
     @property
@@ -1094,6 +1092,18 @@ ESQUEMAS = [
     _f("terminar", "Termina la tarea cuando todo está hecho, verificado y revisado. Resume qué se hizo y cómo usarlo.",
        {"resumen": S}, ["resumen"]),
 ]
+# Fuera de ESQUEMAS: mapa solo se ofrece en repos grandes (en los pequeños la petición al modelo no cambia) y plan_partes
+# solo en la fase de plan del modo grande.
+ESQUEMA_MAPA = _f("mapa", "Mapa del repositorio desde una caché al día: módulos, archivos, líneas y clases/funciones de "
+                          "primer nivel. Úsalo ANTES de listar o leer. Sin 'ruta': resumen por módulo; con 'ruta' "
+                          "(carpeta o archivo): el detalle.", {"ruta": S}, [])
+PARTE = {"type": "object", "properties": {"titulo": S, "archivos": LISTA, "terminado": S, "prueba": S},
+         "required": ["titulo", "archivos", "terminado", "prueba"]}
+ESQUEMA_PLAN_PARTES = _f(
+    "plan_partes", "Guarda el plan del mandato grande: partes en orden (lo común primero), cada una con 15 archivos como "
+                   "máximo (rutas reales; los nuevos también), su criterio de terminado comprobable y su prueba. "
+                   "'convenciones' = decisiones comunes que seguirán todas las partes.",
+    {"partes": {"type": "array", "items": PARTE}, "convenciones": S}, ["partes"])
 
 
 def despachar(h: Herramientas, nombre: str, args: dict) -> str:
@@ -1104,7 +1114,7 @@ def despachar(h: Herramientas, nombre: str, args: dict) -> str:
              "guia": h.guia, "version": h.version, "verificar": h.verificar_cmd, "revisar": h.revisar_cmd,
              "aprender": h.aprender, "restaurar": h.restaurar, "ver_pantalla": h.ver_pantalla, "git": h.git,
              "preguntar": h.preguntar, "experimentar": h.experimentar,
-             "abrir_android_studio": h.abrir_android_studio}
+             "abrir_android_studio": h.abrir_android_studio, "mapa": h.mapa_cmd}
     if nombre not in tabla:
         return f"Herramienta desconocida: {nombre}. Disponibles: {', '.join(tabla)}, terminar."
     try:

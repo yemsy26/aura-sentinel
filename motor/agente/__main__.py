@@ -2,19 +2,19 @@
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
 from . import __version__, config
 from . import modelo as cargador
-from .bucle import Agente, color
+from .bucle import INCOMPLETA, Agente, color
 from .llm import ErrorLLM, detectar
 from .prompts import LECCIONES, REGLAS_USUARIO
 
 AYUDA = """Comandos: /plan  /contexto  /verificar  /nuevo (olvida el historial)  /salir
   /regla <texto>  corrige una conducta del agente para siempre (p. ej. /regla usa siempre pytest)
   /reglas         muestra las reglas y lecciones guardadas
+  /grande <texto> cambio grande por partes (plan por módulos, contexto limpio y commit local por parte)
 Texto de varias líneas: empieza y termina con una línea que tenga solo \"\"\" """
 
 
@@ -26,9 +26,6 @@ def leer_entrada() -> str:
     while (l := input("... ")).strip() != '"""':
         partes.append(l)
     return "\n".join(partes).strip()
-
-
-INCOMPLETA = re.compile(r"(Error del modelo|Detenido|Se alcanzó el máximo|\[AVISO: la tarea termina SIN)")
 
 
 def modo_json(cfg: dict, carpeta: str) -> int:
@@ -183,7 +180,7 @@ def main() -> int:
             elif texto == "/nuevo":
                 agente.ctx.mensajes = agente.ctx.mensajes[:1]
                 print("Historial borrado (los archivos y el plan se conservan).")
-            elif texto.startswith("/"):
+            elif texto.startswith("/") and not texto.startswith("/grande "):
                 print(AYUDA)
             else:
                 try:

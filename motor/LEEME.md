@@ -102,13 +102,36 @@ Windows puede liberar esa RAM si otro programa la necesita, en vez de bloquear u
   valida sintaxis de `.py`/`.json` al escribir, `editar` tolera diferencias de sangría, mata árboles de procesos en timeout.
 - Registro de cada paso en `<proyecto>\.agente\registro.log`; plan en `.agente\plan.md`; resumen final en `.agente\resumen.md`.
 
+## Sistemas grandes y cambios transversales (modo grande)
+
+Para mandatos que tocan todo un repositorio grande (p. ej. «añade inglés a toda la app») sin que el modelo pierda el hilo
+ni encadene compactaciones. Los mandatos normales siguen el camino de siempre.
+
+- **Cuándo entra**: si el mandato empieza por `/grande` o dice «modo grande», o automáticamente si el repo es grande
+  (≥ 25 archivos de código o ≥ 120 KB) y el mandato es transversal («en todos los módulos», «toda la app», «añade/traduce
+  a inglés», «i18n»...).
+- **`mapa`**: en repos grandes el agente tiene la herramienta `mapa` (módulos, archivos, líneas y clases/funciones de
+  primer nivel) en vez de listar y leer a ciegas. Se genera en Python, sin el modelo, con caché en `.agente\mapa.json`
+  que solo vuelve a analizar lo que cambió (50.000 líneas: ~0,3 s en frío y milisegundos después). En repos pequeños no
+  se ofrece, así que la petición al modelo no cambia; una vez ofrecida no se retira (no rompe la caché de prompt).
+- **Plan por partes**: en un contexto limpio y solo leyendo, el modelo divide el trabajo por módulos (15 archivos como
+  máximo por parte, cada una con su criterio de terminado y su prueba) y fija unas convenciones comunes. Lee
+  `ARQUITECTURA.md` y `CONVENCIONES.md` (en la raíz o en `docs\`) si existen.
+- **Cada parte en un contexto LIMPIO** (la parte, la tarea, el plan, las convenciones, lo hecho antes y el mapa del
+  módulo) con el bucle normal; después, verificación (los errores que ya había antes de empezar no cuentan), commit local
+  «Parte k/N: ...» solo con lo que cambió en la parte y estado en `.agente\grande.json`. Si una parte falla, un
+  reintento limpio; si vuelve a fallar se detiene y explica. Al final, verificación estricta y, si hace falta, una parte
+  de cierre.
+- **Reanudar**: tras cerrar Aura, «continúa» retoma la primera parte pendiente. Sin repositorio git se crea uno local
+  (con un commit del estado inicial); dentro de otro repositorio no hace commits. Nunca hace `push`.
+
 ## Herramientas
 
 `plan`, `paso_hecho`, `listar`, `leer`, `buscar`, `escribir` (con `anadir=true` para archivos largos por partes), `editar`, `ejecutar` (con `fondo=true` para servidores;
 crear un venv o `pip`/`npm`/`uv install` tiene siempre al menos 300 s para no dejar el entorno a medias),
 `procesos`, `crear_bat`, `web_buscar` (DuckDuckGo, Bing de respaldo), `web_leer`, `investigar`, `guia`, `version`,
 `calcular`, `resolver_sat`, `experimentar`, `abrir_android_studio`, `verificar`, `revisar`, `aprender`, `preguntar`,
-`terminar`.
+`mapa` (solo en repos grandes), `terminar`.
 `calcular(codigo)` hace cálculo exacto con SymPy (ecuaciones, derivadas, integrales, límites, matrices, primos, decimales
 con la precisión pedida) en un proceso aparte y con tiempo límite. Solo calcula: rechaza importar módulos del sistema,
 abrir archivos, `eval`/`exec` y atributos internos.
@@ -167,6 +190,10 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
      `ENV`/`ARG`, usuario sin privilegios, `.dockerignore`), valida `compose.yaml` y, con Docker en marcha, construye
      la imagen. Con Docker apagado lo dice para que el agente se lo pida al usuario.
    - **YAML**: tabuladores (no válidos en YAML) en manifiestos y workflows.
+   - **Idiomas** (solo si el proyecto tiene archivos de idioma: JSON plano, anidado o por espacio de nombres, `.arb`,
+     `.po`, YAML, `strings.xml` de Android, `.resx` o un `i18n.js`/`textos.py` con un objeto por idioma): claves que
+     faltan en un idioma, textos vacíos, marcadores distintos (`{nombre}`, `%s`), claves que usa el código (`t("x.y")`,
+     `data-i18n`, `R.string.x`...) y no existen, e idiomas copiados sin traducir (≥ 30 % de textos idénticos).
    - Si falta la herramienta de un lenguaje (cargo, go, dotnet, npm, docker), el informe dice dónde instalarla.
 3. **`revisar`** (automático una vez antes de terminar): el modelo revisa en un contexto limpio cada requisito contra
    el código, con número de línea. Con tu juego de naves detectó: `hits` sin efecto, `show_menu`/`reset` nunca

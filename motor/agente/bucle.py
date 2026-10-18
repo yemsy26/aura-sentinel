@@ -6,19 +6,22 @@ import time
 import uuid
 from pathlib import Path
 
+from . import grande
 from . import llm as cliente
+from . import mapa as mapa_repo
 from .contexto import Contexto
-from .herramientas import ESQUEMAS, Herramientas, archivos_pedidos, despachar
+from .herramientas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS, Herramientas, archivos_pedidos, despachar
 from .prompts import REGLAS_USUARIO, entorno, sistema
 from .revision import revisar
 from .verificacion import es_codigo, ignorado
 
 TIPOS = {e["function"]["name"]: {k: v.get("type") for k, v in e["function"]["parameters"]["properties"].items()}
-         for e in ESQUEMAS}
+         for e in [*ESQUEMAS, ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES]}
 ICONOS = {"plan": "PLAN", "paso_hecho": "HECHO", "listar": "ls", "leer": "leer", "buscar": "grep", "escribir": "+",
           "editar": "~", "ejecutar": ">", "procesos": "ps", "crear_bat": "bat", "web_buscar": "web", "web_leer": "web",
           "investigar": "web", "guia": "guia", "version": "ver", "verificar": "QA", "revisar": "REV",
-          "aprender": "nota", "restaurar": "UNDO", "ver_pantalla": "VER", "git": "git", "terminar": "FIN"}
+          "aprender": "nota", "restaurar": "UNDO", "ver_pantalla": "VER", "git": "git", "mapa": "mapa",
+          "plan_partes": "PARTES", "terminar": "FIN"}
 ARG_VISIBLE = ("ruta", "comando", "consulta", "pregunta", "url", "nombre", "patron", "tema", "paquete", "accion",
                "numero", "enfoque")
 ES_ERROR = (r"(exit=[1-9-]|ERROR|TIMEOUT|RECHAZADO|Argumentos|VERIFICACIÓN \([^)]*\): [1-9]|VISUAL: PROBLEMAS|"
@@ -26,6 +29,9 @@ ES_ERROR = (r"(exit=[1-9-]|ERROR|TIMEOUT|RECHAZADO|Argumentos|VERIFICACIÓN \([^
             r"REVISIÓN:(?=[\s\S]*CAMBIOS NECESARIOS))")
 # Tras estas herramientas el IDE refresca el editor y el árbol de archivos (modo --json).
 CAMBIAN_ARCHIVOS = {"escribir", "editar", "crear_bat", "restaurar", "ejecutar", "git"}
+# Respuesta de una tarea que no quedó terminada (el IDE la marca como incompleta).
+INCOMPLETA = re.compile(r"(Error del modelo|Detenido|Se alcanzó el máximo|\[AVISO: la tarea termina SIN)")
+AVISO_MAPA = "\n\n(Repositorio grande: mira mapa() antes de listar o leer archivos.)"
 DEPENDEN_DEL_ESTADO = {"ejecutar", "leer", "listar", "buscar", "procesos", "verificar", "revisar", "paso_hecho",
                        "ver_pantalla", "git"}
 
@@ -82,9 +88,13 @@ class Agente:
         confirmar = (lambda c: True) if not cfg["confirmar_peligrosos"] else self._confirmar if interactivo else None
         self.h = Herramientas(raiz, max_chars, cfg["timeout_comando"], confirmar)
         self.h.cfg_llm = cfg  # ver_pantalla consulta al mismo servidor/modelo
-        tokens_herr = len(json.dumps(ESQUEMAS, ensure_ascii=False)) // 3 + 400
+        self.tokens_herr = len(json.dumps(ESQUEMAS, ensure_ascii=False)) // 3 + 400
+        self.esquemas = ESQUEMAS  # + mapa en repos grandes (se decide al empezar cada mandato y ya no se quita)
+        self.con_mapa = False
+        self.hilo_mapa = None  # caché del mapa poniéndose al día en segundo plano
+        self.requisitos_parte = ""  # modo grande: lo que la revisión debe exigir en la parte en curso
         self.entorno = entorno()
-        self.ctx = Contexto(ventana, sistema(self.h.raiz, ventana, self.entorno), tokens_herr)
+        self.ctx = Contexto(ventana, sistema(self.h.raiz, ventana, self.entorno), self.tokens_herr)
         self.registro = self.h.dir_agente / "registro.log"
         self.h.dir_agente.mkdir(exist_ok=True)
         self._ultimo_progreso = 0.0
@@ -165,11 +175,19 @@ class Agente:
             print(color("      " + self.h.plan_texto().replace("\n", "\n      "), "gris"))
 
     # ---------- bucle ----------
-    def tarea(self, texto: str) -> str:
+    def tarea(self, texto: str, max_pasos: int | None = None, requeridos: set[str] | None = None,
+              etiqueta: str = "") -> str:
+        """Un mandato del usuario. Con max_pasos es una parte del modo grande (no se vuelve a enrutar)."""
+        if max_pasos is None and (como := grande.modo(texto, self._repo_grande(), self.h.dir_agente)):
+            return grande.ejecutar(self, texto, como)
         self.ctx.usuario(texto)
-        self._log(f"USUARIO: {texto}")
+        if self.con_mapa and max_pasos is None:
+            self.ctx.mensajes[-1]["content"] += AVISO_MAPA
+        self._log(etiqueta or f"USUARIO: {texto}")
         nuevos = archivos_pedidos(texto)
-        if nuevos or not re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.IGNORECASE):
+        if requeridos is not None:
+            self.requeridos = set(requeridos)
+        elif nuevos or not re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.IGNORECASE):
             self.requeridos = nuevos  # 'continúa' conserva los de la tarea en curso
         self.h.nueva_tarea(self.pasos_totales + 1)
         self.inicio_tarea, self.revisiones = self.pasos_totales + 1, 0
@@ -179,14 +197,15 @@ class Agente:
         fallos: dict[str, int] = {}
         rechazos_fin = 0
         empujones = 0
-        for paso in range(1, self.cfg["max_pasos"] + 1):
+        limite = max_pasos or self.cfg["max_pasos"]
+        for paso in range(1, limite + 1):
             self.pasos_totales += 1
             self.h.paso = self.pasos_totales  # contador global: válido entre tareas sucesivas
             if self.ctx.hace_falta():
                 self._salida("aviso", f"({self.ctx.compactar(self.llm, self._estado())})")
             enviados = list(self.ctx.mensajes)
             try:
-                r = self.llm.chat(enviados, ESQUEMAS, self.ctx.max_salida(), razonar, self._progreso)
+                r = self.llm.chat(enviados, self.esquemas, self.ctx.max_salida(), razonar, self._progreso)
             except cliente.ErrorLLM as e:
                 self._limpiar_linea()
                 if "context" in str(e).lower() and len(self.ctx.mensajes) > 3:
@@ -267,6 +286,7 @@ class Agente:
                         self._log(f"FIN: {resumen}")
                         return resumen
                 else:
+                    self.esperar_mapa()
                     resultado = despachar(self.h, c["name"], args)
                     if repeticiones[clave] >= 3:
                         resultado += (f"\n[AVISO: es la {repeticiones[clave]}ª vez que haces exactamente esta llamada. "
@@ -294,15 +314,15 @@ class Agente:
                 self.ctx.herramienta(c["id"], resultado)
             if hubo_error and modo == "auto":
                 razonar = True  # pensar solo cuando hace falta (ahorra tokens)
-        msg = f"Se alcanzó el máximo de {self.cfg['max_pasos']} pasos. Escribe 'continúa' para seguir." + self._rescatar()
+        msg = f"Se alcanzó el máximo de {limite} pasos. Escribe 'continúa' para seguir." + self._rescatar()
         self._salida("aviso", msg)
         return msg
 
     def _revisar(self, requisitos: str = "", enfoque: str = "") -> tuple[str, bool]:
         self.revisiones += 1
         self._salida("nota", "(revisión independiente del código en curso...)", "gris")
-        texto, ok = revisar(self.llm, self.h.raiz, requisitos or self.ctx.tarea, self.h.verificacion["informe"], enfoque,
-                            self.h.evidencia_texto())
+        texto, ok = revisar(self.llm, self.h.raiz, requisitos or self.requisitos_parte or self.ctx.tarea,
+                            self.h.verificacion["informe"], enfoque, self.h.evidencia_texto())
         self.h.dir_agente.mkdir(exist_ok=True)
         (self.h.dir_agente / "revision.json").write_text(json.dumps(
             {"aprobado": ok, "fecha": time.time(), "texto": texto[:5000]}, ensure_ascii=False), encoding="utf-8")
@@ -348,12 +368,37 @@ class Agente:
                     "\nComplétalos o márcalos con paso_hecho si ya están hechos.")
         return ""
 
+    def _repo_grande(self) -> bool:
+        """En repos grandes se ofrece mapa (y su caché se pone al día en segundo plano). Una vez ofrecido no se quita:
+        cambiar la lista de herramientas invalidaría la caché de prompt del servidor."""
+        if not mapa_repo.es_grande(self.h.raiz):
+            return False
+        if not self.con_mapa:
+            self.con_mapa, self.esquemas = True, [*ESQUEMAS, ESQUEMA_MAPA]
+            extra = len(json.dumps(ESQUEMA_MAPA, ensure_ascii=False)) // 3
+            self.tokens_herr += extra
+            self.ctx.fijos += extra
+        self.hilo_mapa = mapa_repo.precalentar(self.h.raiz)
+        return True
+
+    def esperar_mapa(self) -> None:
+        """Antes de cualquier herramienta: en Windows, leer un archivo a la vez que otro lo reescribe o lo borra falla.
+        La caché suele estar lista mucho antes (el modelo tarda más en responder que el mapa en hacerse)."""
+        if self.hilo_mapa is not None:
+            self.hilo_mapa.join()
+            self.hilo_mapa = None
+
+    def nuevo_contexto(self) -> None:
+        """Contexto limpio con el mismo prompt de sistema (el prefijo sigue en la caché del servidor)."""
+        self.ctx = Contexto(self.llm.contexto, self.ctx.mensajes[0]["content"], self.tokens_herr)
+
     def _estado(self) -> str:
         return (f"{self.h.plan_texto() or '(sin plan)'}\n\nARCHIVOS DEL PROYECTO (nombres reales: úsalos tal cual):\n"
                 f"{self.h.mapa()}")
 
     def _rescatar(self) -> str:
         """Si la tarea acaba con el proyecto roto pero hubo una versión que funcionaba, se entrega esa."""
+        self.esperar_mapa()
         self.h._cargar_checkpoints()
         if not self.h.checkpoints:
             return ""

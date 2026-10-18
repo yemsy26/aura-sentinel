@@ -59,6 +59,7 @@ TEXTO_RUFF = {"F841": "variable asignada y NUNCA usada (¿lógica sin terminar?)
 class Informe:
     def __init__(self):
         self.errores, self.avisos, self.ok, self.tipos = [], [], [], []
+        self.previos: list[str] = []  # modo grande: errores que ya estaban antes de empezar (no cuentan)
 
     def texto(self, maximo: int) -> str:
         cab = (f"VERIFICACIÓN ({', '.join(self.tipos) or 'sin código'}): {len(self.errores)} ERRORES, "
@@ -68,6 +69,9 @@ class Informe:
                               ("OK", self.ok)):
             if lista:
                 partes.append(f"{titulo}:\n" + "\n".join(f"- {x}" for x in lista[:25]))
+        if self.previos:
+            partes.append(f"PREEXISTENTES ({len(self.previos)}; ya estaban antes del modo grande y no son de esta parte: "
+                          "no los toques):\n" + "\n".join(f"- {x[:160]}" for x in self.previos[:5]))
         txt = "\n".join(partes)
         return txt if len(txt) <= maximo else txt[:maximo - 40] + "\n[... informe recortado]"
 
@@ -167,7 +171,9 @@ def lint_python(raiz: Path, rutas: list[Path], inf: Informe, rapido: bool = Fals
             inf.avisos.append(detalle)
 
 
-def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe) -> None:
+def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None = None) -> None:
+    """solo = carpeta verificada: el análisis mira todo el proyecto (los usos pueden estar fuera de ella) pero solo
+    informa de lo que hay dentro."""
     vulture = BIN / "vulture.exe"
     if not vulture.exists() or not rutas:
         return
@@ -194,6 +200,8 @@ def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe) -> None:
             continue
         ruta_abs = Path(archivo) if Path(archivo).is_absolute() else raiz / archivo  # vulture da rutas relativas a raiz
         if int(num) in decorados.get(str(ruta_abs.resolve()).lower(), set()):
+            continue
+        if solo is not None and solo not in ruta_abs.resolve().parents:
             continue
         traduccion = {"function": "función", "method": "método", "class": "clase", "variable": "variable",
                       "attribute": "atributo", "property": "propiedad"}.get(tipo, tipo)
@@ -645,11 +653,29 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
 
 
 # ---------------------------------------------------------------- entrada
-def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maximo: int = 6000) -> tuple[str, int]:
-    """Devuelve (informe, número de errores)."""
+def normalizar(error: str) -> str:
+    """Un error sin números (líneas, recuentos): reconoce los que ya estaban aunque el código se mueva."""
+    return re.sub(r"\d+", "N", error)
+
+
+def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maximo: int = 6000,
+              previos: set[str] | None = None, idiomas_parcial: list[str] | None = None) -> tuple[str, int]:
+    """Devuelve (informe, número de errores). previos = errores normalizados que no cuentan (modo grande)."""
+    inf = informe_proyecto(raiz, python, ruta, segundos, idiomas_parcial)
+    if isinstance(inf, str):
+        return inf, 1
+    if previos:
+        inf.previos = [e for e in inf.errores if normalizar(e) in previos]
+        inf.errores = [e for e in inf.errores if normalizar(e) not in previos]
+    return inf.texto(maximo), len(inf.errores)
+
+
+def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8,
+                     idiomas_parcial: list[str] | None = None) -> "Informe | str":
+    """El informe estructurado de verificar (o un texto si la ruta no existe)."""
     base = (raiz / ruta).resolve() if ruta not in ("", ".") else raiz
     if not base.exists():
-        return f"No existe: {ruta}", 1
+        return f"No existe: {ruta}"
     if base.is_file():  # verificar("index.html") debe probar el proyecto, no devolver "sin código"
         base = raiz
     inf = Informe()
@@ -665,7 +691,10 @@ def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maxim
                 inf.errores.append(f"{_rel(p, raiz)}:{e.lineno} ERROR DE SINTAXIS: {e.msg}")
         sintaxis_ok = len(inf.errores) == errores_antes
         lint_python(raiz, pys, inf)
-        codigo_muerto(raiz, pys, inf)
+        if base == raiz:
+            codigo_muerto(raiz, pys, inf)
+        else:  # una subcarpeta: quien usa sus funciones puede estar fuera
+            codigo_muerto(raiz, archivos(raiz, ".py"), inf, solo=base)
         if sintaxis_ok:  # con errores de sintaxis no tiene sentido ejecutar
             tests_python(raiz, pys, python, inf)
             ejecutar_python(raiz, pys, python, inf, segundos)
@@ -683,9 +712,11 @@ def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maxim
         bats(raiz, bat, inf)
     from . import ecosistemas  # aquí para evitar el import circular (ecosistemas usa las utilidades de este módulo)
     ecosistemas.verificar_todos(base, raiz, inf)
+    from .idiomas import verificar_idiomas  # solo añade algo si el proyecto tiene archivos de idioma
+    verificar_idiomas(raiz, inf, idiomas_parcial)
     if not inf.tipos and not bat:
         inf.avisos.append(f"No encontré código que verificar en '{ruta}': nada se ha comprobado.")
-    return inf.texto(maximo), len(inf.errores)
+    return inf
 
 
 def chequeo_rapido(raiz: Path, p: Path) -> str:
