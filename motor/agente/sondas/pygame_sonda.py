@@ -1,7 +1,8 @@
 """Juega un programa pygame sin ventana con entradas aleatorias. Uso: python pygame_sonda.py main.py SEGUNDOS
 - Semilla fija: el resultado es reproducible (si un checkpoint pasa, vuelve a pasar).
 - Reloj acelerado: Clock.tick no espera, así en pocos segundos se simulan minutos de partida (choques, game over...).
-Imprime una línea 'SONDA {json}' con frames, coste por frame, pantallas distintas y el error si lo hubo.
+Imprime una línea 'SONDA {json}' con frames, coste por frame, pantallas distintas, el error si lo hubo, las teclas y
+clics enviados, los últimos textos dibujados y si la última pantalla era de un solo color.
 Con SONDA_CAPTURA=ruta.png guarda la última pantalla antes de cerrar (y sus colores/brillo en 'captura') y anota el
 texto de Font.render que se dibuja medio fuera de la pantalla ('textos_cortados')."""
 import hashlib
@@ -24,11 +25,14 @@ sys.argv = [destino]
 random.seed(int(os.environ.get("SONDA_SEMILLA", "7")))
 
 import pygame
+import pygame.sysfont
 
-TECLAS = [pygame.K_RETURN, pygame.K_SPACE, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN,
-          pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s, pygame.K_p, pygame.K_r, pygame.K_1]
+TECLAS = {pygame.K_RETURN: "ENTER", pygame.K_SPACE: "ESPACIO", pygame.K_LEFT: "IZQUIERDA", pygame.K_RIGHT: "DERECHA",
+          pygame.K_UP: "ARRIBA", pygame.K_DOWN: "ABAJO", pygame.K_a: "A", pygame.K_d: "D", pygame.K_w: "W",
+          pygame.K_s: "S", pygame.K_p: "P", pygame.K_r: "R", pygame.K_1: "1"}
 estado = {"frames": 0, "pantallas": set(), "inicio": time.time(), "quit_enviado": False, "ms_simulados": 0,
-          "captura": None}
+          "captura": None, "teclas": {}, "clics": 0, "ultima": b""}
+ULTIMOS_TEXTOS: dict[str, None] = {}  # los últimos textos de Font.render, para decir qué se ve si no cambia nada
 _get, _poll, _quit = pygame.event.get, pygame.event.poll, pygame.quit
 CAPTURA = os.environ.get("SONDA_CAPTURA")
 
@@ -66,8 +70,14 @@ _set_mode, _get_surface, _flip, _update = (pygame.display.set_mode, pygame.displ
 class FuenteSonda(pygame.font.Font):
     def render(self, texto, *a, **k):
         s = super().render(texto, *a, **k)
-        if str(texto).strip():
-            TEXTOS[s] = (str(texto), s.get_bounding_rect())  # sin el margen transparente de la fuente
+        t = str(texto).strip()
+        if t:
+            ULTIMOS_TEXTOS.pop(t, None)
+            ULTIMOS_TEXTOS[t] = None
+            if len(ULTIMOS_TEXTOS) > 8:
+                del ULTIMOS_TEXTOS[next(iter(ULTIMOS_TEXTOS))]
+            if CAPTURA:
+                TEXTOS[s] = (str(texto), s.get_bounding_rect())  # sin el margen transparente de la fuente
         return s
 
 
@@ -169,7 +179,8 @@ def _muestrear():
     s = pygame.display.get_surface()
     if s is not None and estado["frames"] % 25 == 0:
         try:
-            estado["pantallas"].add(hashlib.md5(pygame.image.tobytes(s, "RGB")[::97]).hexdigest())
+            estado["ultima"] = pygame.image.tobytes(s, "RGB")
+            estado["pantallas"].add(hashlib.md5(estado["ultima"][::97]).hexdigest())
         except Exception:
             pass
 
@@ -182,11 +193,13 @@ def _falsos():
         return [pygame.event.Event(pygame.QUIT)]
     evs = []
     if estado["frames"] > 20 and random.random() < 0.12:  # tras los primeros frames (menú visible)
-        k = random.choice(TECLAS)
+        k = random.choice(list(TECLAS))
+        estado["teclas"][TECLAS[k]] = estado["teclas"].get(TECLAS[k], 0) + 1
         evs += [pygame.event.Event(pygame.KEYDOWN, key=k, mod=0, unicode="", scancode=0),
                 pygame.event.Event(pygame.KEYUP, key=k, mod=0, unicode="", scancode=0)]
     if estado["frames"] > 20 and random.random() < 0.02:
         pos = (random.randint(0, 799), random.randint(0, 599))
+        estado["clics"] += 1
         evs += [pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=pos, button=1),
                 pygame.event.Event(pygame.MOUSEBUTTONUP, pos=pos, button=1)]
     return evs
@@ -221,9 +234,8 @@ pygame.key.get_pressed = lambda: Pulsadas()
 pygame.time.Clock = RelojRapido
 pygame.time.delay = pygame.time.wait = lambda ms: 0
 pygame.quit = _quit_capturando
+pygame.font.Font = pygame.sysfont.Font = FuenteSonda  # SysFont crea la fuente con pygame.sysfont.Font
 if CAPTURA:
-    import pygame.sysfont
-    pygame.font.Font = pygame.sysfont.Font = FuenteSonda  # SysFont crea la fuente con pygame.sysfont.Font
     pygame.display.set_mode, pygame.display.get_surface = set_mode, get_surface
     pygame.display.flip, pygame.display.update = flip, update
 
@@ -236,7 +248,11 @@ except Exception:
     resultado["error"] = "\n".join(traceback.format_exc().strip().splitlines()[-14:])
 _capturar()
 t = max(0.1, time.time() - estado["inicio"])
+ultima = estado["ultima"]
 resultado.update(frames=estado["frames"], segundos=round(t, 1), ms_por_frame=round(1000 * t / max(1, estado["frames"]), 1),
                  segundos_de_juego=round(estado["ms_simulados"] / 1000), pantallas_distintas=len(estado["pantallas"]),
-                 termino_por_quit=estado["quit_enviado"], captura=estado["captura"], textos_cortados=textos_cortados())
+                 termino_por_quit=estado["quit_enviado"], captura=estado["captura"], textos_cortados=textos_cortados(),
+                 teclas={n: estado["teclas"][n] for n in TECLAS.values() if n in estado["teclas"]}, clics=estado["clics"], textos=list(ULTIMOS_TEXTOS)[-4:],
+                 un_color=bool(ultima) and ultima == ultima[:3] * (len(ultima) // 3),
+                 driver=os.environ.get("SDL_VIDEODRIVER"))
 print("SONDA " + json.dumps(resultado, ensure_ascii=False), flush=True)

@@ -268,6 +268,24 @@ def _entrada_python(raiz: Path, rutas: list[Path]) -> Path | None:
     return con_main[0] if len(con_main) == 1 else None
 
 
+def _pantalla_fija(d: dict) -> str:
+    """Por qué la pantalla no cambia, con lo que la sonda pulsó y vio: el modelo debe mirar su lógica, no el driver."""
+    if d["un_color"]:
+        return (f"la pantalla NUNCA cambia y está VACÍA (un solo color en {d['segundos_de_juego']} s de juego simulado): "
+                "no dibuja nada, lo tapa con fill() después de dibujar o dibuja en una Surface que nunca copia (blit) a "
+                "la de set_mode().")
+    if not d["teclas"]:
+        return ("la pantalla NUNCA cambia y no se pudo pulsar ninguna tecla: el bucle principal no llama a "
+                "pygame.event.get() en cada frame (usa 'for evento in pygame.event.get():').")
+    teclas =", ".join(f"{k}×{n}" for k, n in d["teclas"].items())
+    textos = f" Textos en pantalla: {', '.join(repr(t[:60]) for t in d['textos'])}." if d["textos"] else ""
+    return (f"la pantalla NUNCA cambia: en {d['segundos_de_juego']} s de juego simulado se pulsaron {teclas} y "
+            f"{d['clics']} clics, y la imagen fue siempre la misma.{textos} El juego se queda ATASCADO en la primera "
+            "pantalla: revisa el código que trata esas teclas (KEYDOWN) y que el cambio de estado no se deshaga en el "
+            "mismo frame (p. ej. llamar a reiniciar()/reset() DESPUÉS de cambiar el estado, si ese método vuelve a "
+            "poner el estado inicial). No es cosa del driver de vídeo: no toques SDL_VIDEODRIVER ni set_mode().")
+
+
 def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, segundos: int) -> None:
     entrada = _entrada_python(raiz, rutas)
     if entrada is None:
@@ -304,9 +322,11 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
             if not d["termino_por_quit"] and d["segundos"] < tramo - 1:
                 inf.avisos.append(f"{rel}: el juego se cerró solo a los {d['segundos_de_juego']} s de juego sin que nadie "
                                   "lo cerrara.")
+            if d["driver"] != "dummy" and semilla == 1:
+                inf.avisos.append(f"{rel}: el juego cambia SDL_VIDEODRIVER y abre una ventana de verdad al verificar. "
+                                  "Quita ese código: verificar ya simula la pantalla.")
             if d["pantallas_distintas"] <= 1:
-                inf.errores.append(f"{rel}: la pantalla NUNCA cambia (¿no dibuja, no llama a pygame.display.flip() o "
-                                   "no responde a teclas?).")
+                inf.errores.append(f"{rel}: {_pantalla_fija(d)}")
                 return
             if d["frames"] > 200 and d["segundos_de_juego"] == 0:
                 inf.errores.append(f"{rel}: el bucle principal NUNCA llama a reloj.tick(60): el juego irá a velocidad máxima "
