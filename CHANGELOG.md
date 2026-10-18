@@ -5,6 +5,27 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.7.0] — 2026-10-18 (Modo grande: sistemas grandes y cambios en todos los módulos)
+
+- **Modo grande** para mandatos que tocan todo un repositorio grande (p. ej. «añade inglés a toda la app»): el agente
+  divide el trabajo en partes por módulos (15 archivos como máximo, cada una con su criterio de terminado y su prueba),
+  hace cada parte en un contexto limpio, la verifica y la guarda en un commit local «Parte k/N». Entra con `/grande`,
+  con «modo grande» o cuando el repositorio es grande y el mandato es transversal; tras cerrar Aura, «continúa» retoma
+  la parte pendiente. Lee `ARQUITECTURA.md` y `CONVENCIONES.md` si existen. Nunca hace `push`.
+- **`mapa`**: mapa del repositorio (módulos, archivos, líneas, clases y funciones) generado sin el modelo, con caché en
+  `.agente\mapa.json` que solo vuelve a analizar lo que cambió. Solo se ofrece en repositorios grandes (≥ 25 archivos de
+  código o ≥ 120 KB).
+- **Idiomas en `verificar`**: claves que faltan en un idioma, textos vacíos, marcadores distintos, claves que usa el
+  código y no existen, e idiomas copiados sin traducir (JSON, `.arb`, `.po`, YAML, `strings.xml`, `.resx`...). Solo
+  corre si el proyecto tiene archivos de idioma.
+- Los mandatos normales siguen igual: en repositorios pequeños las peticiones al modelo son idénticas a las de 4.6.2.
+- Arreglo: `verificar(ruta=subcarpeta)` ya no marca como «NUNCA se usa» código que se usa en otra parte del proyecto.
+- Juegos pygame: si la pantalla no cambia, `verificar` explica la causa (pantalla vacía, bucle sin
+  `pygame.event.get()` o juego atascado, con las teclas enviadas y los textos en pantalla) y avisa si el juego cambia
+  `SDL_VIDEODRIVER`.
+
+---
+
 ## [4.6.2] — 2026-10-17 (archivos largos sin cortes ni HTTP 500)
 
 - Arreglo: si el modelo escribía un archivo tan largo que la respuesta se cortaba a mitad de la llamada, el motor

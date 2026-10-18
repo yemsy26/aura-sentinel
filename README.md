@@ -187,6 +187,10 @@ Cada mensaje del chat lo ejecuta Agente Local (`src-tauri/src/agent.rs`). Aura l
   Conectarse a una base de otra máquina o borrar datos pide tu permiso.
 - **Aprende**: si no sabe algo, lo investiga, lo prueba con `experimentar` fuera del proyecto y guarda la receta que
   funcionó con `aprender(leccion, tema)`; la próxima vez aparece en su guía de ese tema.
+- **Sistemas grandes**: para cambios en todos los módulos (p. ej. añadir un idioma), el modo grande (`/grande`) divide
+  el trabajo en partes de hasta 15 archivos, hace cada una con el contexto limpio, la verifica y la guarda en un commit
+  local. `mapa` le da la estructura del repositorio sin leerlo entero y `verificar` comprueba que no falten
+  traducciones. Detalle en [`motor/LEEME.md`](motor/LEEME.md#sistemas-grandes-y-cambios-transversales-modo-grande).
 - La conversación se conserva mientras no cambies de carpeta ni de modelo. Cancelar detiene el agente y todo
   lo que lanzó.
 - Si una misión queda a medias (plan con pasos sin marcar en `.agente/plan.md`), al abrir la app aparece
