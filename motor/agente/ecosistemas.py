@@ -98,6 +98,105 @@ def rust(base: Path, raiz: Path, inf: Informe) -> None:
             _diagnosticos(salida, CLIPPY, d, raiz, inf, "clippy: ")
 
 
+# ---------------------------------------------------------------- Tauri
+# Lo que compila pero no funciona: sin ventana, sin build.rs o icono, invoke a comandos sin registrar, API de Tauri 1.
+COMANDO_TAURI = re.compile(r"#\[tauri::command[^\]]*\]\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)")
+HANDLER_TAURI = re.compile(r"generate_handler!\s*\[([^\]]*)\]")
+INVOKE = re.compile(r"""\binvoke\s*(?:<[^>()]*>)?\(\s*['"`]([\w.:|/-]+)['"`]""")
+IMPORT_TAURI1 = re.compile(r"""from\s+['"]@tauri-apps/api/(tauri|invoke)['"]""")
+GLOBAL_TAURI = re.compile(r"__TAURI__(?!_)")  # window.__TAURI__ (no __TAURI_INTERNALS__)
+DEVUELVE_TEXTO = re.compile(r"#\[tauri::command[^\]]*\]\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)[^{;]*->\s*"
+                            r"(?:Result\s*<\s*)?String\b")
+FRONTEND = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".vue", ".svelte", ".html"}
+
+
+def _leer(p: Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def tauri(base: Path, raiz: Path, inf: Informe) -> None:
+    confs = _buscar(base, lambda p: p.name == "tauri.conf.json")
+    if not confs:
+        return
+    inf.tipos.append("tauri")
+    for conf in confs:
+        d, rel = conf.parent, _rel(conf, raiz)
+        try:
+            cfg = json.loads(_leer(conf))
+        except ValueError:
+            continue  # la sintaxis del JSON ya la marca verificar
+        if not isinstance(cfg, dict):
+            continue
+        build = cfg.get("build") if isinstance(cfg.get("build"), dict) else {}
+        if "tauri" in cfg or "distDir" in build or "devPath" in build:
+            inf.errores.append(f"{rel}: es configuración de Tauri 1 (claves tauri, distDir o devPath). En Tauri 2 son "
+                               "app.windows, build.frontendDist y build.devUrl: mira guia(\"tauri\").")
+            continue
+        app = cfg.get("app") if isinstance(cfg.get("app"), dict) else {}
+        if not app.get("windows"):
+            inf.errores.append(f'{rel}: no define ninguna ventana (app.windows) y la app arrancará SIN ventana. Añade '
+                               '"app": {"windows": [{"title": "...", "width": 900, "height": 600}]}.')
+        if not cfg.get("identifier"):
+            inf.errores.append(f'{rel}: falta "identifier" (p. ej. "com.miempresa.miapp"): Tauri 2 lo exige para compilar.')
+        dist = build.get("frontendDist")
+        if isinstance(dist, str) and not re.match(r"https?://", dist) and not (d / dist).exists():
+            if build.get("beforeBuildCommand"):
+                inf.avisos.append(f"{rel}: frontendDist '{dist}' todavía no existe; lo crea `{build['beforeBuildCommand']}`: "
+                                  "ejecútalo para comprobar que el frontend compila.")
+            else:
+                inf.errores.append(f"{rel}: frontendDist '{dist}' no existe y no hay beforeBuildCommand que lo cree.")
+        carpeta = _rel(d, raiz)
+        if (d / "Cargo.toml").exists() and not (d / "build.rs").exists():
+            inf.errores.append(f"{carpeta}: falta build.rs con `fn main() {{ tauri_build::build() }}`: sin él la app no "
+                               "lleva su configuración, sus permisos ni su icono.")
+        bundle = cfg.get("bundle") if isinstance(cfg.get("bundle"), dict) else {}
+        ico = [i for i in bundle.get("icon") or [] if isinstance(i, str) and i.lower().endswith(".ico")] or ["icons/icon.ico"]
+        if os.name == "nt" and not any((d / i).exists() for i in ico):
+            inf.errores.append(f"{carpeta}: falta {ico[0]}, que la compilación exige en Windows. Genera los iconos con "
+                               "`npx tauri icon app-icon.png` (guia(\"tauri\") explica cómo crear el PNG).")
+        for i in ico:
+            if (d / i).is_file() and (d / i).read_bytes()[:4] != b"\0\0\1\0":
+                inf.errores.append(f"{carpeta}: {i} no es un icono .ico de verdad (¿un PNG renombrado?) y la ventana saldrá "
+                                   "sin icono. Genéralo con `npx tauri icon app-icon.png`.")
+        rust = {p: _leer(p) for p in _buscar(d, lambda p: p.suffix == ".rs")}
+        definidos = {n for t in rust.values() for n in COMANDO_TAURI.findall(t)}
+        registrados = {n.strip().split("::")[-1] for t in rust.values() for m in HANDLER_TAURI.findall(t)
+                       for n in m.split(",") if n.strip()}
+        for n in sorted(definidos - registrados):
+            inf.errores.append(f"{carpeta}: el comando {n} tiene #[tauri::command] pero no está en "
+                               f"tauri::generate_handler![...]: invoke(\"{n}\") fallará.")
+        for p, t in rust.items():
+            if (re.search(r"System::new\w*\(", t) and re.search(r"\bcpu_usage\(\)", t)
+                    and not re.search(r"MINIMUM_CPU_UPDATE_INTERVAL|sleep\(|State<", t)):
+                inf.avisos.append(f"{_rel(p, raiz)}: lee el uso de CPU de un System recién creado y sysinfo da 0 % en la "
+                                  "primera lectura. Guarda el System en el estado (Mutex<System>) y refréscalo en cada llamada.")
+        web = {p: _leer(p) for p in _buscar(d.parent, lambda p, d=d: p.suffix.lower() in FRONTEND and d not in p.parents)}
+        parsea = any("JSON.parse(" in t for t in web.values())
+        for p, t in rust.items():
+            for m in DEVUELVE_TEXTO.finditer(t):  # Tauri ya serializa lo que devuelve el comando: así llega un texto
+                cuerpo = t[m.end():m.end() + 4000]
+                fin = re.search(r"#\[tauri::command|\n(?:pub\s+)?fn\s", cuerpo)
+                if "serde_json::to_string" in cuerpo[:fin.start() if fin else None] and not parsea:
+                    inf.errores.append(f"{_rel(p, raiz)}: el comando {m.group(1)} devuelve el JSON ya convertido en texto "
+                                       "(serde_json::to_string): en JS llega una cadena y data.campo vale undefined. "
+                                       "Devuelve el struct (-> Result<MiStruct, String>): Tauri lo convierte a JSON.")
+        for p, t in web.items():
+            for n in sorted({n for n in INVOKE.findall(t) if ":" not in n} - registrados):
+                inf.errores.append(f"{_rel(p, raiz)}: invoke(\"{n}\") no corresponde a ningún comando registrado en "
+                                   "generate_handler! de src-tauri.")
+            if GLOBAL_TAURI.search(t) and app.get("withGlobalTauri") is not True:
+                inf.errores.append(f"{_rel(p, raiz)}: usa window.__TAURI__, que solo existe con \"app\": "
+                                   "{\"withGlobalTauri\": true}: dentro de la app valdrá undefined. Para saber si corre en "
+                                   "Tauri usa isTauri() de @tauri-apps/api/core.")
+            if (m := IMPORT_TAURI1.search(t)):
+                inf.errores.append(f"{_rel(p, raiz)}: importa de '@tauri-apps/api/{m.group(1)}', que no existe en Tauri 2: "
+                                   'usa `import { invoke } from "@tauri-apps/api/core"`.')
+        inf.ok.append(f"{rel}: configuración de Tauri 2 revisada ({len(registrados)} comandos registrados)")
+
+
 # ---------------------------------------------------------------- Go
 FALLO_GO = r"FAIL|---|_test\.go|panic|error"
 GOC = r"^(?:vet(?:\.exe)?: )?(?P<archivo>\.?[\\/]?[^\s:#][^:\n]*?\.go):(?P<linea>\d+):\d+: (?P<texto>.+)$"
@@ -640,7 +739,7 @@ def yaml(base: Path, raiz: Path, inf: Informe) -> None:
 
 # ---------------------------------------------------------------- entrada
 def verificar_todos(base: Path, raiz: Path, inf: Informe) -> None:
-    for comprobar in (rust, go, dotnet, node, solidity, anchor, android_gradle, flutter, docker, yaml):
+    for comprobar in (rust, tauri, go, dotnet, node, solidity, anchor, android_gradle, flutter, docker, yaml):
         comprobar(base, raiz, inf)
 
 

@@ -33,7 +33,7 @@ ALIAS = {"juego": "pygame", "pygame-ce": "pygame", "canvas": "html-juego", "java
          "base-de-datos": "bases-de-datos", "basedatos": "bases-de-datos", "sql": "bases-de-datos",
          "postgres": "bases-de-datos", "postgresql": "bases-de-datos", "mysql": "bases-de-datos",
          "mongodb": "bases-de-datos", "mongo": "bases-de-datos", "redis": "bases-de-datos",
-         "migraciones": "bases-de-datos"}
+         "migraciones": "bases-de-datos", "tauri2": "tauri", "tauri-app": "tauri"}
 REEMPLAZOS = {"pygame": "pygame-ce", "pypdf2": "pypdf", "fuzzywuzzy": "rapidfuzz", "pycrypto": "pycryptodome",
               "sklearn": "scikit-learn", "bs4": "beautifulsoup4", "opencv": "opencv-python", "pil": "pillow"}
 

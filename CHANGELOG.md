@@ -5,6 +5,29 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.9.0] — 2026-10-18 (Apps de escritorio con Tauri 2 y arreglos de bucles)
+
+- **Apps de escritorio con Tauri 2:** guía nueva (`guia("tauri")`) con la estructura completa escrita a mano (sin
+  `tauri init`, que es interactivo), `tauri.conf.json` de Tauri 2 con su ventana, `build.rs`, permisos, iconos,
+  `invoke` desde `@tauri-apps/api/core`, la CLI por npm y cómo comprobarlo sin abrir la ventana.
+- **`verificar` revisa los proyectos Tauri:** avisa de lo que compila pero no funciona: sin ventana definida (la app
+  arranca sin ventana), sin `build.rs`, sin `identifier`, sin `icons/icon.ico` o con uno que no es un ICO,
+  `frontendDist` que no existe, un `#[tauri::command]` que no está en `generate_handler!`, un `invoke("x")` sin su
+  comando, la API de Tauri 1, `window.__TAURI__` sin `withGlobalTauri` (dentro de la app vale `undefined`; se usa
+  `isTauri()`), un comando que devuelve el JSON ya convertido en texto (`serde_json::to_string`: en JS llega una
+  cadena), y el uso de CPU leído de un `System` recién creado (siempre 0 %).
+- Arreglo: los archivos pedidos con varios puntos en el nombre (`tauri.conf.json`, `vite.config.ts`) se tomaban
+  como `conf.json` o `config.ts`. El paso del plan no se podía marcar nunca y el agente acababa creando un
+  `conf.json` de sobra para poder terminar.
+- Arreglo: en proyectos Vite (también los de Tauri), `verificar` abría el `index.html` fuente, que carga `/src/main.ts`,
+  y daba un error falso de «MIME type text/plain». Ahora prueba la página compilada de `dist/` después de
+  `npm run build`, y si no se ha generado lo avisa.
+- Arreglo: «Detenido: el modelo repitió 'verificar' 5 veces sin avanzar» saltaba aunque entre una verificación y
+  otra hubiera ejecutado comandos nuevos (copiar un archivo, instalar). Ahora solo se detiene si repite lo mismo sin
+  que haya cambiado nada.
+
+---
+
 ## [4.8.0] — 2026-10-18 (Más rápido, revisar el plan y tarjeta de resultado)
 
 - **Más rápido sin perder comprobaciones:** si el agente marca como hecho un paso de prueba sin haber probado tras su

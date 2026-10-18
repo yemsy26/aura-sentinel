@@ -186,6 +186,10 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
      archivo:línea y explicación de los fallos típicos (SDK, licencias, plataforma no instalada, Java, Gradle,
      repositorios). Si falta el wrapper, da el comando con el Gradle que ya hay en el equipo.
    - **Flutter/Dart**: `flutter pub get`, `flutter analyze`, `flutter test` y `flutter build apk --debug`.
+   - **Tauri 2** (con `tauri.conf.json`): el backend se compila como Rust y además se revisa que haya ventana
+     (`app.windows`), `build.rs`, `identifier`, `icons/icon.ico`, `frontendDist`, que cada `#[tauri::command]` esté en
+     `generate_handler!` y cada `invoke("x")` del frontend tenga su comando, que no se use la API de Tauri 1 y que el
+     uso de CPU no se lea de un `System` recién creado.
    - **Docker**: revisa el Dockerfile (versión fija de la imagen, `COPY` de archivos que no existen, credenciales en
      `ENV`/`ARG`, usuario sin privilegios, `.dockerignore`), valida `compose.yaml` y, con Docker en marcha, construye
      la imagen. Con Docker apagado lo dice para que el agente se lo pida al usuario.
@@ -211,7 +215,8 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
 ## Orientación actualizada e internet
 
 - `guia(tema)`: prácticas actuales y cómo verificar (python, pygame, html-juego, web, api, java, rust, go, node,
-  dotnet, docker, despliegue, android, flutter, blockchain, evm, solana, mev, bases-de-datos, matematicas, tests, bat),
+  dotnet, docker, despliegue, android, flutter, tauri, blockchain, evm, solana, mev, bases-de-datos, matematicas, tests,
+  bat),
   más lo que el agente aprendió de ese tema. Son archivos en `agente\guias\*.md`: puedes editarlos o añadir los tuyos.
 - El agente conoce el entorno al empezar: versiones de Python, Node, Java, Rust, Go, .NET, si Docker está en marcha,
   Podman, OpenSSH, kubectl, Foundry, Anchor, la red por defecto de la CLI de Solana (si es mainnet, se le avisa de

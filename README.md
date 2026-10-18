@@ -186,6 +186,8 @@ Cada mensaje del chat lo ejecuta Agente Local (`src-tauri/src/agent.rs`). Aura l
 - **Android**: apps en Kotlin con Jetpack Compose o en Flutter. Al crear el proyecto abre Android Studio para que
   instale los componentes del SDK que falten (las licencias las aceptas tú), compila el APK con Gradle, explica los
   fallos típicos (SDK, plataforma, Java, Gradle) y lo instala en el móvil o el emulador con `adb`.
+- **Escritorio**: apps con Tauri 2 (Rust y una interfaz web); `verificar` compila el backend y avisa de lo que
+  compila pero no funciona (sin ventana, sin icono, comandos sin registrar).
 - **Bases de datos**: PostgreSQL, MySQL, MongoDB, Redis o SQLite en Docker, migraciones y varias bases a la vez.
   Conectarse a una base de otra máquina o borrar datos pide tu permiso.
 - **Aprende**: si no sabe algo, lo investiga, lo prueba con `experimentar` fuera del proyecto y guarda la receta que

@@ -509,14 +509,39 @@ JS_CANVAS = """() => [...document.querySelectorAll('canvas')].map(c => {
 })"""
 
 
-def navegador(raiz: Path, htmls: list[Path], inf: Informe) -> None:
+VITE_FUENTE = re.compile(r"""<script\b[^>]*\bsrc=["']([^"']+\.(?:ts|tsx|jsx|vue|svelte))["']""", re.IGNORECASE)
+
+
+def fuente_vite(h: Path) -> str:
+    """El script de la página es .ts/.tsx/.jsx/.vue: solo funciona servida por Vite o compilada (dist/)."""
+    try:
+        m = VITE_FUENTE.search(h.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return ""
+    return m.group(1) if m else ""
+
+
+def paginas_vite(raiz: Path, fuentes: list[Path], inf: Informe) -> None:
+    """Prueba en el navegador la versión compilada de cada página fuente de Vite (la deja npm run build en dist/)."""
+    for h in fuentes:
+        paquete = next((d for d in (h.parent, *h.parent.parents) if (d / "package.json").exists()), None)
+        compilada = paquete / "dist" / h.relative_to(paquete) if paquete and raiz in (paquete, *paquete.parents) else None
+        if compilada and compilada.exists():
+            navegador(raiz, [compilada], inf, raiz_web=paquete / "dist")
+        else:
+            inf.avisos.append(f"{_rel(h, raiz)}: es la página fuente de Vite (carga {fuente_vite(h)}) y no se abre tal cual; "
+                              "se prueba la compilada de dist/ cuando `npm run build` funciona.")
+
+
+def navegador(raiz: Path, htmls: list[Path], inf: Informe, raiz_web: Path | None = None) -> None:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         inf.avisos.append("Prueba en navegador no disponible (falta playwright en el agente: ejecuta instalar.bat).")
         return
     paginas = sorted(htmls, key=lambda p: (p.name != "index.html", len(p.parts)))[:2]
-    servidor = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Silencioso, directory=str(raiz)))
+    web = raiz_web or raiz  # dist/ de Vite se sirve desde su carpeta: sus rutas /assets/... son absolutas
+    servidor = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Silencioso, directory=str(web)))
     threading.Thread(target=servidor.serve_forever, daemon=True).start()
     capturas = raiz / ".agente" / "capturas"
     capturas.mkdir(parents=True, exist_ok=True)
@@ -527,7 +552,7 @@ def navegador(raiz: Path, htmls: list[Path], inf: Informe) -> None:
                 inf.avisos.append("No se pudo abrir Edge/Chrome sin ventana para probar la página.")
                 return
             for h in paginas:
-                rel = _rel(h, raiz).replace("\\", "/")
+                rel, url = _rel(h, raiz).replace("\\", "/"), h.relative_to(web).as_posix()
                 pag = nav.new_page(viewport={"width": 1024, "height": 768})
                 problemas = []
                 pag.on("pageerror", lambda e, problemas=problemas: problemas.append(("error", f"EXCEPCIÓN JS: {e}")))
@@ -537,7 +562,7 @@ def navegador(raiz: Path, htmls: list[Path], inf: Informe) -> None:
                 pag.on("response", lambda r, problemas=problemas: problemas.append(("error", f"HTTP {r.status}: {r.url.split('/', 3)[-1]}"))
                        if r.status >= 400 and not r.url.endswith("favicon.ico") else None)
                 try:
-                    pag.goto(f"http://127.0.0.1:{servidor.server_port}/{rel}", wait_until="load", timeout=20000)
+                    pag.goto(f"http://127.0.0.1:{servidor.server_port}/{url}", wait_until="load", timeout=20000)
                 except Exception as e:
                     inf.errores.append(f"{rel}: no se pudo abrir: {e}")
                     continue
@@ -722,8 +747,9 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         inf.tipos.append("web")
         html_estatico(raiz, htmls, jss, inf)
         librerias_cdn(raiz, htmls, inf)
-        if htmls:
-            navegador(raiz, htmls, inf)
+        directas = [h for h in htmls if not fuente_vite(h)]
+        if directas:
+            navegador(raiz, directas, inf)
     javas = [p for p in javas if not _de_android(p, base)]  # esos los compila Gradle (android_gradle, flutter)
     if javas:
         inf.tipos.append("java")
@@ -732,6 +758,8 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         bats(raiz, bat, inf)
     from . import ecosistemas  # aquí para evitar el import circular (ecosistemas usa las utilidades de este módulo)
     ecosistemas.verificar_todos(base, raiz, inf)
+    if (vite := [h for h in htmls if fuente_vite(h)]):  # después de node(): su npm run build deja dist/
+        paginas_vite(raiz, vite, inf)
     from .idiomas import verificar_idiomas  # solo añade algo si el proyecto tiene archivos de idioma
     verificar_idiomas(raiz, inf, idiomas_parcial)
     if not inf.tipos and not bat:

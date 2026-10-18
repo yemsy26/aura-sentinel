@@ -208,6 +208,7 @@ class Agente:
         modo = self.cfg["razonamiento"]
         razonar = modo in ("on", "auto")  # planificar con razonamiento
         repeticiones: dict[str, int] = {}
+        cambios = 0  # acciones NUEVAS que pueden cambiar el proyecto (un comando distinto: copiar, instalar...)
         fallos: dict[str, int] = {}
         rechazos_fin = 0
         empujones = 0
@@ -281,6 +282,8 @@ class Agente:
                 clave = c["name"] + json.dumps(args, sort_keys=True, ensure_ascii=False)
                 if c["name"] in DEPENDEN_DEL_ESTADO:  # tras modificar archivos, repetir la prueba es progreso
                     clave += f"|{self.h.paso_escritura}"
+                    if c["name"] not in CAMBIAN_ARCHIVOS:  # y verificar tras un comando nuevo (no el mismo repetido)
+                        clave += f"|{cambios}"
                 repeticiones[clave] = repeticiones.get(clave, 0) + 1
 
                 if c["name"] == "terminar":
@@ -305,6 +308,8 @@ class Agente:
                 else:
                     self.esperar_mapa()
                     resultado = despachar(self.h, c["name"], args)
+                    if c["name"] in CAMBIAN_ARCHIVOS and repeticiones[clave] == 1:
+                        cambios += 1
                     if repeticiones[clave] >= 3:
                         resultado += (f"\n[AVISO: es la {repeticiones[clave]}ª vez que haces exactamente esta llamada. "
                                       "Cambia de estrategia: lee el error, investiga con web_buscar o pregunta al usuario.]")

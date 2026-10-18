@@ -197,9 +197,11 @@ def externo(comando: str) -> bool:
 MIN_INSTALACION = 300  # segundos
 MAX_PREGUNTAS = 3  # por tarea: más es pedir al usuario lo que el agente puede decidir
 # Archivos que se nombran en un texto (petición del usuario o paso del plan); no las librerías como three.js.
-ARCHIVO_PEDIDO = r"\b[\w\-]+\.(?:py|bat|cmd|ps1|txt|json|md|js|ts|jsx|tsx|html|css|toml|ya?ml|ini|cfg|sql|csv|java|cs|go|rs|cpp|c|h)\b"
+# Con varios puntos en el nombre (tauri.conf.json, vite.config.ts): antes solo se tomaba lo último («conf.json»).
+ARCHIVO_PEDIDO = (r"\b[\w\-]+(?:\.[\w\-]+)*\.(?:py|bat|cmd|ps1|txt|json|md|js|ts|jsx|tsx|html|css|toml|ya?ml|ini|cfg|sql|"
+                  r"csv|java|cs|go|rs|cpp|c|h)\b")
 NO_ARCHIVO = re.compile(r"(node|next|nuxt|vue|react|three|d3|express|chart|p5|phaser|pixi|babylon|anime|alpine|ember|"
-                        r"socket|solid|svelte)\.js$", re.IGNORECASE)
+                        r"socket|solid|svelte)(\.[\w\-]+)*\.js$", re.IGNORECASE)  # librerías: three.js, three.module.js
 CREAR = re.compile(r"\b(crea|escrib|implement|añad|agreg|genera|construi)", re.IGNORECASE)
 
 
@@ -1075,7 +1077,7 @@ ESQUEMAS = [
                        "modelo comprobado (en el .modelo) o INSATISFACIBLE (no hay solución).",
        {"archivo": S, "segundos": I, "modelo": S}, ["archivo"]),
     _f("guia", "Buenas prácticas ACTUALES y cómo verificar para: python, pygame, html-juego, web, api, java, rust, go, "
-               "node, dotnet, docker, despliegue, android, flutter, blockchain, evm, solana, mev, bases-de-datos, "
+               "node, dotnet, docker, despliegue, android, flutter, tauri, blockchain, evm, solana, mev, bases-de-datos, "
                "matematicas, tests, bat. Incluye lo aprendido en tareas anteriores. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
     _f("version", "Última versión real de un paquete o imagen (evita librerías obsoletas): pypi (y si hay wheel para tu "
                   "Python), npm, maven, crates (Rust), go (ruta del módulo, p. ej. github.com/gin-gonic/gin), nuget "

@@ -8,5 +8,6 @@
 - Comandos: `cargo build`, `cargo test`, `cargo clippy --all-targets`, `cargo fmt`, `cargo run -- argumentos`. Versión final: `cargo build --release` -> `target\release\nombre.exe`.
 - La primera compilación descarga y compila dependencias (puede tardar minutos): es normal.
 - run.bat: `crear_bat("run", ["cargo run --release -- %*"])`; test.bat: `crear_bat("test", ["cargo test"])`.
+- App de escritorio (ventana con interfaz web): lee `guia("tauri")`.
 - Contenedor: build en varias etapas (`rust:<versión>-slim` para compilar, `debian:<versión>-slim` o distroless para ejecutar); ver `guia("docker")`.
 - `verificar` compila con `cargo build --all-targets` (errores y avisos con archivo:línea), pasa `cargo test` y muestra los avisos de clippy.
