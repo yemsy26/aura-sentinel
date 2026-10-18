@@ -157,7 +157,7 @@ figuras 3D; una lista de comprobación con razonamiento no lo arregló de forma 
 Por eso marca sin modelo el texto sobre fondo cargado (letras que se confunden con lo de detrás, líneas o una figura de
 canvas/svg tapando parte de un título; con canvas o vídeo detrás mira 4 instantes y guarda la captura del peor).
 Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas en CPU, 800/27,4 tok/s (antes 911/29,0).
-`git`: estado, diff, log, commit local y rama; nunca `push`; lo destructivo (`reset --hard`...) pide confirmación.
+`git`: estado, diff, log, commit local (sin repositorio, lo crea) y rama; nunca `push`; lo destructivo (`reset --hard`...) pide confirmación.
 
 ## Cómo detecta que algo está mal (como los agentes avanzados)
 
@@ -200,7 +200,8 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
    llamados, pausa inexistente y test falso.
 4. **Puertas de conducta**: no puede terminar con errores de verificación, revisión con puntos CRÍTICOS (la última
    revisión se guarda y bloquea aunque se reanude otro día), archivos pedidos que faltan o pasos sin hacer; no puede
-   marcar "probar" sin haber ejecutado; la 4ª reescritura completa de un archivo válido se bloquea (obliga a `editar`);
+   marcar "probar" sin haber ejecutado (si escribió algo, el motor verifica en ese momento y solo lo marca sin
+   errores); la 4ª reescritura completa de un archivo válido se bloquea (obliga a `editar`);
    rechaza contenido que sea un marcador o esté truncado; avisa si borra tests o si pega código en el chat.
 5. **Checkpoints**: cada `verificar` sin errores guarda la versión que funciona. Si después encadena fallos se le
    sugiere `restaurar`; si la tarea se acaba con el proyecto roto, **se restaura sola** la última versión buena.
@@ -264,7 +265,9 @@ El agente de consola (`agente.bat`) es mejor que el chat + MCP para tareas larga
 (una línea por mensaje), para que un IDE (p. ej. Aura Sentinel) muestre los pasos en su interfaz.
 Si el modelo no está cargado, lo carga con el ajuste de VRAM.
 
-- Órdenes por la entrada: `{"tipo":"tarea","texto":"..."}`, `{"tipo":"regla","texto":"..."}`,
+- Órdenes por la entrada: `{"tipo":"tarea","texto":"..."}` (con `"revisar_plan":true`, tras el primer `plan` llega
+  una `pregunta` con el plan y la opción «Aprobar y empezar»; cualquier otra respuesta son cambios que el modelo
+  aplica rehaciendo el plan, y hasta aprobarlo no se cambia ningún archivo), `{"tipo":"regla","texto":"..."}`,
   `{"tipo":"nuevo"}`, `{"tipo":"verificar"}`, `{"tipo":"plan"}`, `{"tipo":"salir"}`.
 - Eventos por la salida: `listo` (modelo, contexto), `paso` (herramienta, detalle, resultado, error, plan),
   `archivos` (rutas cambiadas; vacía = refrescar todo), `nota`, `aviso`, `progreso`, `error`.

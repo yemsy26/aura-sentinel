@@ -8,9 +8,13 @@ export interface Step {
 }
 export interface Note { level: 'nota' | 'aviso' | 'error'; text: string }
 export type RunEntry = { kind: 'step'; step: Step } | { kind: 'note'; note: Note };
+/** Resultado de una misión para la tarjeta final: lo que ya llegó en sus pasos (sin pedir nada al modelo). */
+export interface Summary {
+  files: string[]; verify: string | null; verifyOk: boolean; review: string | null; capture: string | null; launcher: string | null;
+}
 export type ChatItem =
   | { kind: 'user'; text: string; time: string }
-  | { kind: 'agent'; text: string; time: string; status: 'FINISH' | 'ERROR' | 'CANCELLED' }
+  | { kind: 'agent'; text: string; time: string; status: 'FINISH' | 'ERROR' | 'CANCELLED'; summary?: Summary }
   | { kind: 'run'; id: number; entries: RunEntry[] };
 export interface PlanItem { text: string; done: boolean }
 export interface Problem { severity: 'error' | 'warning'; text: string; source: string }
@@ -80,6 +84,24 @@ export function captureOf(output: string): string | null {
   return /Captura:\s*(\S+\.png)/.exec(output)?.[1] ?? null;
 }
 
+/** Resumen de la última misión: su verificación y revisión, la última captura, el lanzador y los archivos cambiados. */
+export function summarize(items: ChatItem[], changed: string[]): Summary | undefined {
+  const userAt = items.map((i) => i.kind).lastIndexOf('user');
+  const run = items.slice(userAt + 1).find((i) => i.kind === 'run');
+  const steps = run?.kind === 'run' ? run.entries.flatMap((e) => (e.kind === 'step' ? [e.step] : [])) : [];
+  if (!steps.length) return undefined;
+  const last = (tool: string) => [...steps].reverse().find((s) => s.tool === tool);
+  const verify = last('verificar');
+  const veredicto = /VEREDICTO:\s*(APROBADO|CAMBIOS NECESARIOS)/i.exec(last('revisar')?.output ?? '')?.[1].toUpperCase();
+  const bats = steps.filter((s) => s.tool === 'crear_bat' && !s.error && s.detail).map((s) => s.detail.replace(/(\.bat)?$/i, '.bat'));
+  return {
+    files: changed, verify: verify?.result ?? null, verifyOk: !!verify && !verify.error,
+    review: veredicto ? (veredicto === 'APROBADO' ? 'Revisión independiente: aprobada' : 'Revisión independiente: pidió cambios') : null,
+    capture: [...steps].reverse().find((s) => s.capture)?.capture ?? null,
+    launcher: [...bats].reverse().find((b) => !/^test/i.test(b)) ?? bats.at(-1) ?? null, // el que abre la app, no el de tests
+  };
+}
+
 function withRun(items: ChatItem[], entry: RunEntry): ChatItem[] {
   const last = items[items.length - 1];
   if (last?.kind === 'run') return [...items.slice(0, -1), { ...last, entries: [...last.entries, entry] }];
@@ -131,11 +153,13 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         ...state, busy: true, phase: 'starting', step: 0, chars: 0, startedAt: action.now, changed: [],
         items: [...state.items, { kind: 'user', text: action.text, time: new Date(action.now).toISOString() }],
       };
-    case 'done':
+    case 'done': {
+      const summary = action.status === 'FINISH' ? summarize(state.items, state.changed) : undefined;
       return {
         ...state, busy: false, phase: 'idle', ask: null,
-        items: [...state.items, { kind: 'agent', text: action.text, status: action.status, time: new Date().toISOString() }],
+        items: [...state.items, { kind: 'agent', text: action.text, status: action.status, time: new Date().toISOString(), summary }],
       };
+    }
     case 'askClosed':
       return state.ask?.id === action.id ? { ...state, ask: null, phase: state.busy ? 'acting' : 'idle' } : state;
     case 'changed':

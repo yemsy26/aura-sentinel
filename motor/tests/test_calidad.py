@@ -1,6 +1,7 @@
 """Pruebas de las herramientas de calidad (sin modelo): python -m unittest discover -s tests -v"""
 import importlib.util
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -200,14 +201,66 @@ class TestConducta(Base):
         r = self.h.escribir("test_a.py", "def test_0():\n    assert True\n")
         self.assertIn("los tests bajaron de 6 a 1", r)
 
-    def test_no_marcar_prueba_sin_ejecutar(self):
+    def test_marcar_prueba_sin_ejecutar_la_verifica_el_motor(self):
         self.h.plan(["crear main.py", "probar el programa"])
         self.h.paso = 1
         self.h.escribir("main.py", "print(1)\n")
-        self.assertIn("RECHAZADO", self.h.paso_hecho(2))
         self.h.paso = 2
-        self.h.ejecutar("python main.py")
-        self.assertIn("marcado como hecho", self.h.paso_hecho(2))
+        r = self.h.paso_hecho(2)  # sin ejecución tras escribir: verifica ahora en vez de rechazar
+        self.assertIn("marcado como hecho (verificado ahora: 0 errores)", r)
+        self.assertEqual(self.h.paso_prueba, 2)
+        self.assertEqual(self.h.verificacion["errores"], 0)
+
+    def test_marcar_prueba_con_errores_la_rechaza_con_el_informe(self):
+        self.h.plan(["crear calc.py y su test", "ejecutar los tests"])
+        self.h.paso = 1
+        self.h.escribir("calc.py", "def doble(x):\n    return x * 3\n")
+        self.h.escribir("test_calc.py", "import unittest\nfrom calc import doble\n\n\nclass T(unittest.TestCase):\n"
+                                        "    def test_doble(self):\n        self.assertEqual(doble(2), 4)\n")
+        self.h.paso = 2
+        r = self.h.paso_hecho(2)
+        self.assertIn("RECHAZADO", r)
+        self.assertIn("he verificado ahora", r)
+        self.assertGreater(self.h.verificacion["errores"], 0)
+        self.assertIn("[ ] 2.", self.h.plan_texto())
+        self.h.paso = 3
+        self.h.ejecutar("python -c \"print('ok')\"")  # una ejecución con éxito sigue valiendo como antes
+        self.assertIn("marcado como hecho.", self.h.paso_hecho(2))
+
+    def test_paso_que_crea_tests_sin_el_archivo_no_verifica(self):
+        self.h.plan(["Crear calc.py", "Crear test_calc.py con tests de la lógica"])
+        self.h.paso = 1
+        self.h.escribir("calc.py", "def doble(x):\n    return x * 2\n")
+        self.h.paso = 2
+        antes = dict(self.h.verificacion)
+        r = self.h.paso_hecho(2)  # falta el archivo: rechazo barato, sin lanzar la verificación completa
+        self.assertIn("pide test_calc.py y todavía no existe", r)
+        self.assertEqual(self.h.verificacion, antes)
+
+    def test_verificar_con_una_url_revisa_el_proyecto(self):
+        self.h.escribir("main.py", "print(1)\n")
+        r = self.h.verificar_cmd("http://localhost:8000")
+        self.assertTrue(r.startswith("VERIFICACIÓN"), r[:80])
+        self.assertIn("para mirar una URL usa ver_pantalla", r)
+        self.assertEqual(self.h.verificacion["ruta"], ".")
+
+    def test_commit_sin_repositorio_lo_crea(self):
+        self.h.escribir("main.py", "print(1)\n")
+        r = self.h.git("commit", mensaje="Primera versión")
+        self.assertIn("Repositorio git creado", r)
+        self.assertTrue((self.dir / ".git").is_dir())
+        self.assertIn("Primera versión", self.h.git("log"))
+        self.h.escribir("main.py", "print(2)\n")
+        self.assertNotIn("Repositorio git creado", self.h.git("commit", mensaje="Segunda"))
+
+    def test_commit_dentro_de_otro_repositorio_no_crea_uno(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.dir, check=True)
+        sub = self.dir / "app"
+        sub.mkdir()
+        h = Herramientas(sub, max_chars=8000, timeout=30)
+        h.escribir("main.py", "print(1)\n")
+        self.assertIn("no es un repositorio git", h.git("commit", mensaje="x"))
+        self.assertFalse((sub / ".git").exists())
 
     def test_no_marcar_creacion_sin_el_archivo(self):
         self.h.plan(["Crear css/styles.css con los estilos", "Crear el hero 3D con Three.js"])

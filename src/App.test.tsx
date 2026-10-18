@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Tauri simulado: comandos con respuestas fijas y eventos que la prueba emite.
@@ -53,8 +53,11 @@ vi.mock('@tauri-apps/api/event', () => ({
 vi.mock('./components/EditorArea', async () => {
   const { forwardRef } = await import('react');
   return {
-    EditorArea: forwardRef(function FakeEditor(p: { tabs: string[]; welcome: unknown }, _ref) {
-      return <div data-testid="editor">{p.tabs.length ? p.tabs.join(',') : (p.welcome as never)}</div>;
+    EditorArea: forwardRef(function FakeEditor(p: { tabs: string[]; welcome: unknown; onAskAgent?: (t: string) => void }, _ref) {
+      return <>
+        <div data-testid="editor">{p.tabs.length ? p.tabs.join(',') : (p.welcome as never)}</div>
+        <button onClick={() => p.onAskAgent?.('@index.html (líneas 2-4) ')}>pedir desde el editor</button>
+      </>;
     }),
   };
 });
@@ -129,6 +132,30 @@ describe('Aura Sentinel', () => {
     expect(screen.getByText('¿Permitir este comando?')).toBeTruthy();
     expect(screen.getByText(/conectarse o publicar fuera de este equipo/)).toBeTruthy();
     expect(screen.getByText('ssh u@h "ls"')).toBeTruthy();
+  });
+
+  it('revisar el plan se recuerda y viaja con la misión; al terminar se ve el resultado', async () => {
+    render(<App />);
+    await screen.findByText('index.html');
+    await waitFor(() => expect(listeners.has('file-updated')).toBe(true));
+    fireEvent.click(screen.getByLabelText('Revisar el plan'));
+    expect(localStorage.getItem('aura_revisar_plan')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'pedir desde el editor' }));
+    const box = screen.getByLabelText('Instrucción para el agente') as HTMLTextAreaElement;
+    expect(box.value).toBe('@index.html (líneas 2-4) ');
+    fireEvent.change(box, { target: { value: `${box.value}añade un título`, selectionStart: 40 } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(called('process_user_prompt')).toHaveLength(1));
+    expect(called('process_user_prompt')[0]).toMatchObject({ reviewPlan: true });
+    emit('agent-event', { tipo: 'paso', paso: 1, herramienta: 'verificar', detalle: '', resultado: 'VERIFICACIÓN (web): 0 ERRORES, 0 AVISOS',
+      error: false, salida: '' });
+    emit('file-updated', { path: 'C:\\ws\\index.html' });
+    await act(async () => missionDone(JSON.stringify({ status: 'FINISH', respuesta_conversacional: 'Hecho' })));
+    const card = await screen.findByRole('region', { name: 'Resultado de la misión' });
+    expect(card.textContent).toContain('0 ERRORES');
+    expect(card.textContent).toContain('1 archivo cambiado');
+    fireEvent.click(within(card).getByRole('button', { name: 'index.html' }));
+    expect(screen.getByTestId('editor').textContent).toContain('C:\\ws\\index.html');
   });
 
   it('las acciones rápidas usan las órdenes del agente', async () => {

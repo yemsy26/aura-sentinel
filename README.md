@@ -150,13 +150,16 @@ la ventana pinta en ~0,1 s con un paquete inicial de 358 KB.
 - **Lateral**: explorador con marcas **M/A** de lo que cambió o creó el agente en la misión, búsqueda en el
   proyecto, git (rama, cambios, commits), puntos de restauración del agente y sus reglas y lecciones.
 - **Editor**: pestañas Monaco; si el agente cambió el archivo, un aviso con `+N −M` líneas, **Ver cambios**
-  (editor de diferencias frente a cómo estaba al empezar la misión) y **Deshacer**.
+  (editor de diferencias frente a cómo estaba al empezar la misión) y **Deshacer**. **Pedir al agente sobre esto**
+  (menú contextual o `Ctrl+Shift+A`) lleva `@archivo (líneas a-b)` de la selección al chat.
 - **Panel inferior** (`Ctrl+J`): terminal (comandos en la carpeta del proyecto), problemas de la última
   verificación y de la revisión visual, procesos que dejó el agente (servidores) y vista previa de
   `http://localhost:PUERTO`.
 - **Agente**: estado, paso y tiempo, contexto usado, plan con su avance, una tarjeta por paso (con la salida
   y la captura de `ver_pantalla`), confirmación de comandos en línea, misión pendiente, acciones rápidas
-  (Verificar, Revisar código, Continuar, Nueva conversación) y `@archivo` en el mensaje.
+  (Verificar, Revisar código, Continuar, Nueva conversación) y `@archivo` en el mensaje. Con **Revisar el plan**
+  marcado, el agente enseña el plan y espera tu aprobación (o tus cambios) antes de tocar nada; al terminar, la
+  tarjeta **Resultado** resume la verificación, la revisión, la última captura y los archivos cambiados.
 
 ## Cómo funcionan las misiones
 

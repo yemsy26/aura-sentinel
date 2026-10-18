@@ -32,6 +32,7 @@ CAMBIAN_ARCHIVOS = {"escribir", "editar", "crear_bat", "restaurar", "ejecutar", 
 # Respuesta de una tarea que no quedó terminada (el IDE la marca como incompleta).
 INCOMPLETA = re.compile(r"(Error del modelo|Detenido|Se alcanzó el máximo|\[AVISO: la tarea termina SIN)")
 AVISO_MAPA = "\n\n(Repositorio grande: mira mapa() antes de listar o leer archivos.)"
+APROBAR_PLAN = "Aprobar y empezar"
 DEPENDEN_DEL_ESTADO = {"ejecutar", "leer", "listar", "buscar", "procesos", "verificar", "revisar", "paso_hecho",
                        "ver_pantalla", "git"}
 
@@ -106,6 +107,7 @@ class Agente:
         self.h.preguntar_cb = self._preguntar if interactivo else None
         self.emitir = None  # modo --json: emitir(tipo, **datos) publica un evento para el IDE
         self.responder = None  # modo --json: responder(tipo, **datos) espera la respuesta del usuario
+        self.revisar_plan = False  # el usuario aprueba el plan antes de que se cambie nada (opción de Aura)
 
     # ---------- utilidades de consola ----------
     def _confirmar(self, comando: str, motivo: str = "ejecutar un comando potencialmente destructivo") -> bool:
@@ -122,6 +124,16 @@ class Agente:
             print(f"    {i}. {o}")
         respuesta = input("  (número u otra respuesta) > ").strip()
         return opciones[int(respuesta) - 1] if respuesta.isdigit() and 0 < int(respuesta) <= len(opciones) else respuesta
+
+    def _aprobar_plan(self, resultado: str) -> tuple[bool, str]:
+        """El usuario revisa el plan antes de empezar: lo aprueba o pide cambios. Devuelve (sigue por aprobar, resultado)."""
+        respuesta = self._preguntar("Revisa el plan antes de que empiece:\n" + self.h.plan_texto(), [APROBAR_PLAN]).strip()
+        if not respuesta or respuesta == APROBAR_PLAN:
+            self._log("PLAN aprobado por el usuario")
+            return False, resultado + "\n[El usuario APROBÓ el plan: empieza por el paso 1.]"
+        self._log(f"PLAN: el usuario pide cambios: {respuesta}")
+        return True, resultado + (f"\n[El usuario pide cambios en el plan: {respuesta}\nRehaz el plan con plan(...) "
+                                  "con esos cambios y espera a que lo apruebe; no cambies archivos todavía.]")
 
     def _progreso(self, razon: int, texto: int) -> None:
         ahora = time.time()
@@ -185,10 +197,12 @@ class Agente:
             self.ctx.mensajes[-1]["content"] += AVISO_MAPA
         self._log(etiqueta or f"USUARIO: {texto}")
         nuevos = archivos_pedidos(texto)
+        sigue = bool(re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.IGNORECASE))
         if requeridos is not None:
             self.requeridos = set(requeridos)
-        elif nuevos or not re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.IGNORECASE):
+        elif nuevos or not sigue:
             self.requeridos = nuevos  # 'continúa' conserva los de la tarea en curso
+        por_aprobar = self.revisar_plan and max_pasos is None and self.responder is not None and not sigue
         self.h.nueva_tarea(self.pasos_totales + 1)
         self.inicio_tarea, self.revisiones = self.pasos_totales + 1, 0
         modo = self.cfg["razonamiento"]
@@ -285,6 +299,9 @@ class Agente:
                         self._decir(resumen)
                         self._log(f"FIN: {resumen}")
                         return resumen
+                elif por_aprobar and c["name"] in CAMBIAN_ARCHIVOS:
+                    resultado = ("RECHAZADO: el usuario quiere revisar el plan antes de que cambies nada. Lee lo que "
+                                 "necesites, crea el plan con plan(...) y espera su respuesta.")
                 else:
                     self.esperar_mapa()
                     resultado = despachar(self.h, c["name"], args)
@@ -305,6 +322,8 @@ class Agente:
                                           "y corrige solo eso con editar. Si no la encuentras, usa web_buscar con el error.]")
                     if c["name"] == "plan" and (olvidados := [f for f in self.requeridos if f.lower() not in resultado.lower()]):
                         resultado += f"\n[AVISO: el usuario pidió {', '.join(sorted(olvidados))} y el plan no lo incluye. Corrige el plan.]"
+                    if c["name"] == "plan" and por_aprobar and resultado.startswith("Plan guardado"):
+                        por_aprobar, resultado = self._aprobar_plan(resultado)
                     siguiente = next((l[6:] for l in self.h.plan_texto().splitlines() if l.startswith("- [ ]")), "")
                     if siguiente and c["name"] not in ("plan", "paso_hecho"):
                         resultado += f"\n[Plan, paso pendiente: {siguiente}]"

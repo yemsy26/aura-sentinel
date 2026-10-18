@@ -56,6 +56,8 @@ export default function App() {
   const [settings, setSettings] = useState<'engine' | 'profile' | 'keys' | null>(null);
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
+  const [reviewPlan, setReviewPlan] = useState(() => stored('aura_revisar_plan', false));
+  const [draft, setDraft] = useState<{ text: string; id: number } | null>(null);
   const editor = useRef<EditorHandle>(null);
   const treeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const workspaceRef = useRef(workspace);
@@ -212,14 +214,14 @@ export default function App() {
     dispatch({ type: 'send', text, now: Date.now() });
     void api.saveChat(ws, { sender: 'user', text, timestamp: now() }).catch(() => undefined);
     try {
-      const result = await api.mission(message, ws, model || null);
+      const result = await api.mission(message, ws, model || null, reviewPlan);
       dispatch({ type: 'done', text: result.respuesta_conversacional, status: result.status });
       void api.saveChat(ws, { sender: 'agent', text: result.respuesta_conversacional, timestamp: now() }).catch(() => undefined);
     } catch (e) {
       dispatch({ type: 'done', text: `Error: ${errorText(e)}`, status: 'ERROR' });
     }
     afterRun();
-  }, [agent.busy, files, model, afterRun]);
+  }, [agent.busy, files, model, reviewPlan, afterRun]);
 
   const runOrder = useCallback(async (order: QuickOrder, label: string) => {
     const ws = workspaceRef.current;
@@ -359,7 +361,8 @@ export default function App() {
         <main className="main">
           <Suspense fallback={<div className="editor-zone">{welcome}</div>}>
             <EditorArea ref={editor} workspace={workspace} tabs={tabs} active={active} agentChanged={agent.changed} dirty={dirty}
-              onActivate={setActive} onClose={closeTab} onDirty={markDirty} onToast={notify} welcome={welcome} />
+              onActivate={setActive} onClose={closeTab} onDirty={markDirty} onToast={notify} welcome={welcome}
+              onAskAgent={(text) => setDraft({ text, id: Date.now() })} />
           </Suspense>
           {bottomOpen && <>
             <Splitter axis="y" size={bottomHeight} onSize={setBottomHeight} min={110} max={640} invert />
@@ -375,7 +378,8 @@ export default function App() {
         <AgentPanel state={agent} width={agentWidth} workspace={workspace} files={files} pending={pending}
           onSend={(t) => void runMission(t)} onStop={stop} onQuick={quick} onAnswer={answer}
           onDismissPending={() => { if (workspace) void api.dismissPending(workspace).then(() => setPending(null)); }}
-          onOpenFile={openFile} onOpenUrl={openUrl} />
+          onOpenFile={openFile} onOpenUrl={openUrl} draft={draft}
+          reviewPlan={reviewPlan} onReviewPlan={(v) => { setReviewPlan(v); store('aura_revisar_plan', v); }} />
       </div>
       <StatusBar git={git} errors={problems.filter((x) => x.severity === 'error').length}
         warnings={problems.filter((x) => x.severity === 'warning').length} server={server} bionic={bionic} stats={stats}

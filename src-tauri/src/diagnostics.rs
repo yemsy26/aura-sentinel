@@ -42,7 +42,7 @@ pub fn start(app: &tauri::AppHandle, job_path: &str) -> Result<(), String> {
     }
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let result = crate::agent::process_user_prompt(prompt, workspace, model, handle.clone()).await;
+        let result = crate::agent::process_user_prompt(prompt, workspace, model, None, handle.clone()).await;
         let exit_code = diagnostic_exit_code(&result);
         let report = serde_json::json!({"elapsed_ms":started.elapsed().as_millis(), "result": result});
         let _ = std::fs::write(root.join(".aura/diagnostic-result.json"), report.to_string());

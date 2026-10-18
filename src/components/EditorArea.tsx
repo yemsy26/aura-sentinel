@@ -2,7 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { api, errorText } from '../lib/api';
 import { confirmar } from '../lib/confirmar';
 import { monaco } from '../lib/monaco';
-import { baseName, diffCounts, languageOf, relativePath, samePath } from '../lib/text';
+import { baseName, diffCounts, languageOf, relativePath, samePath, selectionRef } from '../lib/text';
 import { Icon } from './Icon';
 
 export interface EditorHandle {
@@ -23,6 +23,7 @@ interface Props {
   onClose: (path: string) => void;
   onDirty: (path: string, dirty: boolean) => void;
   onToast: (text: string, error?: boolean) => void;
+  onAskAgent?: (ref: string) => void;
   welcome: React.ReactNode;
 }
 
@@ -66,6 +67,15 @@ export const EditorArea = forwardRef<EditorHandle, Props>(function EditorArea(p,
       padding: { top: 8 }, model: null,
     });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { if (current.current) void save(current.current); });
+    ed.addAction({ // la selección (o la línea del cursor) pasa al chat como «@archivo (líneas a-b)»
+      id: 'aura.pedirAlAgente', label: 'Pedir al agente sobre esto', contextMenuGroupId: 'navigation', contextMenuOrder: 0,
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyA],
+      run: (e) => {
+        const path = current.current, sel = e.getSelection(), ws = props.current.workspace;
+        if (!path || !sel) return;
+        props.current.onAskAgent?.(selectionRef(ws ? relativePath(ws, path) : path, sel.startLineNumber, sel.endLineNumber, sel.endColumn));
+      },
+    });
     editor.current = ed;
     return () => {
       ed.dispose();

@@ -701,6 +701,17 @@ class Herramientas:
                            creationflags=subprocess.CREATE_NO_WINDOW, check=False)
         return r.returncode, decodificar(r.stdout + r.stderr).strip()
 
+    def _crear_repo(self) -> bool:
+        """Sin repositorio, el commit lo crea (el modelo se ahorra el fallo, el init y repetir). Nunca dentro de otro."""
+        if self._git("rev-parse", "--git-dir")[0] == 0:
+            return False
+        try:
+            dentro = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=self.raiz, capture_output=True,
+                                    timeout=30, creationflags=subprocess.CREATE_NO_WINDOW, check=False).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return not dentro and self._git("init")[0] == 0
+
     def git(self, accion: str = "estado", mensaje: str = "", nombre: str = "", ruta: str = "", comando: str = "") -> str:
         rutas = ["--", self.rel(self.ruta(ruta))] if ruta else NO_VERSIONAR
         if accion == "estado":
@@ -718,9 +729,12 @@ class Herramientas:
         elif accion == "commit":
             if not mensaje.strip():
                 return "Indica 'mensaje' para el commit (una frase: qué cambia y por qué)."
+            creado = self._crear_repo()
             codigo, salida = self._git("add", "-A", *rutas)
             if codigo == 0:
                 codigo, salida = self._git("commit", "-m", mensaje.strip(), *(rutas if ruta else []))
+                if codigo == 0 and creado:
+                    salida = "Repositorio git creado en la carpeta del proyecto.\n" + salida
         elif accion == "rama":
             if not re.fullmatch(r"[\w][\w./-]*", nombre or ""):
                 return "Indica 'nombre' para la rama (letras, números, - _ / .)."
@@ -807,6 +821,9 @@ class Herramientas:
 
     # ---------- calidad y conocimiento ----------
     def verificar_cmd(self, ruta: str = ".", segundos: int = 8) -> str:
+        nota = ""
+        if re.match(r"https?://", ruta or ""):  # la página la abre verificar; una URL daba «No existe» y otra vuelta
+            ruta, nota = ".", "\n(verificar revisa el proyecto, también la web en el navegador; para mirar una URL usa ver_pantalla)"
         informe, errores = verificar(self.raiz, self.python_proyecto(), ruta, max(4, min(int(segundos), 60)), self.max_chars,
                                      previos=self.errores_previos, idiomas_parcial=self.idiomas_parcial)
         subcarpeta = ruta not in ("", ".") and (self.raiz / ruta).is_dir()  # un archivo verifica todo el proyecto
@@ -820,7 +837,7 @@ class Herramientas:
             self.fallos_desde_verde += 1
             informe += "\nCorrige los ERRORES (empieza por el primero), usa editar y vuelve a llamar a verificar."
             informe += self._sugerir_restaurar()
-        return informe
+        return informe + nota
 
     def _fuentes(self) -> list[Path]:
         return [p for p in self.raiz.rglob("*") if p.is_file() and (es_codigo(p) or p.suffix.lower() in (".txt", ".md", ".cfg", ".ini"))
@@ -974,22 +991,31 @@ class Herramientas:
             return "No hay plan. Crea uno con plan."
         lineas = self.archivo_plan.read_text(encoding="utf-8").splitlines()
         patron = re.compile(rf"^- \[[ x!]\] {int(numero)}\. ")
+        verificado = ""
         for i, l in enumerate(lineas):
             if patron.match(l):
-                if (re.search(r"prob|test|verific|ejecut|comprob|revis", l, re.IGNORECASE)
-                        and self.paso_prueba < max(self.paso_escritura, self.inicio_tarea)):
-                    return (f"RECHAZADO: el paso {numero} es de prueba/verificación y no hay ninguna ejecución con éxito "
-                            "después de tu último cambio. Ejecuta la prueba (o verificar) y luego márcalo.")
+                # primero lo barato: un paso que crea un archivo que aún no existe («Crear test_x.py con tests»)
                 faltan = sorted(f for f in archivos_pedidos(l) if not self.existe(f)) if CREAR.search(l) else []
                 if faltan:  # conducta: marcar como hecho un paso antes de hacerlo
                     return (f"RECHAZADO: el paso {numero} pide {', '.join(faltan)} y todavía no existe. "
                             "Créalo con escribir y después márcalo como hecho.")
+                if (re.search(r"prob|test|verific|ejecut|comprob|revis", l, re.IGNORECASE)
+                        and self.paso_prueba < max(self.paso_escritura, self.inicio_tarea)):
+                    if self.paso_escritura < self.inicio_tarea:  # nada escrito en esta tarea: no hay qué verificar
+                        return (f"RECHAZADO: el paso {numero} es de prueba/verificación y no hay ninguna ejecución con "
+                                "éxito después de tu último cambio. Ejecuta la prueba (o verificar) y luego márcalo.")
+                    # verifica ahora en vez de rechazar: el modelo se ahorra dos vueltas (verificar y volver a marcar)
+                    informe = self.verificar_cmd(".")
+                    if self.verificacion["errores"]:
+                        return (f"RECHAZADO: el paso {numero} es de prueba/verificación y he verificado ahora el proyecto: "
+                                f"tiene errores.\n{informe}")
+                    verificado = " (verificado ahora: 0 errores)"
                 base = re.sub(r" — .*$", "", l[6:])
                 lineas[i] = f"- [x] {base}" + (f" — {nota.strip()[:150]}" if nota.strip() else "")
                 self.archivo_plan.write_text("\n".join(lineas) + "\n", encoding="utf-8")
                 pendientes = [l for l in lineas if l.startswith("- [ ]")]
                 sig = f"Siguiente: {pendientes[0][6:]}" if pendientes else "Todos los pasos hechos: verifica y usa terminar."
-                return f"Paso {numero} marcado como hecho. {sig}"
+                return f"Paso {numero} marcado como hecho{verificado}. {sig}"
         return f"No existe el paso {numero}.\n{self.plan_texto()}"
 
     def existe(self, nombre: str) -> bool:

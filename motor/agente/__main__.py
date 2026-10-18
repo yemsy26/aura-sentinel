@@ -31,7 +31,8 @@ def leer_entrada() -> str:
 def modo_json(cfg: dict, carpeta: str) -> int:
     """Protocolo para IDEs: órdenes JSON por stdin y eventos JSON por stdout, uno por línea.
 
-    Órdenes: {"tipo": "tarea"|"regla"|"revisar", "texto": ...}, {"tipo": "nuevo"|"verificar"|"plan"|
+    Órdenes: {"tipo": "tarea"|"regla"|"revisar", "texto": ...} ("tarea" con "revisar_plan": true pregunta por el plan
+    antes de cambiar nada), {"tipo": "nuevo"|"verificar"|"plan"|
     "procesos"|"salir"}, {"tipo": "detener", "id": N}, {"tipo": "restaurar", "numero": N} y
     {"tipo": "respuesta", "si": bool} tras un evento "confirmar" (trae "comando" y "motivo") y
     {"tipo": "respuesta", "texto": "..."} tras un evento "pregunta" (trae "pregunta" y "opciones"). Cada orden acaba con un evento "fin"
@@ -88,6 +89,7 @@ def _protocolo(cfg: dict, carpeta: str, canal) -> int:
                 break
             try:
                 if tipo == "tarea":
+                    agente.revisar_plan = bool(orden.get("revisar_plan"))
                     respuesta = agente.tarea(texto)
                     estado = "incompleta" if INCOMPLETA.match(respuesta) else "ok"
                 elif tipo == "nuevo":

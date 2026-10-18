@@ -56,8 +56,8 @@ export const api = {
   saveChat: (workspacePath: string, message: ChatMessage) => invoke<void>('save_chat_message', { workspacePath, message }),
   clearChat: (workspacePath: string) => invoke<void>('clear_chat_history', { workspacePath }),
 
-  mission: async (userMessage: string, workspacePath: string, model: string | null) =>
-    JSON.parse(await invoke<string>('process_user_prompt', { userMessage, workspacePath, model })) as MissionResult,
+  mission: async (userMessage: string, workspacePath: string, model: string | null, reviewPlan = false) =>
+    JSON.parse(await invoke<string>('process_user_prompt', { userMessage, workspacePath, model, reviewPlan })) as MissionResult,
   order: (order: QuickOrder, workspacePath: string) => invoke<FinEvent>('agent_order', { order, workspacePath }),
   cancel: () => invoke<boolean>('cancel_agent_mission'),
   answer: (id: string, answer: string) => invoke<void>('submit_user_answer', { id, answer }),

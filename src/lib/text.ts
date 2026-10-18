@@ -18,6 +18,12 @@ export function relativePath(root: string, path: string): string {
   return path.toLowerCase().startsWith(base) ? path.slice(base.length).replace(/^[\\/]+/, '') : path;
 }
 
+/** «@ruta (líneas a-b) » para pedir al agente sobre una selección; una selección que acaba al inicio de una línea no la cuenta. */
+export function selectionRef(rel: string, start: number, end: number, endColumn: number): string {
+  const last = endColumn === 1 && end > start ? end - 1 : end;
+  return `@${rel} (${last === start ? `línea ${start}` : `líneas ${start}-${last}`}) `;
+}
+
 export const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 export const samePath = (a: string, b: string) => a.replace(/\//g, '\\').toLowerCase() === b.replace(/\//g, '\\').toLowerCase();
 

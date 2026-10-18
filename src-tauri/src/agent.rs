@@ -3,7 +3,7 @@
 //! `agent-event` (el evento tal cual), `agent-step`, `file-updated` y `agent-ask-user`. Una sesión por carpeta y modelo conserva la
 //! conversación entre mensajes.
 //!
-//! Protocolo (una línea JSON por mensaje): Aura envía `{"tipo":"tarea","texto":...}` y, tras un evento
+//! Protocolo (una línea JSON por mensaje): Aura envía `{"tipo":"tarea","texto":...,"revisar_plan":bool}` y, tras un evento
 //! `confirmar`, `{"tipo":"respuesta","si":bool}`. El agente emite `listo`, `paso`, `archivos`, `nota`,
 //! `aviso`, `progreso`, `error`, `confirmar` y, al acabar cada orden, `fin`. Las órdenes rápidas
 //! (verificar, revisar, procesos, restaurar...) usan la misma sesión con `agent_order`.
@@ -669,6 +669,7 @@ pub async fn process_user_prompt(
     user_message: String,
     workspace_path: String,
     model: Option<String>,
+    review_plan: Option<bool>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let Some(_lock) = MissionLock::try_lock() else {
@@ -683,6 +684,7 @@ pub async fn process_user_prompt(
         message.truncate(idx);
     }
     let message = message.trim().to_string();
+    let review_plan = review_plan.unwrap_or(false) && !is_resume(&message); // el usuario aprueba el plan antes
     if !is_resume(&message) {
         let ws = workspace_path.clone(); // base de "Ver cambios" para esta misión (lee disco: fuera del runtime)
         let _ = tokio::task::spawn_blocking(move || crate::ide::snapshot_workspace(&ws)).await;
@@ -696,7 +698,14 @@ pub async fn process_user_prompt(
             } else {
                 message
             };
-            run_order(&app_handle, &workspace_path, current, json!({"tipo": "tarea", "texto": text}), &mut slot).await
+            run_order(
+                &app_handle,
+                &workspace_path,
+                current,
+                json!({"tipo": "tarea", "texto": text, "revisar_plan": review_plan}),
+                &mut slot,
+            )
+            .await
         }
         Err(halt) => Err(halt),
     };

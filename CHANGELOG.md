@@ -5,6 +5,24 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.8.0] — 2026-10-18 (Más rápido, revisar el plan y tarjeta de resultado)
+
+- **Más rápido sin perder comprobaciones:** si el agente marca como hecho un paso de prueba sin haber probado tras su
+  último cambio, el motor verifica él mismo en ese momento: si no hay errores, el paso queda hecho; si los hay, se los
+  da directamente. Antes lo rechazaba y el modelo necesitaba dos vueltas más (verificar y volver a marcar).
+- `git commit` en una carpeta sin repositorio lo crea y hace el commit en una sola llamada (nunca dentro de otro
+  repositorio).
+- `verificar` con una URL (`http://localhost:8000`) revisa el proyecto en vez de contestar «No existe».
+- **Revisar el plan** (casilla junto al chat): el agente enseña el plan y espera a que lo apruebes o pidas cambios
+  antes de tocar ningún archivo. Si pides cambios, rehace el plan y vuelve a preguntar.
+- **Tarjeta de resultado** al terminar una misión: verificación, revisión, última captura, cómo abrirlo y los archivos
+  que cambió (cada uno se abre con **Ver cambios**). Se construye con lo que ya mandó el agente, sin pedir nada al
+  modelo.
+- **Pedir al agente sobre esto** (menú contextual del editor o `Ctrl+Shift+A`): pone `@archivo (líneas a-b)` de la
+  selección en el chat para que escribas qué quieres.
+
+---
+
 ## [4.7.0] — 2026-10-18 (Modo grande: sistemas grandes y cambios en todos los módulos)
 
 - **Modo grande** para mandatos que tocan todo un repositorio grande (p. ej. «añade inglés a toda la app»): el agente

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { agentReducer, captureOf, initialAgent, parsePlan, parseProblems, parseUsage, type AgentState } from './agent';
+import { agentReducer, captureOf, initialAgent, parsePlan, parseProblems, parseUsage, summarize, type AgentState } from './agent';
 import type { AgentEvent } from './api';
-import { diffCounts, joinPath, relativePath, serverUrl } from './text';
+import { diffCounts, joinPath, relativePath, selectionRef, serverUrl } from './text';
 
 const ev = (state: AgentState, event: AgentEvent) => agentReducer(state, { type: 'event', event });
 
@@ -60,6 +60,34 @@ describe('protocolo de Agente Local', () => {
     expect(s.changed).toEqual([]);
   });
 
+  it('la misión termina con su resultado: verificación, revisión, captura, lanzador y archivos', () => {
+    let s = agentReducer(initialAgent, { type: 'send', text: 'crea un catálogo', now: 0 });
+    const paso = (n: number, herramienta: string, resultado: string, salida = '', error = false, detalle = '') =>
+      { s = ev(s, { tipo: 'paso', paso: n, herramienta, detalle, resultado, error, salida }); };
+    paso(1, 'verificar', 'VERIFICACIÓN (web): 2 ERRORES, 0 AVISOS', '', true);
+    paso(2, 'ver_pantalla', 'VISUAL: OK', 'VISUAL: OK\nCaptura: .agente/capturas/pantalla_index.png');
+    paso(3, 'crear_bat', 'OK creado run.bat', '', false, 'run');
+    paso(4, 'crear_bat', 'OK creado test.bat', '', false, 'test'); // el lanzador es run.bat, no el de tests
+    paso(5, 'revisar', 'REVISIÓN:', 'REVISIÓN:\n- requisito 1: hecho (index.html:12)\nVEREDICTO: APROBADO');
+    paso(6, 'verificar', 'VERIFICACIÓN (web): 0 ERRORES, 0 AVISOS');
+    s = agentReducer(s, { type: 'changed', path: 'C:\\ws\\index.html' });
+    s = agentReducer(s, { type: 'done', text: 'Listo', status: 'FINISH' });
+    expect(s.items.at(-1)).toMatchObject({ kind: 'agent', summary: {
+      files: ['C:\\ws\\index.html'], verify: 'VERIFICACIÓN (web): 0 ERRORES, 0 AVISOS', verifyOk: true,
+      review: 'Revisión independiente: aprobada', capture: '.agente/capturas/pantalla_index.png', launcher: 'run.bat' } });
+    s = agentReducer(s, { type: 'send', text: 'Verificar el proyecto', now: 0 }); // orden rápida: sin pasos, sin tarjeta
+    s = agentReducer(s, { type: 'done', text: '0 ERRORES', status: 'FINISH' });
+    expect(s.items.at(-1)).toMatchObject({ kind: 'agent', summary: undefined });
+    expect(summarize([{ kind: 'user', text: 'x', time: '' }], [])).toBeUndefined();
+  });
+
+  it('una misión cancelada o con error no muestra tarjeta de resultado', () => {
+    let s = agentReducer(initialAgent, { type: 'send', text: 'x', now: 0 });
+    s = ev(s, { tipo: 'paso', paso: 1, herramienta: 'leer', detalle: 'a.py', resultado: 'OK', error: false, salida: '' });
+    s = agentReducer(s, { type: 'done', text: 'Cancelada', status: 'CANCELLED' });
+    expect(s.items.at(-1)).toMatchObject({ kind: 'agent', summary: undefined });
+  });
+
   it('cierra la confirmación solo si es la misma pregunta', () => {
     let s = agentReducer(initialAgent, { type: 'ask', ask: { id: 'a', question: 'q', options: ['Permitir'], context: '' } });
     expect(s.phase).toBe('waiting');
@@ -78,6 +106,11 @@ describe('utilidades de texto', () => {
     expect(joinPath('C:\\ws', 'D:\\otro\\b.js')).toBe('D:\\otro\\b.js');
     expect(relativePath('C:\\WS', 'C:\\ws\\src\\a.js')).toBe('src\\a.js');
     expect(relativePath('C:\\ws', 'npm test')).toBe('npm test'); // los comandos no son rutas
+  });
+  it('referencia de una selección del editor para el agente', () => {
+    expect(selectionRef('src\\a.py', 3, 3, 10)).toBe('@src\\a.py (línea 3) ');
+    expect(selectionRef('a.py', 2, 5, 8)).toBe('@a.py (líneas 2-5) ');
+    expect(selectionRef('a.py', 2, 5, 1)).toBe('@a.py (líneas 2-4) '); // acaba al principio de la línea 5
   });
   it('detecta el servidor de un proceso', () => {
     expect(serverUrl('python -m http.server 8000')).toBe('http://localhost:8000');

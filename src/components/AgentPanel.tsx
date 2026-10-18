@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { PHASE_LABEL, toolLabel, type AgentState, type ChatItem, type PlanItem, type RunEntry, type Step } from '../lib/agent';
+import { PHASE_LABEL, toolLabel, type AgentState, type ChatItem, type PlanItem, type RunEntry, type Step, type Summary } from '../lib/agent';
 import { api, type PendingMission } from '../lib/api';
 import { formatElapsed, formatTokens, joinPath, markdown, relativePath } from '../lib/text';
 import { Meter } from './Bars';
@@ -26,6 +26,9 @@ interface Props {
   onDismissPending: () => void;
   onOpenFile: (path: string) => void;
   onOpenUrl: (url: string) => void;
+  draft?: { text: string; id: number } | null; // texto que llega del editor («Pedir al agente sobre esto»)
+  reviewPlan?: boolean;
+  onReviewPlan?: (value: boolean) => void;
 }
 
 export function AgentPanel(p: Props) {
@@ -131,7 +134,7 @@ function Question({ ask, onAnswer }: { ask: { question: string; options: string[
   return (
     <section className="card question" aria-label="Pregunta del agente">
       <strong>El agente pregunta</strong>
-      <div>{ask.question}</div>
+      <div style={{ whiteSpace: 'pre-wrap' }}>{ask.question}</div>
       {ask.options.length > 0 && (
         <div className="field-row">
           {ask.options.map((o, i) => (
@@ -190,10 +193,40 @@ function Item({ item, last, busy, workspace, onImage, onOpenFile, onOpenUrl }: {
       e.preventDefault();
       onOpenUrl(link.href);
     };
-    return <div className={`msg-agent ${item.status}`} onClick={click}
-      dangerouslySetInnerHTML={{ __html: markdown(item.text || '(sin respuesta)') }} />;
+    return <>
+      <div className={`msg-agent ${item.status}`} onClick={click}
+        dangerouslySetInnerHTML={{ __html: markdown(item.text || '(sin respuesta)') }} />
+      {item.summary && <ResultCard summary={item.summary} workspace={workspace} onImage={onImage} onOpenFile={onOpenFile} />}
+    </>;
   }
   return <Run entries={item.entries} live={last && busy} workspace={workspace} onImage={onImage} onOpenFile={onOpenFile} />;
+}
+
+/** Tarjeta final: verificación, revisión, última captura, lanzador y archivos cambiados (abre cada uno para Ver cambios). */
+function ResultCard({ summary, workspace, onImage, onOpenFile }: {
+  summary: Summary; workspace: string | null; onImage: (src: string) => void; onOpenFile: (p: string) => void;
+}) {
+  const [image, setImage] = useState<string | null>(null);
+  useEffect(() => {
+    if (summary.capture && workspace) void api.image(joinPath(workspace, summary.capture)).then(setImage).catch(() => setImage(null));
+  }, [summary.capture, workspace]);
+  const shown = summary.files.slice(0, 12);
+  return (
+    <section className="card result" aria-label="Resultado de la misión">
+      <strong>Resultado</strong>
+      {summary.verify && <div className={summary.verifyOk ? 'ok' : 'err'}>
+        <Icon name="check" size={13} /> {summary.verify}</div>}
+      {summary.review && <div className="dim">{summary.review}</div>}
+      {image && <img className="capture" src={image} alt="Última captura de la pantalla" onClick={() => onImage(image)} />}
+      {summary.launcher && <div>Para abrirlo: <code>{summary.launcher}</code></div>}
+      {shown.length > 0 && <div className="result-files">
+        <span className="dim">{summary.files.length === 1 ? '1 archivo cambiado' : `${summary.files.length} archivos cambiados`}</span>
+        {shown.map((f) => <button key={f} className="btn small" title="Abrir (con Ver cambios)" onClick={() => onOpenFile(f)}>
+          {workspace ? relativePath(workspace, f) : f}</button>)}
+        {summary.files.length > shown.length && <span className="dim">y {summary.files.length - shown.length} más</span>}
+      </div>}
+    </section>
+  );
 }
 
 const VISIBLE_STEPS = 6;
@@ -259,6 +292,11 @@ function Composer(p: Props) {
   const [text, setText] = useState('');
   const [mention, setMention] = useState<{ query: string; index: number } | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!p.draft) return;
+    setText((t) => `${t}${t && !t.endsWith(' ') ? ' ' : ''}${p.draft!.text}`);
+    requestAnimationFrame(() => { const el = area.current; el?.focus(); el?.setSelectionRange(el.value.length, el.value.length); });
+  }, [p.draft]);
   const matches = useMemo(() => {
     if (!mention) return [];
     const q = mention.query.toLowerCase();
@@ -338,6 +376,8 @@ function Composer(p: Props) {
         <div className="composer-bar">
           <button className="icon-btn bordered" aria-label="Adjuntar archivo" title="Adjuntar archivo" onClick={attach} disabled={!p.workspace}>
             <Icon name="attach" /></button>
+          <label className="review-plan" title="El agente te enseña el plan y espera a que lo apruebes o pidas cambios antes de tocar nada">
+            <input type="checkbox" checked={!!p.reviewPlan} onChange={(e) => p.onReviewPlan?.(e.target.checked)} />Revisar el plan</label>
           <span className="dim" style={{ fontSize: 12 }}>Enter envía · Shift+Enter salto de línea</span>
           {p.state.busy
             ? <button className="send stop" aria-label="Detener" title="Detener" onClick={p.onStop}><Icon name="stop" /></button>
