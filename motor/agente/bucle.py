@@ -12,7 +12,7 @@ from . import mapa as mapa_repo
 from .contexto import Contexto
 from .herramientas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS, Herramientas, archivos_pedidos, despachar
 from .prompts import REGLAS_USUARIO, entorno, sistema
-from .revision import revisar
+from .revision import mtime_fuentes, revisar
 from .verificacion import es_codigo, ignorado
 
 TIPOS = {e["function"]["name"]: {k: v.get("type") for k, v in e["function"]["parameters"]["properties"].items()}
@@ -372,12 +372,15 @@ class Agente:
         elif escribio and self.h.verificacion["errores"] > 0:
             return "RECHAZADO: la última verificación tiene errores sin corregir:\n" + self.h.verificacion["informe"]
         previa = self._revision_previa()
-        if not escribio and previa and not previa["aprobado"] and previa["fecha"] >= self._mtime_codigo():
+        # Lo que lee el revisor (también capabilities/*.json o tauri.conf.json) no cambió desde que pidió cambios. Si la
+        # revisión es de esta tarea (también un revisar a mano), terminar sin tocar nada la ignoraba.
+        pendiente = previa and not previa["aprobado"] and previa["fecha"] >= mtime_fuentes(self.h.raiz)
+        if pendiente and (not escribio or self.revisiones):
             return ("RECHAZADO: la última revisión pidió cambios y el código no se ha modificado desde entonces. "
                     "Corrige estos puntos con editar, verifica y luego termina:\n" + previa["texto"])
         # 1ª revisión siempre; 2ª si se cambió código después de una revisión que pidió cambios.
         if escribio and (self.revisiones == 0 or (self.revisiones < 2 and previa and not previa["aprobado"]
-                                                    and self._mtime_codigo() > previa["fecha"])):
+                                                    and not pendiente)):
             texto, ok = self._revisar()
             self._mostrar(paso, "revisar", {}, texto)
             if not ok:

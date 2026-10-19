@@ -2,13 +2,14 @@
 
 Python: sintaxis, ruff (errores reales), vulture (código que nunca se usa = funciones sin conectar), tests,
         ejecución del programa y, si es pygame, una partida sin ventana con teclas aleatorias.
-HTML/JS: referencias rotas, ids inexistentes, sintaxis JS (node --check) y prueba real en Edge sin ventana
-         (errores de consola, 404, canvas vacío, animación, respuesta a teclado/ratón, capturas).
+HTML/JS: referencias rotas, ids que busca el JS/TS y no existen, sintaxis JS (node --check) y prueba real en Edge
+         sin ventana (errores de consola, 404, canvas vacío, animación, respuesta a teclado/ratón, capturas).
 Java:   javac -Xlint y ejecución del main en modo headless (o mvn test si hay pom.xml).
 .bat:   archivos llamados que no existen y falta de cd /d "%~dp0".
 Rust, Go, .NET, Node/TypeScript, Docker/Compose y YAML: en ecosistemas.py.
 """
 import ast
+import difflib
 import html.parser
 import json
 import os
@@ -78,11 +79,13 @@ class Informe:
 
 def ignorado(p: Path, raiz: Path) -> bool:
     """Carpetas que no son código del proyecto: entornos, compilados y dependencias (también lib/ de Foundry, con
-    forge-std y OpenZeppelin, que traen sus propios scripts y package.json, y sus cache/ y broadcast/)."""
+    forge-std y OpenZeppelin, que traen sus propios scripts y package.json, y sus cache/ y broadcast/; y gen/ e icons/
+    junto a tauri.conf.json, que Tauri regenera al compilar: sus esquemas, ~300 KB, tapaban el código al revisor)."""
     partes = p.relative_to(raiz).parts[:-1]
     if IGNORAR & set(partes):
         return True
-    return any(parte in ("lib", "cache", "broadcast") and (raiz.joinpath(*partes[:i]) / "foundry.toml").exists()
+    return any((parte in ("lib", "cache", "broadcast") and (raiz.joinpath(*partes[:i]) / "foundry.toml").exists())
+               or (parte in ("gen", "icons") and (raiz.joinpath(*partes[:i]) / "tauri.conf.json").exists())
                for i, parte in enumerate(partes))
 
 
@@ -438,11 +441,9 @@ def librerias_cdn(raiz: Path, htmls: list[Path], inf: Informe) -> None:
 
 
 def html_estatico(raiz: Path, htmls: list[Path], jss: list[Path], inf: Informe) -> None:
-    todos_ids, codigo_js = set(), []
     for h in htmls:
         p = _HtmlInfo()
         p.feed(h.read_text(encoding="utf-8", errors="replace"))
-        todos_ids |= set(p.ids)
         for i in {x for x in p.ids if p.ids.count(x) > 1}:
             inf.avisos.append(f"{_rel(h, raiz)}: id '{i}' repetido.")
         for ref in p.refs:
@@ -451,18 +452,65 @@ def html_estatico(raiz: Path, htmls: list[Path], jss: list[Path], inf: Informe) 
         abiertas = [t for t in p.mal_cerradas + p.pila if t not in ("html", "body", "head", "p", "li", "td", "tr", "option")]
         if abiertas:
             inf.avisos.append(f"{_rel(h, raiz)}: etiquetas sin cerrar: {', '.join(sorted(set(abiertas)))[:120]}")
-        codigo_js += p.scripts
         for i, s in enumerate(p.scripts):
             _node_check(raiz, s, f"{_rel(h, raiz)} <script> #{i + 1}", inf, p.modulo)
     for j in jss:
-        codigo_js.append(j.read_text(encoding="utf-8", errors="replace"))
         _node_check(raiz, j, _rel(j, raiz), inf)
-    texto_js = "\n".join(codigo_js)
-    usados = set(re.findall(r"getElementById\(\s*['\"]([\w-]+)['\"]", texto_js))
-    usados |= set(re.findall(r"querySelector(?:All)?\(\s*['\"]#([\w-]+)['\"]", texto_js))
-    for i in sorted(usados - todos_ids):
-        if not re.search(rf"\.id\s*=\s*['\"]{i}['\"]|id=\\?['\"]{i}\\?['\"]", texto_js):
-            inf.errores.append(f"El JS busca el elemento id='{i}' pero no existe en ningún HTML (devolverá null).")
+
+
+# getElementById("x") / querySelector("#x ...") con texto literal: una plantilla (${...}), una variable o una suma
+# no encajan (no se sabe qué id será) y no se miran.
+BUSCA_ID = re.compile(r"""getElementById\(\s*['"`]([\w-]+)['"`]\s*\)|querySelector(?:All)?\s*(?:<[^<>()]*>)?"""
+                      r"""\(\s*['"`]#([\w-]+)(?:[\s>+~.:\[,][^'"`$]*)?['"`]\s*\)""")
+# Ids que crea el código: el.id = "x", setAttribute("id", "x"), id="x" en innerHTML o JSX, id={"x"}, {id: "x"}.
+CREA_ID = re.compile(r"""\.id\s*=\s*['"`]([\w-]+)['"`]|setAttribute\(\s*['"`]id['"`]\s*,\s*['"`]([\w-]+)['"`]|"""
+                     r"""(?<![\w.-])id\s*[=:]\s*\{?\s*\\?['"`]([\w-]+)\\?['"`]""")
+SCRIPT_EN_LINEA = re.compile(r"<script\b[^>]*>(.*?)</script>", re.IGNORECASE | re.DOTALL)
+FUENTES_DOM = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
+
+
+def _id_parecido(i: str, ids: set[str]) -> str:
+    """El id existente más parecido: primero entre los que empiezan igual (cpu-percent -> cpu-usage), si no, entre
+    todos los muy parecidos."""
+    inicio = re.split(r"[-_]", i)[0]
+    mismos = [x for x in sorted(ids) if re.split(r"[-_]", x)[0] == inicio]
+    return next(iter(difflib.get_close_matches(i, mismos, 1, 0.4) or difflib.get_close_matches(i, sorted(ids), 1, 0.6)),
+                "")
+
+
+def ids_dom(raiz: Path, base: Path, inf: Informe) -> None:
+    """El JS/TS de base busca con texto literal un id que no tiene ningún HTML del proyecto ni crea ningún script:
+    getElementById devolverá null (fuera de la app, p. ej. en Tauri, init() vuelve antes y la prueba no lo ve)."""
+    todos = archivos(raiz, *FUENTES_DOM, ".vue", ".svelte", ".html", ".htm")
+    if not any(p.suffix.lower() in (".html", ".htm") for p in todos):
+        return  # sin páginas (una librería) no hay DOM con el que comparar
+    definidos, usos = set(), {}  # usos: id -> ["archivo:línea", ...]
+    for p in todos:
+        texto, suf = p.read_text(encoding="utf-8", errors="replace"), p.suffix.lower()
+        definidos |= {m[m.lastindex] for m in CREA_ID.finditer(texto)}
+        if suf in (".html", ".htm"):
+            info = _HtmlInfo()
+            info.feed(texto)
+            definidos |= set(info.ids)
+            trozos = [(m.start(1), m[1]) for m in SCRIPT_EN_LINEA.finditer(texto)]
+        else:
+            trozos = [(0, texto)]
+        if suf in (".vue", ".svelte") or p.name.endswith(".min.js") or base not in (p, *p.parents):
+            continue
+        for desde, codigo in trozos:
+            for m in BUSCA_ID.finditer(codigo):
+                antes = codigo[codigo.rfind("\n", 0, m.start()) + 1:m.start()]
+                if "//" in antes or antes.lstrip().startswith(("*", "/*")):
+                    continue  # comentado
+                linea = texto.count("\n", 0, desde + m.start()) + 1
+                usos.setdefault(m[m.lastindex], []).append(f"{_rel(p, raiz)}:{linea}")
+    for i, sitios in usos.items():
+        if i in definidos:
+            continue
+        parecido = _id_parecido(i, definidos)
+        inf.errores.append(f"{sitios[0]} busca el elemento id='{i}' pero no existe en ningún HTML ni lo crea ningún "
+                           "script (devolverá null)." + (f" ¿Querías '{parecido}', que sí existe?" if parecido else "")
+                           + (f" También en {', '.join(sitios[1:4])}." if len(sitios) > 1 else ""))
 
 
 def _node_check(raiz: Path, codigo_o_ruta, nombre: str, inf: Informe, modulo: bool = False) -> None:
@@ -746,6 +794,7 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
     if htmls or jss:
         inf.tipos.append("web")
         html_estatico(raiz, htmls, jss, inf)
+        ids_dom(raiz, base, inf)
         librerias_cdn(raiz, htmls, inf)
         directas = [h for h in htmls if not fuente_vite(h)]
         if directas:
@@ -785,7 +834,7 @@ def chequeo_rapido(raiz: Path, p: Path) -> str:
         # Recién escrito el HTML, el JS y el CSS pueden estar aún por crear: se recuerdan, no son errores.
         pendientes = [re.sub(r".* referencia '(.+)' y NO existe\.", r"PENDIENTE: crea '\1'", e) for e in inf.errores
                       if "y NO existe" in e]
-        inf.errores = [e for e in inf.errores if "busca el elemento" not in e and "y NO existe" not in e]
+        inf.errores = [e for e in inf.errores if "y NO existe" not in e]
         inf.avisos = pendientes + inf.avisos
     lineas = [f"ERROR: {e}" for e in inf.errores[:5]] + [f"AVISO: {a}" for a in inf.avisos[:4]]
     return ("\n" + "\n".join(lineas)) if lineas else ""

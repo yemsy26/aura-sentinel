@@ -5,6 +5,28 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [Sin publicar]
+
+- **El revisor conoce las prácticas actuales:** recibe, de las guías de los temas del proyecto (Tauri, Rust, pygame,
+  web…), solo las frases que corrigen una versión vieja y nombran algo del código o de la petición (como mucho unos
+  450 tokens). Si la petición nombra una API que no existe en la versión del proyecto (p. ej. `@tauri-apps/api` en
+  Tauri 2), usar la forma actual cuenta como desviación justificada y no como CRÍTICO.
+- **La gravedad se decide por la consecuencia:** CRÍTICO solo si, tal como está, algo falla o un requisito no se
+  cumple. Un `[CRITICO]` que el propio revisor retira en su última frase («no rompe la funcionalidad», «esto es
+  correcto») ya no bloquea el veredicto.
+- **`verificar` revisa los ids del DOM también en TypeScript:** un `getElementById("x")` o `querySelector("#x")` en
+  `.js`, `.ts`, `.tsx` o `.jsx` que busca un id que no tiene ningún HTML ni crea ningún script da error con
+  `archivo:línea` y el id parecido que sí existe («¿Querías 'cpu-usage'?»). Antes solo se miraban los `.js` y los
+  scripts dentro del HTML, y en Tauri la prueba no lo veía porque fuera de la app el código se detiene antes.
+- Arreglo: `gen/` e `icons/` junto a `tauri.conf.json`, que Tauri regenera al compilar, ya no cuentan como código del
+  proyecto. Sus esquemas (~300 KB) llenaban lo que lee el revisor y tapaban el código. En Aura-Monitor, lo que se le
+  manda baja de unos 30 000 a unos 5 700 tokens.
+- Arreglo: tras una revisión que pidió cambios, `terminar` sin haber tocado nada pasaba si la revisión era de la misma
+  tarea (también un `revisar` a mano). Ahora se rechaza con los puntos pendientes. Y corregir solo un `.json` de
+  configuración (`tauri.conf.json`, `capabilities/`) cuenta como cambio y lleva a la segunda revisión.
+
+---
+
 ## [4.9.0] — 2026-10-18 (Apps de escritorio con Tauri 2 y arreglos de bucles)
 
 - **Apps de escritorio con Tauri 2:** guía nueva (`guia("tauri")`) con la estructura completa escrita a mano (sin
