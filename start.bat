@@ -7,7 +7,6 @@ echo =======================================================
 echo          AURA SENTINEL - INICIO
 echo =======================================================
 cd /d "%~dp0"
-set "CARGO_TARGET_DIR=%CD%\target-audit"
 set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 
 echo.

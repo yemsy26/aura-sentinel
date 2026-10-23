@@ -1,6 +1,5 @@
 # Compilación de Rust / Tauri (Cargo.lock sí se versiona: fija las dependencias de la app)
 target/
-/target-audit/
 *.exe
 *.pdb
 
@@ -24,7 +23,11 @@ motor/lecciones.md
 /motor/aprendido/
 /motor/complementos/
 
-# Estado local del agente y del IDE si se abre este repositorio como proyecto
+# Espacio por defecto de Aura (los proyectos que crea el agente no son parte del repositorio)
+/workspace/
+
+# Estado local del agente y del IDE en cada carpeta abierta (también si se abre este repositorio)
 .agente/
 .aura/
+.fenix_chat.json
 *.log

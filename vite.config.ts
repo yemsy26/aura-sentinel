@@ -5,11 +5,11 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
-  // Solo interesa vigilar la interfaz: las carpetas de compilación (target, target-audit...) tienen miles de
+  // Solo interesa vigilar la interfaz: las carpetas de compilación (src-tauri/target) tienen miles de
   // archivos que cargo bloquea mientras escribe (EBUSY) y gastan CPU sin motivo.
   server: {
     port: 1420, strictPort: true,
-    watch: { ignored: ['**/src-tauri/**', '**/workspace/**', '**/target/**', '**/target-*/**', '**/dist/**', '**/.agente/**', '**/.aura/**'] },
+    watch: { ignored: ['**/src-tauri/**', '**/workspace/**', '**/target/**', '**/dist/**', '**/.agente/**', '**/.aura/**'] },
   },
   build: { outDir: 'dist', target: 'es2022', chunkSizeWarningLimit: 8000 },
   test: { environment: 'jsdom', include: ['src/**/*.test.{ts,tsx}'] },
