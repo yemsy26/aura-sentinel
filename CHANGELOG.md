@@ -87,7 +87,8 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
   («arregla el botón» en un proyecto Tauri recibe las de Tauri), o por dos palabras con significado en común. Con la
   lista llena se olvida la que lleva más tiempo sin usarse; se usa al entrar en una tarea o cuando el agente la intenta
   guardar otra vez. El prompt de sistema ya no cambia al aprender, así que su prefijo sigue en la caché del servidor.
-  `lecciones.md` sigue siendo la lista que se edita a mano; el uso va en `lecciones_uso.json`.
+  `lecciones.md` sigue siendo la lista que se edita a mano; el uso va en `lecciones_uso.json`. Cuando una misión larga
+  resume su historial, las lecciones de la tarea pasan al resumen (en el prompt de sistema nunca se perdían).
 
 ---
 

@@ -145,6 +145,7 @@ class TestContexto(unittest.TestCase):
                 return {"content": "- resumen de prueba"}
         c = Contexto(4000, "sistema", 100)
         c.usuario("crea una app")
+        c.lecciones = "\n\nLECCIONES DE TAREAS ANTERIORES (...):\n- en pygame usa convert_alpha()"
         for i in range(12):
             c.asistente("", [{"id": f"t{i}", "name": "escribir",
                               "arguments": json.dumps({"ruta": f"f{i}.py", "contenido": "x = 1\n" * 300})}])
@@ -154,6 +155,7 @@ class TestContexto(unittest.TestCase):
         self.assertLess(c.tokens(), 4000 * 0.6)
         self.assertEqual(c.mensajes[1]["role"], "user")
         self.assertIn("resumen de prueba", c.mensajes[1]["content"])
+        self.assertIn("convert_alpha", c.mensajes[1]["content"])  # el resumen no se lleva las lecciones de la tarea
         self.assertEqual(c.mensajes[2]["role"], "assistant")  # nunca un 'tool' huérfano
         ids = {tc["id"] for m in c.mensajes for tc in m.get("tool_calls") or []}
         self.assertTrue(all(m["tool_call_id"] in ids for m in c.mensajes if m["role"] == "tool"))

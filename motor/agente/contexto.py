@@ -40,6 +40,7 @@ class Contexto:
         self.fijos = tokens_herramientas  # esquemas de herramientas + plantilla
         self.chars_por_token = 3.0         # se calibra con el uso real
         self.tarea = ""
+        self.lecciones = ""  # las de la tarea (lecciones.para_tarea): van en su mensaje y sobreviven al resumen
         self.tras_compactar = 0
 
     # ---- medición ----
@@ -148,6 +149,7 @@ class Contexto:
             resumen = r["content"].strip() or transcripcion[-1500:]
         except Exception:  # sin modelo: conservar el final de la transcripción
             resumen = transcripcion[-1500:]
-        nuevo = {"role": "user", "content": (f"TAREA: {self.tarea[:3000]}\n\nPROGRESO HASTA AHORA (resumen):\n{resumen}"
+        nuevo = {"role": "user", "content": (f"TAREA: {self.tarea[:3000]}{self.lecciones}"
+                                             f"\n\nPROGRESO HASTA AHORA (resumen):\n{resumen}"
                                              f"\n\nPLAN Y ESTADO:\n{plan or '(sin plan)'}\n\nContinúa desde donde quedaste.")}
         self.mensajes = [self.mensajes[0], nuevo] + self.mensajes[corte:]

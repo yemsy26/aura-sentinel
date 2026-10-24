@@ -276,8 +276,9 @@ class Agente:
         sigue = bool(re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.IGNORECASE))
         # Las lecciones que tocan van con la tarea, no en el prompt de sistema: así este no cambia entre tareas
         # (su prefijo sigue en la caché del servidor) y no ocupan sitio las que no tienen que ver.
-        if not sigue and (previas := lecciones.para_tarea(texto, self.h.raiz)):
-            self.ctx.mensajes[-1]["content"] += previas
+        if not sigue:
+            self.ctx.lecciones = lecciones.para_tarea(texto, self.h.raiz)
+            self.ctx.mensajes[-1]["content"] += self.ctx.lecciones
         if requeridos is not None:
             self.requeridos = set(requeridos)
         elif nuevos or not sigue:
