@@ -106,7 +106,7 @@ def main() -> int:
     ap.add_argument("--raiz", default=str(Path.home() / "Proyectos"), help="carpeta inicial del MCP")
     ap.add_argument("--desactivar-bionic-core", action="store_true")
     ap.add_argument("--configurar-modelo", metavar="RUTA_JSON",
-                    help="'auto' = el modelo de agente.json; o la ruta, p. ej. "
+                    help="'auto' = el recomendado (o el fijado en agente.json); o la ruta, p. ej. "
                          "unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf.json")
     a = ap.parse_args()
     if not PY.exists():
@@ -118,7 +118,7 @@ def main() -> int:
     print(f"[OK] Prompt de sistema para Bionic/LM Studio: {INST / 'PROMPT_SISTEMA_MCP.txt'}")
     if a.configurar_modelo == "auto":  # setup.ps1: el modelo de agente.json, si es uno de los que sé descargar
         from .descargar import MODELOS
-        m = MODELOS.get(config.cargar().get("modelo", ""))
+        m = MODELOS.get(config.recomendado(config.cargar()))
         if not m:
             print("[AVISO] El modelo de agente.json no es uno conocido: configúralo a mano en Bionic.")
             return 0

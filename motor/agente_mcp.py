@@ -94,8 +94,8 @@ def web_leer(url: str, buscar: str = "") -> str:
 
 
 @mcp.tool(description=D["investigar"])
-def investigar(pregunta: str) -> str:
-    return H.investigar(pregunta)
+def investigar(pregunta: str, web: bool = False) -> str:
+    return H.investigar(pregunta, web)
 
 
 @mcp.tool(description=D["guia"])

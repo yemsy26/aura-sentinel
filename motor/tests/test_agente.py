@@ -11,10 +11,25 @@ from typing import ClassVar
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from agente import lecciones
 from agente.bucle import archivos_pedidos, coaccionar, llamadas_en_texto
 from agente.contexto import Contexto
 from agente.herramientas import INSTALACIONES, MIN_INSTALACION, Herramientas, despachar, recortar
 from agente.modelo import fraccion_expertos, guardar_config, leer_gguf
+
+
+def sin_lecciones_reales():
+    """setUpModule de las pruebas que hacen tareas: cada tarea lee motor/lecciones.md y anota en lecciones_uso.json
+    las que usa. Con el Aura de desarrollo, que usa este motor, serían las lecciones del usuario."""
+    vacia = Path(tempfile.mkdtemp(prefix="agente_lecciones_"))
+    for nombre, ruta in (("ARCHIVO", vacia / "lecciones.md"), ("USO", vacia / "lecciones_uso.json")):
+        parche = mock.patch.object(lecciones, nombre, ruta)
+        parche.start()
+        unittest.addModuleCleanup(parche.stop)
+    unittest.addModuleCleanup(shutil.rmtree, vacia, True)
+
+
+setUpModule = sin_lecciones_reales
 
 
 class TestHerramientas(unittest.TestCase):

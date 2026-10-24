@@ -6,6 +6,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
+from . import pasajes
 from .config import RAIZ_INSTALACION
 
 DIR_GUIAS = Path(__file__).resolve().parent / "guias"
@@ -231,15 +232,38 @@ def version(h, paquete: str, ecosistema: str = "pypi") -> str:
     return "\n".join(lineas)
 
 
-def investigar(h, pregunta: str, max_paginas: int = 3) -> str:
-    """Busca, lee las mejores páginas y devuelve solo los párrafos relevantes, con fuentes."""
+def _hace(momento: float) -> str:
+    dias = int((time.time() - momento) // pasajes.DIA)
+    return "hoy" if dias < 1 else "ayer" if dias == 1 else f"hace {dias} días"
+
+
+def _de_memoria(pregunta: str, guardados: list, cupo: int, max_paginas: int) -> str:
+    """Lo ya investigado que cubre la pregunta, agrupado por página como lo devuelve la web."""
+    paginas: dict[str, list] = {}
+    for p in guardados:
+        paginas.setdefault(p.url, []).append(p)
+    elegidas = list(paginas.items())[:max_paginas]
+    pasajes.usar([p.id for _, ps in elegidas for p in ps])
+    partes = [f"### {url} (leída {_hace(min(p.leido for p in ps))})\n"
+              + "\n\n".join(p.texto for p in sorted(ps, key=lambda p: p.id))[:cupo] for url, ps in elegidas]
+    return (f"Investigación: {pregunta}\nDe la memoria de lo ya investigado, sin salir a internet. Si no responde a la "
+            "pregunta o necesitas lo más reciente, repite con web=true.\n\n" + "\n\n".join(partes))
+
+
+def investigar(h, pregunta: str, max_paginas: int = 3, web: bool = False) -> str:
+    """Busca, lee las mejores páginas y devuelve solo los párrafos relevantes, con fuentes.
+
+    Memoria primero: si lo ya investigado (pasajes.py) cubre la pregunta, responde con ello sin salir a internet;
+    web=True lee la web igualmente. Lo leído se guarda para la próxima vez."""
+    cupo = max(800, h.max_chars // max_paginas - 100)
+    if not web and (guardados := pasajes.buscar(pregunta)):
+        return _de_memoria(pregunta, guardados, cupo, max_paginas)
     resultados = h.web_buscar(pregunta)
     urls = re.findall(r"^\s+(https?://\S+)", resultados, re.MULTILINE)
     urls = [u for u in urls if not re.search(r"youtube\.com|tiktok\.com|facebook\.com|pinterest\.|instagram\.", u)]
     if not urls:
         return resultados
-    cupo = max(800, h.max_chars // max_paginas - 100)
-    partes, vistos = [], set()
+    partes, vistos, leidos = [], set(), []
     for u in urls:
         if len(partes) >= max_paginas:
             break
@@ -259,6 +283,9 @@ def investigar(h, pregunta: str, max_paginas: int = 3) -> str:
             utiles.append(par)
         if utiles:
             partes.append(f"### {u}\n" + "\n\n".join(utiles)[:cupo])
+            # sin la marca de recortar(): ese párrafo está cortado por la mitad
+            leidos.append((u, [p for p in utiles if "caracteres omitidos ...]" not in p]))
     if not partes:
         return f"No pude leer ninguna página útil. Resultados de búsqueda:\n{resultados}"
+    pasajes.guardar(pregunta, leidos)
     return f"Investigación: {pregunta}\n\n" + "\n\n".join(partes)

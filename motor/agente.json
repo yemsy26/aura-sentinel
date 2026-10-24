@@ -1,6 +1,6 @@
 {
   "servidor": "auto",
-  "modelo": "qwen3.6-35b-a3b",
+  "modelo": "auto",
   "razonamiento": "auto",
   "max_pasos": 100,
   "max_chars_resultado": 0,
@@ -17,7 +17,7 @@
   "carga": {
     "kv_cache": "q8_0",
     "flash_attention": true,
-    "contexto_min": 8192,
+    "contexto_min": 16384,
     "contexto_max": 65536,
     "margen_vram_mib": 450
   }

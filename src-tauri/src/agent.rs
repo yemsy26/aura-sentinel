@@ -275,6 +275,10 @@ pub async fn get_models() -> Result<Vec<String>, String> {
     list_models().await
 }
 
+/// El que el motor descarga por defecto (motor/agente/config.py): sin ninguno cargado, va el primero en vez del primero
+/// de Bionic, que podía ser uno que no cabe en el equipo. No es un candado: se puede elegir cualquiera.
+const RECOMMENDED_MODEL: &str = "qwen3.6-35b-a3b";
+
 fn model_keys(body: &Value) -> Vec<String> {
     let mut models: Vec<(bool, String)> = body["models"]
         .as_array()
@@ -286,8 +290,51 @@ fn model_keys(body: &Value) -> Vec<String> {
             Some((loaded, model["key"].as_str()?.to_string()))
         })
         .collect();
-    models.sort_by_key(|(loaded, _)| !loaded);
+    models.sort_by_key(|(loaded, key)| (!loaded, key != RECOMMENDED_MODEL));
     models.into_iter().map(|(_, key)| key).collect()
+}
+
+/// Prueba si un modelo sirve para el agente (python -m agente --probar-modelo): lo carga si hace falta, le pide crear
+/// un archivo con una herramienta y terminar, y dice si es apto, apto con límites o no apto, y por qué.
+#[tauri::command]
+pub async fn probe_model(app: AppHandle, model: String) -> Result<Value, String> {
+    let Some(_lock) = MissionLock::try_lock() else {
+        return Err("Hay una misión en curso: espera a que termine para probar un modelo.".into());
+    };
+    let dir = installation(&app)?;
+    // Probar otro modelo descarga el de la sesión abierta: la próxima misión arranca un motor nuevo.
+    if let Some(old) = session().lock().await.take() {
+        stop(old).await;
+    }
+    let mut command = Command::new(dir.join(".venv").join("Scripts").join("python.exe"));
+    command
+        .args(["-m", "agente", "--probar-modelo", &model])
+        .current_dir(&dir)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONUNBUFFERED", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = tokio::time::timeout(Duration::from_secs(900), command.output())
+        .await
+        .map_err(|_| "La prueba tardó más de 15 minutos (¿el modelo no cabe en el equipo?).".to_string())?
+        .map_err(|e| format!("No pude iniciar Agente Local: {e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    probe_result(&text).ok_or_else(|| {
+        let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("sin salida");
+        format!("La prueba no devolvió resultado: {last}")
+    })
+}
+
+/// La última línea JSON con veredicto (antes van los avisos de la carga).
+fn probe_result(stdout: &str) -> Option<Value> {
+    stdout
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok().filter(|v| v.get("veredicto").is_some()))
 }
 
 // ── Misiones pendientes (plan de Agente Local con pasos sin marcar) ─────────
@@ -388,15 +435,10 @@ async fn spawn(dir: &Path, workspace: &str, model: &str) -> Result<Session, Stri
     Ok(Session { workspace: workspace.into(), model: model.into(), child, stdin, events })
 }
 
-/// Detiene el agente y todo lo que lanzó (servidores en segundo plano incluidos).
+/// Detiene el agente. Lo que lanzó (servidores en segundo plano, el comando en curso) va en sus trabajos de Windows
+/// (motor/agente/procesos.py) y Windows lo cierra al morir el motor. Sin `taskkill /T`: decidía por el número del
+/// proceso padre, que Windows reutiliza, y podía cerrar consolas y programas del usuario.
 async fn stop(mut session: Session) {
-    if let Some(pid) = session.child.id() {
-        let mut taskkill = Command::new("taskkill");
-        taskkill.args(["/PID", &pid.to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null());
-        #[cfg(windows)]
-        taskkill.creation_flags(CREATE_NO_WINDOW);
-        let _ = taskkill.status().await;
-    }
     let _ = session.child.kill().await;
 }
 
@@ -805,6 +847,23 @@ mod tests {
             {"type": "llm", "key": "b", "loaded_instances": [{"id": "b"}]}
         ]});
         assert_eq!(model_keys(&body), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn with_none_loaded_the_recommended_goes_first() {
+        let body = json!({"models": [
+            {"type": "llm", "key": "recursivesi/flint", "loaded_instances": []},
+            {"type": "llm", "key": RECOMMENDED_MODEL, "loaded_instances": []},
+            {"type": "llm", "key": "otro", "loaded_instances": [{"id": "otro"}]}
+        ]});
+        assert_eq!(model_keys(&body), vec!["otro", RECOMMENDED_MODEL, "recursivesi/flint"]);
+    }
+
+    #[test]
+    fn probe_result_is_the_last_json_line_with_a_verdict() {
+        let out = "No hay modelo cargado: lo cargo ...\nServidor: x\n{\"tipo\": 1}\n{\"modelo\": \"m\", \"veredicto\": \"apto\"}\n";
+        assert_eq!(probe_result(out).unwrap()["veredicto"], "apto");
+        assert!(probe_result("Servidor: x\n[OK] cargado\n").is_none());
     }
 
     #[test]

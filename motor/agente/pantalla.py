@@ -11,7 +11,7 @@ from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from . import config, llm
+from . import app_tauri, config, llm
 from .verificacion import SONDA_PYGAME, _canal_navegador, _cola, _correr, _entrada_python, _rel, _Silencioso, archivos
 
 LOCALES = {"localhost", "127.0.0.1", "::1"}
@@ -356,9 +356,57 @@ def _elegir(raiz: Path) -> str:
     return ""
 
 
+def _tauri(raiz: Path) -> Path | None:
+    """La carpeta con tauri.conf.json (src-tauri) si el proyecto es una app Tauri."""
+    from .verificacion import ignorado
+    return next((p.parent for p in sorted(raiz.rglob("tauri.conf.json")) if not ignorado(p, raiz)), None)
+
+
+def _es_dev(objetivo: str, d: Path) -> bool:
+    """La URL es el devUrl de la app: en un navegador se ve el frontend sin Tauri (sin invoke ni datos)."""
+    try:
+        dev = (json.loads((d / "tauri.conf.json").read_text(encoding="utf-8")).get("build") or {}).get("devUrl") or ""
+    except (OSError, ValueError, AttributeError):
+        return False
+    url, suya = urllib.parse.urlparse(objetivo), urllib.parse.urlparse(str(dev))
+    return bool(suya.port) and url.hostname in LOCALES and url.port == suya.port
+
+
+def ver_app(h, d: Path, png: Path, pregunta: str, espera: float) -> tuple[str, str]:
+    """(informe de la ventana real de la app Tauri, o '' y el motivo si no se pudo abrir)."""
+    from .ecosistemas import ENTORNO
+    r = app_tauri.probar(d, ENTORNO, png, espera)
+    if r["estado"] == "omitido":
+        return "", r["motivo"]
+    juicio, fuente = (evaluar(png.read_bytes(), "la ventana de la app de escritorio (Tauri)", pregunta,
+                              getattr(h, "cfg_llm", None)) if png.is_file() else (None, "sin captura"))
+    mal = bool(r["errores"]) or bool(juicio and re.search(r"VISUAL:\s*PROBLEMAS", juicio, re.IGNORECASE))
+    partes = [f"VISUAL: {'PROBLEMAS' if mal else 'OK'} en la app Tauri (su ventana de verdad, no un navegador; {fuente})",
+              f"Captura: {h.rel(png)}" if png.is_file() else "", f"Texto de la ventana: «{r['texto'] or '(ninguno)'}»"]
+    if r["errores"]:
+        partes.append("Errores (consola o la app):\n" + "\n".join(f"- {e}" for e in r["errores"]))
+    if r["consola"]:
+        partes.append("Consola: " + " | ".join(r["consola"]))
+    if juicio:
+        detalle = re.sub(r"^\s*VISUAL:\s*\w+\s*|\s*VISUAL:\s*\w+\s*$", "", juicio).strip() or juicio
+        partes.append(detalle[:1800])
+    return "\n".join(p for p in partes if p), ""
+
+
 def ver(h, ruta: str = "", pregunta: str = "", segundos: float = 2) -> str:
     espera = max(0.5, min(float(segundos or 2), 20))
-    objetivo = (ruta or "").strip().strip('"') or _elegir(h.raiz)
+    objetivo = (ruta or "").strip().strip('"')
+    nota, d = "", _tauri(h.raiz)
+    if d and (not objetivo or objetivo.lower() in ("app", "tauri") or _es_dev(objetivo, d)):
+        (h.dir_agente / "capturas").mkdir(parents=True, exist_ok=True)
+        informe, motivo = ver_app(h, d, h.dir_agente / "capturas" / "app_tauri.png", pregunta, max(espera, 3))
+        if informe:
+            return informe
+        nota = (f"\nNOTA: no pude abrir la app de verdad ({motivo}). Esto es el frontend en un navegador normal, FUERA "
+                "de Tauri: aquí invoke no existe, así que si faltan los datos NO es un fallo de la app. Para ver la app, "
+                "deja libre ese puerto y llama a ver_pantalla sin ruta.")
+        objetivo = "" if objetivo.lower() in ("app", "tauri") else objetivo
+    objetivo = objetivo or _elegir(h.raiz)
     if not objetivo:
         return "No encontré qué mostrar: indica ruta (un .html, el .py del juego pygame o http://localhost:PUERTO)."
     if objetivo.startswith(("http://", "https://")):
@@ -395,4 +443,4 @@ def ver(h, ruta: str = "", pregunta: str = "", segundos: float = 2) -> str:
     else:
         partes.append("Solo comprobaciones automáticas (texto cortado o sobre fondo cargado, fuera de pantalla, pantalla en "
                       "negro). Para el juicio visual hace falta un modelo con visión cargado (o su mmproj).")
-    return "\n".join(partes)
+    return "\n".join(partes) + nota

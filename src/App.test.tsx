@@ -14,6 +14,9 @@ const responses: Record<string, (args?: Record<string, unknown>) => unknown> = {
   ]),
   load_chat_history: () => JSON.stringify([{ sender: 'agent', text: 'Hola **anterior**', timestamp: '' }]),
   get_models: () => ['qwen3.6-35b-a3b', 'qwen3.5-9b'],
+  probe_model: (args) => ({ modelo: args?.model, veredicto: 'apto con límites', motivos: [],
+    limites: ['lento en este equipo (~3 tokens/s): una misión puede tardar horas'],
+    detalles: { nombre: 'Qwen 9B', tamano_gb: 6.2, cuantizacion: 'Q4_K', contexto: 32768, formato: 'texto', tokens_s: 3 }, segundos: 41 }),
   get_agent_rules: () => ({ reglas: '- usa pytest', lecciones: '' }),
   get_system_stats: () => ({ cpu: 12, ramUsed: 21.4, ramTotal: 31.8, gpu: { used: 7183, total: 8188, util: 30 } }),
   get_git_info: () => ({ branch: 'main', changes: [], log: [] }),
@@ -188,6 +191,20 @@ describe('Aura Sentinel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }));
     await waitFor(() => expect(called('clear_chat_history')).toHaveLength(1));
     await waitFor(() => expect(screen.queryByText('anterior')).toBeNull());
+  });
+
+  it('probar modelo dice si el elegido sirve y por qué', async () => {
+    render(<App />);
+    await screen.findByText('index.html');
+    const select = screen.getByLabelText('Modelo activo').parentElement!.querySelector('select') as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe('qwen3.6-35b-a3b'));
+    fireEvent.change(select, { target: { value: 'qwen3.5-9b' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Probar' }));
+    const dialogo = await screen.findByRole('dialog', { name: 'Probar modelo' });
+    expect(await within(dialogo).findByText('apto con límites')).toBeTruthy();
+    expect(dialogo.textContent).toContain('lento en este equipo');
+    expect(dialogo.textContent).toContain('como texto (las entiende el agente)');
+    expect(called('probe_model')).toEqual([{ model: 'qwen3.5-9b' }]);
   });
 
   it('los motores complementarios se activan desde Configuración y enlazan a su repositorio', async () => {

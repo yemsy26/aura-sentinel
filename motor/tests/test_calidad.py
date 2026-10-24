@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agente import conocimiento, herramientas
+from agente import conocimiento, lecciones
 from agente.herramientas import Herramientas
 from agente.verificacion import verificar
 
@@ -273,7 +273,8 @@ class TestConducta(Base):
 
     def test_aprender(self):
         destino = self.dir / "lecciones.md"
-        with mock.patch.object(herramientas, "LECCIONES", destino):
+        with mock.patch.object(lecciones, "ARCHIVO", destino), \
+                mock.patch.object(lecciones, "USO", self.dir / "lecciones_uso.json"):
             self.assertIn("guardada", self.h.aprender("En pygame no uses emojis en textos: la fuente no los tiene."))
             self.assertIn("ya estaba", self.h.aprender("En pygame no uses emojis en textos: la fuente no los tiene."))
         self.assertIn("emojis", destino.read_text(encoding="utf-8"))

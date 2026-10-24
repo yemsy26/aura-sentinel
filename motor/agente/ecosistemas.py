@@ -11,7 +11,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import android
+from . import android, app_tauri
 from .verificacion import Informe, _correr, _rel, ignorado
 
 COMPILAR = 600   # segundos: la primera compilación descarga dependencias
@@ -195,6 +195,23 @@ def tauri(base: Path, raiz: Path, inf: Informe) -> None:
                 inf.errores.append(f"{_rel(p, raiz)}: importa de '@tauri-apps/api/{m.group(1)}', que no existe en Tauri 2: "
                                    'usa `import { invoke } from "@tauri-apps/api/core"`.')
         inf.ok.append(f"{rel}: configuración de Tauri 2 revisada ({len(registrados)} comandos registrados)")
+        abrir_app(d, rel, raiz, inf)
+
+
+def abrir_app(d: Path, rel: str, raiz: Path, inf: Informe) -> None:
+    """Con todo lo demás sin errores, abre la app de verdad unos segundos: que compile no basta, y en un navegador
+    invoke no existe."""
+    if inf.errores:
+        return
+    r = app_tauri.probar_una_vez(d, ENTORNO, raiz / ".agente" / "capturas" / "app_tauri.png")
+    if r["estado"] == "omitido":
+        inf.avisos.append(f"{rel}: no abrí la app para probarla: {r['motivo']}.")
+    elif r["errores"]:
+        inf.errores += [f"{rel}: al abrir la app de verdad: {e}" for e in r["errores"]]
+    elif not r["texto"]:
+        inf.avisos.append(f"{rel}: la app abre su ventana, pero no se ve ningún texto (captura en .agente/capturas).")
+    else:
+        inf.ok.append(f"{rel}: la app abre su ventana (probada de verdad unos segundos) y se ve: «{r['texto'][:300]}»")
 
 
 # ---------------------------------------------------------------- Go

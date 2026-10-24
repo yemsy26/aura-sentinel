@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from . import config
-from .llm import ErrorLLM, detectar, http_json, listar_modelos
+from .llm import ErrorLLM, detectar, http_json, info_modelo, listar_modelos
 
 CACHE = config.RAIZ_INSTALACION / ".cache_modelos.json"
 MODELOS = Path.home() / ".lmstudio" / "models"
@@ -241,8 +241,8 @@ def elegir(base: str, cfg: dict, pedido: str | None) -> dict:
     activos = [m for m in llms if m.get("loaded_instances")]
     if activos:
         return activos[0]
-    if len(llms) == 1 or not sys.stdin.isatty():
-        return llms[0]
+    if len(llms) == 1 or not sys.stdin.isatty():  # sin elegir: el recomendado si está, no el primero de la lista
+        return next((m for m in llms if m["key"] == config.RECOMENDADO), llms[0])
     for i, m in enumerate(llms, 1):
         print(f"  {i}. {m.get('display_name', m['key'])}  ({m['size_bytes'] / 2**30:.1f} GB, {m.get('quantization', {}).get('name', '')})")
     n = input("Elige modelo (número): ").strip()
@@ -388,6 +388,9 @@ def ajustar(cfg: dict, pedido: str | None, contexto: int | None) -> int:
     CACHE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
     usada, _ = vram()
     estado_txt = "todo en VRAM" if not techo else "VRAM llena: parte desbordada a RAM (más lento)"
+    tam = int(modelo.get("size_bytes") or 0) // 2**20
+    if not exp and not techo and tam > fijo * 1.25:  # la app solo subió a la GPU las capas que caben (Flint: 5,5 de 22,5 GB)
+        estado_txt = f"~{fijo / 1024:.1f} de {tam / 1024:.1f} GB en VRAM, el resto en RAM y CPU (más lento)"
     if exp:
         estado_txt = f"expertos de {n_cpu}/{len(exp)} capas en CPU, resto en VRAM" if not techo else estado_txt
         real = argumento_llama("--n-cpu-moe")
@@ -395,6 +398,31 @@ def ajustar(cfg: dict, pedido: str | None, contexto: int | None) -> int:
             print(f"[AVISO] La app aplicó --n-cpu-moe {real} en vez de {n_cpu}: la VRAM medida puede no cuadrar.")
     print(f"[OK] {clave} cargado: contexto {ctx} tokens, VRAM {usada}/{total} MiB, {estado_txt}")
     return 0
+
+
+def preparar(cfg: dict, avisar=print, detectar=detectar) -> None:
+    """Deja cargado el modelo del agente: el pedido (o, en auto, el que ya haya) con el contexto mínimo del agente.
+    Un modelo cargado a mano con poco contexto (LM Studio pone 4096) se recarga con el que quepa en la VRAM."""
+    base, cargado, contexto = detectar(cfg)
+    minimo = int(cfg["carga"]["contexto_min"])
+    if not cargado:
+        avisar("No hay modelo cargado: lo cargo con el ajuste de VRAM (puede tardar un minuto) ...")
+        ajustar(cfg, None, None)
+        return
+    if contexto >= minimo:
+        return
+    info = info_modelo(base, cargado)
+    clave, maximo = info.get("key") or cargado, int(info.get("max_context_length") or 0)
+    if not info:  # sin su ficha no se sabe qué recargar: solo se avisa
+        avisar(f"{cargado} trabaja con {contexto} tokens de contexto y el agente necesita al menos {minimo}.")
+        return
+    if maximo and maximo < minimo:
+        avisar(f"{clave} admite como mucho {maximo} tokens de contexto y el agente necesita {minimo} (sus instrucciones "
+               "y herramientas ocupan ~5.000 antes de empezar): funcionará mal. Usa otro modelo.")
+        return
+    avisar(f"{clave} está cargado con {contexto} tokens de contexto y el agente necesita al menos {minimo}: lo recargo "
+           "con el mayor que quepa en la VRAM (puede tardar un minuto) ...")
+    ajustar(dict(cfg, modelo=clave), clave, None)
 
 
 def estado(cfg: dict) -> int:

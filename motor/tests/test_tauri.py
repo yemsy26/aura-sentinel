@@ -169,6 +169,18 @@ class PaginaFuenteDeVite(unittest.TestCase):
         verificacion.paginas_vite(self.dir, [self.dir / "index.html"], inf)
         self.assertEqual(inf.errores, [])
         self.assertTrue(any("compilado ok" in o for o in inf.ok), inf.ok)
+        self.assertFalse([o for o in inf.ok if "FUERA de Tauri" in o])
+
+    @unittest.skipUnless(HAY_NAVEGADOR, "sin playwright")
+    def test_en_tauri_avisa_de_que_el_navegador_no_es_la_app(self):
+        """El agente tomaba los «--» del frontend en un navegador (sin invoke) por un fallo de la app."""
+        (self.dir / "src-tauri").mkdir()
+        (self.dir / "src-tauri" / "tauri.conf.json").write_text("{}", encoding="utf-8")
+        (self.dir / "dist").mkdir()
+        (self.dir / "dist" / "index.html").write_text("<p>CPU -- %</p>", encoding="utf-8")
+        inf = Informe()
+        verificacion.paginas_vite(self.dir, [self.dir / "index.html"], inf)
+        self.assertTrue(any("CPU -- %" in o and "FUERA de Tauri" in o for o in inf.ok), inf.ok)
 
 
 if __name__ == "__main__":

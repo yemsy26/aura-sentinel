@@ -59,6 +59,7 @@ pub fn run() {
             agent::process_user_prompt,
             agent::cancel_agent_mission,
             agent::get_models,
+            agent::probe_model,
             agent::get_agent_settings,
             agent::save_agent_settings,
             agent::get_pending_mission,

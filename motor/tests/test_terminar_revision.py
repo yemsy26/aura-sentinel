@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_agente import llamada
+from test_agente import llamada, sin_lecciones_reales
 
 from agente import config
 
@@ -20,6 +20,7 @@ CAMBIOS = {"content": "REQUISITOS:\n- saludar -> NO CUMPLE: dice adiós\nPROBLEM
 APROBADO = {"content": "REQUISITOS:\n- saludar -> CUMPLE (main.py:1)\nPROBLEMAS:\n- ninguno\nVEREDICTO: APROBADO",
             "tool_calls": [], "finish_reason": "stop", "usage": {}}
 FIN = {"content": "Listo.", "tool_calls": [], "finish_reason": "stop", "usage": {}}
+setUpModule = sin_lecciones_reales
 
 
 class LLMLento:

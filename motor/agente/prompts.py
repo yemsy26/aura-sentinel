@@ -122,7 +122,6 @@ def sistema(raiz: Path, contexto: int, entorno_txt: str) -> str:
             f"Contexto del modelo: {contexto} tokens (sé económico: lee por bloques y evita salidas enormes).\n\n"
             f"{METODO}"
             f"{_bloque('REGLAS DEL USUARIO (obligatorias, prioridad máxima)', REGLAS_USUARIO, 2000)}"
-            f"{_bloque('LECCIONES APRENDIDAS (evita repetir estos errores)', LECCIONES, 1500)}"
             f"{memoria}")
 
 

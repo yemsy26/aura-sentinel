@@ -53,6 +53,13 @@ code, pre, .mono { font-family: var(--mono); }
 .btn.danger { color: var(--err); border-color: var(--err-line); }
 .btn.accent { color: var(--accent-soft); border-color: var(--accent-line); }
 .btn.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
+.probe-verdict { display: inline-block; padding: 1px 8px; border-radius: 9px; font-weight: 600; font-size: 12px; }
+.probe-verdict.ok { background: var(--ok-bg, #16331f); color: var(--ok, #6fd38c); }
+.probe-verdict.warn { background: #3a2a1a; color: #f0b35a; }
+.probe-verdict.err { background: #3a1a1a; color: var(--err, #f07070); }
+.probe-list { margin: 0; padding-left: 18px; font-size: 13px; }
+.probe-list.err li::marker { color: var(--err, #f07070); }
+.probe-list.warn li::marker { color: #f0b35a; }
 .btn.chip { border-radius: 15px; background: var(--raised); font-size: 12px; }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0;
   background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--muted); }

@@ -26,6 +26,22 @@ def listar_modelos(base: str) -> list[dict]:
     return http_json(f"{base}/api/v1/models", timeout=4).get("models", [])
 
 
+def info_modelo(base: str, modelo: str) -> dict:
+    """Ficha del modelo (por su clave o por el id de su instancia cargada): capacidades, tamaño, contexto máximo..."""
+    try:
+        modelos = listar_modelos(base)
+    except ErrorLLM:
+        return {}
+    return next((m for m in modelos if modelo == m.get("key")
+                 or any(i.get("id") == modelo for i in m.get("loaded_instances") or [])), {})
+
+
+def opciones_razonar(info: dict) -> list[str] | None:
+    """['off', 'on'], ['on'] (razona siempre)... o None si el servidor no lo dice."""
+    razon = (info.get("capabilities") or {}).get("reasoning")
+    return list(razon.get("allowed_options") or []) if isinstance(razon, dict) else None
+
+
 def detectar(cfg: dict) -> tuple[str, str | None, int]:
     """Devuelve (url_servidor, modelo_cargado, contexto). modelo=None si no hay LLM cargado."""
     bases = SERVIDORES if cfg["servidor"] == "auto" else [cfg["servidor"].rstrip("/")]
@@ -49,8 +65,10 @@ def detectar(cfg: dict) -> tuple[str, str | None, int]:
 
 
 class LLM:
-    def __init__(self, base: str, modelo: str, contexto: int, cfg: dict):
+    def __init__(self, base: str, modelo: str, contexto: int, cfg: dict, info: dict | None = None):
         self.base, self.modelo, self.contexto, self.cfg = base, modelo, contexto, cfg
+        self.info = info_modelo(base, modelo) if info is None else info
+        self.razonar_opciones = opciones_razonar(self.info)
 
     def chat(self, mensajes: list, herramientas: list | None, max_tokens: int, razonar: bool, al_progreso=None) -> dict:
         cuerpo = {
@@ -63,7 +81,8 @@ class LLM:
         }
         if herramientas:
             cuerpo["tools"] = herramientas
-        if not razonar:
+        # Apagar el razonamiento solo si el modelo lo permite: a uno que razona siempre (Flint) se le pedía igual.
+        if not razonar and (self.razonar_opciones is None or "off" in self.razonar_opciones):
             cuerpo["reasoning_effort"] = "none"
         req = urllib.request.Request(f"{self.base}/v1/chat/completions", json.dumps(cuerpo).encode(),
                                      {"Content-Type": "application/json"})

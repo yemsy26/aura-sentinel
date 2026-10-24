@@ -2,7 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, us
 import { AgentPanel, type QuickKind } from './components/AgentPanel';
 import { ActivityBar, Splitter, StatusBar, TopBar, type SideView } from './components/Bars';
 import { BottomPanel, type BottomTab } from './components/BottomPanel';
-import { CommandPalette, SettingsDialog, Shortcuts, type PaletteCommand } from './components/Dialogs';
+import { CommandPalette, ModelProbeDialog, SettingsDialog, Shortcuts, type PaletteCommand } from './components/Dialogs';
 import type { EditorHandle } from './components/EditorArea';
 import { Icon } from './components/Icon';
 import { SidePanel } from './components/SidePanel';
@@ -54,6 +54,7 @@ export default function App() {
   const [pending, setPending] = useState<PendingMission | null>(null);
   const [palette, setPalette] = useState(false);
   const [settings, setSettings] = useState<'engine' | 'profile' | 'keys' | null>(null);
+  const [probing, setProbing] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const [reviewPlan, setReviewPlan] = useState(() => stored('aura_revisar_plan', false));
@@ -347,6 +348,7 @@ export default function App() {
     <div className="app">
       <TopBar workspace={workspace} recents={recents} onOpenFolder={() => void pickFolder()} onPickRecent={(p) => void openWorkspace(p)}
         onPalette={() => setPalette(true)} models={models} model={model} onModel={setModel} bionic={bionic}
+        onProbe={() => setProbing(model)} busy={agent.busy}
         context={agent.context} stats={stats} onSettings={() => setSettings('engine')} />
       <div className="workbench">
         <ActivityBar view={view} onView={toggleView} changes={git?.changes.length ?? 0} onProfile={() => setSettings('profile')} />
@@ -390,6 +392,7 @@ export default function App() {
         files={tree.filter((n) => !n.is_dir).map((n) => ({ path: n.path, label: workspace ? relativePath(workspace, n.path) : n.name }))} />}
       {settings && <SettingsDialog initialTab={settings} workspace={workspace} onClose={() => setSettings(null)} onToast={notify}
         onEngineChanged={() => void refreshModels()} />}
+      {probing && <ModelProbeDialog model={probing} onClose={() => setProbing(null)} onDone={() => void refreshModels()} />}
       {toast && <div className={`toast${toast.error ? ' err' : ''}`} role="status">{toast.text}</div>}
     </div>
   );

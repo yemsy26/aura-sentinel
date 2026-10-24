@@ -115,11 +115,11 @@ def main() -> int:
     for flujo in (sys.stdout, sys.stderr):
         flujo.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="agente.descargar", description=__doc__.split("\n\n")[1])
-    ap.add_argument("--modelo", help=f"clave del modelo ({', '.join(MODELOS)}); por defecto la de agente.json")
+    ap.add_argument("--modelo", help=f"clave del modelo ({', '.join(MODELOS)}); por defecto la recomendada")
     ap.add_argument("--sin-vision", action="store_true", help="no bajar el proyector de visión (mmproj, ~0,9 GB)")
     ap.add_argument("--carpeta", type=Path, help="carpeta de modelos (por defecto la de LM Studio)")
     a = ap.parse_args()
-    clave = a.modelo or config.cargar().get("modelo", "")
+    clave = a.modelo or config.recomendado(config.cargar())
     if clave not in MODELOS:
         print(f"[ERROR] No sé descargar '{clave}'. Conocidos: {', '.join(MODELOS)}. Otros modelos: desde LM Studio.")
         return 2

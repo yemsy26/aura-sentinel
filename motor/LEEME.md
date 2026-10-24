@@ -3,8 +3,12 @@
 Agente de programación 100 % local para Bionic / LM Studio: planifica, escribe, ejecuta, verifica (tests, web en
 Edge sin ventana, juegos pygame, capturas de pantalla) y corrige hasta que funciona. Es el motor de las misiones de
 Aura Sentinel (carpeta `motor/` del repositorio) y también se usa solo, en consola o como MCP. Funciona con cualquier
-modelo con tool-calling; el de `agente.json` es **Qwen3.6-35B-A3B UD-Q3_K_XL** (MoE) con visión, probado en una
-RTX 4060 de 8 GB con 32 GB de RAM.
+modelo con tool-calling: `agente.json` viene con `"modelo": "auto"` (el cargado o el elegido en Aura). El recomendado,
+el que se descarga, es **Qwen3.6-35B-A3B UD-Q3_K_XL** (MoE) con visión, probado en una RTX 4060 de 8 GB con 32 GB de
+RAM. `python -m agente --probar-modelo CLAVE` (el botón **Probar** de Aura) dice si otro modelo sirve y por qué.
+Con cada modelo el motor lee su ficha en Bionic/LM Studio: solo apaga el razonamiento si se puede, avisa si no está
+entrenado para herramientas o está muy comprimido, recarga con 16K de contexto como mínimo y entiende las llamadas
+que escriben como texto Qwen, Mistral, Llama, Gemma o en JSON suelto.
 
 ## Instalación (en este o en otro equipo)
 
@@ -99,7 +103,8 @@ Windows puede liberar esa RAM si otro programa la necesita, en vez de bloquear u
   resultados viejos y contenidos ya escritos en disco; si no basta, el modelo resume y sigue con TAREA + RESUMEN + PLAN.
 - **Anti-bucles**: avisa a la 3ª llamada idéntica y se detiene a la 5ª. Si responde sin actuar con pasos pendientes, se le empuja a seguir.
 - **Robustez**: corrige tipos mal enviados (`"3"`, `"true"`), entiende llamadas escritas como texto (`<tool_call>`),
-  valida sintaxis de `.py`/`.json` al escribir, `editar` tolera diferencias de sangría, mata árboles de procesos en timeout.
+  valida sintaxis de `.py`/`.json` al escribir, `editar` tolera diferencias de sangría. Cada comando va en un trabajo de
+  Windows (Job Object): en un timeout, con `procesos detener` o al cerrar el motor se cierran sus procesos y nada más.
 - Registro de cada paso en `<proyecto>\.agente\registro.log`; plan en `.agente\plan.md`; resumen final en `.agente\resumen.md`.
 
 ## Sistemas grandes y cambios transversales (modo grande)
@@ -163,7 +168,7 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
 
 1. **Al escribir cada archivo**: sintaxis + lint inmediato (`.py` con ruff: nombres sin definir, variables sin usar;
    `.js` con `node --check`; `.go` con `gofmt -e`; `.rs` con rustfmt; `.html` referencias rotas; `.bat` archivos que
-   no existen; Dockerfile; tabuladores en YAML). Avisa si el archivo lleva una credencial escrita (clave, token).
+   no existen y `npm`/`npx` sin `call` (el .bat terminaría ahí); Dockerfile; tabuladores en YAML). Avisa si el archivo lleva una credencial escrita (clave, token).
 2. **`verificar`** (y automático antes de terminar):
    - Python: ruff, **vulture** (funciones/métodos que nunca se llaman = lógica sin conectar), tests (y detecta tests
      falsos que no importan el proyecto), ejecución del programa.
@@ -189,7 +194,9 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
    - **Tauri 2** (con `tauri.conf.json`): el backend se compila como Rust y además se revisa que haya ventana
      (`app.windows`), `build.rs`, `identifier`, `icons/icon.ico`, `frontendDist`, que cada `#[tauri::command]` esté en
      `generate_handler!` y cada `invoke("x")` del frontend tenga su comando, que no se use la API de Tauri 1 y que el
-     uso de CPU no se lea de un `System` recién creado.
+     uso de CPU no se lea de un `System` recién creado. Si todo eso está bien, **abre la app de verdad** unos segundos
+     (el `.exe` de `cargo build` con `dist/` servido en `devUrl`): qué se ve en su ventana, errores de su consola y
+     captura. `ver_pantalla` sin ruta enseña esa ventana, no el frontend en un navegador (allí `invoke` no existe).
    - **Docker**: revisa el Dockerfile (versión fija de la imagen, `COPY` de archivos que no existen, credenciales en
      `ENV`/`ARG`, usuario sin privilegios, `.dockerignore`), valida `compose.yaml` y, con Docker en marcha, construye
      la imagen. Con Docker apagado lo dice para que el agente se lo pida al usuario.
@@ -228,17 +235,27 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
   módulo está obsoleto), NuGet (.NET), Docker Hub (etiquetas para `FROM`, sin `latest`), el Maven de Google (Android:
   plugin de Android, AndroidX, Compose) y pub.dev (Dart/Flutter); en PyPI, si hay wheel para tu Python (p. ej. `pygame` → usa `pygame-ce`
   porque `pygame` no tiene wheel para Python 3.14).
-- `investigar(pregunta)`: busca, lee las mejores páginas y devuelve solo los párrafos útiles con su fuente, en un paso.
+- `investigar(pregunta, web)`: busca, lee las mejores páginas y devuelve solo los párrafos útiles con su fuente, en un
+  paso. Memoria primero: guarda esos párrafos en `pasajes.db` y, si una pregunta posterior está cubierta por lo ya
+  leído (al menos 3 de cada 4 de sus palabras), responde con ello sin salir a internet e indica de qué página es y
+  cuándo se leyó. Lo guardado caduca pronto porque las APIs cambian: a los 30 días sin usarse o a los 90 de leerse,
+  aunque se use. Releer una página reemplaza lo guardado de ella. `web=true` lee internet aunque esté en memoria.
+  Para vaciarla, borra `pasajes.db`.
 
 ## Corregir conductas del agente
 
 - En la consola del agente: `/regla nunca uses emojis en los textos del juego` → se guarda en `reglas.md` y se aplica
   ya y en todas las tareas (prioridad máxima). `/reglas` las muestra. También puedes editar `reglas.md` a mano.
-- El agente guarda sus propias lecciones con `aprender` en `lecciones.md` (máx. 40, las más recientes) y las recetas
-  de un tema en `aprendido\<tema>.md` (máx. 60 por tema).
+- El agente guarda sus propias lecciones con `aprender` en `lecciones.md` y las recetas de un tema en
+  `aprendido\<tema>.md` (máx. 60 por tema). Cada tarea recibe, junto a su mensaje, solo las lecciones que tienen que
+  ver con ella: las que comparten un tema con la tarea o con los archivos del proyecto (pygame, Tauri, node, .bat...)
+  o dos palabras con significado; como mucho 8. Caben 40: con la lista llena se olvida la que lleva más tiempo sin
+  usarse, no la más antigua. Una lección se usa cuando entra en una tarea o cuando el agente la intenta guardar otra
+  vez. `lecciones.md` se puede editar a mano; el uso de cada una se anota aparte, en `lecciones_uso.json`.
 - Por proyecto: crea `AGENTE.md` en la carpeta del proyecto con instrucciones específicas.
 Comandos destructivos (`rmdir /s`, `del /s`, `format`, `reg delete`, matar procesos por nombre con `taskkill /IM`,
-`Stop-Process -Name` o `pkill`...) piden confirmación. También lo que sale del
+`Stop-Process -Name` o `pkill`...) piden confirmación. `taskkill` por nombre o número cierra sin preguntar solo los
+procesos que lanzó el propio agente; cerrar otros pide permiso. También lo que sale del
 equipo: `ssh`, `scp`, `sftp`, `rsync`, `git push`, `docker push`/`login`, `kubectl apply`/`delete`, `helm`,
 `terraform apply`, publicar paquetes (`npm`/`cargo publish`), nubes (`az`, `aws`, `gcloud`...) y peticiones
 HTTP que escriben (`curl -X POST`, `-d`...) a algo que no sea `localhost`. Sin tu permiso, se bloquea.

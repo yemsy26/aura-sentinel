@@ -21,6 +21,8 @@ motor/.cache_modelos.json
 motor/reglas.md
 motor/lecciones.md
 /motor/aprendido/
+/motor/pasajes.db*
+/motor/lecciones_uso.*
 /motor/complementos/
 
 # Espacio por defecto de Aura (los proyectos que crea el agente no son parte del repositorio)

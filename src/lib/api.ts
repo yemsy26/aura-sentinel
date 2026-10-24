@@ -46,6 +46,20 @@ export type QuickOrder =
 
 type FinEvent = Extract<AgentEvent, { tipo: 'fin' }>;
 
+/** Resultado de «Probar modelo» (python -m agente --probar-modelo). */
+export interface ModelProbe {
+  modelo: string;
+  veredicto: 'apto' | 'apto con límites' | 'no apto';
+  motivos: string[];
+  limites: string[];
+  detalles: {
+    nombre?: string; tamano_gb?: number; cuantizacion?: string; contexto?: number; contexto_max?: number | null;
+    memoria?: string; tokens_s?: number | null; formato?: 'nativo' | 'texto' | 'ninguno';
+    herramientas?: boolean | null; razonamiento?: string[] | null; vision?: boolean | null;
+  };
+  segundos?: number;
+}
+
 export const api = {
   currentDirectory: () => invoke<string>('get_current_directory'),
   tree: async (path: string) => JSON.parse(await invoke<string>('get_workspace_tree', { path })) as FileNode[],
@@ -62,6 +76,7 @@ export const api = {
   cancel: () => invoke<boolean>('cancel_agent_mission'),
   answer: (id: string, answer: string) => invoke<void>('submit_user_answer', { id, answer }),
   models: () => invoke<string[]>('get_models'),
+  probeModel: (model: string) => invoke<ModelProbe>('probe_model', { model }),
   agentSettings: () => invoke<AgentSettings>('get_agent_settings'),
   saveAgentSettings: (carpeta: string) => invoke<AgentSettings>('save_agent_settings', { carpeta }),
   installEngine: () => invoke<string>('install_engine'),

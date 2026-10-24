@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, config
+from . import __version__, compat, config
 from . import modelo as cargador
 from .bucle import INCOMPLETA, Agente, color
 from .llm import ErrorLLM, detectar
@@ -72,16 +72,18 @@ def _protocolo(cfg: dict, carpeta: str, canal) -> int:
         return {}
 
     try:
-        if not detectar(cfg)[1]:
-            emitir("aviso", texto="No hay modelo cargado: lo cargo con el ajuste de VRAM (puede tardar un minuto) ...")
-            cargador.ajustar(cfg, None, None)
+        cargador.preparar(cfg, lambda texto: emitir("aviso", texto=texto), detectar)  # el pedido o el cargado
         agente = Agente(cfg, Path(carpeta), interactivo=True)
     except ErrorLLM as e:
         emitir("error", texto=str(e))
         return 2
     agente.emitir, agente.responder = emitir, responder
+    info = getattr(agente.llm, "info", {})  # ficha del modelo en Bionic/LM Studio
+    for aviso in compat.avisos(info, agente.llm.contexto, int(cfg["carga"]["contexto_min"])):
+        emitir("aviso", texto=aviso)
     emitir("listo", version=__version__, modelo=agente.llm.modelo, contexto=agente.llm.contexto,
-           servidor=agente.llm.base, proyecto=str(agente.h.raiz), entorno=agente.entorno)
+           servidor=agente.llm.base, proyecto=str(agente.h.raiz), entorno=agente.entorno,
+           capacidades=compat.resumen(info))
     try:
         for orden in ordenes:
             tipo, texto, estado, datos = orden.get("tipo"), str(orden.get("texto", "")), "ok", None
@@ -123,6 +125,17 @@ def _protocolo(cfg: dict, carpeta: str, canal) -> int:
     return 0
 
 
+def probar_modelo(cfg: dict, clave: str) -> int:
+    """Avisos de la carga en líneas sueltas; la última línea es el resultado en JSON (lo lee Aura)."""
+    from .prueba_modelo import probar
+    try:
+        r = probar(cfg, clave, avisar=lambda texto: print(texto, flush=True))
+    except ErrorLLM as e:
+        r = {"modelo": clave, "veredicto": "no apto", "motivos": [str(e)], "limites": [], "detalles": {}}
+    print(json.dumps(r, ensure_ascii=False), flush=True)
+    return 0 if r["veredicto"] != "no apto" else 1
+
+
 def main() -> int:
     for flujo in (sys.stdout, sys.stderr):
         flujo.reconfigure(encoding="utf-8", errors="replace")
@@ -133,7 +146,8 @@ def main() -> int:
     ap.add_argument("--razonamiento", choices=["auto", "on", "off"])
     ap.add_argument("--max-pasos", type=int)
     ap.add_argument("--json", action="store_true", help="protocolo de eventos JSON por stdin/stdout (para IDEs)")
-    ap.add_argument("--modelo", help="clave del modelo (en vez de la de agente.json); con --json lo carga si falta")
+    ap.add_argument("--modelo", help="clave del modelo (en vez de la de agente.json); lo carga si falta")
+    ap.add_argument("--probar-modelo", metavar="CLAVE", help="prueba si ese modelo sirve para el agente (lo carga) y sale")
     a = ap.parse_args()
 
     cfg = config.cargar()
@@ -143,9 +157,12 @@ def main() -> int:
         cfg["max_pasos"] = a.max_pasos
     if a.modelo:
         cfg["modelo"] = a.modelo
+    if a.probar_modelo:
+        return probar_modelo(cfg, a.probar_modelo)
     if a.json:
         return modo_json(cfg, a.carpeta)
     try:
+        cargador.preparar(cfg, detectar=detectar)
         agente = Agente(cfg, Path(a.carpeta), interactivo=a.tarea is None)
     except ErrorLLM as e:
         print(color(f"[ERROR] {e}", "rojo"))

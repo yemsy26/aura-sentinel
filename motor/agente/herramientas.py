@@ -12,15 +12,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import android, conocimiento, matematicas, pantalla
+from . import android, conocimiento, lecciones, matematicas, pantalla, procesos
 from . import mapa as mapa_repo
-from .config import RAIZ_INSTALACION
 from .mapa import PATRONES_MAPA
-from .verificacion import chequeo_rapido, correr, es_codigo, ignorado, verificar
+from .verificacion import chequeo_rapido, con_call, correr, es_codigo, ignorado, verificar
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
           "what", "este", "esta", "esto", "hay", "hacer", "puedo", "cual", "cuál", "cómo", "qué", "use", "using"}
-LECCIONES = RAIZ_INSTALACION / "lecciones.md"
 
 IGNORAR = {".git", ".venv", "venv", "env", "node_modules", "__pycache__", "dist", "build", ".next", ".agente",
            "target", "obj", ".idea", ".vscode", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages"}
@@ -40,6 +38,17 @@ PELIGROSOS = re.compile(
     r"\btaskkill\b[^&|]*\s/IM\s|\bstop-process\b[^&|]*-name\b|\b(pkill|killall)\b|"
     r"\bwmic\s+process\b.*\b(delete|terminate)\b",
     re.IGNORECASE)
+# Cerrar un proceso por su número: solo los que lanzó el agente. Los demás pueden ser del usuario o del propio Aura
+# (una misión cerró a la fuerza el que tenía el puerto 1420 sin saber de quién era).
+MATAR_PID = re.compile(r"\btaskkill\b[^&|]*?/PID\s+(\d+)|\bstop-process\b[^&|]*?-Id\s+(\d+)", re.IGNORECASE)
+MATAR_NOMBRE = re.compile(r'\btaskkill\b[^&|]*?/IM\s+"?([^\s"&|]+)|\bstop-process\b[^&|]*?-Name\s+"?([^\s"&|,]+)',
+                          re.IGNORECASE)
+COLA_SIN_EFECTO = re.compile(r"\s*(?:\|\|\s*echo\b[^&|]*|[12]?>\s*nul)\s*$", re.IGNORECASE)  # 2>nul, || echo ...
+# Instalan o quitan paquetes: sin package.json en la carpeta, npm sube y usa el de una carpeta superior (p. ej. el de
+# C:\Users\<usuario>) y cambia SUS paquetes. Una prueba lo hizo: quitó 37 paquetes de la carpeta del usuario.
+NPM_INSTALA = re.compile(r"\b(?:npm|pnpm|yarn)(?:\.cmd)?\s+(?:install|i|ci|add|uninstall|un|remove|rm|update|up|"
+                         r"upgrade|prune|dedupe)\b", re.IGNORECASE)
+CD = re.compile(r'\bcd\s+(?:/d\s+)?(?:"([^"]+)"|([^\s&|"]+))', re.IGNORECASE)
 # Nunca se versionan (aunque falte .gitignore): estado del agente, entornos y cachés.
 NO_VERSIONAR = ["--", ".", ":(exclude).agente"] + [f":(exclude,glob)**/{d}/**" for d in (
     ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")]
@@ -77,6 +86,8 @@ SCRIPT = re.compile(r'(?:^|[\s&|;(])"?((?:[\w.:-]+[\\/])*[\w.-]+\.(?:bat|cmd|ps1
 COMENTARIO = re.compile(r"\s*(rem\b|::|#|echo\b|@echo\b|write-host\b)", re.IGNORECASE)
 NPM_SCRIPT = re.compile(r"\b(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:run(?:-script)?\s+)?([\w:.-]+)", re.IGNORECASE)
 DESTRUCTIVO = "ejecutar un comando potencialmente destructivo"
+AJENO = "cerrar un proceso que no lanzó el agente (puede ser del usuario o del propio Aura)"
+POR_NOMBRE = "cerrar por su nombre TODOS esos programas del equipo, también los que tiene abiertos el usuario"
 EXTERNO = "conectarse o publicar fuera de este equipo (servidor, registro de imágenes, clúster o nube)"
 # Credenciales reales escritas en un archivo: deben ir en variables de entorno o en un .env fuera de git.
 CREDENCIALES = re.compile(
@@ -229,10 +240,6 @@ def decodificar(datos: bytes) -> str:
         return datos.decode("cp850", "replace")  # consola de Windows en español
 
 
-def matar_arbol(pid: int) -> None:
-    subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False)
-
-
 class _HtmlATexto(html.parser.HTMLParser):
     OMITIR = frozenset({"script", "style", "noscript", "svg", "nav", "footer", "header", "form", "iframe"})
     BLOQUE = frozenset({"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "pre", "section", "article",
@@ -285,11 +292,13 @@ class Herramientas:
         self.errores_previos: set[str] | None = None  # modo grande: errores que ya estaban (no cuentan)
         self.idiomas_parcial: list[str] | None = None  # modo grande: archivos de la parte en curso (idiomas a medias)
 
-    def nueva_tarea(self, paso_inicio: int = 0) -> None:
+    def nueva_tarea(self, paso_inicio: int = 0, texto: str = "") -> None:
         self.reescrituras.clear()
         self.evidencia.clear()
         self.preguntas = 0
         self.inicio_tarea = paso_inicio
+        if texto.strip():
+            self._anotar_checkpoints(texto)
 
     def python_proyecto(self) -> str:
         venv = self.raiz / ".venv" / "Scripts" / "python.exe"
@@ -563,8 +572,13 @@ class Herramientas:
                 motivo = cripto or (LICENCIA if LICENCIAS.search(linea) else EXTERNO)
                 detalle = linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
                 break
+            donde = linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
+            if motivo is None and MATAR_NOMBRE.search(linea):
+                motivo, detalle = POR_NOMBRE, donde
             if motivo is None and PELIGROSOS.search(linea):
-                motivo, detalle = DESTRUCTIVO, linea if not origen else f"{comando}\n(el script {origen} ejecuta: {linea[:200]})"
+                motivo, detalle = DESTRUCTIVO, donde
+            if motivo is None and {int(a or b) for a, b in MATAR_PID.findall(linea)} - set(self.propios()):
+                motivo, detalle = AJENO, donde
         if not motivo:
             return None
         if self.confirmar and self._pedir_permiso(detalle if detalle != comando else comando, motivo):
@@ -576,6 +590,13 @@ class Herramientas:
         if motivo == LICENCIA:
             return ("BLOQUEADO: aceptar licencias lo decide el usuario. Pídele que las acepte en Android Studio (SDK "
                     "Manager) y vuelve a verificar.")
+        if motivo == POR_NOMBRE:
+            return ("BLOQUEADO: no hay ningún programa con ese nombre lanzado por el agente, y los que hay son de otros "
+                    "programas o del usuario: no se cierran. Los tuyos se ven y se paran con procesos (listar, detener).")
+        if motivo == AJENO:
+            return ("BLOQUEADO: ese proceso no lo lanzó el agente: puede ser del usuario o de otro programa (también el "
+                    "propio Aura). Los tuyos se paran con procesos(accion='detener', id=N). Si ocupa un puerto que "
+                    "necesitas, pide al usuario que lo cierre o usa otro puerto.")
         if motivo == EXTERNO:
             return ("BLOQUEADO: conectarse o publicar fuera del equipo necesita el permiso del usuario y no lo dio. "
                     "Explícale qué quieres hacer y por qué, o pídele que lo haga él.")
@@ -587,8 +608,62 @@ class Herramientas:
         except TypeError:  # confirmar(comando) de integraciones anteriores
             return bool(self.confirmar(comando))
 
+    def _npm_fuera(self, comando: str) -> str | None:
+        """npm install en una carpeta del proyecto sin package.json: npm usaría el de una carpeta superior."""
+        lineas = [(comando, True), *((l, False) for _, l in self._scripts(comando))]
+        for linea, con_cd in lineas:
+            if not (m := NPM_INSTALA.search(linea)):
+                continue
+            carpeta = self.raiz
+            for c in CD.finditer(linea[:m.start()]) if con_cd else ():
+                destino = (c.group(1) or c.group(2)).strip()
+                if "%" not in destino:
+                    carpeta = carpeta / destino  # una ruta absoluta reemplaza a la anterior
+            carpeta = carpeta.resolve()
+            if self.raiz not in (carpeta, *carpeta.parents):
+                continue
+            for d in (carpeta, *carpeta.parents):
+                if (d / "package.json").is_file() or (d / "node_modules").is_dir():
+                    if self.raiz not in (d, *d.parents):
+                        return (f"BLOQUEADO: en {self.rel(carpeta)} no hay package.json y npm usaría el de {d}, fuera del "
+                                "proyecto: instalaría o quitaría paquetes allí. Crea antes el package.json del proyecto "
+                                "(con escribir, o npm init -y en esa carpeta) y repite el comando.")
+                    break
+        return None
+
+    def propios(self) -> dict[int, str]:
+        """{número: nombre} de los procesos vivos que lanzó el agente (los dice Windows: están en sus trabajos)."""
+        pids = set()
+        for p in self.procesos.values():
+            pids |= set(p["trabajo"].pids()) if p.get("trabajo") else ({p["proc"].pid} if p["proc"].poll() is None else set())
+        return {pid: procesos.nombre(pid) for pid in pids}
+
+    def _cerrar_propios(self, comando: str) -> str | None:
+        """taskkill /IM x o /PID n (o Stop-Process) solo: se cierran los procesos del agente que encajan; los del
+        usuario con el mismo nombre no se tocan. None = no es eso, o no hay nada propio (lo decide _permitido)."""
+        orden = comando.strip()
+        while (m := COLA_SIN_EFECTO.search(orden)) and m.group(0):
+            orden = orden[:m.start()]
+        nombres = {(a or b).lower().removesuffix(".exe") for a, b in MATAR_NOMBRE.findall(orden)}
+        pids = {int(a or b) for a, b in MATAR_PID.findall(orden)}
+        if re.search(r"[&|]", orden) or not (nombres or pids):
+            return None
+        mios = self.propios()
+        if pids - set(mios):
+            return None
+        objetivo = sorted(pids | {p for p, n in mios.items() if n.lower().removesuffix(".exe") in nombres})
+        if not objetivo:
+            return None
+        cerrados = [f"{mios[p] or 'proceso'} ({p})" for p in objetivo if procesos.cerrar_pid(p)]
+        self._anotar(comando, f"cerrados {len(cerrados)} propios", "")
+        return (f"exit=0\nCerré {len(cerrados)} proceso(s) que lanzó el agente: {', '.join(cerrados) or 'ninguno'}. Los "
+                "demás programas del equipo con ese nombre no se tocan (pueden ser del usuario). Para cerrar todo lo de un "
+                "comando en segundo plano usa procesos(accion='detener', id=N).")
+
     def ejecutar(self, comando: str, segundos: int = 0, fondo: bool = False) -> str:
-        if (bloqueo := self._permitido(comando)):
+        if (cerrado := self._cerrar_propios(comando)) is not None:
+            return cerrado
+        if (bloqueo := self._permitido(comando) or self._npm_fuera(comando)):
             return bloqueo
         if fondo:
             return self._fondo(comando)
@@ -596,7 +671,9 @@ class Herramientas:
         if INSTALACIONES.search(comando):
             limite = max(limite, MIN_INSTALACION)
         t0 = time.time()
-        codigo, salida = correr(comando, self.raiz, limite, self._entorno())
+        quedan = []
+        codigo, salida = correr(comando, self.raiz, limite, self._entorno(), quedan)
+        abierto = self._registrar_abiertos(comando, quedan)
         if codigo is None:
             self._anotar(comando, f"TIMEOUT {limite}s", decodificar(salida))
             return (f"TIMEOUT tras {limite}s (proceso detenido). Si es un servidor o programa que no termina, usa "
@@ -607,7 +684,19 @@ class Herramientas:
         elif self.checkpoints:
             self.fallos_desde_verde += 1
         texto = decodificar(salida).strip() or "(sin salida)"
-        return f"exit={codigo} ({time.time() - t0:.1f}s)\n{recortar(texto, self.max_chars)}" + (self._sugerir_restaurar() if codigo else "")
+        return (f"exit={codigo} ({time.time() - t0:.1f}s)\n{recortar(texto, self.max_chars)}{abierto}"
+                + (self._sugerir_restaurar() if codigo else ""))
+
+    def _registrar_abiertos(self, comando: str, quedan: list) -> str:
+        """Lo que el comando dejó abierto (una ventana con start, un demonio de compilación) queda como proceso propio."""
+        if not quedan:
+            return ""
+        proc, trabajo = quedan[0]
+        n = max(self.procesos, default=0) + 1
+        self.procesos[n] = {"proc": proc, "trabajo": trabajo, "comando": comando, "abierto": True}
+        nombres = ", ".join(sorted({procesos.nombre(p) or str(p) for p in trabajo.pids()} - {"conhost.exe"}))
+        return (f"\n(Sigue abierto lo que lanzó: {nombres}. Es tuyo: proceso #{n}; ciérralo con "
+                f"procesos(accion='detener', id={n}) cuando no haga falta.)")
 
     def _anotar(self, comando: str, estado: str, salida: str) -> None:
         cola = " | ".join(l.strip() for l in salida.strip().splitlines()[-3:])[:240]
@@ -622,10 +711,10 @@ class Herramientas:
         self.dir_agente.mkdir(exist_ok=True)
         log = self.dir_agente / f"proceso_{n}.log"
         f = open(log, "wb")  # noqa: SIM115 -- abierto mientras viva el proceso; se cierra al detenerlo
-        proc = subprocess.Popen(comando, shell=True, cwd=self.raiz, env=self._entorno(), stdin=subprocess.DEVNULL,
-                                stdout=f, stderr=subprocess.STDOUT,
-                                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
-        self.procesos[n] = {"proc": proc, "log": log, "archivo": f, "comando": comando}
+        proc, trabajo = procesos.lanzar(comando, shell=True, cwd=self.raiz, env=self._entorno(), stdin=subprocess.DEVNULL,
+                                        stdout=f, stderr=subprocess.STDOUT,
+                                        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
+        self.procesos[n] = {"proc": proc, "trabajo": trabajo, "log": log, "archivo": f, "comando": comando}
         time.sleep(4)  # captura errores de arranque
         self._anotar(comando, f"proceso #{n} en segundo plano" if proc.poll() is None else f"terminó exit={proc.returncode}", "")
         estado = f"TERMINÓ (exit={proc.returncode})" if proc.poll() is not None else "en ejecución"
@@ -633,8 +722,14 @@ class Herramientas:
             self.paso_prueba = self.paso
         return f"Proceso #{n} {estado}. Log inicial:\n{self._cola_log(n)}\nUsa procesos(accion='ver', id={n}) o 'detener'."
 
+    def _vivo(self, n: int) -> bool:
+        p = self.procesos[n]
+        return bool(p["trabajo"].pids()) if p.get("trabajo") else p["proc"].poll() is None
+
     def _cola_log(self, n: int, maximo: int = 2500) -> str:
         p = self.procesos[n]
+        if not p.get("archivo"):
+            return "(sin registro: lo dejó abierto un comando normal)"
         p["archivo"].flush()
         return recortar(decodificar(p["log"].read_bytes()).strip() or "(sin salida aún)", maximo)
 
@@ -642,21 +737,30 @@ class Herramientas:
         if accion == "listar" or not id:
             if not self.procesos:
                 return "No hay procesos en segundo plano."
-            return "\n".join(f"#{n} {'vivo' if p['proc'].poll() is None else 'terminado'}: {p['comando']}"
+            return "\n".join(f"#{n} {'vivo' if self._vivo(n) else 'terminado'}: {p['comando']}{self._miembros(n)}"
                              for n, p in self.procesos.items())
         if id not in self.procesos:
             return f"No existe el proceso #{id}."
         if accion == "detener":
-            matar_arbol(self.procesos[id]["proc"].pid)
-            return f"Proceso #{id} detenido."
-        vivo = self.procesos[id]["proc"].poll() is None
+            procesos.detener(self.procesos[id]["proc"], self.procesos[id].get("trabajo"))
+            return f"Proceso #{id} detenido (solo lo que lanzó ese comando; nada más del equipo)."
+        vivo = self._vivo(id)
         return f"#{id} {'vivo' if vivo else 'terminado'}. Log:\n{self._cola_log(id, self.max_chars)}"
 
+    def _miembros(self, n: int) -> str:
+        t = self.procesos[n].get("trabajo")
+        nombres = sorted({procesos.nombre(p) for p in t.pids()} - {"", "conhost.exe"}) if t else []
+        return f" ({', '.join(nombres)})" if nombres else ""
+
     def detener_todos(self) -> None:
+        """Al cerrar el agente: lo de segundo plano se cierra; lo que dejó abierto un comando normal, no."""
         for p in self.procesos.values():
-            if p["proc"].poll() is None:
-                matar_arbol(p["proc"].pid)
-            p["archivo"].close()
+            if not p.get("abierto"):
+                procesos.detener(p["proc"], p.get("trabajo"))
+            if p.get("archivo"):
+                p["archivo"].close()
+            if p.get("trabajo"):
+                p["trabajo"].cerrar()
 
     def crear_bat(self, nombre: str, comandos: list, descripcion: str = "", usar_venv: bool = False) -> str:
         nombre = nombre if nombre.lower().endswith((".bat", ".cmd")) else nombre + ".bat"
@@ -683,7 +787,7 @@ class Herramientas:
                 continue
             i += 1
             lineas += [f"echo [{i}/{total}] {c.replace('%', '%%').replace('&', '^&').replace('>', '^>').replace('<', '^<').replace('|', '^|')}",
-                       f"{'call ' if c.lower().endswith(('.bat', '.cmd')) and not c.lower().startswith('call ') else ''}{c}",
+                       con_call(c, self.raiz),  # npm, npx, otro .bat...: sin call el .bat terminaría ahí
                        'if errorlevel 1 (set "RC=%errorlevel%" & goto :error)']
         lineas += ["echo.", "echo [OK] Terminado correctamente.", "goto :fin", ":error", "echo.",
                    "echo [ERROR] Falló el paso anterior (código %RC%).", ":fin",
@@ -833,7 +937,7 @@ class Herramientas:
         if errores == 0:
             self.paso_prueba = self.paso
             n = self._checkpoint()
-            informe += (f"\nSIN ERRORES: guardado checkpoint #{n} (versión que funciona). Los avisos son secundarios: "
+            informe += (f"\nSIN ERRORES: guardado checkpoint #{n} (sin errores de verificar). Los avisos son secundarios: "
                         "atiende solo los de lógica sin conectar y no toques lo que ya funciona. Sigue con el plan.")
         else:
             self.fallos_desde_verde += 1
@@ -868,11 +972,31 @@ class Herramientas:
         self.archivo_checkpoints.write_text(json.dumps(self.checkpoints, ensure_ascii=False), encoding="utf-8")
         return len(self.checkpoints)
 
+    def _anotar_checkpoints(self, texto: str) -> None:
+        """Lo que escribió el usuario DESPUÉS de cada versión guardada: si avisaba de un fallo, esa versión lo tiene
+        (una misión restauró dos veces la versión de la que el usuario acababa de decir que no arrancaba)."""
+        self._cargar_checkpoints()
+        if not self.checkpoints:
+            return
+        nota = " ".join(texto.split())[:240]
+        for cp in self.checkpoints:
+            cp["despues"] = [*cp.get("despues", []), nota][-2:]
+        self.archivo_checkpoints.write_text(json.dumps(self.checkpoints, ensure_ascii=False), encoding="utf-8")
+
+    @staticmethod
+    def _dijo_despues(cp: dict) -> str:
+        dijo = cp.get("despues") or []
+        if not dijo:
+            return ""
+        return (" OJO: después de esa versión el usuario escribió: " + " / ".join(f"«{d}»" for d in dijo)
+                + ". Si avisaba de un fallo, esa versión LO TIENE: corrígelo sobre ella, no vuelvas a restaurarla.")
+
     def _sugerir_restaurar(self) -> str:
         if self.checkpoints and self.fallos_desde_verde >= 3:
-            return (f"\n[ATENCIÓN: en el paso {self.checkpoints[-1]['paso']} tenías una versión que FUNCIONABA (checkpoint "
+            cp = self.checkpoints[-1]
+            return (f"\n[ATENCIÓN: en el paso {cp['paso']} tenías una versión sin errores de verificar (checkpoint "
                     f"#{len(self.checkpoints)}) y desde entonces llevas {self.fallos_desde_verde} fallos. Si no lo arreglas "
-                    "en el próximo intento, usa restaurar() y aplica cambios más pequeños.]")
+                    f"en el próximo intento, usa restaurar() y aplica cambios más pequeños.{self._dijo_despues(cp)}]")
         return ""
 
     def restaurar(self, checkpoint: int = 0) -> str:
@@ -889,8 +1013,8 @@ class Herramientas:
         self.verificacion = {"paso": self.paso, "errores": 0, "informe": f"restaurado checkpoint #{n}"}
         self.paso_prueba = self.paso
         extra = f" Archivos creados después (no se tocaron): {', '.join(nuevos)}." if nuevos else ""
-        return (f"OK restaurado el checkpoint #{n} (versión que funcionaba, {cp.get('fecha', 'paso ' + str(cp['paso']))}): "
-                f"{len(cp['archivos'])} archivos.{extra} Haz cambios pequeños y verifica tras cada uno.")
+        return (f"OK restaurado el checkpoint #{n} (pasó verificar sin errores, {cp.get('fecha', 'paso ' + str(cp['paso']))}): "
+                f"{len(cp['archivos'])} archivos.{extra}{self._dijo_despues(cp)} Haz cambios pequeños y verifica tras cada uno.")
 
     def ver_pantalla(self, ruta: str = "", pregunta: str = "", segundos: int = 2) -> str:
         return pantalla.ver(self, ruta, pregunta, segundos)
@@ -922,8 +1046,8 @@ class Herramientas:
     def version(self, paquete: str, ecosistema: str = "pypi") -> str:
         return conocimiento.version(self, paquete, ecosistema)
 
-    def investigar(self, pregunta: str) -> str:
-        return conocimiento.investigar(self, pregunta)
+    def investigar(self, pregunta: str, web: bool = False) -> str:
+        return conocimiento.investigar(self, pregunta, web=web)
 
     def calcular(self, codigo: str, segundos: int = 30) -> str:
         return matematicas.calcular(self, codigo, segundos)
@@ -934,15 +1058,7 @@ class Herramientas:
     def aprender(self, leccion: str, tema: str = "") -> str:
         if tema.strip():
             return conocimiento.aprender_tema(tema, leccion)
-        leccion = " ".join(leccion.split())[:220]
-        if len(leccion) < 15:
-            return "La lección debe ser una frase concreta (qué pasó y cómo evitarlo)."
-        previas = LECCIONES.read_text(encoding="utf-8").splitlines() if LECCIONES.exists() else ["# Lecciones aprendidas"]
-        if any(leccion.lower() in l.lower() for l in previas):
-            return "Esa lección ya estaba guardada."
-        cuerpo = [l for l in previas[1:] if l.strip()][-39:] + [f"- {leccion}"]  # máximo 40, las más recientes
-        LECCIONES.write_text(previas[0] + "\n" + "\n".join(cuerpo) + "\n", encoding="utf-8")
-        return "Lección guardada: se tendrá en cuenta en las próximas tareas."
+        return lecciones.guardar(leccion)
 
     def mapa(self, maximo: int = 1500) -> str:
         """Archivos del proyecto con sus nombres públicos: tras compactar, el modelo no inventa módulos ni nombres."""
@@ -1065,7 +1181,9 @@ ESQUEMAS = [
     _f("web_leer", "Lee el texto de una página web. 'buscar' filtra párrafos con esas palabras.",
        {"url": S, "buscar": S}, ["url"]),
     _f("investigar", "Busca en internet y lee las mejores páginas en UN paso: devuelve los párrafos relevantes con su "
-                     "fuente. Úsalo para APIs, errores o librerías que no conozcas bien.", {"pregunta": S}, ["pregunta"]),
+                     "fuente. Úsalo para APIs, errores o librerías que no conozcas bien. Primero mira lo ya "
+                     "investigado (se guarda 30 días); web=true lee internet aunque esté en memoria.",
+       {"pregunta": S, "web": B}, ["pregunta"]),
     _f("calcular", "Cálculo matemático EXACTO con SymPy (nunca calcules de memoria): álgebra, ecuaciones (solve), "
                    "derivadas, integrales, límites, series, matrices, factorización, primos, fracciones y decimales "
                    "con la precisión que pidas (N(expr, 50)). 'codigo' es Python con todo SymPy importado y x, y, z, t "
@@ -1092,8 +1210,8 @@ ESQUEMAS = [
        {"ruta": S, "segundos": I}, []),
     _f("ver_pantalla", "Captura la interfaz (un .html, una URL http://localhost:PUERTO o el .py de un juego pygame) y "
                        "comprueba si se ve bien: texto cortado o sobre fondo cargado, elementos fuera de pantalla, "
-                       "pantalla en negro. Si el "
-                       "modelo cargado ve imágenes, la revisa él. 'pregunta' = qué mirar además.",
+                       "pantalla en negro. En una app Tauri, sin ruta abre la app de verdad y enseña su ventana. "
+                       "Si el modelo cargado ve imágenes, la revisa él. 'pregunta' = qué mirar además.",
        {"ruta": S, "pregunta": S, "segundos": I}, []),
     _f("revisar", "Revisión independiente: otro análisis compara cada requisito con el código y señala lo que falta o "
                   "no funciona. 'enfoque' = qué mirar con más cuidado.", {"requisitos": S, "enfoque": S}, []),

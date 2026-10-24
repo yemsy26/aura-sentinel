@@ -65,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 2. `npm install` de la interfaz.
 3. Instala el motor (`motor\instalar.bat`): crea `motor\.venv`, instala sus dependencias, pasa sus pruebas y
    registra el MCP `agente-local` en Bionic y LM Studio.
-4. Descarga y verifica el modelo de `motor\agente.json` (`motor\descargar_modelo.bat`: Qwen3.6-35B-A3B
+4. Descarga y verifica el modelo recomendado (`motor\descargar_modelo.bat`: Qwen3.6-35B-A3B
    UD-Q3_K_XL, 16,8 GB, y su visión, 0,9 GB, desde Hugging Face; reanuda si se corta y comprueba el SHA-256).
 5. Con Bionic abierto, lo ajusta a tu equipo (`motor\cargar_modelo.bat`): mide la VRAM, elige el contexto que
    cabe y cuántas capas de expertos del modelo van a la RAM/CPU, y aplica los ajustes de chat en Bionic.
@@ -87,9 +87,13 @@ ejemplo Qwen3.5 9B, ~6 GB de VRAM con 64K de contexto):
 
 1. Instala sin el modelo grande: `powershell -ExecutionPolicy Bypass -File setup.ps1 -SinModelo`.
 2. Descarga el modelo pequeño desde la búsqueda de Bionic / LM Studio.
-3. En Aura, elígelo en el selector de la barra superior: se carga ajustado a tu VRAM. Para que sea el de
-   siempre, pon su clave (la que muestra el selector) en `"modelo"` de `motor\agente.json` y ejecuta
-   `motor\cargar_modelo.bat`.
+3. En Aura, elígelo en el selector de la barra superior: se carga ajustado a tu VRAM. Pulsa **Probar** al lado
+   para saber si sirve en tu equipo: carga el modelo, le pide crear un archivo con una herramienta y dice si es
+   apto, apto con límites (lento, poco contexto, muy comprimido, razona siempre…) o no apto, y por qué.
+
+El agente usa cualquier modelo: con `"modelo": "auto"` en `motor\agente.json` (lo que trae), el que esté cargado o
+el que elijas en Aura. Si está cargado con menos de 16K de contexto, lo recarga con el que quepa en tu VRAM. Para
+fijar siempre uno, pon su clave (la que muestra el selector) en `"modelo"`.
 
 Los modelos pequeños resuelven tareas sencillas, pero se equivocan más en proyectos largos; las medidas de
 VRAM y velocidad de cada modelo están en `motor\LEEME.md`.

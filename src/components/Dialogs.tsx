@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { confirmar } from '../lib/confirmar';
-import { api, errorText, type Addon, type AgentSettings, type ProfileSnapshot, type UserProfile } from '../lib/api';
+import { api, errorText, type Addon, type AgentSettings, type ModelProbe, type ProfileSnapshot, type UserProfile } from '../lib/api';
 import { Icon, type IconName } from './Icon';
 
 export interface PaletteCommand { id: string; label: string; icon: IconName; hint?: string; run: () => void }
@@ -220,6 +220,56 @@ function Addons({ onToast }: { onToast: (t: string, error?: boolean) => void }) 
         </div>
       ))}
     </section>
+  );
+}
+
+const FORMATO = { nativo: 'nativas (las convierte el servidor)', texto: 'como texto (las entiende el agente)', ninguno: 'no llamó a ninguna' };
+
+/** «Probar modelo»: si el modelo sirve para el agente en este equipo, y por qué. */
+export function ModelProbeDialog({ model, onClose, onDone, probe = api.probeModel }: {
+  model: string; onClose: () => void; onDone?: () => void; probe?: (model: string) => Promise<ModelProbe>;
+}) {
+  const [result, setResult] = useState<ModelProbe | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let vivo = true;
+    probe(model).then((r) => { if (vivo) setResult(r); }).catch((e) => { if (vivo) setError(errorText(e)); }).finally(() => onDone?.());
+    return () => { vivo = false; };
+  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
+  const d = result?.detalles;
+  const fila = (k: string, v: string | number | null | undefined) => (v === undefined || v === null || v === '' ? null
+    : <Fragment key={k}><span className="dim">{k}</span><span>{v}</span></Fragment>);
+  const tono = result?.veredicto === 'apto' ? 'ok' : result?.veredicto === 'no apto' ? 'err' : 'warn';
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <div className="dialog" role="dialog" aria-label="Probar modelo" onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}>
+        <div className="dialog-head">
+          <h2 className="grow">Probar modelo</h2>
+          <button className="icon-btn" aria-label="Cerrar" onClick={onClose}><Icon name="close" /></button>
+        </div>
+        <div className="dialog-body">
+          {!result && !error && <p className="muted" style={{ margin: 0 }}>Probando <strong>{model}</strong>… Si no está cargado, se carga
+            ajustado a tu VRAM (puede tardar unos minutos) y se le pide crear un archivo con una herramienta y terminar,
+            como en una misión.</p>}
+          {error && <p className="err" role="alert" style={{ margin: 0 }}>{error}</p>}
+          {result && <>
+            <p style={{ margin: 0 }}><span className={`probe-verdict ${tono}`}>{result.veredicto}</span> <strong>{d?.nombre ?? result.modelo}</strong></p>
+            {result.motivos.length > 0 && <ul className="probe-list err">{result.motivos.map((m) => <li key={m}>{m}</li>)}</ul>}
+            {result.limites.length > 0 && <ul className="probe-list warn">{result.limites.map((m) => <li key={m}>{m}</li>)}</ul>}
+            <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 14px', fontSize: 13 }}>
+              {fila('Tamaño', d?.tamano_gb ? `${d.tamano_gb} GB${d.cuantizacion ? ` (${d.cuantizacion})` : ''}` : undefined)}
+              {fila('Memoria', d?.memoria)}
+              {fila('Contexto', d?.contexto ? `${d.contexto.toLocaleString('es')} tokens${d.contexto_max ? ` (máx. ${d.contexto_max.toLocaleString('es')})` : ''}` : undefined)}
+              {fila('Velocidad', d?.tokens_s ? `~${d.tokens_s} tokens/s` : undefined)}
+              {fila('Herramientas', d?.formato ? FORMATO[d.formato] : undefined)}
+              {fila('Razonamiento', d?.razonamiento ? (d.razonamiento.includes('off') ? 'se puede apagar' : 'siempre activo') : undefined)}
+              {fila('Duración', result.segundos !== undefined ? `${result.segundos} s` : undefined)}
+            </div>
+          </>}
+        </div>
+      </div>
+    </div>
   );
 }
 

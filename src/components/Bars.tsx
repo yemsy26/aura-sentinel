@@ -25,6 +25,8 @@ interface TopBarProps {
   models: string[];
   model: string;
   onModel: (model: string) => void;
+  onProbe: () => void;
+  busy: boolean;
   bionic: 'ok' | 'err' | 'unknown';
   context: number | null;
   stats: SystemStats | null;
@@ -78,6 +80,8 @@ export function TopBar(p: TopBarProps) {
           </select>
           {p.context ? <span className="dim">{formatTokens(p.context)}</span> : null}
         </label>
+        <button className="btn small" onClick={p.onProbe} disabled={!p.model || p.busy}
+          title={p.busy ? 'Hay una misión en curso' : 'Probar si este modelo sirve para el agente en tu equipo'}>Probar</button>
         {gpu && <Meter label="VRAM" value={gpu.used} max={gpu.total} text={`${gb(gpu.used / 1024)} / ${gb(gpu.total / 1024)} GB`} />}
         <button className="icon-btn bordered" aria-label="Configuración" onClick={p.onSettings}><Icon name="settings" /></button>
       </div>

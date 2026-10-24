@@ -11,9 +11,14 @@ from typing import ClassVar
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_agente import sin_lecciones_reales
+
 from agente import config, grande, idiomas, mapa
 from agente.herramientas import ESQUEMA_MAPA, ESQUEMAS, Herramientas, despachar
 from agente.verificacion import Informe, normalizar
+
+setUpModule = sin_lecciones_reales
 
 GIT = {"GIT_AUTHOR_NAME": "prueba", "GIT_AUTHOR_EMAIL": "prueba@local", "GIT_COMMITTER_NAME": "prueba",
        "GIT_COMMITTER_EMAIL": "prueba@local"}

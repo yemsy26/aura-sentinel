@@ -227,7 +227,7 @@ def validar(h, args: dict, rechazos: int) -> dict | str:
 
 
 def planificar(agente, tarea: str) -> dict | str:
-    from .bucle import coaccionar, llamadas_en_texto
+    from .bucle import coaccionar, llamadas_en_texto, sin_llamadas
     from .llm import ErrorLLM
     h = agente.h
     docs = documentos(h.raiz)
@@ -253,7 +253,8 @@ def planificar(agente, tarea: str) -> dict | str:
         ctx.calibrar((r["usage"] or {}).get("prompt_tokens", 0), ctx.mensajes)
         razonar = agente.cfg["razonamiento"] == "on"
         llamadas = r["tool_calls"] or llamadas_en_texto(r["content"])
-        contenido = re.sub(r"<tool_call>.*?(</tool_call>|$)", "", r["content"], flags=re.DOTALL).strip()
+        contenido = (sin_llamadas(r["content"]) if llamadas and not r["tool_calls"]
+                     else re.sub(r"<tool_call>.*?(</tool_call>|$)", "", r["content"], flags=re.DOTALL).strip())
         ctx.asistente(contenido, llamadas)
         if not llamadas:
             ctx.mensajes.append({"role": "user", "content": "Responde llamando a plan_partes (no escribas el plan en el chat)."})

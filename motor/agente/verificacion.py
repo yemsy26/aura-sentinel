@@ -5,7 +5,7 @@ Python: sintaxis, ruff (errores reales), vulture (código que nunca se usa = fun
 HTML/JS: referencias rotas, ids que busca el JS/TS y no existen, sintaxis JS (node --check) y prueba real en Edge
          sin ventana (errores de consola, 404, canvas vacío, animación, respuesta a teclado/ratón, capturas).
 Java:   javac -Xlint y ejecución del main en modo headless (o mvn test si hay pom.xml).
-.bat:   archivos llamados que no existen y falta de cd /d "%~dp0".
+.bat:   archivos llamados que no existen, falta de cd /d "%~dp0" y npm/npx (o un .cmd) sin call.
 Rust, Go, .NET, Node/TypeScript, Docker/Compose y YAML: en ecosistemas.py.
 """
 import ast
@@ -24,6 +24,8 @@ import urllib.request
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from . import procesos
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
 SONDA_PYGAME = Path(__file__).resolve().parent / "sondas" / "pygame_sonda.py"
@@ -100,23 +102,32 @@ def _rel(p: Path, raiz: Path) -> str:
         return str(p)
 
 
-def correr(cmd, cwd, timeout, entorno=None) -> tuple[int | None, bytes]:
-    """(código o None si se pasó del tiempo, salida en bruto). Mata el árbol de procesos si se pasa del tiempo.
+def correr(cmd, cwd, timeout, entorno=None, quedan: list | None = None) -> tuple[int | None, bytes]:
+    """(código o None si se pasó del tiempo, salida en bruto). Si se pasa del tiempo, cierra su trabajo entero (solo
+    sus procesos: ver procesos.py).
 
     La salida va a un archivo temporal y no a una tubería: si el comando deja algo en segundo plano (`start /b`, un
-    servidor), ese proceso hereda la salida y con una tubería la espera no acabaría nunca."""
+    servidor), ese proceso hereda la salida y con una tubería la espera no acabaría nunca. Lo que deje abierto (una
+    ventana con `start`, el demonio de Gradle o el compilador de .NET, que aceleran la siguiente compilación) sigue
+    abierto como antes, también si el motor acaba; con `quedan`, su trabajo se añade ahí para poder cerrarlo."""
     with tempfile.TemporaryFile() as archivo:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=entorno, stdin=subprocess.DEVNULL, stdout=archivo,
-                                stderr=subprocess.STDOUT, creationflags=SIN_VENTANA, shell=isinstance(cmd, str))
+        proc, trabajo = procesos.lanzar(cmd, cwd=cwd, env=entorno, stdin=subprocess.DEVNULL, stdout=archivo,
+                                        stderr=subprocess.STDOUT, creationflags=SIN_VENTANA, shell=isinstance(cmd, str))
         try:
             codigo = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+            procesos.detener(proc, trabajo)
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 pass
             codigo = None
+        if trabajo:
+            trabajo.matar_al_cerrar(False)  # lo que quede abierto sobrevive al motor, como antes
+            if quedan is not None and trabajo.pids():
+                quedan.append((proc, trabajo))
+            else:
+                trabajo.cerrar()
         archivo.seek(0)
         return codigo, archivo.read()
 
@@ -575,7 +586,11 @@ def paginas_vite(raiz: Path, fuentes: list[Path], inf: Informe) -> None:
         paquete = next((d for d in (h.parent, *h.parent.parents) if (d / "package.json").exists()), None)
         compilada = paquete / "dist" / h.relative_to(paquete) if paquete and raiz in (paquete, *paquete.parents) else None
         if compilada and compilada.exists():
+            antes = len(inf.ok)
             navegador(raiz, [compilada], inf, raiz_web=paquete / "dist")
+            if (paquete / "src-tauri" / "tauri.conf.json").exists():  # el agente tomaba los «--» por un fallo
+                inf.ok[antes:] = [o + " (en un navegador normal, FUERA de Tauri: invoke no existe y sin sus datos es lo "
+                                  "esperado; la app de verdad se prueba aparte)" for o in inf.ok[antes:]]
         else:
             inf.avisos.append(f"{_rel(h, raiz)}: es la página fuente de Vite (carga {fuente_vite(h)}) y no se abre tal cual; "
                               "se prueba la compilada de dist/ cuando `npm run build` funciona.")
@@ -724,6 +739,50 @@ def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
 
 
 # ---------------------------------------------------------------- .bat
+# Programas que en Windows son un .cmd o un .bat: lanzados sin "call", el .bat termina con ellos y no ejecuta nada
+# más (run.bat hacía npm install y nunca llegaba a npx tauri dev ni a su pause).
+LOTES = {"npm", "npx", "yarn", "pnpm", "ng", "vite", "tauri", "tsc", "expo", "eas", "ionic", "cordova", "flutter",
+         "gradle", "gradlew", "mvn", "mvnw", "conda", "az", "gcloud", "firebase", "vercel", "netlify", "code"}
+SEPARADOR_BAT = re.compile(r"&&|\|\||&")
+
+
+def _ordenes_bat(linea: str) -> list[str]:
+    """La línea partida por &&, || y & fuera de comillas; los separadores quedan como elementos sueltos."""
+    partes, actual, comillas, i = [], "", False, 0
+    while i < len(linea):
+        c = linea[i]
+        if c == '"':
+            comillas = not comillas
+        elif not comillas and (m := SEPARADOR_BAT.match(linea, i)) and linea[i - 1:i] != "^":
+            partes += [actual, m.group(0)]
+            actual, i = "", i + len(m.group(0))
+            continue
+        actual += c
+        i += 1
+    return partes + [actual]
+
+
+def es_lote(orden: str, carpeta: Path | None = None) -> bool:
+    """El programa de la orden es un .cmd o un .bat: npm, npx, flutter, gradlew, otro .bat del proyecto..."""
+    orden = orden.strip().lstrip("@(").strip()
+    programa = orden[1:].split('"')[0] if orden.startswith('"') else (orden.split() or [""])[0]
+    nombre = programa.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if nombre.endswith((".bat", ".cmd")) or nombre in LOTES:
+        return True
+    return bool(carpeta and nombre and "." not in nombre
+                and any((carpeta / f"{programa}{ext}").is_file() for ext in (".bat", ".cmd")))
+
+
+def con_call(linea: str, carpeta: Path | None = None) -> str:
+    """Pone call delante de cada orden de la línea que lanza un .cmd o un .bat (cd x && call npm install)."""
+    partes = _ordenes_bat(linea)
+    for i in range(0, len(partes), 2):
+        orden = partes[i].lstrip()
+        if orden and not re.match(r"(?i)call\s", orden) and es_lote(orden, carpeta):
+            partes[i] = partes[i][:len(partes[i]) - len(orden)] + "call " + orden
+    return "".join(partes)
+
+
 def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
     for b in lista:
         texto = b.read_text(encoding="utf-8", errors="replace")
@@ -731,6 +790,15 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
         if not re.search(r'cd\s+/d\s+"?%~dp0', texto, re.IGNORECASE) and re.search(r"\b(python|py|node|java|javac)\b", texto, re.IGNORECASE):
             inf.avisos.append(f"{rel}: no hace cd /d \"%~dp0\": fallará si se abre desde otra carpeta.")
         lineas = [l.strip() for l in texto.splitlines()]
+        for i, l in enumerate(lineas):
+            if not l or re.match(r"(?i)(echo|rem|::|:|set|title|start|if|for|goto|exit)\b|@?echo\b", l):
+                continue
+            sigue = next((x for x in lineas[i + 1:] if x and not re.match(r"(?i)(rem\b|::)", x)), "")
+            sin_call = [o.strip() for o in _ordenes_bat(l)[::2] if o.strip() and not re.match(r"(?i)call\s", o.strip())
+                        and es_lote(o, b.parent)]
+            if sin_call and sigue:
+                inf.errores.append(f"{rel}:{i + 1} '{sin_call[0][:50]}' sin call: es un .cmd y el .bat termina ahí, sin "
+                                   f"ejecutar lo que sigue ('{sigue[:40]}'). Escribe 'call {sin_call[0][:50]}'.")
         for i, l in enumerate(lineas):
             if re.search(r"(http\.server|flask\s+run|uvicorn|npm\s+(run\s+)?(start|dev)|npx\s+serve|live-server)", l, re.IGNORECASE) \
                     and not re.match(r"(?i)(echo|rem|start)\b", l):

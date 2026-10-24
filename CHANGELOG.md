@@ -7,6 +7,25 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ## [Sin publicar]
 
+- **El agente funciona con cualquier modelo, no solo con Qwen3.6:**
+  - `agente.json` venía con `"modelo": "qwen3.6-35b-a3b"`. Desde Bionic (MCP) o la consola, el motor ignoraba el
+    modelo cargado, lo descargaba de memoria y cargaba Qwen. Ahora viene en `"auto"`: usa el cargado o el elegido en
+    Aura. Qwen3.6 sigue siendo el recomendado (el que se descarga y el que se propone si no hay ninguno cargado).
+  - Lee la ficha de cada modelo en Bionic/LM Studio. Solo le pide no razonar si se puede apagar: a uno que razona
+    siempre, como Flint, se le pedía igual. Avisa al empezar si el modelo no está entrenado para usar herramientas,
+    si razona siempre o si está comprimido a 1-2 bits.
+  - Contexto mínimo de 16K: sus instrucciones y herramientas ocupan ~5.000 tokens antes de empezar. Un modelo cargado
+    a mano con menos (LM Studio pone 4096) se recarga con el mayor que quepa en la VRAM.
+  - Entiende las llamadas a herramientas que los modelos escriben como texto: antes solo el formato de Qwen; ahora
+    también Mistral (`[TOOL_CALLS]`), Llama (`<|python_tag|>`), Gemma (```` ```tool_code ````) y JSON suelto. Solo
+    cuentan los nombres de herramientas que existen.
+- **Probar modelo** (botón junto al selector de Aura, o `python -m agente --probar-modelo CLAVE`): carga el modelo si
+  hace falta y le pide crear un archivo con una herramienta y terminar, como en una misión. Dice si es apto, apto con
+  límites o no apto y por qué: si cabe en la GPU o irá a la RAM, contexto, velocidad, si llama a las herramientas
+  bien o como texto, si razona siempre y si está muy comprimido. La memoria se mide con el modelo ya cargado (el que
+  hubiera antes ocupa la RAM que usará) y la velocidad, en la segunda respuesta (la primera aún lee el modelo del disco).
+- Al cargar un modelo que no cabe en la VRAM y no es MoE (Flint, 22,5 GB), el cargador decía «todo en VRAM»; ahora
+  dice cuánto va en la VRAM y que el resto va en RAM y CPU.
 - **El revisor conoce las prácticas actuales:** recibe, de las guías de los temas del proyecto (Tauri, Rust, pygame,
   web…), solo las frases que corrigen una versión vieja y nombran algo del código o de la petición (como mucho unos
   450 tokens). Si la petición nombra una API que no existe en la versión del proyecto (p. ej. `@tauri-apps/api` en
@@ -24,6 +43,51 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 - Arreglo: tras una revisión que pidió cambios, `terminar` sin haber tocado nada pasaba si la revisión era de la misma
   tarea (también un `revisar` a mano). Ahora se rechaza con los puntos pendientes. Y corregir solo un `.json` de
   configuración (`tauri.conf.json`, `capabilities/`) cuenta como cambio y lleva a la segunda revisión.
+- **Las apps Tauri se prueban abiertas:** con todo lo demás sin errores, `verificar` abre la app de verdad unos segundos
+  (el `.exe` de `cargo build`, con `dist/` servido en el puerto de `devUrl`) y dice qué se ve en su ventana, los errores
+  de su consola y deja una captura. Sin cambios no la vuelve a abrir. `ver_pantalla` sin ruta (o con la URL de
+  `devUrl`) enseña esa ventana. Antes miraba el frontend en un navegador, donde `invoke` no existe: salía sin datos y
+  el agente «arreglaba» lo que funcionaba. Si no puede abrirla (sin compilar, `dist/` viejo, puerto ocupado) lo avisa y
+  explica que el navegador no es la app.
+- La guía de Tauri usa el puerto 1430 para el frontend en vez del 1420 habitual, que es el de Aura abierto en
+  desarrollo: con los dos en el mismo puerto, la app no arrancaba.
+- Arreglo: `crear_bat` pone `call` delante de `npm`, `npx` y los demás programas que en Windows son un `.cmd`. Sin él,
+  `run.bat` hacía `npm install` y terminaba, sin llegar a `npx tauri dev`. `verificar` lo marca en los `.bat` escritos a
+  mano.
+- Arreglo: los comandos del proyecto ya no heredan lo que dejó para su propia compilación el programa que abrió Aura
+  (`CARGO_TARGET_DIR`, `CARGO_PKG_*`, `npm_*`, `TAURI_CONFIG`...). Con Aura abierto en desarrollo, la app del usuario
+  se compilaba en la carpeta de Aura. Las variables que el usuario tiene guardadas en Windows se respetan.
+- Arreglo: `npm install` (o `add`, `uninstall`...) en una carpeta del proyecto sin `package.json` se bloquea: npm
+  subía y cambiaba los paquetes de una carpeta superior, como la del usuario, que a menudo tiene uno. El agente crea
+  antes el `package.json`.
+- **El agente controla lo que abre y no cierra lo tuyo:** cada comando que lanza va en un «trabajo» de Windows (Job
+  Object), que sabe exactamente qué procesos abrió, también lo que abre con `start`. Detener un proceso, que se pase de
+  tiempo o cerrar Aura cierra solo eso. Antes se usaba `taskkill /T`, que decide por el número del proceso padre (Windows
+  reutiliza esos números) y podía cerrar consolas y programas del usuario. Lo que un comando deja abierto (una ventana,
+  el demonio de Gradle) sigue abierto como antes, pero sale en `procesos` como suyo y lo puede cerrar. Si el motor se
+  cierra de golpe, Windows cierra con él lo que tenía en segundo plano; Aura ya no usa `taskkill /T` al detenerlo.
+- `taskkill /IM x` o `/PID n` del agente cierran solo sus propios procesos con ese nombre o número. Los demás no se
+  tocan: cerrar por número un proceso que no lanzó, o por nombre cuando no tiene ninguno suyo, pide permiso. Una misión
+  cerró a la fuerza el proceso que ocupaba el puerto 1420: era la consola del servidor de Aura que el usuario tenía
+  abierta.
+- Arreglo: `restaurar` ya no llama «versión que funcionaba» a la que solo pasó `verificar`. Si después el usuario
+  escribió algo (p. ej. «al iniciar con el .bat no arranca»), se lo recuerda al restaurarla: antes volvía a la versión de
+  la que el usuario acababa de decir que fallaba, sin saberlo.
+- **`investigar` recuerda lo que lee (memoria primero):** guarda los párrafos útiles de cada página con su fuente y la
+  fecha en `motor\pasajes.db` (SQLite con búsqueda de texto completo, que encuentra nombres exactos como
+  `invoke_handler`). Si una pregunta posterior está cubierta por lo ya leído, responde con ello al instante y sin salir a
+  internet, diciendo de qué página es y cuándo se leyó. Antes volvía a buscar y leer las mismas páginas en cada tarea.
+  Caduca pronto porque las APIs cambian: a los 30 días sin usarse o a los 90 de leerse; releer una página reemplaza lo
+  guardado de ella. `investigar(pregunta, web=true)` lee internet aunque esté en memoria. Sin la base de datos,
+  investiga en la web como antes.
+- **Las lecciones que se usan sobreviven y cada tarea recibe solo las suyas:** antes iban siempre en el prompt de
+  sistema los últimos 1.500 caracteres de `lecciones.md` (unas 8 lecciones, las más recientes, tuvieran que ver o no)
+  y, con 40, se borraba la más antigua aunque fuera la que más servía. Ahora cada tarea recibe en su mensaje hasta 8
+  lecciones que tienen que ver con ella: por un tema que nombra la tarea o que se deduce de los archivos del proyecto
+  («arregla el botón» en un proyecto Tauri recibe las de Tauri), o por dos palabras con significado en común. Con la
+  lista llena se olvida la que lleva más tiempo sin usarse; se usa al entrar en una tarea o cuando el agente la intenta
+  guardar otra vez. El prompt de sistema ya no cambia al aprender, así que su prefijo sigue en la caché del servidor.
+  `lecciones.md` sigue siendo la lista que se edita a mano; el uso va en `lecciones_uso.json`.
 
 ---
 
