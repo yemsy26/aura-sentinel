@@ -1,7 +1,6 @@
 """Modo grande, mapa del repositorio y cobertura de idiomas (sin modelo): python -m unittest tests.test_grande -v"""
 import json
 import os
-import shutil
 import sys
 import tempfile
 import time
@@ -12,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_agente import sin_lecciones_reales
+from test_agente import borrar, sin_lecciones_reales
 
 from agente import config, grande, idiomas, mapa
 from agente.herramientas import ESQUEMA_MAPA, ESQUEMAS, Herramientas, despachar
@@ -36,7 +35,7 @@ class Temporal(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp(prefix="agente_grande_"))
 
     def tearDown(self):
-        shutil.rmtree(self.dir, ignore_errors=True)
+        borrar(self.dir)
 
 
 # ---------------------------------------------------------------- mapa

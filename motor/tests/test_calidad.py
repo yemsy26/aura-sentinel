@@ -9,6 +9,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_agente import borrar
+
 from agente import conocimiento, lecciones
 from agente.herramientas import Herramientas
 from agente.verificacion import verificar
@@ -24,7 +27,7 @@ class Base(unittest.TestCase):
 
     def tearDown(self):
         self.h.detener_todos()
-        shutil.rmtree(self.dir, ignore_errors=True)
+        borrar(self.dir)
 
     def escribir(self, ruta, texto):
         p = self.dir / ruta

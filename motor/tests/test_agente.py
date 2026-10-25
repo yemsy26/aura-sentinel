@@ -1,10 +1,13 @@
 """Pruebas sin modelo: python -m unittest discover -s tests -v"""
 import json
 import math
+import os
 import shutil
+import stat
 import struct
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import ClassVar
@@ -30,6 +33,25 @@ def sin_lecciones_reales():
 
 
 setUpModule = sin_lecciones_reales
+
+
+def borrar(carpeta: Path) -> None:
+    """La carpeta temporal de una prueba, entera. Con rmtree(ignore_errors=True) se quedaba en %TEMP% en cada ejecución
+    (test_grande dejó 118): en Windows los objetos de .git son de solo lectura y el log de un proceso recién cerrado
+    tarda un momento en soltarse."""
+    def escribible(funcion, ruta, _):
+        os.chmod(ruta, stat.S_IWRITE)
+        funcion(ruta)
+
+    for _ in range(10):
+        try:
+            shutil.rmtree(carpeta, onexc=escribible)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            time.sleep(0.2)
+    shutil.rmtree(carpeta, ignore_errors=True)
 
 
 class TestHerramientas(unittest.TestCase):

@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_agente import LLMGuion, llamada
+from test_agente import LLMGuion, borrar, llamada
 
 from agente import __main__ as cli
 from agente import config
@@ -30,7 +30,7 @@ class Base(unittest.TestCase):
 
     def tearDown(self):
         self.h.detener_todos()
-        shutil.rmtree(self.dir, ignore_errors=True)
+        borrar(self.dir)
 
 
 class Call(Base):
