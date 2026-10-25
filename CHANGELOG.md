@@ -5,7 +5,7 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
-## [Sin publicar]
+## [4.10.1] — 2026-10-25 (Instalar motor en cualquier PC)
 
 - **«Instalar motor» fallaba en la app instalada («"python" no se reconoce...»):**
   - Abierta desde el escritorio, la app recibe el entorno del Explorador, que en algunos equipos no lleva el PATH
