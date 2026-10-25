@@ -5,7 +5,7 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
-## [Sin publicar]
+## [4.10.0] — 2026-10-25 (Cualquier modelo, control de procesos, apps Tauri abiertas y memoria)
 
 - **El agente funciona con cualquier modelo, no solo con Qwen3.6:**
   - `agente.json` venía con `"modelo": "qwen3.6-35b-a3b"`. Desde Bionic (MCP) o la consola, el motor ignoraba el
