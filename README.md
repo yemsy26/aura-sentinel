@@ -25,7 +25,8 @@ Tools solo hacen falta para compilar.
    original, compara su huella con la SHA-256 de las notas de la versión:
    `(Get-FileHash .\AuraSentinel_<versión>_x64-setup.exe).Hash`.
 3. Se instala en `%LOCALAPPDATA%\AuraSentinel`, sin permisos de administrador.
-4. Instala Bionic o LM Studio, `uv` o Python 3.11+ y, si no los tienes, Edge o Chrome (tabla de abajo).
+4. Instala Bionic o LM Studio y, si no los tienes, Edge o Chrome (tabla de abajo). Python no hace falta: si no
+   encuentra `uv` ni Python 3.12, el motor descarga `uv` (verificado con su SHA-256) y este trae Python 3.12.
 5. Abre Aura → **Configuración → Motor → Instalar motor**: crea el entorno de Python del motor, pasa sus pruebas
    y lo registra en Bionic / LM Studio. Al terminar, pulsa **Comprobar de nuevo**.
 6. Descarga el modelo con `descargar_modelo.bat` (en `%LOCALAPPDATA%\AuraSentinel\motor`) y, con Bionic abierto,
@@ -45,7 +46,7 @@ Sigue los pasos 1 a 4. La tabla de requisitos también vale para el instalador.
 | Rust (toolchain `x86_64-pc-windows-msvc`) | backend de Tauri | https://rustup.rs/ |
 | Build Tools de Visual Studio con «Desarrollo para el escritorio con C++» | compilar Rust en Windows | https://visualstudio.microsoft.com/visual-cpp-build-tools/ |
 | WebView2 Runtime (viene con Windows 11) | ventana de la app | https://developer.microsoft.com/microsoft-edge/webview2/ |
-| `uv` (recomendado) o Python 3.11+ | entorno del motor | https://docs.astral.sh/uv/ |
+| `uv` o Python 3.12 (opcional: si faltan, `instalar.bat` descarga `uv` y Python 3.12) | entorno del motor | https://docs.astral.sh/uv/ |
 | Bionic o LM Studio | sirve el modelo (puertos 1235 / 1234) | https://lmstudio.ai/ |
 | Edge o Chrome | el agente prueba ahí las páginas web | ya instalado en Windows |
 | GPU NVIDIA (recomendado) y ~32 GB de RAM | velocidad del modelo (con menos, ver abajo) | |
@@ -116,7 +117,7 @@ npm run tauri build
 
 Deja `AuraSentinel_<versión>_x64-setup.exe` (NSIS, por usuario, sin administrador) y un `.msi` en
 `src-tauri\target\release\bundle\` (o en `%CARGO_TARGET_DIR%\release\bundle\`). El instalador incluye el motor:
-la primera vez, **Configuración → Motor → Instalar motor** crea su entorno de Python (necesita `uv` o Python).
+la primera vez, **Configuración → Motor → Instalar motor** crea su entorno de Python (si falta, descarga `uv` y Python 3.12).
 El modelo se instala aparte (`descargar_modelo.bat` dentro de la carpeta `motor` de la app, o desde LM Studio).
 Usa el **`setup.exe`**: instala en `%LOCALAPPDATA%\AuraSentinel`, donde el motor puede crear su `.venv`. El `.msi`
 instala en `Program Files` y ahí «Instalar motor» solo funciona ejecutándolo como administrador.

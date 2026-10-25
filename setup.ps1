@@ -53,7 +53,7 @@ $uv = Get-Command uv -ErrorAction SilentlyContinue
 $python = Version python '--version'
 if ($uv) { Ok "uv (crea el entorno de Python del motor con Python 3.12)" }
 elseif ($python -match 'Python 3\.(1[1-9]|[2-9]\d)') { Ok $python }
-else { Falta "Python 3.11+ (https://www.python.org/) o uv (https://docs.astral.sh/uv/)"; $bloquea = $true }
+else { Ok "Python: sin uv ni Python 3.12, instalar.bat descarga uv (verificado con su SHA-256) y este trae Python 3.12" }
 $edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Google\Chrome\Application\chrome.exe") | Where-Object { Test-Path $_ }
 if ($edge) { Ok "Navegador para probar las páginas web: $(Split-Path -Leaf $edge[0])" } else { Aviso "Sin Edge ni Chrome: el agente no podrá probar páginas web." }
 $gpu = Version nvidia-smi '--query-gpu=name,memory.total', '--format=csv,noheader'

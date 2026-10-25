@@ -5,6 +5,20 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [Sin publicar]
+
+- **«Instalar motor» fallaba en la app instalada («"python" no se reconoce...»):**
+  - Abierta desde el escritorio, la app recibe el entorno del Explorador, que en algunos equipos no lleva el PATH
+    del usuario (pasa si es muy largo). `instalar.bat` no encontraba `uv` ni `python`.
+  - `instalar.bat` busca `uv` también donde lo dejan sus instaladores (`%USERPROFILE%\.local\bin`, `.cargo\bin`,
+    WinGet, scoop). Si no hay, descarga `uv` 0.13.0 de su repositorio oficial y solo lo usa si cuadra su SHA-256;
+    `uv` crea el entorno con Python 3.12 y lo descarga si el equipo no lo tiene. Ya no hace falta instalar Python.
+  - Versiones exactas de las dependencias en `motor/requisitos.txt` (las del entorno con el que pasan todas las
+    pruebas): otro equipo queda igual que el de desarrollo.
+  - La app y el motor completan el PATH con las carpetas guardadas del sistema y del usuario: el motor (también
+    como MCP de Bionic), sus pruebas y los comandos del usuario encuentran `uv`, Python, `cargo`... aunque se
+    abran desde el escritorio.
+
 ## [4.10.0] — 2026-10-25 (Cualquier modelo, control de procesos, apps Tauri abiertas y memoria)
 
 - **El agente funciona con cualquier modelo, no solo con Qwen3.6:**

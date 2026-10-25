@@ -24,6 +24,7 @@ motor/lecciones.md
 /motor/pasajes.db*
 /motor/lecciones_uso.*
 /motor/complementos/
+/motor/.herramientas/
 
 # Espacio por defecto de Aura (los proyectos que crea el agente no son parte del repositorio)
 /workspace/

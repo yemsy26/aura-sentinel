@@ -31,8 +31,89 @@ fn save_project_country(app: tauri::AppHandle, workspace_path: String, country: 
     user_profile::save_project_country(&app, &workspace_path, country)
 }
 
+/// Añade al PATH heredado las carpetas del PATH del sistema y del usuario guardadas en Windows que no traiga.
+/// Abierta desde el escritorio, la app recibe el entorno del Explorador, que puede no llevar el PATH del usuario
+/// (pasa si es muy largo): sin él, el motor, su instalador y los comandos del usuario no encuentran uv, Python, cargo...
+#[cfg(windows)]
+fn complete_path() {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegGetValueW(
+            key: isize,
+            subkey: *const u16,
+            value: *const u16,
+            flags: u32,
+            kind: *mut u32,
+            data: *mut core::ffi::c_void,
+            size: *mut u32,
+        ) -> i32;
+    }
+    const HKEY_CURRENT_USER: isize = 0x8000_0001_u32 as i32 as isize;
+    const HKEY_LOCAL_MACHINE: isize = 0x8000_0002_u32 as i32 as isize;
+    const RRF_RT_REG_SZ: u32 = 0x0000_0002; // un REG_EXPAND_SZ llega ya expandido
+    let wide = |text: &str| std::ffi::OsStr::new(text).encode_wide().chain(Some(0)).collect::<Vec<_>>();
+    let saved = |key: isize, subkey: &str| {
+        let mut data = vec![0u16; 32_768]; // el máximo de una variable de entorno
+        let mut size = (data.len() * 2) as u32;
+        let (subkey, value) = (wide(subkey), wide("Path"));
+        let status = unsafe {
+            let data = data.as_mut_ptr().cast();
+            RegGetValueW(key, subkey.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), data, &mut size)
+        };
+        let length = if status == 0 { data.iter().position(|&c| c == 0).unwrap_or(0) } else { 0 };
+        std::ffi::OsString::from_wide(&data[..length]).to_string_lossy().into_owned()
+    };
+    let saved = [
+        saved(HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+        saved(HKEY_CURRENT_USER, "Environment"),
+    ];
+    std::env::set_var("PATH", merged_path(&std::env::var("PATH").unwrap_or_default(), &saved));
+}
+
+/// `current` más las carpetas de `saved` (valores de PATH) que no tenga, sin repetir ni reordenar.
+#[cfg(windows)]
+fn merged_path(current: &str, saved: &[String]) -> String {
+    let key = |dir: &str| dir.trim().trim_end_matches(['\\', '/']).to_lowercase();
+    let mut path = current.trim_end_matches(';').to_string();
+    let mut known: std::collections::HashSet<String> = path.split(';').map(key).collect();
+    known.insert(String::new()); // las vacías no se añaden
+    for dir in saved.iter().flat_map(|value| value.split(';')) {
+        if known.insert(key(dir)) {
+            if !path.is_empty() {
+                path.push(';');
+            }
+            path.push_str(dir);
+        }
+    }
+    path
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::merged_path;
+
+    #[test]
+    fn adds_the_missing_user_path() {
+        // Abierta desde el escritorio, la app instalada recibía solo el PATH del sistema: sin uv, Python ni cargo.
+        let saved = [
+            r"C:\Windows;C:\Windows\System32\;;".to_string(),
+            r"C:\u\.local\bin;C:\U\.cargo\bin;C:\u\.local\bin".to_string(),
+        ];
+        assert_eq!(
+            merged_path(r"C:\Windows;C:\Windows\system32;", &saved),
+            r"C:\Windows;C:\Windows\system32;C:\u\.local\bin;C:\U\.cargo\bin"
+        );
+        assert_eq!(merged_path("", &[r"C:\Windows".to_string()]), r"C:\Windows");
+        assert_eq!(merged_path(r"C:\a", &["; ".to_string()]), r"C:\a");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    complete_path();
+
     // Aislamiento de hardware: sin GPU en WebView2, la VRAM queda para el modelo. Se añade a lo que ya
     // hubiera (p. ej. --remote-debugging-port=9333 para depurar la interfaz) en vez de pisarlo.
     const NO_GPU: &str = "--disable-gpu --disable-gpu-compositing";

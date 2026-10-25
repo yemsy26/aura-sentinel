@@ -16,7 +16,7 @@ from test_agente import LLMGuion, borrar, llamada
 
 from agente import __main__ as cli
 from agente import config
-from agente.entorno import limpio
+from agente.entorno import completo, limpio
 from agente.herramientas import Herramientas
 from agente.verificacion import Informe, bats, con_call
 
@@ -88,6 +88,14 @@ class Entorno(unittest.TestCase):
         self.assertEqual(sin_guardar["PATH"], r"C:\Windows;C:\u\.cargo\bin")
         guardado = limpio(env, guardada=lambda nombre: env.get(nombre) if nombre == "CARGO_TARGET_DIR" else None)
         self.assertEqual(guardado["CARGO_TARGET_DIR"], r"C:\aura\target-audit")  # la puso el usuario: se respeta
+
+    def test_completa_el_path_sin_el_del_usuario(self):
+        """Aura instalado y abierto desde el escritorio recibía solo el PATH del sistema: sin uv, Python ni cargo."""
+        guardadas = [r"C:\Windows", r"C:\Windows\System32\\", "", r"C:\u\.local\bin", r"C:\U\.cargo\bin", r"C:\u\.local\bin"]
+        self.assertEqual(completo(r"C:\Windows;C:\Windows\system32;", guardadas),
+                         r"C:\Windows;C:\Windows\system32;C:\u\.local\bin;C:\U\.cargo\bin")
+        self.assertEqual(completo("", [r"C:\Windows"]), r"C:\Windows")
+        self.assertEqual(completo(r"C:\a", ["", " "]), r"C:\a")
 
 
 class ProcesosAjenos(Base):

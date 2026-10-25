@@ -53,6 +53,7 @@
       "../motor/tests/*.py": "motor/tests/",
       "../motor/agente.json": "motor/agente.json",
       "../motor/agente_mcp.py": "motor/agente_mcp.py",
+      "../motor/requisitos.txt": "motor/requisitos.txt",
       "../motor/PROMPT_SISTEMA_MCP.txt": "motor/PROMPT_SISTEMA_MCP.txt",
       "../motor/LEEME.md": "motor/LEEME.md",
       "../motor/agente.bat": "motor/agente.bat",

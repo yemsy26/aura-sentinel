@@ -14,8 +14,11 @@ que escriben como texto Qwen, Mistral, Llama, Gemma o en JSON suelto.
 
 Lo más sencillo es `setup.ps1` en la raíz del repositorio: hace todo lo de abajo. A mano, desde esta carpeta:
 
-1. `instalar.bat`: crea `.venv` (con `uv` si está; si no, con `python -m venv`), instala `mcp`, `ruff`, `vulture`
-   y `playwright` (usa el Edge o Chrome del equipo: no descarga navegadores), pasa las pruebas y registra el MCP.
+1. `instalar.bat`: crea `.venv` con Python 3.12 e instala las versiones exactas de `requisitos.txt` (`mcp`, `ruff`,
+   `vulture`, `playwright`...). Usa `uv` aunque no esté en el PATH; si no hay, descarga `uv` 0.13.0 de su
+   repositorio (solo lo usa si cuadra su SHA-256) y `uv` trae Python 3.12 si falta. Sin conexión a GitHub, usa
+   `py -3.12` o `python`. `playwright` usa el Edge o Chrome del equipo (no descarga navegadores). Después pasa las
+   pruebas y registra el MCP.
 2. `descargar_modelo.bat`: baja de Hugging Face (`unsloth/Qwen3.6-35B-A3B-GGUF`) el modelo (16,8 GB) y su visión
    (`mmproj-F16.gguf`, 0,9 GB) a la carpeta de modelos de LM Studio. Reanuda si se corta y comprueba el SHA-256
    publicado; si ya están y cuadran, no baja nada. `--sin-vision` omite la visión.
