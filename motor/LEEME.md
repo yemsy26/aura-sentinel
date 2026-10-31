@@ -143,12 +143,12 @@ crear un venv o `pip`/`npm`/`uv install` tiene siempre al menos 300 s para no de
 `calcular(codigo)` hace cálculo exacto con SymPy (ecuaciones, derivadas, integrales, límites, matrices, primos, decimales
 con la precisión pedida) en un proceso aparte y con tiempo límite. Solo calcula: rechaza importar módulos del sistema,
 abrir archivos, `eval`/`exec` y atributos internos.
-`resolver_sat(archivo)` resuelve una fórmula DIMACS CNF con el motor complementario
-[Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust) (CDCL, capa de paridad GF(2), ruptura de simetrías y
-varios hilos) y comprueba el modelo contra cada cláusula antes de darlo por bueno. Para sudokus, horarios, coloreado o
+`resolver_sat(archivo)` resuelve una fórmula DIMACS CNF o un `.opb` (restricciones lineales, con `min:` para optimizar)
+con el motor complementario [Sat-hibrido-rust](https://github.com/yemsy26/Sat-hibrido-rust) (CDCL, paridad GF(2),
+congruencia y ruptura de simetrías) y comprueba la solución contra el archivo antes de darla por buena. Para sudokus, horarios, coloreado o
 asignaciones, el agente codifica el problema con un script, lo resuelve y comprueba la solución decodificada (guía
 `matematicas`). Es un motor complementario predeterminado: `instalar.bat` lo activa (descarga su versión
-publicada con la SHA-256 comprobada o lo compila desde su repositorio) salvo que lo hayas desactivado
+publicada con la SHA-256 comprobada) salvo que lo hayas desactivado
 (`.venv\Scripts\python.exe -m agente.complementos desactivar sat-hibrido`); sin él, el agente usa python-sat en el
 proyecto.
 `experimentar(codigo, lenguaje)` prueba una API o una idea en `.agente\experimento` (python, node, powershell o bat),

@@ -1,4 +1,4 @@
-"""Pruebas del permiso para transacciones en blockchain y de las herramientas resolver_sat (hunt) y calcular (SymPy).
+"""Pruebas del permiso para transacciones en blockchain y de las herramientas resolver_sat y calcular (SymPy).
 
 Ningún comando de blockchain llega a ejecutarse: subprocess.Popen falla si se intenta.
 """
@@ -126,7 +126,7 @@ def palomar(palomas, nidos):
     return f"p cnf {palomas * nidos} {len(cl)}\n" + "".join(" ".join(map(str, c)) + " 0\n" for c in cl)
 
 
-@unittest.skipUnless(matematicas.ruta_hunt(), "falta bin/hunt.exe")
+@unittest.skipUnless(matematicas.ruta_sat(), "falta el motor SAT")
 class ResolverSat(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
@@ -174,10 +174,47 @@ class ResolverSat(unittest.TestCase):
 
     def test_sin_respuesta_y_sin_resolvedor(self):
         (self.dir / "f.cnf").write_text("p cnf 1 1\n1 0\n", encoding="utf-8")
-        with mock.patch.object(matematicas.subprocess, "run", side_effect=subprocess.TimeoutExpired("hunt", 1)):
+        with mock.patch.object(matematicas.subprocess, "run", side_effect=subprocess.TimeoutExpired("motor", 1)):
             self.assertIn("SIN RESPUESTA en 5 s", self.h.resolver_sat("f.cnf", segundos=5))
-        with mock.patch.object(matematicas, "ruta_hunt", return_value=None):
+        with mock.patch.object(matematicas, "ruta_sat", return_value=None):
             self.assertIn("no está activado", self.h.resolver_sat("f.cnf"))
+
+    def test_opb_optimo_con_coste_y_modelo_comprobados(self):
+        (self.dir / "p.opb").write_text("* barato\nmin: +3 x1 +2 x2 +4 x3 ;\n+1 x1 +1 x2 +1 x3 >= 2 ;\n+1 x1 +1 x3 >= 1 ;\n", encoding="utf-8")
+        r = despachar(self.h, "resolver_sat", {"archivo": "p.opb"})
+        self.assertTrue(r.startswith("ÓPTIMO: coste 5"), r)
+        self.assertIn("Variables verdaderas: 1 2", r)
+        self.assertEqual((self.dir / "p.modelo").read_text(encoding="utf-8").strip(), "v 1 2 -3 0")
+        self.assertIn("resolver_sat p.opb -> ÓPTIMO", self.h.evidencia_texto())
+
+    def test_opb_negado_sin_objetivo_e_imposible(self):
+        (self.dir / "a.opb").write_text("min: +2 ~x1 +1 x2 ;\n+1 x1 +1 x2 >= 1 ;\n", encoding="utf-8")
+        self.assertTrue(self.h.resolver_sat("a.opb").startswith("ÓPTIMO: coste 0"))
+        (self.dir / "b.opb").write_text("+1 x1 +1 x2 = 1 ;\n", encoding="utf-8")
+        self.assertTrue(self.h.resolver_sat("b.opb").startswith("SATISFACIBLE"))
+        (self.dir / "c.opb").write_text("+1 x1 >= 1 ;\n+1 ~x1 >= 1 ;\n", encoding="utf-8")
+        self.assertTrue(self.h.resolver_sat("c.opb").startswith("INSATISFACIBLE"))
+
+    def test_opb_mal_escrito_dice_donde(self):
+        for texto, esperado in (("+1 x1 x2 >= 1 ;\n", "restricción 1"), ("+1 x1 >= 1\n", "falta el ';'"), ("+1 x1 >= 1 ;\n+1 x2 ! 1 ;\n", "restricción 2")):
+            (self.dir / "m.opb").write_text(texto, encoding="utf-8")
+            self.assertIn(esperado, self.h.resolver_sat("m.opb"))
+
+    def test_opb_no_acepta_un_modelo_o_un_coste_falsos(self):
+        (self.dir / "f.opb").write_text("min: +1 x1 ;\n+1 x1 +1 x2 >= 1 ;\n", encoding="utf-8")
+
+        def falso(modelo, coste, codigo=30):
+            salida = json.dumps({"status": "OPTIMUM", "model": modelo, "cost": coste})
+            return mock.patch.object(matematicas.subprocess, "run", lambda orden, **_: subprocess.CompletedProcess(orden, codigo, salida, ""))
+
+        with falso([-1, -2], 0):
+            self.assertIn("no cumple la restricción 1", self.h.resolver_sat("f.opb"))
+        with falso([1, 2], 0):
+            self.assertIn("coste 1 y el resolvedor dijo 0", self.h.resolver_sat("f.opb"))
+        with falso([1, -2], 1, 124):
+            r = self.h.resolver_sat("f.opb", segundos=5)
+            self.assertTrue(r.startswith("MEJOR ENCONTRADA: coste 1"), r)
+            self.assertIn("sin demostrar", r)
 
 
 @unittest.skipUnless(importlib.util.find_spec("sympy"), "falta SymPy")

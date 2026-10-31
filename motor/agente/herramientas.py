@@ -1209,10 +1209,10 @@ ESQUEMAS = [
                    "con la precisión que pidas (N(expr, 50)). 'codigo' es Python con todo SymPy importado y x, y, z, t "
                    "ya definidos; se muestra el valor de la última línea. Ej.: solve(x**2 - 5*x + 6, x)",
        {"codigo": S, "segundos": I}, ["codigo"]),
-    _f("resolver_sat", "Resuelve una fórmula booleana en DIMACS CNF (un .cnf del proyecto) con el resolvedor SAT del "
-                       "motor. Para restricciones y combinatoria (sudoku, horarios, coloreado, asignaciones, "
-                       "planificación): codifícalas con un script (guia('matematicas')). Devuelve SATISFACIBLE con el "
-                       "modelo comprobado (en el .modelo) o INSATISFACIBLE (no hay solución).",
+    _f("resolver_sat", "Resuelve un .cnf (DIMACS) o un .opb (restricciones lineales, con min: para optimizar) del "
+                       "proyecto con el resolvedor del motor. Para restricciones y combinatoria (sudoku, horarios, "
+                       "coloreado, asignaciones, planificación): codifícalas con un script (guia('matematicas')). "
+                       "Devuelve SATISFACIBLE u ÓPTIMO con el modelo comprobado (en el .modelo) o INSATISFACIBLE.",
        {"archivo": S, "segundos": I, "modelo": S}, ["archivo"]),
     _f("guia", "Buenas prácticas ACTUALES y cómo verificar para: python, pygame, html-juego, web, api, java, rust, go, "
                "node, dotnet, docker, despliegue, android, flutter, tauri, blockchain, evm, solana, mev, bases-de-datos, "

@@ -38,11 +38,11 @@ class Complementos(Temporal):
         self.addCleanup(parche.stop)
 
     def release(self, binario: bytes, sha: str):
-        archivos = {"https://api.github.com/repos/yemsy26/Sat-hibrido-rust/releases/latest": json.dumps({
-            "tag_name": "v1.0.0", "assets": [
-                {"name": "hunt-x86_64-pc-windows-msvc.exe", "browser_download_url": "https://x/hunt.exe"},
-                {"name": "hunt-x86_64-pc-windows-msvc.exe.sha256", "browser_download_url": "https://x/hunt.sha"}]}).encode(),
-            "https://x/hunt.exe": binario, "https://x/hunt.sha": f"{sha}  hunt.exe\n".encode()}
+        archivos = {"https://api.github.com/repos/yemsy26/Sat-hibrido-rust/releases/tags/v0.2.0": json.dumps({
+            "tag_name": "v0.2.0", "assets": [
+                {"name": "motor-x86_64-pc-windows-msvc.exe", "browser_download_url": "https://x/motor.exe"},
+                {"name": "motor-x86_64-pc-windows-msvc.exe.sha256", "browser_download_url": "https://x/motor.sha"}]}).encode(),
+            "https://x/motor.exe": binario, "https://x/motor.sha": f"{sha}  motor.exe\n".encode()}
         return mock.patch.object(complementos, "_descargar", lambda url: archivos[url])
 
     def test_sin_activar_no_hay_herramienta(self):
@@ -52,8 +52,8 @@ class Complementos(Temporal):
         self.assertIn("github.com/yemsy26/Sat-hibrido-rust", datos[0]["repo"])
         self.assertEqual(datos[0]["usa"][0]["nombre"], "Chronos-VFS")
         with mock.patch.dict("os.environ", {}, clear=False) as entorno:
-            entorno.pop("AGENTE_HUNT", None)
-            self.assertIsNone(matematicas.ruta_hunt())
+            entorno.pop("AGENTE_SAT", None)
+            self.assertIsNone(matematicas.ruta_sat())
             (self.dir / "f.cnf").write_text("p cnf 1 1\n1 0\n", encoding="utf-8")
             r = Herramientas(self.dir).resolver_sat("f.cnf")
             self.assertIn("no está activado", r)
@@ -65,8 +65,8 @@ class Complementos(Temporal):
         datos = HUNT.read_bytes()
         with self.release(datos, hashlib.sha256(datos).hexdigest()):
             texto = complementos.activar("sat-hibrido", aviso=lambda _: None)
-        self.assertIn("versión v1.0.0", texto)
-        self.assertEqual(complementos.ruta("sat-hibrido"), self.dir / "complementos" / "sat-hibrido" / "hunt.exe")
+        self.assertIn("versión v0.2.0", texto)
+        self.assertEqual(complementos.ruta("sat-hibrido"), self.dir / "complementos" / "sat-hibrido" / "motor.exe")
         self.assertIn("desactivado", complementos.desactivar("sat-hibrido"))
         self.assertIsNone(complementos.ruta("sat-hibrido"))
 
@@ -75,22 +75,18 @@ class Complementos(Temporal):
             complementos.activar("sat-hibrido", aviso=lambda _: None)
         self.assertIsNone(complementos.ruta("sat-hibrido"))
 
-    def test_sin_version_publicada_compila_y_si_no_puede_lo_explica(self):
+    def test_sin_la_version_fijada_publicada_lo_explica(self):
         no_hay = urllib.error.HTTPError("u", 404, "Not Found", None, None)
         with mock.patch.object(complementos, "_descargar", side_effect=no_hay), \
-                mock.patch.object(complementos.shutil, "which", return_value=None), \
-                self.assertRaisesRegex(RuntimeError, "rustup"):
+                self.assertRaisesRegex(RuntimeError, "v0.2.0.*no está publicada"):
             complementos.activar("sat-hibrido", aviso=lambda _: None)
 
-    @unittest.skipUnless(HUNT, "activa antes sat-hibrido")
-    def test_sin_version_publicada_usa_el_codigo_del_repositorio(self):
-        def compilar(_c, destino, _aviso):
-            shutil.copyfile(HUNT, destino)
-            return "compilado de Sat-hibrido-rust@abc1234"
-
-        with mock.patch.object(complementos, "_desde_release", return_value=None), \
-                mock.patch.object(complementos, "_compilar", compilar):
-            self.assertIn("compilado de Sat-hibrido-rust@abc1234", complementos.activar("sat-hibrido", aviso=lambda _: None))
+    def test_una_instalacion_con_otra_version_se_actualiza(self):
+        activados = []
+        complementos._guardar({"sat-hibrido": {"activo": True, "origen": "versión v0.1.0"}})  # la de hunt.exe
+        with mock.patch.object(complementos, "activar", lambda id_, aviso=print: activados.append(id_) or "activado"):
+            self.assertEqual(complementos.asegurar(), ["activado"])
+        self.assertEqual(activados, ["sat-hibrido"])
 
     def test_un_binario_que_no_resuelve_no_se_activa(self):
         falso = self.dir / "falso.exe"
@@ -115,8 +111,7 @@ class Complementos(Temporal):
         self.assertEqual(activados, ["sat-hibrido"])
 
     def test_sin_red_la_instalacion_sigue(self):
-        with mock.patch.object(complementos, "_descargar", side_effect=urllib.error.URLError("sin red")), \
-                mock.patch.object(complementos.shutil, "which", return_value=None):
+        with mock.patch.object(complementos, "_descargar", side_effect=urllib.error.URLError("sin red")):
             mensajes = complementos.asegurar(aviso=lambda _: None)
         self.assertIn("no se pudo activar ahora", mensajes[0])
         self.assertIn("Motores complementarios", mensajes[0])

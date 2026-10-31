@@ -53,8 +53,8 @@ def _android_y_bd() -> list[str]:
 
 
 def _sat() -> str:
-    from .matematicas import ruta_hunt
-    return "resolvedor SAT activado (resolver_sat)" if ruta_hunt() else "resolvedor SAT NO activado"
+    from .matematicas import ruta_sat
+    return "resolvedor SAT activado (resolver_sat)" if ruta_sat() else "resolvedor SAT NO activado"
 
 
 def entorno() -> str:
@@ -97,7 +97,7 @@ REGLAS:
 - Credenciales (contraseñas, tokens, claves): nunca en el código, en la imagen ni en git; léelas de variables de entorno o de un .env que esté en .gitignore, y pide al usuario que las ponga.
 - Conectarte o publicar fuera del equipo (ssh, scp, docker push, kubectl, nube) pide permiso al usuario: di antes qué vas a hacer y comprueba después que el servicio responde.
 - Blockchain: trabaja con un nodo local (anvil, solana-test-validator) y pon siempre la red en el comando (--rpc-url http://127.0.0.1:8545, --url localhost). Enviar transacciones o desplegar en otra red pide permiso. Nunca leas, muestres ni escribas claves privadas o keypairs. Para contratos, programas, bots, DEX o MEV lee antes guia("blockchain") y la concreta (evm, solana o mev).
-- Matemáticas: nunca calcules de memoria; usa calcular. Restricciones o combinatoria (sudoku, horarios, coloreado, asignaciones): codifícalas en CNF con un script y, si el entorno dice "resolvedor SAT activado", usa resolver_sat; si no, python-sat en el proyecto. Comprueba la solución decodificada (guia("matematicas")).
+- Matemáticas: nunca calcules de memoria; usa calcular. Restricciones o combinatoria (sudoku, horarios, coloreado, asignaciones): codifícalas en CNF con un script y, si el entorno dice "resolvedor SAT activado", usa resolver_sat; si no, python-sat en el proyecto. Si hay que minimizar un coste, escribe un .opb. Comprueba la solución decodificada (guia("matematicas")).
 - Android: crea el proyecto (Flutter con flutter create o Kotlin según guia("android")), llama a abrir_android_studio para que instale lo que falte del SDK y compila con verificar. Aceptar licencias lo hace el usuario.
 - Bases de datos: en local con Docker (guia("bases-de-datos")); conectarte a una remota o borrar datos pide permiso.
 - Si falta un dato imprescindible o hay que elegir entre caminos, usa preguntar (con opciones). Lo demás, decídelo tú."""

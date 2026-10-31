@@ -24,5 +24,12 @@
   4. `resolver_sat("problema.cnf")`: SATISFACIBLE deja el modelo en `problema.modelo` (línea `v` con los literales; positivo = verdadero). INSATISFACIBLE = no hay solución con esas restricciones.
   5. Un script `decodificar.py` lee la línea `v`, reconstruye la solución y la COMPRUEBA contra el enunciado (filas, columnas, turnos...), no solo contra la CNF.
   6. Antes del caso grande, prueba la codificación con uno pequeño de solución conocida. Si sale INSATISFACIBLE y no debería, sobra una restricción o hay un signo cambiado.
+- Optimizar (el horario de menor coste, la asignación más barata): escribe `problema.opb`, una restricción por línea sobre `x1`, `x2`... con `>=`, `<=` o `=`, y `~x1` para negar; todo término lleva coeficiente:
+  ```text
+  min: +3 x1 +2 x2 +4 x3 ;
+  +1 x1 +1 x2 +1 x3 >= 2 ;
+  +2 x1 -1 ~x3 <= 1 ;
+  ```
+  `resolver_sat("problema.opb")`: ÓPTIMO da el coste demostrado; MEJOR ENCONTRADA es solo la mejor de ese tiempo, sin demostrar: dilo así y no la presentes como óptima. Para mochilas o coeficientes muy variados de más de 30 objetos, mejor programación dinámica o `ortools`. Sin `min:` solo busca una solución.
 - Si el programa del usuario debe resolver SAT él solo (sin el motor): `version("python-sat", "pypi")` (paquete `pysat`) o `z3-solver` para restricciones con números; en otros lenguajes, investiga su librería.
 - Tests: comprueban la solución decodificada contra el enunciado y un caso sin solución.
