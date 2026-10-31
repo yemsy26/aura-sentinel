@@ -6,7 +6,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import grande, lecciones
+from . import grande, lecciones, metricas
 from . import llm as cliente
 from . import mapa as mapa_repo
 from .contexto import Contexto
@@ -242,6 +242,18 @@ class Agente:
         with open(self.registro, "a", encoding="utf-8") as f:
             f.write(f"[{time.strftime('%H:%M:%S')}] {texto}\n")
 
+    def _medir(self, c: dict, args: dict, inicio: float, resultado: str) -> None:
+        metricas.anotar(self.h.dir_agente, tipo="llamada", paso=self.pasos_totales, nombre=c["name"],
+                        s=round(time.time() - inicio, 2), args_car=len(c.get("arguments") or ""),
+                        resultado_car=len(resultado), **metricas.detalle(c["name"], args))
+
+    def _compactar(self, forzar: bool = False) -> None:
+        inicio = time.time()
+        texto = self.ctx.compactar(self.llm, self._estado(), forzar=forzar)
+        metricas.anotar(self.h.dir_agente, tipo="compactar", paso=self.pasos_totales, s=round(time.time() - inicio, 2),
+                        texto=texto)
+        self._salida("aviso", f"({texto})")
+
     def _mostrar(self, paso: int, nombre: str, args: dict, resultado: str) -> None:
         visible = next((str(args[k]) for k in ARG_VISIBLE if k in args), "")
         primera = resultado.strip().splitlines()[0] if resultado.strip() else ""
@@ -304,14 +316,15 @@ class Agente:
             self.pasos_totales += 1
             self.h.paso = self.pasos_totales  # contador global: válido entre tareas sucesivas
             if self.ctx.hace_falta():
-                self._salida("aviso", f"({self.ctx.compactar(self.llm, self._estado())})")
+                self._compactar()
             enviados = list(self.ctx.mensajes)
+            t_modelo = time.time()
             try:
                 r = self.llm.chat(enviados, self.esquemas, self.ctx.max_salida(), razonar, self._progreso)
             except cliente.ErrorLLM as e:
                 self._limpiar_linea()
                 if "context" in str(e).lower() and len(self.ctx.mensajes) > 3:
-                    self._salida("aviso", f"({self.ctx.compactar(self.llm, self._estado(), forzar=True)})")
+                    self._compactar(forzar=True)
                     continue
                 self._salida("aviso", f"Error del modelo: {e}", "rojo")
                 return f"Error del modelo: {e}"
@@ -320,6 +333,13 @@ class Agente:
             llamadas = r["tool_calls"] or llamadas_en_texto(r["content"])
             contenido = (sin_llamadas(r["content"]) if llamadas and not r["tool_calls"]
                          else re.sub(r"<tool_call>.*?(</tool_call>|$)", "", r["content"], flags=re.DOTALL).strip())
+            uso = r["usage"] or {}
+            metricas.anotar(self.h.dir_agente, tipo="turno", paso=self.pasos_totales,
+                            modelo_s=round(time.time() - t_modelo, 2), espera_s=r.get("espera") and round(r["espera"], 2),
+                            tokens_entrada=uso.get("prompt_tokens"), tokens_salida=uso.get("completion_tokens"),
+                            razonamiento_car=len(r.get("reasoning") or ""), nota_car=len(contenido),
+                            args_car=sum(len(c.get("arguments") or "") for c in llamadas), llamadas=len(llamadas),
+                            fin=r["finish_reason"], timings=r.get("timings") or None)
             razonar = modo == "on"
 
             if not llamadas:
@@ -352,6 +372,7 @@ class Agente:
                 self._salida("nota", f"· {contenido[:300]}", "gris")
             hubo_error = False
             for c in llamadas:
+                t_llamada = time.time()
                 try:
                     args = coaccionar(c["name"], json.loads(c["arguments"] or "{}", strict=False))
                 except ValueError as e:
@@ -364,6 +385,7 @@ class Agente:
                         resultado = f"Argumentos JSON inválidos ({e}). Repite la llamada con JSON válido."
                     self.ctx.herramienta(c["id"], resultado)
                     self._mostrar(paso, c["name"], {}, resultado)
+                    self._medir(c, {}, t_llamada, resultado)
                     hubo_error = True
                     continue
 
@@ -386,6 +408,7 @@ class Agente:
                                        f"{self._rescatar()}]\n" + resumen)
                         self.ctx.herramienta(c["id"], "Tarea terminada.")
                         self._mostrar(paso, "terminar", {}, "Tarea terminada")
+                        self._medir(c, args, t_llamada, "Tarea terminada.")
                         self._guardar_resumen(resumen)
                         self._decir(resumen)
                         self._log(f"FIN: {resumen}")
@@ -422,6 +445,7 @@ class Agente:
                         resultado += f"\n[Plan, paso pendiente: {siguiente}]"
                 self._mostrar(paso, c["name"], args, resultado)
                 self._log(f"{c['name']} {json.dumps(args, ensure_ascii=False)[:300]} -> {resultado[:300]}")
+                self._medir(c, args, t_llamada, resultado)
                 hubo_error |= bool(re.match(ES_ERROR, resultado))
                 self.ctx.herramienta(c["id"], resultado)
             if hubo_error and modo == "auto":

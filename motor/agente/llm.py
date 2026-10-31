@@ -1,5 +1,6 @@
 """Cliente mínimo (solo stdlib) para la API de chat de LM Studio / Bionic (`/v1/chat/completions`)."""
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -86,7 +87,8 @@ class LLM:
             cuerpo["reasoning_effort"] = "none"
         req = urllib.request.Request(f"{self.base}/v1/chat/completions", json.dumps(cuerpo).encode(),
                                      {"Content-Type": "application/json"})
-        texto, razon, llamadas, fin, uso = [], [], {}, None, {}
+        texto, razon, llamadas, fin, uso, tiempos = [], [], {}, None, {}, {}
+        t0, espera = time.time(), None  # espera: hasta el primer token (cola y lectura del prompt)
         try:
             with urllib.request.urlopen(req, timeout=600) as r:
                 for linea in r:
@@ -100,8 +102,11 @@ class LLM:
                     if ev.get("error"):
                         raise ErrorLLM(str(ev["error"]))
                     uso = ev.get("usage") or uso
+                    tiempos = ev.get("timings") or tiempos  # llama.cpp: tokens del prompt leídos y generados, ms
                     for ch in ev.get("choices", []):
                         d = ch.get("delta", {})
+                        if espera is None and (d.get("reasoning_content") or d.get("content") or d.get("tool_calls")):
+                            espera = time.time() - t0
                         if d.get("reasoning_content"):
                             razon.append(d["reasoning_content"])
                         if d.get("content"):
@@ -125,4 +130,6 @@ class LLM:
             "tool_calls": [llamadas[i] for i in sorted(llamadas)],
             "finish_reason": fin,
             "usage": uso,
+            "espera": espera,
+            "timings": tiempos,
         }
