@@ -73,8 +73,8 @@ class Informe:
             if lista:
                 partes.append(f"{titulo}:\n" + "\n".join(f"- {x}" for x in lista[:25]))
         if self.previos:
-            partes.append(f"PREEXISTENTES ({len(self.previos)}; ya estaban antes del modo grande y no son de esta parte: "
-                          "no los toques):\n" + "\n".join(f"- {x[:160]}" for x in self.previos[:5]))
+            partes.append(f"PREEXISTENTES ({len(self.previos)}; ya estaban antes de esta tarea: no los toques salvo que "
+                          "el usuario lo pida):\n" + "\n".join(f"- {x[:160]}" for x in self.previos[:5]))
         txt = "\n".join(partes)
         return txt if len(txt) <= maximo else txt[:maximo - 40] + "\n[... informe recortado]"
 
@@ -185,7 +185,7 @@ def lint_python(raiz: Path, rutas: list[Path], inf: Informe, rapido: bool = Fals
             inf.avisos.append(detalle)
 
 
-def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None = None) -> None:
+def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None = None, tope: int = 12) -> None:
     """solo = carpeta verificada: el análisis mira todo el proyecto (los usos pueden estar fuera de ella) pero solo
     informa de lo que hay dentro."""
     vulture = BIN / "vulture.exe"
@@ -226,8 +226,16 @@ def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None
             inf.avisos.append(f"{_rel(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' se define pero NUNCA se usa "
                               f"(¿falta llamarla/conectarla al flujo principal?)")
         n += 1
-        if n >= 12:
+        if n >= tope:
             break
+
+
+def muertos_ahora(raiz: Path) -> set[str]:
+    """El código sin usar que ya hay (normalizado). Un módulo existente puede ofrecer funciones que nadie llama dentro
+    del proyecto: al empezar una tarea no son piezas por conectar, y exigir corregirlas hacía borrar código ajeno."""
+    inf = Informe()
+    codigo_muerto(raiz, archivos(raiz, ".py"), inf, tope=10_000)
+    return {normalizar(e) for e in inf.errores + inf.avisos}
 
 
 def _modulos_proyecto(rutas: list[Path]) -> set[str]:
@@ -821,13 +829,14 @@ def normalizar(error: str) -> str:
 
 def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maximo: int = 6000,
               previos: set[str] | None = None, idiomas_parcial: list[str] | None = None) -> tuple[str, int]:
-    """Devuelve (informe, número de errores). previos = errores normalizados que no cuentan (modo grande)."""
+    """Devuelve (informe, número de errores). previos = errores y avisos normalizados que ya estaban: no cuentan."""
     inf = informe_proyecto(raiz, python, ruta, segundos, idiomas_parcial)
     if isinstance(inf, str):
         return inf, 1
     if previos:
-        inf.previos = [e for e in inf.errores if normalizar(e) in previos]
+        inf.previos = [re.sub(r"(NUNCA se usa).*", r"\1", e) for e in inf.errores + inf.avisos if normalizar(e) in previos]
         inf.errores = [e for e in inf.errores if normalizar(e) not in previos]
+        inf.avisos = [a for a in inf.avisos if normalizar(a) not in previos]
     return inf.texto(maximo), len(inf.errores)
 
 

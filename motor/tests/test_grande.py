@@ -265,6 +265,52 @@ class TestPreexistentes(Temporal):
         self.assertGreater(h.verificacion["errores"], 0)
 
 
+class TestCodigoSinUsarPrevio(Temporal):
+    PREVIO = "def formatear(d):\n    return d\n\n\ndef ayuda():\n    return 1\n\n\nclass Caja:\n    def abrir(self):\n        return ayuda()\n\n\n"
+
+    def test_lo_que_ya_estaba_no_bloquea_ni_se_pide_borrar(self):
+        escribir(self.dir, "util.py", self.PREVIO + "print(Caja)\n")
+        h = Herramientas(self.dir)
+        h.nueva_tarea(1, "corrige un error")
+        informe = h.verificar_cmd()
+        self.assertEqual(h.verificacion["errores"], 0, informe)
+        self.assertIn("PREEXISTENTES (", informe)
+        self.assertIn("salvo que el usuario lo pida", informe)
+        self.assertIn("'formatear'", informe)
+        self.assertIn("'abrir'", informe)
+        self.assertGreater(informe.index("'abrir'"), informe.index("PREEXISTENTES ("))  # un aviso previo no pide revisarlo
+        self.assertNotIn("bórrala", informe)
+
+    def test_lo_que_deja_sin_conectar_la_tarea_si_bloquea(self):
+        escribir(self.dir, "util.py", self.PREVIO + "print(Caja, Caja().abrir())\n")
+        h = Herramientas(self.dir)
+        h.nueva_tarea(1, "añade algo")
+        escribir(self.dir, "nuevo.py", "def sin_conectar():\n    return 1\n")
+        informe = h.verificar_cmd()
+        self.assertEqual(h.verificacion["errores"], 1, informe)
+        self.assertIn("'sin_conectar' NUNCA se usa", informe)
+        h.nueva_tarea(5, "")  # 'continúa' no renueva la foto: sigue siendo de la tarea
+        h.verificar_cmd()
+        self.assertEqual(h.verificacion["errores"], 1)
+
+    def test_usada_antes_y_huerfana_por_la_tarea_bloquea(self):
+        escribir(self.dir, "util.py", "def ayuda():\n    return 1\n\n\nprint(ayuda())\n")
+        h = Herramientas(self.dir)
+        h.nueva_tarea(1, "quita el print")
+        escribir(self.dir, "util.py", "def ayuda():\n    return 1\n")
+        informe = h.verificar_cmd()
+        self.assertEqual(h.verificacion["errores"], 1, informe)
+        self.assertIn("'ayuda' NUNCA se usa", informe)
+
+    def test_modo_grande_manda_su_propia_lista(self):
+        escribir(self.dir, "util.py", "def vieja():\n    return 1\n")
+        h = Herramientas(self.dir)
+        h.nueva_tarea(1, "algo")
+        h.errores_previos = set()  # el modo grande empieza después: lo que no esté en su lista cuenta
+        h.verificar_cmd()
+        self.assertEqual(h.verificacion["errores"], 1)
+
+
 class TestVerificarSubcarpeta(Temporal):
     def test_codigo_sin_usar_mira_todo_el_proyecto(self):
         escribir(self.dir, "main.py", "from inventario.servicio import Inventario\n\n\ndef fuera_de_carpeta():\n    pass\n\n\n"

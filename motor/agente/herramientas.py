@@ -15,7 +15,7 @@ from pathlib import Path
 from . import android, conocimiento, lecciones, matematicas, pantalla, procesos
 from . import mapa as mapa_repo
 from .mapa import PATRONES_MAPA
-from .verificacion import chequeo_rapido, con_call, correr, es_codigo, ignorado, verificar
+from .verificacion import chequeo_rapido, con_call, correr, es_codigo, ignorado, muertos_ahora, verificar
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
           "what", "este", "esta", "esto", "hay", "hacer", "puedo", "cual", "cuál", "cómo", "qué", "use", "using"}
@@ -290,6 +290,7 @@ class Herramientas:
         self.preguntar_cb = None            # preguntar_cb(pregunta, opciones) -> respuesta; lo conecta el bucle
         self.preguntas = 0
         self.errores_previos: set[str] | None = None  # modo grande: errores que ya estaban (no cuentan)
+        self.muertos_previos: set[str] = set()  # código sin usar que ya estaba al empezar la tarea (no cuenta)
         self.idiomas_parcial: list[str] | None = None  # modo grande: archivos de la parte en curso (idiomas a medias)
 
     def nueva_tarea(self, paso_inicio: int = 0, texto: str = "") -> None:
@@ -297,8 +298,9 @@ class Herramientas:
         self.evidencia.clear()
         self.preguntas = 0
         self.inicio_tarea = paso_inicio
-        if texto.strip():
+        if texto.strip():  # 'continúa' y las partes del modo grande siguen con la foto que había
             self._anotar_checkpoints(texto)
+            self.muertos_previos = muertos_ahora(self.raiz)
 
     def python_proyecto(self) -> str:
         venv = self.raiz / ".venv" / "Scripts" / "python.exe"
@@ -931,7 +933,8 @@ class Herramientas:
         if re.match(r"https?://", ruta or ""):  # la página la abre verificar; una URL daba «No existe» y otra vuelta
             ruta, nota = ".", "\n(verificar revisa el proyecto, también la web en el navegador; para mirar una URL usa ver_pantalla)"
         informe, errores = verificar(self.raiz, self.python_proyecto(), ruta, max(4, min(int(segundos), 60)), self.max_chars,
-                                     previos=self.errores_previos, idiomas_parcial=self.idiomas_parcial)
+                                     previos=self.muertos_previos if self.errores_previos is None else self.errores_previos,
+                                     idiomas_parcial=self.idiomas_parcial)
         subcarpeta = ruta not in ("", ".") and (self.raiz / ruta).is_dir()  # un archivo verifica todo el proyecto
         self.verificacion = {"paso": self.paso, "errores": errores, "informe": informe, "ruta": ruta if subcarpeta else "."}
         if errores == 0:
