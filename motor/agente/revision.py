@@ -44,6 +44,8 @@ Comprueba, con el número de línea como prueba:
 7. Si un requisito nombra una API, import, opción o comando que NO existe en la versión que usa el proyecto (lo dicen las
    PRÁCTICAS ACTUALES o el compilador), usar la forma actual es una desviación justificada: ponlo como
    CUMPLE (desviación justificada: <motivo>), nunca CRITICO, y no pidas volver a la forma del usuario.
+8. Lo que la verificación lista como PREEXISTENTES ya estaba antes de esta tarea: una función sin usar puede ser parte de lo
+   que ofrece el módulo. No es un problema ni pidas borrarla, salvo que la petición trate de eso.
 Ignora estilo y gustos. No inventes problemas: si no ves la línea que lo demuestra, no lo pongas. Las PRÁCTICAS ACTUALES mandan sobre lo que recuerdes de versiones antiguas.
 Gravedad por la consecuencia: CRITICO si, tal como está el código, al ejecutarlo algo falla o un requisito no se cumple;
 MEDIO si solo fallaría en otras condiciones o es mejorable. Lo que compruebas y está bien no es un problema: nunca lo

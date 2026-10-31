@@ -302,6 +302,39 @@ class TestCodigoSinUsarPrevio(Temporal):
         self.assertEqual(h.verificacion["errores"], 1, informe)
         self.assertIn("'ayuda' NUNCA se usa", informe)
 
+    def test_lo_previo_no_tapa_lo_nuevo_con_el_tope(self):
+        escribir(self.dir, "viejo.py", "".join(f"def vieja_{chr(97 + i)}():\n    return {i}\n\n\n" for i in range(20)))
+        h = Herramientas(self.dir)
+        h.nueva_tarea(1, "añade algo")
+        self.assertEqual(len(h.muertos_previos), 20)  # la foto no se queda en los 12 primeros
+        escribir(self.dir, "zzz.py", "def nueva():\n    return 1\n")  # vulture la lista la última
+        informe = h.verificar_cmd()
+        self.assertEqual(h.verificacion["errores"], 1, informe)
+        self.assertIn("'nueva' NUNCA se usa", informe)
+
+    def test_tarea_interrumpida_no_convierte_su_trabajo_en_previo(self):
+        escribir(self.dir, "util.py", "def vieja():\n    return 1\n")
+        h = Herramientas(self.dir)
+        h.nueva_tarea(1, "primera")
+        escribir(self.dir, "a_medias.py", "def sin_conectar():\n    return 1\n")
+        h.tarea_interrumpida()
+        escribir(self.dir, "del_usuario.py", "def suya():\n    return 1\n")  # la escribe el usuario tras parar
+        h = Herramientas(self.dir)  # se reabrió Aura
+        h.nueva_tarea(9, "otra petición")
+        informe = h.verificar_cmd()
+        self.assertEqual(h.verificacion["errores"], 1, informe)
+        self.assertIn("'sin_conectar' NUNCA se usa", informe)
+        self.assertNotIn("'vieja' NUNCA se usa: el", informe)
+        self.assertNotIn("'suya' NUNCA se usa: el", informe)
+
+    def test_continua_tras_reabrir_conserva_la_foto(self):
+        escribir(self.dir, "util.py", "def vieja():\n    return 1\n")
+        Herramientas(self.dir).nueva_tarea(1, "primera")
+        h = Herramientas(self.dir)
+        h.nueva_tarea(1, "")  # 'continúa' en una sesión nueva
+        h.verificar_cmd()
+        self.assertEqual(h.verificacion["errores"], 0)
+
     def test_modo_grande_manda_su_propia_lista(self):
         escribir(self.dir, "util.py", "def vieja():\n    return 1\n")
         h = Herramientas(self.dir)

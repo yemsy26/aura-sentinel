@@ -298,9 +298,26 @@ class Herramientas:
         self.evidencia.clear()
         self.preguntas = 0
         self.inicio_tarea = paso_inicio
-        if texto.strip():  # 'continúa' y las partes del modo grande siguen con la foto que había
+        if texto.strip():
             self._anotar_checkpoints(texto)
-            self.muertos_previos = muertos_ahora(self.raiz)
+            self.muertos_previos = muertos_ahora(self.raiz) - set(self._foto().get("sin_conectar", []))
+            self._guardar_foto(foto=sorted(self.muertos_previos))
+        elif not self.muertos_previos:  # 'continúa' tras reabrir Aura sigue con la foto de la tarea que continúa
+            self.muertos_previos = set(self._foto().get("foto", []))
+
+    def tarea_interrumpida(self) -> None:
+        """Lo que queda sin conectar es trabajo a medias de la tarea: la siguiente no debe tomarlo por código previo."""
+        self._guardar_foto(foto=sorted(self.muertos_previos), sin_conectar=sorted(muertos_ahora(self.raiz) - self.muertos_previos))
+
+    def _foto(self) -> dict:
+        try:
+            return json.loads((self.dir_agente / "sin_usar.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def _guardar_foto(self, **datos) -> None:
+        self.dir_agente.mkdir(exist_ok=True)
+        (self.dir_agente / "sin_usar.json").write_text(json.dumps(datos, ensure_ascii=False), encoding="utf-8")
 
     def python_proyecto(self) -> str:
         venv = self.raiz / ".venv" / "Scripts" / "python.exe"

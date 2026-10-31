@@ -19,7 +19,7 @@ from pathlib import Path
 from . import mapa
 from .contexto import Contexto
 from .herramientas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS, NO_VERSIONAR, recortar
-from .verificacion import informe_proyecto, normalizar
+from .verificacion import informe_proyecto, muertos_ahora, normalizar
 
 EXPLICITO = re.compile(r"^\s*/grande\b|\bmodo grande\b", re.IGNORECASE)
 TRANSVERSAL = re.compile(
@@ -410,7 +410,8 @@ def _partes(agente, estado: dict) -> str:
     if "errores_previos" not in estado:
         agente._salida("nota", "(modo grande: verificación inicial para separar los errores que ya había...)", "gris")
         inf = informe_proyecto(h.raiz, h.python_proyecto())
-        estado["errores_previos"] = sorted({normalizar(e) for e in inf.errores}) if not isinstance(inf, str) else []
+        previos = {normalizar(e) for e in inf.errores} if not isinstance(inf, str) else set()
+        estado["errores_previos"] = sorted(previos | muertos_ahora(h.raiz))
         guardar(h.dir_agente, estado)
     while True:
         k = next((i for i, p in enumerate(estado["partes"], 1) if p["estado"] != "hecha"), None)

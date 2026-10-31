@@ -268,6 +268,12 @@ class Agente:
         """Un mandato del usuario. Con max_pasos es una parte del modo grande (no se vuelve a enrutar)."""
         if max_pasos is None and (como := grande.modo(texto, self._repo_grande(), self.h.dir_agente)):
             return grande.ejecutar(self, texto, como)
+        respuesta = self._tarea(texto, max_pasos, requeridos, etiqueta)
+        if max_pasos is None and INCOMPLETA.match(respuesta):
+            self.h.tarea_interrumpida()
+        return respuesta
+
+    def _tarea(self, texto: str, max_pasos: int | None, requeridos: set[str] | None, etiqueta: str) -> str:
         self.ctx.usuario(texto)
         if self.con_mapa and max_pasos is None:
             self.ctx.mensajes[-1]["content"] += AVISO_MAPA

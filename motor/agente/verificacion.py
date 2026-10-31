@@ -185,9 +185,10 @@ def lint_python(raiz: Path, rutas: list[Path], inf: Informe, rapido: bool = Fals
             inf.avisos.append(detalle)
 
 
-def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None = None, tope: int = 12) -> None:
+def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None = None, tope: int = 12,
+                  previos: set[str] | None = None) -> None:
     """solo = carpeta verificada: el análisis mira todo el proyecto (los usos pueden estar fuera de ella) pero solo
-    informa de lo que hay dentro."""
+    informa de lo que hay dentro. Lo que ya estaba (previos) no gasta el tope: taparía lo nuevo."""
     vulture = BIN / "vulture.exe"
     if not vulture.exists() or not rutas:
         return
@@ -220,12 +221,13 @@ def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None
         traduccion = {"function": "función", "method": "método", "class": "clase", "variable": "variable",
                       "attribute": "atributo", "property": "propiedad"}.get(tipo, tipo)
         if tipo in ("class", "function"):  # en código generado casi siempre es una pieza que falta conectar
-            inf.errores.append(f"{_rel(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' NUNCA se usa: el programa no "
-                               f"la crea ni la llama. Conéctala al flujo principal (o bórrala si sobra).")
+            lista, texto = inf.errores, (f"{_rel(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' NUNCA se usa: el "
+                                         f"programa no la crea ni la llama. Conéctala al flujo principal (o bórrala si sobra).")
         else:
-            inf.avisos.append(f"{_rel(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' se define pero NUNCA se usa "
-                              f"(¿falta llamarla/conectarla al flujo principal?)")
-        n += 1
+            lista, texto = inf.avisos, (f"{_rel(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' se define pero NUNCA "
+                                        f"se usa (¿falta llamarla/conectarla al flujo principal?)")
+        lista.append(texto)
+        n += normalizar(texto) not in (previos or ())
         if n >= tope:
             break
 
@@ -830,7 +832,7 @@ def normalizar(error: str) -> str:
 def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maximo: int = 6000,
               previos: set[str] | None = None, idiomas_parcial: list[str] | None = None) -> tuple[str, int]:
     """Devuelve (informe, número de errores). previos = errores y avisos normalizados que ya estaban: no cuentan."""
-    inf = informe_proyecto(raiz, python, ruta, segundos, idiomas_parcial)
+    inf = informe_proyecto(raiz, python, ruta, segundos, idiomas_parcial, previos)
     if isinstance(inf, str):
         return inf, 1
     if previos:
@@ -841,7 +843,7 @@ def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maxim
 
 
 def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8,
-                     idiomas_parcial: list[str] | None = None) -> "Informe | str":
+                     idiomas_parcial: list[str] | None = None, previos: set[str] | None = None) -> "Informe | str":
     """El informe estructurado de verificar (o un texto si la ruta no existe)."""
     base = (raiz / ruta).resolve() if ruta not in ("", ".") else raiz
     if not base.exists():
@@ -862,9 +864,9 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         sintaxis_ok = len(inf.errores) == errores_antes
         lint_python(raiz, pys, inf)
         if base == raiz:
-            codigo_muerto(raiz, pys, inf)
+            codigo_muerto(raiz, pys, inf, previos=previos)
         else:  # una subcarpeta: quien usa sus funciones puede estar fuera
-            codigo_muerto(raiz, archivos(raiz, ".py"), inf, solo=base)
+            codigo_muerto(raiz, archivos(raiz, ".py"), inf, solo=base, previos=previos)
         if sintaxis_ok:  # con errores de sintaxis no tiene sentido ejecutar
             tests_python(raiz, pys, python, inf)
             ejecutar_python(raiz, pys, python, inf, segundos)
