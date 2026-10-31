@@ -5,6 +5,27 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.11.0] — 2026-10-31 (Motor SAT v0.2.0 y optimización, y el agente respeta el código ajeno)
+
+- **Motor SAT nuevo (Sat-hibrido-rust v0.2.0):**
+  - `resolver_sat` usa `motor.exe` en vez de `hunt.exe`. Resuelve más problemas difíciles: en 95 fórmulas de prueba,
+    88 frente a 86 y ninguna respuesta errónea; R(3,6) y R(4,4) en K18 pasan de sin respuesta a menos de 1 s.
+  - **Optimización:** `resolver_sat` admite `.opb` (restricciones lineales con `min:`). Distingue el óptimo demostrado
+    (ÓPTIMO) de la mejor solución hallada en ese tiempo (MEJOR ENCONTRADA), y comprueba el modelo y el coste contra el
+    archivo. En problemas grandes con coeficientes muy variados puede no llegar al óptimo: la guía lo avisa.
+  - Aura descarga la versión fijada `v0.2.0`, no la última publicada, porque las órdenes cambian entre versiones.
+    **Tras actualizar, pulsa Instalar motor** (o Activar en Motores complementarios) para traerlo; hasta entonces el
+    agente usa python-sat.
+  - Ya no hay compilación de respaldo: si no se puede descargar, Aura lo explica y sigue sin el motor.
+  - Un UNSAT y un óptimo no quedan certificados con VeriPB: lo normal es no tenerlo instalado (`--no-verify`).
+- **El agente ya no borra código que nadie pidió tocar:**
+  - `verificar` daba como error una función existente que nadie llamaba, y el agente la borraba para poder terminar.
+    Ahora toma nota del código sin usar al empezar la tarea: eso sale como PREEXISTENTES y no bloquea. Lo que deje
+    sin conectar la propia tarea sigue bloqueando, también si la retomas tras interrumpirla o reabrir Aura.
+  - El revisor tampoco debe pedir borrarlo, salvo que la petición trate de eso.
+- **Métricas por turno:** `.agente/metricas.jsonl` anota el tiempo y los tokens de cada turno y llamada, y
+  `python -m agente.metricas <carpeta>` los resume. Solo se guardan en el proyecto; no salen del equipo.
+
 ## [4.10.1] — 2026-10-25 (Instalar motor en cualquier PC)
 
 - **«Instalar motor» fallaba en la app instalada («"python" no se reconoce...»):**
