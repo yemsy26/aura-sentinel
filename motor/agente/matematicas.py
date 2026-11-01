@@ -53,6 +53,10 @@ def leer_dimacs(texto: str) -> tuple[int, list[list[int]], list[str]]:
             if literal:
                 actual.append(literal)
             else:
+                if not actual:  # haría la fórmula insatisfacible por sí sola: un resultado falso con buena pinta
+                    raise ValueError(f"línea {i}: cláusula vacía. 0 no es una variable, marca el fin de cláusula: un script "
+                                     "que usa 0 como constante falsa corrompe la fórmula. Una constante es una variable "
+                                     "nueva con su cláusula de una sola variable ([-f] para falso)")
                 clausulas.append(actual)
                 actual = []
     if n is None:

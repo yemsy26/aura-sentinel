@@ -711,9 +711,12 @@ class Herramientas:
         if not quedan:
             return ""
         proc, trabajo = quedan[0]
+        nombres = ", ".join(sorted({procesos.nombre(p) for p in trabajo.pids()} - {"", "conhost.exe"}))
+        if not nombres:  # solo queda la consola oculta, que se cierra sola: avisar haría gastar un turno en cerrarla
+            trabajo.cerrar()
+            return ""
         n = max(self.procesos, default=0) + 1
         self.procesos[n] = {"proc": proc, "trabajo": trabajo, "comando": comando, "abierto": True}
-        nombres = ", ".join(sorted({procesos.nombre(p) or str(p) for p in trabajo.pids()} - {"conhost.exe"}))
         return (f"\n(Sigue abierto lo que lanzó: {nombres}. Es tuyo: proceso #{n}; ciérralo con "
                 f"procesos(accion='detener', id={n}) cuando no haga falta.)")
 
@@ -881,11 +884,11 @@ class Herramientas:
         return f"exit={codigo} git {accion}\n{recortar(salida, self.max_chars)}" if codigo else recortar(salida or "OK", self.max_chars)
 
     # ---------- web ----------
-    def _descargar(self, url: str, datos: bytes | None = None) -> tuple[str, str]:
+    def _descargar(self, url: str, datos: bytes | None = None, maximo: int = 3_000_000) -> tuple[str, str]:
         req = urllib.request.Request(url, datos, {"User-Agent": UA, "Accept-Language": "es,en;q=0.8"})
         with urllib.request.urlopen(req, timeout=20) as r:
             tipo = r.headers.get("Content-Type", "")
-            cuerpo = r.read(3_000_000)
+            cuerpo = r.read(maximo)
             enc = r.headers.get_content_charset() or "utf-8"
         return cuerpo.decode(enc, "replace"), tipo
 
@@ -1209,7 +1212,8 @@ ESQUEMAS = [
                    "con la precisión que pidas (N(expr, 50)). 'codigo' es Python con todo SymPy importado y x, y, z, t "
                    "ya definidos; se muestra el valor de la última línea. Ej.: solve(x**2 - 5*x + 6, x)",
        {"codigo": S, "segundos": I}, ["codigo"]),
-    _f("resolver_sat", "Resuelve un .cnf (DIMACS) o un .opb (restricciones lineales, con min: para optimizar) del "
+    _f("resolver_sat", "Llámala tú directamente: no se importa desde un script ni es un comando. Resuelve un .cnf (DIMACS) o un .opb "
+                       "(restricciones lineales, con min: para optimizar) del "
                        "proyecto con el resolvedor del motor. Para restricciones y combinatoria (sudoku, horarios, "
                        "coloreado, asignaciones, planificación): codifícalas con un script (guia('matematicas')). "
                        "Devuelve SATISFACIBLE u ÓPTIMO con el modelo comprobado (en el .modelo) o INSATISFACIBLE.",

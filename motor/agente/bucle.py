@@ -32,9 +32,17 @@ CAMBIAN_ARCHIVOS = {"escribir", "editar", "crear_bat", "restaurar", "ejecutar", 
 # Respuesta de una tarea que no quedó terminada (el IDE la marca como incompleta).
 INCOMPLETA = re.compile(r"(Error del modelo|Detenido|Se alcanzó el máximo|\[AVISO: la tarea termina SIN)")
 AVISO_MAPA = "\n\n(Repositorio grande: mira mapa() antes de listar o leer archivos.)"
+# Importar una herramienta desde un script: sin este aviso, el modelo acaba programando su propio resolvedor.
+MODULO_ES_HERRAMIENTA = re.compile(r"No module named '(resolver_sat|calcular)'")
+
+
+def aviso_herramienta(resultado: str) -> str:
+    m = MODULO_ES_HERRAMIENTA.search(resultado)
+    return (f"\n[AVISO: {m[1]} es una herramienta tuya, no un módulo de Python: tus scripts no pueden usarla. Quita el import, "
+            f"haz que el script solo escriba el archivo o lea el resultado, y llama tú a {m[1]} entre un script y otro.]" if m else "")
 APROBAR_PLAN = "Aprobar y empezar"
 DEPENDEN_DEL_ESTADO = {"ejecutar", "leer", "listar", "buscar", "procesos", "verificar", "revisar", "paso_hecho",
-                       "ver_pantalla", "git"}
+                       "ver_pantalla", "git", "resolver_sat"}
 
 
 def color(txt: str, c: str) -> str:
@@ -307,6 +315,7 @@ class Agente:
         modo = self.cfg["razonamiento"]
         razonar = modo in ("on", "auto")  # planificar con razonamiento
         repeticiones: dict[str, int] = {}
+        lecturas: dict[tuple, int] = {}  # del mismo archivo sin escribir nada entre medias
         cambios = 0  # acciones NUEVAS que pueden cambiar el proyecto (un comando distinto: copiar, instalar...)
         fallos: dict[str, int] = {}
         rechazos_fin = 0
@@ -419,6 +428,13 @@ class Agente:
                 else:
                     self.esperar_mapa()
                     resultado = despachar(self.h, c["name"], args)
+                    resultado += aviso_herramienta(resultado)
+                    if c["name"] == "leer":
+                        vez = (str(args.get("ruta")), self.h.paso_escritura)
+                        lecturas[vez] = lecturas.get(vez, 0) + 1
+                        if lecturas[vez] >= 5:
+                            resultado += (f"\n[AVISO: es la {lecturas[vez]}ª vez que lees {vez[0]} sin cambiar nada: el texto no va a "
+                                          "cambiar. Decide ya: corrige con editar o ejecuta algo que aporte datos nuevos.]")
                     if c["name"] in CAMBIAN_ARCHIVOS and repeticiones[clave] == 1:
                         cambios += 1
                     if repeticiones[clave] >= 3:

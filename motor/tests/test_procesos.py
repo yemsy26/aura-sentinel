@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import uuid
 from pathlib import Path
 
@@ -109,6 +110,16 @@ class Trabajos(unittest.TestCase):
         self.h.procesos_cmd("detener", n)
         self.assertTrue(esperar(lambda: not self.h.propios()))
         self.assertIsNone(self.usuario.poll())
+
+    def test_solo_la_consola_oculta_o_un_proceso_ya_acabado_no_cuentan_como_abierto(self):
+        """El aviso hacía gastar un turno en cerrar lo que ya no existía (salía con el nombre vacío)."""
+        for nombre_pid in ("conhost.exe", ""):
+            trabajo = mock.Mock()
+            trabajo.pids.return_value = [123]
+            with mock.patch.object(procesos, "nombre", return_value=nombre_pid):
+                self.assertEqual("", self.h._registrar_abiertos("python x.py", [(mock.Mock(), trabajo)]))
+            trabajo.cerrar.assert_called_once()
+        self.assertEqual({}, self.h.procesos)
 
     def test_si_el_motor_muere_mueren_sus_procesos_y_no_los_del_usuario(self):
         """Aura ya no usa taskkill /T al detener: cierra el motor y Windows cierra sus trabajos."""

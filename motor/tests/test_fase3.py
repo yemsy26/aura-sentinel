@@ -6,10 +6,12 @@ import importlib.util
 import itertools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -17,6 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente import conocimiento, matematicas, prompts
+from agente.bucle import DEPENDEN_DEL_ESTADO, aviso_herramienta
 from agente.herramientas import CRIPTO, CRIPTO_CONFIG, ESQUEMAS, Herramientas, despachar, externo, transaccion
 
 NO_EJECUTAR = mock.patch("agente.herramientas.subprocess.Popen", side_effect=AssertionError("no debe ejecutarse"))
@@ -162,6 +165,14 @@ class ResolverSat(unittest.TestCase):
         self.assertIn("hay 2", r)
         self.assertIn("No existe", self.h.resolver_sat("no.cnf"))
 
+    def test_una_clausula_vacia_no_pasa_por_un_insatisfacible_de_verdad(self):
+        """Un script que usaba 0 como constante daba INSATISFACIBLE por la fórmula rota, no por el problema."""
+        for texto in ("p cnf 3 2\n1 2 0\n-1 3 0 0\n", "p cnf 2 1\n0\n"):
+            (self.dir / "f.cnf").write_text(texto, encoding="utf-8")
+            r = self.h.resolver_sat("f.cnf")
+            self.assertTrue(r.startswith("DIMACS no válido"), r)
+            self.assertIn("cláusula vacía", r)
+
     def test_nunca_da_por_bueno_un_modelo_que_no_cumple(self):
         (self.dir / "f.cnf").write_text("p cnf 2 2\n1 0\n2 0\n", encoding="utf-8")
 
@@ -194,6 +205,44 @@ class ResolverSat(unittest.TestCase):
         self.assertTrue(self.h.resolver_sat("b.opb").startswith("SATISFACIBLE"))
         (self.dir / "c.opb").write_text("+1 x1 >= 1 ;\n+1 ~x1 >= 1 ;\n", encoding="utf-8")
         self.assertTrue(self.h.resolver_sat("c.opb").startswith("INSATISFACIBLE"))
+
+    def test_importar_la_herramienta_avisa_de_como_se_usa(self):
+        self.assertIn("es una herramienta tuya", aviso_herramienta("ModuleNotFoundError: No module named 'resolver_sat'"))
+        self.assertEqual("", aviso_herramienta("ModuleNotFoundError: No module named 'pygame'"))
+        guia = conocimiento.guia("matematicas")
+        self.assertIn("No se importan", guia)
+        self.assertNotIn('resolver_sat("', guia)  # escrito así parece una función de Python
+
+    def test_repetir_resolver_sat_tras_cambiar_el_archivo_no_es_un_bucle(self):
+        self.assertIn("resolver_sat", DEPENDEN_DEL_ESTADO)  # el agente paraba con la fórmula ya corregida
+
+    def test_el_multiplicador_de_la_guia_multiplica(self):
+        codigo = re.search(r"```python\n(\s+clausulas, n = .*?)```", conocimiento.guia("matematicas"), re.DOTALL)[1]
+        espacio = {}
+        exec(textwrap.dedent(codigo), espacio)
+        clausulas, a, b = espacio["clausulas"], espacio["a"], espacio["b"]
+        for x, y in ((3, 5), (65535, 65535), (40000, 51234)):
+            unidades = [[v if x >> i & 1 else -v] for i, v in enumerate(a)] + [[v if y >> i & 1 else -v] for i, v in enumerate(b)]
+            todas = clausulas + unidades
+            (self.dir / "m.cnf").write_text(f"p cnf {espacio['n']} {len(todas)}\n" + "".join(" ".join(map(str, c)) + " 0\n" for c in todas), encoding="utf-8")
+            self.assertTrue(self.h.resolver_sat("m.cnf").startswith("SATISFACIBLE"))
+            verdaderas = {int(t) for t in (self.dir / "m.modelo").read_text(encoding="utf-8").split()[1:-1]}
+            for salida in (espacio["salidas_1"], espacio["salidas_2"]):
+                self.assertEqual(x * y, sum(1 << i for i, v in enumerate(salida) if v in verdaderas))
+
+    def test_version_de_pypi_con_respuesta_muy_grande(self):
+        pedidos = []
+
+        class H:
+            def python_proyecto(self):
+                return sys.executable
+
+            def _descargar(self, url, datos=None, maximo=0):
+                pedidos.append(maximo)
+                return json.dumps({"info": {"name": "x", "version": "1", "summary": ""}, "urls": [], "releases": {}}), ""
+
+        self.assertIn("PyPI x 1", conocimiento.version(H(), "x"))
+        self.assertGreater(pedidos[0], 3_000_000)  # python-sat pasa de 3 MB: cortado no era JSON válido
 
     def test_opb_mal_escrito_dice_donde(self):
         for texto, esperado in (("+1 x1 x2 >= 1 ;\n", "restricción 1"), ("+1 x1 >= 1\n", "falta el ';'"), ("+1 x1 >= 1 ;\n+1 x2 ! 1 ;\n", "restricción 2")):

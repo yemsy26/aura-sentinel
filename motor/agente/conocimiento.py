@@ -9,6 +9,7 @@ from pathlib import Path
 from . import pasajes
 from .config import RAIZ_INSTALACION
 
+MAX_PYPI = 64_000_000  # bytes: la ficha de un paquete con muchas versiones pasa de los 3 MB de una página
 DIR_GUIAS = Path(__file__).resolve().parent / "guias"
 APRENDIDO = RAIZ_INSTALACION / "aprendido"  # recetas comprobadas por tema que guarda el agente con aprender(tema=...)
 MAX_APRENDIDO = 60  # líneas por tema, las más recientes
@@ -210,7 +211,7 @@ def version(h, paquete: str, ecosistema: str = "pypi") -> str:
                 lineas.append(f"- {g}:{a}:{ultima}   (pom.xml: <groupId>{g}</groupId><artifactId>{a}</artifactId><version>{ultima}</version>)")
             return "\n".join(lineas)
         nombre = REEMPLAZOS.get(paquete.lower(), paquete)
-        d = json.loads(h._descargar(f"https://pypi.org/pypi/{urllib.parse.quote(nombre)}/json")[0])
+        d = json.loads(h._descargar(f"https://pypi.org/pypi/{urllib.parse.quote(nombre)}/json", maximo=MAX_PYPI)[0])
     except Exception as e:
         return f"No pude consultar {paquete} ({eco}): {e}"
     info = d["info"]
