@@ -1,7 +1,6 @@
 """Herramientas del agente. Devuelven texto compacto (barato en tokens y fácil de leer para modelos pequeños)."""
 import base64
 import html.parser
-import http.client
 import json
 import os
 import re
@@ -9,7 +8,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -85,9 +83,6 @@ LANZA_BAT = re.compile(r'\s*(?:cd\s+(?:/d\s+)?(?P<cd>"[^"]+"|\S+)\s*&&\s*)?(?:cm
 INTERNAS_CMD = {"assoc", "call", "cd", "chdir", "cls", "copy", "del", "dir", "echo", "erase", "exit", "for", "ftype", "goto", "if",
                 "md", "mkdir", "move", "path", "pause", "popd", "pushd", "rd", "ren", "rename", "rmdir", "rem", "set", "setlocal",
                 "shift", "start", "title", "type", "ver", "vol"}
-# La dirección que abrirá el usuario. Las pruebas, el revisor y verificar pasaron con la portada dando 404: solo miraban /api.
-URL_LOCAL = re.compile(r"https?://(?:localhost|127\.0\.0\.1):\d{2,5}(?:/[^\s\"'`<>)\]]*)?", re.IGNORECASE)
-SIN_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 PATH_DEL_USUARIO = ('if defined FALTA for /f "skip=2 tokens=2,*" %%A in (\'reg query HKCU\\Environment /v Path 2^>nul\') '
                     'do call set "PATH=%%PATH%%;%%B"')
 # Bases de datos en otra máquina (servidor, nube): conectarse a ellas cuenta como salir del equipo.
@@ -293,8 +288,6 @@ class Herramientas:
         self.procesos: dict[int, dict] = {}
         self.paso = 0               # lo actualiza el bucle
         self.paso_escritura = -1    # último paso que modificó archivos
-        self.paso_programa = -1     # último paso que modificó el programa (no su documentación ni sus pruebas)
-        self.web_ok: dict[str, int] = {}  # dirección -> paso_programa con que respondió
         self.paso_prueba = -1       # último paso que ejecutó algo con éxito tras escribir
         self.verificacion = {"paso": -1, "errores": -1, "informe": ""}
         self.revisar_cb = None      # lo conecta el bucle o el servidor MCP (necesita el modelo)
@@ -306,7 +299,6 @@ class Herramientas:
         self.evidencia: list[str] = []      # comandos ejecutados en la tarea y su resultado (para revisar)
         self.preguntar_cb = None            # preguntar_cb(pregunta, opciones) -> respuesta; lo conecta el bucle
         self.preguntas = 0
-        self.mandato = ""
         self.errores_previos: set[str] | None = None  # modo grande: errores que ya estaban (no cuentan)
         self.muertos_previos: set[str] = set()  # código sin usar que ya estaba al empezar la tarea (no cuenta)
         self.idiomas_parcial: list[str] | None = None  # modo grande: archivos de la parte en curso (idiomas a medias)
@@ -317,7 +309,6 @@ class Herramientas:
         self.preguntas = 0
         self.inicio_tarea = paso_inicio
         if texto.strip():
-            self.mandato = texto
             self._anotar_checkpoints(texto)
             self.muertos_previos = muertos_ahora(self.raiz) - set(self._foto().get("sin_conectar", []))
             self._guardar_foto(foto=sorted(self.muertos_previos))
@@ -402,9 +393,6 @@ class Herramientas:
             if os.path.exists(tmp):
                 os.unlink(tmp)
         self.paso_escritura = self.paso
-        if p.suffix.lower() not in (".md", ".txt", ".bat", ".cmd", ".csv") and not re.search(r"(^test_|_test\.)", p.name, re.IGNORECASE) \
-                and "tests" not in p.parts:
-            self.paso_programa = self.paso
 
     # ---------- archivos ----------
     def listar(self, ruta: str = ".", profundidad: int = 2) -> str:
@@ -772,48 +760,7 @@ class Herramientas:
         estado = f"TERMINÓ (exit={proc.returncode})" if proc.poll() is not None else "en ejecución"
         if proc.poll() is None:
             self.paso_prueba = self.paso
-        aviso = self._aviso_portada(comando) if proc.poll() is None else ""
-        return f"Proceso #{n} {estado}. Log inicial:\n{self._cola_log(n)}\nUsa procesos(accion='ver', id={n}) o 'detener'.{aviso}"
-
-    def _direcciones(self, comando: str) -> list[str]:
-        """Las direcciones locales que nombran el mandato, el comando y los .bat del proyecto."""
-        textos = [self.mandato, comando]
-        for bat in self.raiz.glob("*.bat"):
-            try:
-                textos.append(bat.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                continue
-        urls = (re.sub(r"(:\d+)$", r"\1/", u.rstrip(".,;:")) for texto in textos for u in URL_LOCAL.findall(texto))
-        return list(dict.fromkeys(urls))[:3]
-
-    @staticmethod
-    def _estado_url(url: str) -> str:
-        """Vacío si la página abre; si no, lo que le pasa. Un 401 o un 405 son del programa: no dicen que falle."""
-        for intento in range(4):  # puede estar aún arrancando
-            if intento:
-                time.sleep(1)
-            try:
-                with SIN_PROXY.open(url, timeout=2):
-                    return ""
-            except urllib.error.HTTPError as e:
-                return f"responde {e.code}" if e.code in (404, 410) or e.code >= 500 else ""
-            except (OSError, ValueError, http.client.HTTPException):
-                continue
-        return "no responde"
-
-    def _aviso_portada(self, comando: str) -> str:
-        fallos = []
-        for url in self._direcciones(comando):
-            if estado := self._estado_url(url):
-                fallos.append(f"{url} {estado}")
-            else:
-                self.web_ok[url] = self.paso_programa
-        return (f"\n[AVISO: {'; '.join(fallos)}. Es lo que abrirá el usuario. Si este proceso es ese servidor, corrígelo ya y "
-                "compruébalo con ver_pantalla.]" if fallos else "")
-
-    def web_sin_abrir(self) -> list[str]:
-        """Las direcciones que abrirá el usuario y no han respondido desde el último cambio del programa."""
-        return [url for url in self._direcciones("") if self.web_ok.get(url, -2) < self.paso_programa]
+        return f"Proceso #{n} {estado}. Log inicial:\n{self._cola_log(n)}\nUsa procesos(accion='ver', id={n}) o 'detener'."
 
     def _vivo(self, n: int) -> bool:
         p = self.procesos[n]
