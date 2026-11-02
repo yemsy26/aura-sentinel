@@ -30,14 +30,20 @@ def guardada(nombre: str) -> str | None:
     return None
 
 
-def carpetas_guardadas() -> list[str]:
+def carpetas_sistema() -> list[str]:
+    """El PATH con que se abre un .bat con doble clic en el peor caso: solo el del sistema."""
+    return carpetas_guardadas(usuario=False)
+
+
+def carpetas_guardadas(usuario: bool = True) -> list[str]:
     """Carpetas del PATH del sistema y luego las del usuario, como las guarda Windows."""
     try:
         import winreg
     except ImportError:
         return []
     carpetas = []
-    for raiz, clave in ((winreg.HKEY_LOCAL_MACHINE, SISTEMA), (winreg.HKEY_CURRENT_USER, "Environment")):
+    claves = [(winreg.HKEY_LOCAL_MACHINE, SISTEMA)] + ([(winreg.HKEY_CURRENT_USER, "Environment")] if usuario else [])
+    for raiz, clave in claves:
         try:
             with winreg.OpenKey(raiz, clave) as k:
                 carpetas += winreg.ExpandEnvironmentStrings(str(winreg.QueryValueEx(k, "Path")[0])).split(os.pathsep)

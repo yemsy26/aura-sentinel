@@ -816,7 +816,7 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
                 if despues:
                     inf.errores.append(f"{rel}: '{l[:60]}' bloquea (el servidor no termina) y las líneas siguientes "
                                        f"('{despues[0][:40]}') nunca se ejecutan. Pon 'start \"\" http://...' ANTES del servidor.")
-        patron = r'\b(?:python|py(?: -3\.\d+)?|node|java -jar)\s+(?:"([^"]+\.(?:py|js|mjs|jar))"|(?!-)([^\s"&|<>]+\.(?:py|js|mjs|jar))\b)'
+        patron = r'(?:\b(?:python|py(?: -3\.\d+)?|node|java -jar)|%PY%)\s+(?:"([^"]+\.(?:py|js|mjs|jar))"|(?!-)([^\s"&|<>]+\.(?:py|js|mjs|jar))\b)'
         for m in re.finditer(patron, texto, re.IGNORECASE):
             destino = (m.group(1) or m.group(2)).strip()
             if "%" not in destino and not (b.parent / destino).exists():

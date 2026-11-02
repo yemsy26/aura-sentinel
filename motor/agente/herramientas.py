@@ -14,8 +14,9 @@ from pathlib import Path
 
 from . import android, conocimiento, lecciones, matematicas, pantalla, procesos
 from . import mapa as mapa_repo
+from .entorno import carpetas_sistema
 from .mapa import PATRONES_MAPA
-from .verificacion import chequeo_rapido, con_call, correr, es_codigo, ignorado, muertos_ahora, verificar
+from .verificacion import _ordenes_bat, chequeo_rapido, con_call, correr, es_codigo, ignorado, muertos_ahora, verificar
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
           "what", "este", "esta", "esto", "hay", "hacer", "puedo", "cual", "cuál", "cómo", "qué", "use", "using"}
@@ -75,6 +76,15 @@ LOCALES = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"}
 # Aceptar licencias (SDK de Android) es decisión del usuario.
 LICENCIAS = re.compile(r"\bsdkmanager(\.bat)?\b.*--licenses|\bflutter\s+doctor\s+--android-licenses", re.IGNORECASE)
 LICENCIA = "aceptar licencias del SDK de Android (lo decide el usuario)"
+# Con doble clic, el .bat recibe el PATH del Explorador, que puede no traer el del usuario (pasa si es muy largo). El motor sí
+# lo tiene: el .bat funcionaba en sus pruebas y al usuario le decía «"python" no se reconoce». Se prueba como lo abrirá él.
+LANZA_BAT = re.compile(r'\s*(?:cd\s+(?:/d\s+)?(?P<cd>"[^"]+"|\S+)\s*&&\s*)?(?:cmd(?:\.exe)?\s+/c\s+)?(?:call\s+)?'
+                       r'(?P<bat>"[^"]+\.(?:bat|cmd)"|[^\s"&|<>]+\.(?:bat|cmd))(?:\s+[^&|<>]*)?', re.IGNORECASE)
+INTERNAS_CMD = {"assoc", "call", "cd", "chdir", "cls", "copy", "del", "dir", "echo", "erase", "exit", "for", "ftype", "goto", "if",
+                "md", "mkdir", "move", "path", "pause", "popd", "pushd", "rd", "ren", "rename", "rmdir", "rem", "set", "setlocal",
+                "shift", "start", "title", "type", "ver", "vol"}
+PATH_DEL_USUARIO = ('if defined FALTA for /f "skip=2 tokens=2,*" %%A in (\'reg query HKCU\\Environment /v Path 2^>nul\') '
+                    'do call set "PATH=%%PATH%%;%%B"')
 # Bases de datos en otra máquina (servidor, nube): conectarse a ellas cuenta como salir del equipo.
 CLIENTE_BD = re.compile(r"\b(psql|pg_dump|pg_dumpall|pg_restore|mysql|mysqldump|mariadb|mongosh|mongo|mongodump|"
                         r"mongorestore|mongoimport|redis-cli|sqlcmd|cqlsh|clickhouse-client)(\.exe)?\b", re.IGNORECASE)
@@ -514,11 +524,19 @@ class Herramientas:
         return f"OK editado: {self.rel(p)}.{self._validar(p, nuevo)}"
 
     # ---------- comandos ----------
-    def _entorno(self) -> dict:
+    def _abre_bat(self, comando: str) -> bool:
+        """El comando entero es abrir un .bat del proyecto, solo o tras un cd."""
+        m = LANZA_BAT.fullmatch(comando)
+        return bool(m) and (self.raiz / (m["cd"] or ".").strip('"') / m["bat"].strip('"')).is_file()
+
+    def _entorno(self, comando: str = "") -> dict:
         env = dict(os.environ, AGENTE_NOPAUSE="1", PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
                    PIP_DISABLE_PIP_VERSION_CHECK="1", PYTHONDONTWRITEBYTECODE="1", CI="1")
         venv = self.raiz / ".venv" / "Scripts"
-        if venv.is_dir():  # el venv del proyecto tiene prioridad
+        if self._abre_bat(comando) and (sistema := carpetas_sistema()):
+            env["PATH"] = os.pathsep.join(sistema)
+            env.pop("NODEFAULTCURRENTDIRECTORYINEXEPATH", None)  # la pone quien lanzó el motor: el .bat no se encontraría
+        elif venv.is_dir():  # el venv del proyecto tiene prioridad
             env["PATH"] = f"{venv}{os.pathsep}{env.get('PATH', '')}"
             env["VIRTUAL_ENV"] = str(venv.parent)
         return android.con_android(env)
@@ -691,7 +709,7 @@ class Herramientas:
             limite = max(limite, MIN_INSTALACION)
         t0 = time.time()
         quedan = []
-        codigo, salida = correr(comando, self.raiz, limite, self._entorno(), quedan)
+        codigo, salida = correr(comando, self.raiz, limite, self._entorno(comando), quedan)
         abierto = self._registrar_abiertos(comando, quedan)
         if codigo is None:
             self._anotar(comando, f"TIMEOUT {limite}s", decodificar(salida))
@@ -733,7 +751,7 @@ class Herramientas:
         self.dir_agente.mkdir(exist_ok=True)
         log = self.dir_agente / f"proceso_{n}.log"
         f = open(log, "wb")  # noqa: SIM115 -- abierto mientras viva el proceso; se cierra al detenerlo
-        proc, trabajo = procesos.lanzar(comando, shell=True, cwd=self.raiz, env=self._entorno(), stdin=subprocess.DEVNULL,
+        proc, trabajo = procesos.lanzar(comando, shell=True, cwd=self.raiz, env=self._entorno(comando), stdin=subprocess.DEVNULL,
                                         stdout=f, stderr=subprocess.STDOUT,
                                         creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
         self.procesos[n] = {"proc": proc, "trabajo": trabajo, "log": log, "archivo": f, "comando": comando}
@@ -784,6 +802,42 @@ class Herramientas:
             if p.get("trabajo"):
                 p["trabajo"].cerrar()
 
+    def _programas_bat(self, comandos: list[str]) -> list[str]:
+        """Los programas externos que lanzan las órdenes, sin los de cmd ni los que están en la carpeta del proyecto."""
+        programas = []
+        for c in comandos:
+            for orden in _ordenes_bat(c)[::2]:
+                palabras = re.sub(r"(?i)^call\s+", "", orden.strip().lstrip("@(")).split()
+                p = palabras[0].lower() if palabras else ""
+                p = "python" if p == "python3" else p
+                if re.fullmatch(r"[\w+-]+", p) and p not in INTERNAS_CMD and p not in programas \
+                        and not any((self.raiz / f"{p}{ext}").is_file() for ext in (".bat", ".cmd", ".exe")):
+                    programas.append(p)
+        return programas
+
+    @staticmethod
+    def _con_py(linea: str) -> str:
+        partes = _ordenes_bat(linea)
+        partes[::2] = [re.sub(r"(?i)^(\s*)python3?(?=\s|$)", r"\1%PY%", o) for o in partes[::2]]
+        return "".join(partes)
+
+    def _buscar_programas(self, comandos: list[str], usar_venv: bool) -> list[str]:
+        """Si falta un programa, recupera el PATH del usuario; Python además puede estar solo con el lanzador py."""
+        programas = self._programas_bat(comandos)
+        python = usar_venv or "python" in programas
+        if python and "python" not in programas:
+            programas.insert(0, "python")
+        if not programas:
+            return []
+        lineas = ['set "FALTA="']
+        lineas += [("call python --version >nul 2>&1" if p == "python" else f"where /q {p}") + ' || set "FALTA=1"' for p in programas]
+        lineas.append(PATH_DEL_USUARIO)
+        if python:
+            lineas += ['set "PY=python"', 'call python --version >nul 2>&1 || (call py --version >nul 2>&1 && set "PY=py")',
+                       ('call %PY% --version >nul 2>&1 || (echo [ERROR] No encuentro Python: instálalo desde '
+                        'https://www.python.org/downloads/ & set "RC=9009" & goto :error)')]
+        return lineas
+
     def crear_bat(self, nombre: str, comandos: list, descripcion: str = "", usar_venv: bool = False) -> str:
         nombre = nombre if nombre.lower().endswith((".bat", ".cmd")) else nombre + ".bat"
         if isinstance(comandos, str):
@@ -793,11 +847,12 @@ class Herramientas:
                   f"title {Path(nombre).stem}", 'set "RC=0"']
         if descripcion:
             lineas.append(f"echo {descripcion}")
+        lineas += self._buscar_programas(comandos, usar_venv)
         if usar_venv:
             lineas += ['if not exist ".venv\\Scripts\\python.exe" (',
                        "  echo Creando entorno virtual .venv ...",
-                       "  python -m venv .venv || (set \"RC=1\" & goto :error)", ")",
-                       'call ".venv\\Scripts\\activate.bat"',
+                       "  %PY% -m venv .venv || (set \"RC=1\" & goto :error)", ")",
+                       'call ".venv\\Scripts\\activate.bat"', 'set "PY=python"',
                        "if exist requirements.txt (",
                        "  python -m pip install -q -r requirements.txt || (set \"RC=1\" & goto :error)", ")"]
         reales = [c.strip() for c in comandos if c.strip()]
@@ -809,7 +864,7 @@ class Herramientas:
                 continue
             i += 1
             lineas += [f"echo [{i}/{total}] {c.replace('%', '%%').replace('&', '^&').replace('>', '^>').replace('<', '^<').replace('|', '^|')}",
-                       con_call(c, self.raiz),  # npm, npx, otro .bat...: sin call el .bat terminaría ahí
+                       con_call(self._con_py(c), self.raiz),  # npm, npx, otro .bat...: sin call el .bat terminaría ahí
                        'if errorlevel 1 (set "RC=%errorlevel%" & goto :error)']
         lineas += ["echo.", "echo [OK] Terminado correctamente.", "goto :fin", ":error", "echo.",
                    "echo [ERROR] Falló el paso anterior (código %RC%).", ":fin",

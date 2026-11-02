@@ -2,7 +2,6 @@
 desarrollo, cerrar procesos ajenos y restaurar la versión de la que el usuario acababa de decir que fallaba."""
 import io
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -16,7 +15,7 @@ from test_agente import LLMGuion, borrar, llamada
 
 from agente import __main__ as cli
 from agente import config
-from agente.entorno import completo, limpio
+from agente.entorno import carpetas_sistema, completo, limpio
 from agente.herramientas import Herramientas
 from agente.verificacion import Informe, bats, con_call
 
@@ -53,9 +52,8 @@ class Call(Base):
         self.h.crear_bat("run", ["npm install", 'python -c "print(\'segundo paso\')"'])
         texto = (self.dir / "run.bat").read_text(encoding="utf-8")
         self.assertIn("call npm install", texto)
-        ruta = f"{falsos}{os.pathsep}{os.environ.get('PATH', '')}"
-        with mock.patch.dict(os.environ, {"PATH": ruta}):  # el npm falso va primero en el PATH
-            salida = self.h.ejecutar("run.bat", segundos=30)
+        with mock.patch("agente.herramientas.carpetas_sistema", lambda: [str(falsos), *carpetas_sistema()]):
+            salida = self.h.ejecutar("run.bat", segundos=30)  # el npm falso va primero en el PATH
         self.assertIn("npm falso install", salida)
         self.assertIn("segundo paso", salida)
 
