@@ -312,6 +312,7 @@ class Agente:
         por_aprobar = self.revisar_plan and max_pasos is None and self.responder is not None and not sigue
         self.h.nueva_tarea(self.pasos_totales + 1, texto if max_pasos is None and not sigue else "")
         self.inicio_tarea, self.revisiones = self.pasos_totales + 1, 0
+        self.es_parte = max_pasos is not None
         modo = self.cfg["razonamiento"]
         razonar = modo in ("on", "auto")  # planificar con razonamiento
         repeticiones: dict[str, int] = {}
@@ -415,6 +416,8 @@ class Agente:
                         if self.h.verificacion["errores"] > 0:  # salió por la válvula anti-bucle con errores
                             resumen = ("[AVISO: la tarea termina SIN resolver todos los errores de verificación."
                                        f"{self._rescatar()}]\n" + resumen)
+                        if sin_abrir := self._web_sin_abrir():
+                            resumen = f"[AVISO: la tarea termina SIN haber comprobado que abre {', '.join(sin_abrir)}.]\n" + resumen
                         self.ctx.herramienta(c["id"], "Tarea terminada.")
                         self._mostrar(paso, "terminar", {}, "Tarea terminada")
                         self._medir(c, args, t_llamada, "Tarea terminada.")
@@ -481,6 +484,9 @@ class Agente:
         self._log(f"REVISIÓN ({'aprobada' if ok else 'cambios'}): {texto[:1500]}")
         return texto, ok
 
+    def _web_sin_abrir(self) -> list[str]:
+        return self.h.web_sin_abrir() if not self.es_parte and self.h.paso_escritura >= self.inicio_tarea else []
+
     def _puede_terminar(self, rechazos: int, paso: int) -> str:
         """Puerta de calidad: lo que un agente avanzado comprueba antes de decir 'hecho'."""
         if rechazos >= 4:
@@ -499,6 +505,9 @@ class Agente:
                 return "RECHAZADO: la verificación automática encontró errores:\n" + informe
         elif escribio and self.h.verificacion["errores"] > 0:
             return "RECHAZADO: la última verificación tiene errores sin corregir:\n" + self.h.verificacion["informe"]
+        if sin_abrir := self._web_sin_abrir():  # antes que la revisión: leer el código no dice si la página abre
+            return (f"RECHAZADO: el usuario abrirá {', '.join(sin_abrir)} y no ha respondido desde tu último cambio. Arranca el "
+                    "programa con ejecutar(fondo=true), corrige lo que avise, detén el proceso y vuelve a llamar a terminar.")
         previa = self._revision_previa()
         # Lo que lee el revisor (también capabilities/*.json o tauri.conf.json) no cambió desde que pidió cambios. Si la
         # revisión es de esta tarea (también un revisar a mano), terminar sin tocar nada la ignoraba.
