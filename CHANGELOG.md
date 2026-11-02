@@ -5,6 +5,20 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.11.1] — 2026-11-01 (Circuitos, y fallos hallados en una misión matemática completa)
+
+- **Motor SAT v0.2.1:** comparar dos circuitos iguales ya no se queda sin respuesta: dos multiplicadores de 16 bits
+  pasan de sin respuesta en 30 s a menos de 0,1 s. No cambia ninguna orden. **Tras actualizar, pulsa Instalar motor.**
+- **`resolver_sat` y `calcular` son herramientas, no módulos:** la guía y la descripción lo aclaran, y hay un aviso si el
+  agente intenta importarlos.
+- **Paradas y avisos falsos:** repetir `resolver_sat` tras cambiar el archivo ya no cuenta como bucle, y `conhost.exe`
+  solo ya no se avisa como programa abierto.
+- **Fórmulas rotas:** una cláusula vacía en DIMACS se rechaza en vez de dar INSATISFACIBLE, porque ese resultado no
+  decía nada del problema.
+- **`version`** ya admite respuestas grandes de PyPI (`python-sat` pasaba de 3 MB).
+- **Guía de matemáticas:** circuitos, un multiplicador probado, constantes y formato `.opb`.
+- **Aviso** a la 5.ª lectura del mismo archivo sin escribir nada.
+
 ## [4.11.0] — 2026-10-31 (Motor SAT v0.2.0 y optimización, y el agente respeta el código ajeno)
 
 - **Motor SAT nuevo (Sat-hibrido-rust v0.2.0):**

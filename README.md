@@ -227,7 +227,7 @@ Sat-hibrido-rust usa [Chronos-VFS](https://github.com/yemsy26/Chronos-VFS) (anil
 las trazas de prueba del resolvedor); no se activa por separado porque no añade ninguna herramienta al agente.
 
 Al activar un motor, Aura descarga de su repositorio el ejecutable de la versión fijada en el catálogo con su
-`.sha256` y comprueba la suma (Sat-hibrido-rust v0.2.0: 2 MB, solo CPU, no usa VRAM). Antes de activarlo comprueba que resuelve tres problemas conocidos. Queda en
+`.sha256` y comprueba la suma (Sat-hibrido-rust v0.2.1: 2 MB, solo CPU, no usa VRAM). Antes de activarlo comprueba que resuelve tres problemas conocidos. Queda en
 `motor\complementos\` (fuera de git); `AGENTE_SAT` permite usar otro `motor.exe`.
 
 Para añadir otro motor: una entrada en `CATALOGO` de `motor/agente/complementos.py` con su repositorio, el nombre del

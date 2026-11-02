@@ -34,7 +34,7 @@ CATALOGO = {
                    "optimización con coste (.opb), con la solución comprobada contra el archivo."),
         "herramientas": ["resolver_sat"],
         "predeterminado": True,  # CPU, sin VRAM, 2 MB: vale la pena tenerlo siempre
-        "version": "v0.2.0",  # fija: sus órdenes cambian entre versiones, y subirla es un cambio probado de Aura
+        "version": "v0.2.1",  # fija: sus órdenes cambian entre versiones, y subirla es un cambio probado de Aura
         "ejecutable": "motor.exe",
         "binario_release": "motor-x86_64-pc-windows-msvc.exe",  # con su .sha256 al lado en la release
         "usa": [{"nombre": "Chronos-VFS", "repo": "https://github.com/yemsy26/Chronos-VFS",
