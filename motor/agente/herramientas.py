@@ -38,7 +38,7 @@ from .permisos import (
     transaccion,
 )
 from .proyecto import IGNORAR, correr, es_codigo, ignorado
-from .verificacion import chequeo_rapido, con_call, muertos_ahora, verificar
+from .verificacion import chequeo_rapido, con_call, muertos_ahora, ordenes_bat, verificar
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
           "what", "este", "esta", "esto", "hay", "hacer", "puedo", "cual", "cuál", "cómo", "qué", "use", "using"}
@@ -56,6 +56,16 @@ INSTALACIONES = re.compile(  # descargan, instalan o compilan: con poco tiempo s
     r"sdkmanager|anchor\s+(build|test|init)\b|forge\s+(init|install|build|test)\b)",
     re.IGNORECASE)
 MIN_INSTALACION = 300  # segundos
+# Con doble clic, el .bat recibe el PATH del Explorador, que puede no traer el del usuario (pasa si es muy largo): el .bat
+# funcionaba en las pruebas del motor y al usuario le decía «"python" no se reconoce».
+INTERNAS_CMD = {"assoc", "call", "cd", "chdir", "cls", "copy", "del", "dir", "echo", "erase", "exit", "for", "ftype", "goto", "if",
+                "md", "mkdir", "move", "path", "pause", "popd", "pushd", "rd", "ren", "rename", "rmdir", "rem", "set", "setlocal",
+                "shift", "start", "title", "type", "ver", "vol"}
+PATH_DEL_USUARIO = ('if defined FALTA for /f "skip=2 tokens=2,*" %%A in (\'reg query HKCU\\Environment /v Path 2^>nul\') '
+                    'do call set "PATH=%%PATH%%;%%B"')
+# «start "" /min cmd /k python app.py» lanza python app.py en otra ventana, que hereda el PATH de este .bat: hay que
+# buscar ese programa (una misión lo escribió así y con doble clic la ventana nueva no encontraba Python).
+LANZADOR = r'(?:start\s+(?:"[^"]*"\s+)?(?:/\w+\s+)*)?(?:cmd(?:\.exe)?\s+/[ck]\s+"?)?'
 MAX_PREGUNTAS = 3  # por tarea: más es pedir al usuario lo que el agente puede decidir
 # Archivos que se nombran en un texto (petición del usuario o paso del plan); no las librerías como three.js.
 # Con varios puntos en el nombre (tauri.conf.json, vite.config.ts): antes solo se tomaba lo último («conf.json»).
@@ -634,6 +644,43 @@ class Herramientas:
             if p.get("trabajo"):
                 p["trabajo"].cerrar()
 
+    def _programas_bat(self, comandos: list[str]) -> list[str]:
+        """Los programas externos que lanzan las órdenes, sin los de cmd ni los que están en la carpeta del proyecto."""
+        programas = []
+        for c in comandos:
+            for orden in ordenes_bat(c)[::2]:
+                orden = re.sub(r"(?i)^call\s+", "", orden.strip().lstrip("@("))
+                palabras = re.sub(f"(?i)^{LANZADOR}", "", orden).split()
+                p = palabras[0].lower() if palabras else ""
+                p = "python" if p == "python3" else p
+                if re.fullmatch(r"[\w+-]+", p) and p not in INTERNAS_CMD and p not in programas \
+                        and not any((self.raiz / f"{p}{ext}").is_file() for ext in (".bat", ".cmd", ".exe")):
+                    programas.append(p)
+        return programas
+
+    @staticmethod
+    def _con_py(linea: str) -> str:
+        partes = ordenes_bat(linea)
+        partes[::2] = [re.sub(rf'(?i)^(\s*{LANZADOR})python3?(?=[\s"]|$)', r"\1%PY%", o) for o in partes[::2]]
+        return "".join(partes)
+
+    def _buscar_programas(self, comandos: list[str], usar_venv: bool) -> list[str]:
+        """Si falta un programa, recupera el PATH del usuario; Python además puede estar solo con el lanzador py."""
+        programas = self._programas_bat(comandos)
+        python = usar_venv or "python" in programas
+        if python and "python" not in programas:
+            programas.insert(0, "python")
+        if not programas:
+            return []
+        lineas = ['set "FALTA="']
+        lineas += [("call python --version >nul 2>&1" if p == "python" else f"where /q {p}") + ' || set "FALTA=1"' for p in programas]
+        lineas.append(PATH_DEL_USUARIO)
+        if python:
+            lineas += ['set "PY=python"', 'call python --version >nul 2>&1 || (call py --version >nul 2>&1 && set "PY=py")',
+                       ('call %PY% --version >nul 2>&1 || (echo [ERROR] No encuentro Python: instálalo desde '
+                        'https://www.python.org/downloads/ & set "RC=9009" & goto :error)')]
+        return lineas
+
     def crear_bat(self, nombre: str, comandos: list, descripcion: str = "", usar_venv: bool = False) -> str:
         nombre = nombre if nombre.lower().endswith((".bat", ".cmd")) else nombre + ".bat"
         if isinstance(comandos, str):
@@ -643,11 +690,12 @@ class Herramientas:
                   f"title {Path(nombre).stem}", 'set "RC=0"']
         if descripcion:
             lineas.append(f"echo {descripcion}")
+        lineas += self._buscar_programas(comandos, usar_venv)
         if usar_venv:
             lineas += ['if not exist ".venv\\Scripts\\python.exe" (',
                        "  echo Creando entorno virtual .venv ...",
-                       "  python -m venv .venv || (set \"RC=1\" & goto :error)", ")",
-                       'call ".venv\\Scripts\\activate.bat"',
+                       "  %PY% -m venv .venv || (set \"RC=1\" & goto :error)", ")",
+                       'call ".venv\\Scripts\\activate.bat"', 'set "PY=python"',
                        "if exist requirements.txt (",
                        "  python -m pip install -q -r requirements.txt || (set \"RC=1\" & goto :error)", ")"]
         reales = [c.strip() for c in comandos if c.strip()]
@@ -659,7 +707,7 @@ class Herramientas:
                 continue
             i += 1
             lineas += [f"echo [{i}/{total}] {c.replace('%', '%%').replace('&', '^&').replace('>', '^>').replace('<', '^<').replace('|', '^|')}",
-                       con_call(c, self.raiz),  # npm, npx, otro .bat...: sin call el .bat terminaría ahí
+                       con_call(self._con_py(c), self.raiz),  # npm, npx, otro .bat...: sin call el .bat terminaría ahí
                        'if errorlevel 1 (set "RC=%errorlevel%" & goto :error)']
         lineas += ["echo.", "echo [OK] Terminado correctamente.", "goto :fin", ":error", "echo.",
                    "echo [ERROR] Falló el paso anterior (código %RC%).", ":fin",

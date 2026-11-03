@@ -657,7 +657,7 @@ LOTES = {"npm", "npx", "yarn", "pnpm", "ng", "vite", "tauri", "tsc", "expo", "ea
 SEPARADOR_BAT = re.compile(r"&&|\|\||&")
 
 
-def _ordenes_bat(linea: str) -> list[str]:
+def ordenes_bat(linea: str) -> list[str]:
     """La línea partida por &&, || y & fuera de comillas; los separadores quedan como elementos sueltos."""
     partes, actual, comillas, i = [], "", False, 0
     while i < len(linea):
@@ -686,7 +686,7 @@ def es_lote(orden: str, carpeta: Path | None = None) -> bool:
 
 def con_call(linea: str, carpeta: Path | None = None) -> str:
     """Pone call delante de cada orden de la línea que lanza un .cmd o un .bat (cd x && call npm install)."""
-    partes = _ordenes_bat(linea)
+    partes = ordenes_bat(linea)
     for i in range(0, len(partes), 2):
         orden = partes[i].lstrip()
         if orden and not re.match(r"(?i)call\s", orden) and es_lote(orden, carpeta):
@@ -700,12 +700,14 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
         rel = relativa(b, raiz)
         if not re.search(r'cd\s+/d\s+"?%~dp0', texto, re.IGNORECASE) and re.search(r"\b(python|py|node|java|javac)\b", texto, re.IGNORECASE):
             inf.avisos.append(f"{rel}: no hace cd /d \"%~dp0\": fallará si se abre desde otra carpeta.")
+        if (m := re.search(r"&(?:gt|lt|amp|quot);", texto)):
+            inf.errores.append(f"{rel}: tiene '{m[0]}', que es código de HTML, y cmd lo ejecuta tal cual. Escribe > < & \" sin más.")
         lineas = [l.strip() for l in texto.splitlines()]
         for i, l in enumerate(lineas):
             if not l or re.match(r"(?i)(echo|rem|::|:|set|title|start|if|for|goto|exit)\b|@?echo\b", l):
                 continue
             sigue = next((x for x in lineas[i + 1:] if x and not re.match(r"(?i)(rem\b|::)", x)), "")
-            sin_call = [o.strip() for o in _ordenes_bat(l)[::2] if o.strip() and not re.match(r"(?i)call\s", o.strip())
+            sin_call = [o.strip() for o in ordenes_bat(l)[::2] if o.strip() and not re.match(r"(?i)call\s", o.strip())
                         and es_lote(o, b.parent)]
             if sin_call and sigue:
                 inf.errores.append(f"{rel}:{i + 1} '{sin_call[0][:50]}' sin call: es un .cmd y el .bat termina ahí, sin "
@@ -717,7 +719,7 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
                 if despues:
                     inf.errores.append(f"{rel}: '{l[:60]}' bloquea (el servidor no termina) y las líneas siguientes "
                                        f"('{despues[0][:40]}') nunca se ejecutan. Pon 'start \"\" http://...' ANTES del servidor.")
-        patron = r'\b(?:python|py(?: -3\.\d+)?|node|java -jar)\s+(?:"([^"]+\.(?:py|js|mjs|jar))"|(?!-)([^\s"&|<>]+\.(?:py|js|mjs|jar))\b)'
+        patron = r'(?:\b(?:python|py(?: -3\.\d+)?|node|java -jar)|%PY%)\s+(?:"([^"]+\.(?:py|js|mjs|jar))"|(?!-)([^\s"&|<>]+\.(?:py|js|mjs|jar))\b)'
         for m in re.finditer(patron, texto, re.IGNORECASE):
             destino = (m.group(1) or m.group(2)).strip()
             if "%" not in destino and not (b.parent / destino).exists():
