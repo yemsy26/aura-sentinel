@@ -10,7 +10,7 @@ import re
 import threading
 from pathlib import Path
 
-from .verificacion import IGNORAR, es_codigo
+from .proyecto import IGNORAR, es_codigo
 
 PATRONES_MAPA = {
     ".js": r"(?:^|\s)(?:class|function|interface|record)\s+(\w+)", ".mjs": r"(?:^|\s)(?:class|function)\s+(\w+)",

@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from .conocimiento import DIR_GUIAS
-from .verificacion import es_codigo, ignorado
+from .proyecto import es_codigo, ignorado
 
 BLOQUEOS = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.lock", "go.sum", "packages.lock.json"}
 # Archivo o extensión -> guía del tema (los mismos tipos que comprueba verificar). El orden decide quién entra antes.

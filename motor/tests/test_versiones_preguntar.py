@@ -41,7 +41,7 @@ def descargar_falso(url, datos=None):
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self.dir = Path(tempfile.mkdtemp(prefix="agente_fase2_"))
+        self.dir = Path(tempfile.mkdtemp(prefix="agente_versiones_"))
         self.h = Herramientas(self.dir)
         self.h._descargar = descargar_falso
 
@@ -99,7 +99,7 @@ class TestPreguntar(Base):
 
 class TestPreguntaPorJson(unittest.TestCase):
     def setUp(self):
-        self.dir = Path(tempfile.mkdtemp(prefix="agente_fase2_json_"))
+        self.dir = Path(tempfile.mkdtemp(prefix="agente_versiones_json_"))
 
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)

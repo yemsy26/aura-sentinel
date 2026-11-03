@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agente import app_tauri, ecosistemas, pantalla
 from agente.herramientas import Herramientas
-from agente.verificacion import Informe
+from agente.proyecto import Informe
 
 EN_WINDOWS = os.name == "nt"
 HAY_PLAYWRIGHT = importlib.util.find_spec("playwright") is not None

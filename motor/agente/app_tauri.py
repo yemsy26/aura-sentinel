@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from . import procesos
+from .proyecto import archivos
 
 ESPERA_VENTANA = 30  # s hasta que WebView2 abre el puerto de depuración (la primera vez prepara su perfil)
 FUENTES_WEB = (".html", ".htm", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".vue", ".svelte", ".css")
@@ -79,7 +80,6 @@ def _libre() -> int:
 
 def _desfasada(dist: Path) -> bool:
     """El frontend cambió después de la última compilación de dist/."""
-    from .verificacion import archivos
     raiz = dist.parent
     fuentes = [p for p in archivos(raiz, *FUENTES_WEB) if dist not in p.parents and "src-tauri" not in p.parts]
     return bool(fuentes) and max(p.stat().st_mtime for p in fuentes) > (dist / "index.html").stat().st_mtime + 1
@@ -199,7 +199,6 @@ def _mirar(proc, puerto: int, png: Path | None, espera: float, log: Path, salida
 
 def _huella(dir_tauri: Path, exe: Path) -> tuple:
     """Lo que cambia la app que se ve: el .exe, la configuración, dist/ y el código del frontend."""
-    from .verificacion import archivos
     raiz = dir_tauri.parent
     fuentes = [p for p in archivos(raiz, *FUENTES_WEB) if "src-tauri" not in p.parts]
     return (exe.stat().st_mtime, (dir_tauri / "tauri.conf.json").stat().st_mtime,

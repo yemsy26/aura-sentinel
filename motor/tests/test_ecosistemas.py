@@ -10,8 +10,10 @@ from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agente import conocimiento, ecosistemas
-from agente.herramientas import INSTALACIONES, Herramientas, externo
-from agente.verificacion import Informe, es_codigo, verificar
+from agente.herramientas import INSTALACIONES, Herramientas
+from agente.permisos import externo
+from agente.proyecto import Informe, es_codigo
+from agente.verificacion import verificar
 
 
 class Base(unittest.TestCase):

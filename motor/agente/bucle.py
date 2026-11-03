@@ -3,20 +3,20 @@ import json
 import re
 import sys
 import time
-import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import grande, lecciones, metricas
 from . import llm as cliente
 from . import mapa as mapa_repo
 from .contexto import Contexto
-from .herramientas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS, Herramientas, archivos_pedidos, despachar
+from .esquemas import ESQUEMA_MAPA, ESQUEMAS
+from .herramientas import Herramientas, archivos_pedidos, despachar
+from .llamadas import coaccionar, llamadas_en_texto, sin_llamadas
 from .prompts import REGLAS_USUARIO, entorno, sistema
+from .proyecto import es_codigo, ignorado
 from .revision import mtime_fuentes, revisar
-from .verificacion import es_codigo, ignorado
 
-TIPOS = {e["function"]["name"]: {k: v.get("type") for k, v in e["function"]["parameters"]["properties"].items()}
-         for e in [*ESQUEMAS, ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES]}
 ICONOS = {"plan": "PLAN", "paso_hecho": "HECHO", "listar": "ls", "leer": "leer", "buscar": "grep", "escribir": "+",
           "editar": "~", "ejecutar": ">", "procesos": "ps", "crear_bat": "bat", "web_buscar": "web", "web_leer": "web",
           "investigar": "web", "guia": "guia", "version": "ver", "verificar": "QA", "revisar": "REV",
@@ -29,8 +29,6 @@ ES_ERROR = (r"(exit=[1-9-]|ERROR|TIMEOUT|RECHAZADO|Argumentos|VERIFICACIÓN \([^
             r"REVISIÓN:(?=[\s\S]*CAMBIOS NECESARIOS))")
 # Tras estas herramientas el IDE refresca el editor y el árbol de archivos (modo --json).
 CAMBIAN_ARCHIVOS = {"escribir", "editar", "crear_bat", "restaurar", "ejecutar", "git"}
-# Respuesta de una tarea que no quedó terminada (el IDE la marca como incompleta).
-INCOMPLETA = re.compile(r"(Error del modelo|Detenido|Se alcanzó el máximo|\[AVISO: la tarea termina SIN)")
 AVISO_MAPA = "\n\n(Repositorio grande: mira mapa() antes de listar o leer archivos.)"
 # Importar una herramienta desde un script: sin este aviso, el modelo acaba programando su propio resolvedor.
 MODULO_ES_HERRAMIENTA = re.compile(r"No module named '(resolver_sat|calcular)'")
@@ -50,116 +48,18 @@ def color(txt: str, c: str) -> str:
     return f"\033[{codigos[c]}m{txt}\033[0m" if sys.stdout.isatty() else txt
 
 
-def coaccionar(nombre: str, args: dict) -> dict:
-    """Los modelos pequeños mandan '3' en vez de 3 o 'true' en vez de true."""
-    for k, tipo in TIPOS.get(nombre, {}).items():
-        v = args.get(k)
-        if isinstance(v, str):
-            if tipo == "integer" and re.fullmatch(r"-?\d+", v.strip()):
-                args[k] = int(v)
-            elif tipo == "boolean":
-                args[k] = v.strip().lower() in ("true", "1", "si", "sí", "yes")
-            elif tipo == "array":
-                try:
-                    args[k] = json.loads(v)
-                except ValueError:
-                    args[k] = [l for l in v.splitlines() if l.strip()]
-    return {k: v for k, v in args.items() if k in TIPOS.get(nombre, args)}
-
-
-def _llamada(nombre, args) -> dict | None:
-    """Llamada válida solo si la herramienta existe (en texto libre, un JSON cualquiera no debe ejecutarse)."""
-    if isinstance(args, str):
-        try:
-            args = json.loads(args) if args.strip() else {}
-        except ValueError:
-            return None
-    if nombre not in TIPOS or not isinstance(args, dict):
-        return None
-    return {"name": nombre, "arguments": json.dumps(args, ensure_ascii=False)}
-
-
-def _de_json(obj) -> list:
-    """{"name", "arguments"|"parameters"|"args"|"input"}, {"function": {...}} o una lista de ellos."""
-    if isinstance(obj, list):
-        return [c for o in obj for c in _de_json(o)]
-    if not isinstance(obj, dict):
-        return []
-    f = obj["function"] if isinstance(obj.get("function"), dict) else obj
-    args = next((f[k] for k in ("arguments", "parameters", "args", "input") if k in f), {})
-    c = _llamada(f.get("name") or obj.get("tool"), args)
-    return [c] if c else []
-
-
-def _jsons(texto: str) -> list:
-    """Los objetos o listas JSON seguidos que empiezan el texto (separados por espacios, comas o ';')."""
-    dec, out, i = json.JSONDecoder(), [], 0
-    while (m := re.compile(r"[\s,;]*([\[{])").match(texto, i)):
-        try:
-            obj, i = dec.raw_decode(texto, m.start(1))
-        except ValueError:
-            break
-        out += _de_json(obj)
-    return out
-
-
-def _de_python(codigo: str) -> list:
-    """```tool_code de Gemma: escribir(ruta="a.py", contenido="...") o print(default_api.escribir(...)), solo eso."""
-    import ast
-    try:
-        sentencias = ast.parse(codigo).body
-    except SyntaxError:
-        return []
-    out = []
-    for s in sentencias:
-        llamada = s.value if isinstance(s, ast.Expr) else None
-        if isinstance(llamada, ast.Call) and getattr(llamada.func, "id", "") == "print" and llamada.args:
-            llamada = llamada.args[0]
-        if not isinstance(llamada, ast.Call):
-            return []
-        nombre = getattr(llamada.func, "attr", None) or getattr(llamada.func, "id", "")
-        try:
-            args = {k.arg: ast.literal_eval(k.value) for k in llamada.keywords}
-        except ValueError:
-            return []
-        if not (c := _llamada(nombre, args)):
-            return []
-        out.append(c)
-    return out
-
-
-def llamadas_en_texto(texto: str) -> list:
-    """Respaldo para modelos/servidores que escriben la llamada como texto en vez de usar tool_calls: Qwen
-    (<tool_call>, <function=...>), Mistral ([TOOL_CALLS]), Llama (<|python_tag|>), Gemma (```tool_code) y JSON suelto
-    ({"name": ..., "arguments": ...}). Antes solo se entendía el de Qwen: con otro modelo el agente no hacía nada."""
-    out = []
-    for bloque in re.findall(r"<tool_call>(.*?)(?:</tool_call>|$)", texto, re.DOTALL):
-        if "<function=" not in bloque:
-            out += _jsons(bloque.strip())
-    for nombre, cuerpo in re.findall(r"<function=([\w.-]+)>(.*?)(?:</function>|$)", texto, re.DOTALL):
-        args = {p: v.strip("\n") for p, v in re.findall(r"<parameter=([\w-]+)>\n?(.*?)\n?</parameter>", cuerpo, re.DOTALL)}
-        out += [c for c in [_llamada(nombre, args if args or "{" not in cuerpo else cuerpo.strip())] if c]
-    if not out and "[TOOL_CALLS]" in texto:
-        resto = texto.split("[TOOL_CALLS]", 1)[1]
-        pares = re.findall(r"([\w.-]+)\[ARGS\](\{.*?\})(?=\s*(?:[\w.-]+\[ARGS\]|$))", resto, re.DOTALL)
-        out = [c for n, a in pares if (c := _llamada(n, a))] or _jsons(resto.strip())
-    if not out and "<|python_tag|>" in texto:
-        out = _jsons(texto.split("<|python_tag|>", 1)[1].strip())
-    for lenguaje, bloque in ([] if out else re.findall(r"```(\w*)[ \t]*\n(.*?)```", texto, re.DOTALL)):
-        out += _de_python(bloque) if lenguaje.lower() in ("tool_code", "python", "py") else _jsons(bloque.strip())
-    if not out and texto.strip()[:1] in ("{", "["):
-        out = _jsons(texto.strip())
-    for c in out:
-        c["id"] = uuid.uuid4().hex[:24]
-    return out
-
-
-def sin_llamadas(texto: str) -> str:
-    """El texto del modelo sin las llamadas que se sacaron de él."""
-    texto = re.sub(r"<tool_call>.*?(</tool_call>|$)|<function=[\w.-]+>.*?(</function>|$)", "", texto, flags=re.DOTALL)
-    texto = re.sub(r"(\[TOOL_CALLS\]|<\|python_tag\|>).*", "", texto, flags=re.DOTALL)
-    texto = re.sub(r"```(?:json|tool_call|tool_code)?[ \t]*\n.*?```", "", texto, flags=re.DOTALL)
-    return "" if texto.strip()[:1] in ("{", "[") and llamadas_en_texto(texto) else texto.strip()
+@dataclass
+class _Marcha:
+    """Lo que el bucle recuerda durante una tarea para notar que el modelo se atasca."""
+    modo: str
+    razonar: bool
+    por_aprobar: bool
+    repeticiones: dict[str, int] = field(default_factory=dict)
+    lecturas: dict[tuple, int] = field(default_factory=dict)  # del mismo archivo sin escribir nada entre medias
+    cambios: int = 0  # acciones NUEVAS que pueden cambiar el proyecto (un comando distinto: copiar, instalar...)
+    fallos: dict[str, int] = field(default_factory=dict)
+    rechazos_fin: int = 0
+    empujones: int = 0
 
 
 class Agente:
@@ -289,11 +189,52 @@ class Agente:
         if max_pasos is None and (como := grande.modo(texto, self._repo_grande(), self.h.dir_agente)):
             return grande.ejecutar(self, texto, como)
         respuesta = self._tarea(texto, max_pasos, requeridos, etiqueta)
-        if max_pasos is None and INCOMPLETA.match(respuesta):
+        if max_pasos is None and grande.INCOMPLETA.match(respuesta):
             self.h.tarea_interrumpida()
         return respuesta
 
     def _tarea(self, texto: str, max_pasos: int | None, requeridos: set[str] | None, etiqueta: str) -> str:
+        m = self._preparar(texto, max_pasos, requeridos, etiqueta)
+        limite = max_pasos or self.cfg["max_pasos"]
+        for paso in range(1, limite + 1):
+            self.pasos_totales += 1
+            self.h.paso = self.pasos_totales  # contador global: válido entre tareas sucesivas
+            if self.ctx.hace_falta():
+                self._compactar()
+            try:
+                r, llamadas, contenido = self._pedir_al_modelo(m)
+            except cliente.ErrorLLM as e:
+                self._limpiar_linea()
+                if "context" in str(e).lower() and len(self.ctx.mensajes) > 3:
+                    self._compactar(forzar=True)
+                    continue
+                self._salida("aviso", f"Error del modelo: {e}", "rojo")
+                return f"Error del modelo: {e}"
+
+            if not llamadas:
+                respuesta = self._sin_llamadas(contenido, r["finish_reason"], m)
+                if respuesta is None:
+                    continue
+                return respuesta
+
+            m.empujones = 0
+            self.ctx.asistente(contenido, llamadas)
+            if contenido:
+                self._salida("nota", f"· {contenido[:300]}", "gris")
+            hubo_error = False
+            for c in llamadas:
+                fin, error = self._atender(c, r["finish_reason"], paso, m)
+                if fin is not None:
+                    return fin
+                hubo_error |= error
+            if hubo_error and m.modo == "auto":
+                m.razonar = True  # pensar solo cuando hace falta (ahorra tokens)
+        msg = f"Se alcanzó el máximo de {limite} pasos. Escribe 'continúa' para seguir." + self._rescatar()
+        self._salida("aviso", msg)
+        return msg
+
+    def _preparar(self, texto: str, max_pasos: int | None, requeridos: set[str] | None, etiqueta: str) -> _Marcha:
+        """Deja el contexto y las herramientas listos para una tarea nueva o para seguir la anterior."""
         self.ctx.usuario(texto)
         if self.con_mapa and max_pasos is None:
             self.ctx.mensajes[-1]["content"] += AVISO_MAPA
@@ -313,162 +254,152 @@ class Agente:
         self.h.nueva_tarea(self.pasos_totales + 1, texto if max_pasos is None and not sigue else "")
         self.inicio_tarea, self.revisiones = self.pasos_totales + 1, 0
         modo = self.cfg["razonamiento"]
-        razonar = modo in ("on", "auto")  # planificar con razonamiento
-        repeticiones: dict[str, int] = {}
-        lecturas: dict[tuple, int] = {}  # del mismo archivo sin escribir nada entre medias
-        cambios = 0  # acciones NUEVAS que pueden cambiar el proyecto (un comando distinto: copiar, instalar...)
-        fallos: dict[str, int] = {}
-        rechazos_fin = 0
-        empujones = 0
-        limite = max_pasos or self.cfg["max_pasos"]
-        for paso in range(1, limite + 1):
-            self.pasos_totales += 1
-            self.h.paso = self.pasos_totales  # contador global: válido entre tareas sucesivas
-            if self.ctx.hace_falta():
-                self._compactar()
-            enviados = list(self.ctx.mensajes)
-            t_modelo = time.time()
-            try:
-                r = self.llm.chat(enviados, self.esquemas, self.ctx.max_salida(), razonar, self._progreso)
-            except cliente.ErrorLLM as e:
-                self._limpiar_linea()
-                if "context" in str(e).lower() and len(self.ctx.mensajes) > 3:
-                    self._compactar(forzar=True)
-                    continue
-                self._salida("aviso", f"Error del modelo: {e}", "rojo")
-                return f"Error del modelo: {e}"
-            self._limpiar_linea()
-            self.ctx.calibrar((r["usage"] or {}).get("prompt_tokens", 0), enviados)
-            llamadas = r["tool_calls"] or llamadas_en_texto(r["content"])
-            contenido = (sin_llamadas(r["content"]) if llamadas and not r["tool_calls"]
-                         else re.sub(r"<tool_call>.*?(</tool_call>|$)", "", r["content"], flags=re.DOTALL).strip())
-            uso = r["usage"] or {}
-            metricas.anotar(self.h.dir_agente, tipo="turno", paso=self.pasos_totales,
-                            modelo_s=round(time.time() - t_modelo, 2), espera_s=r.get("espera") and round(r["espera"], 2),
-                            tokens_entrada=uso.get("prompt_tokens"), tokens_salida=uso.get("completion_tokens"),
-                            razonamiento_car=len(r.get("reasoning") or ""), nota_car=len(contenido),
-                            args_car=sum(len(c.get("arguments") or "") for c in llamadas), llamadas=len(llamadas),
-                            fin=r["finish_reason"], timings=r.get("timings") or None)
-            razonar = modo == "on"
+        return _Marcha(modo=modo, razonar=modo in ("on", "auto"), por_aprobar=por_aprobar)  # planificar con razonamiento
 
-            if not llamadas:
-                self.ctx.asistente(contenido, [])
-                if r["finish_reason"] == "length":
-                    self.ctx.mensajes.append({"role": "user", "content": (
-                        "Tu respuesta se cortó por longitud. Divide el trabajo: archivos más pequeños (módulos) "
-                        "y una llamada a escribir por archivo.")})
-                    continue
-                pendiente = "- [ ]" in self.h.plan_texto()
-                pregunta = contenido.rstrip().endswith("?")
-                if contenido.count("```") >= 2 and contenido.count("\n") > 25 and empujones < 2:
-                    empujones += 1  # conducta: pegar código en el chat en vez de escribir archivos
-                    self.ctx.mensajes.append({"role": "user", "content": (
-                        "No pegues código en el chat: guárdalo con escribir (un archivo por llamada) y sigue el método.")})
-                    continue
-                if pendiente and not pregunta and empujones < 2:
-                    empujones += 1
-                    self.ctx.mensajes.append({"role": "user", "content": (
-                        "Continúa con el plan usando las herramientas (no describas, actúa). "
-                        f"Pasos:\n{self.h.plan_texto()}")})
-                    continue
-                self._decir(contenido)
-                self._log(f"AGENTE: {contenido}")
-                return contenido
+    def _pedir_al_modelo(self, m: _Marcha) -> tuple[dict, list, str]:
+        """Un turno del modelo: su respuesta, las llamadas que pide (también si las escribió como texto) y lo que dijo."""
+        enviados = list(self.ctx.mensajes)
+        t_modelo = time.time()
+        r = self.llm.chat(enviados, self.esquemas, self.ctx.max_salida(), m.razonar, self._progreso)
+        self._limpiar_linea()
+        self.ctx.calibrar((r["usage"] or {}).get("prompt_tokens", 0), enviados)
+        llamadas = r["tool_calls"] or llamadas_en_texto(r["content"])
+        contenido = (sin_llamadas(r["content"]) if llamadas and not r["tool_calls"]
+                     else re.sub(r"<tool_call>.*?(</tool_call>|$)", "", r["content"], flags=re.DOTALL).strip())
+        uso = r["usage"] or {}
+        metricas.anotar(self.h.dir_agente, tipo="turno", paso=self.pasos_totales,
+                        modelo_s=round(time.time() - t_modelo, 2), espera_s=r.get("espera") and round(r["espera"], 2),
+                        tokens_entrada=uso.get("prompt_tokens"), tokens_salida=uso.get("completion_tokens"),
+                        razonamiento_car=len(r.get("reasoning") or ""), nota_car=len(contenido),
+                        args_car=sum(len(c.get("arguments") or "") for c in llamadas), llamadas=len(llamadas),
+                        fin=r["finish_reason"], timings=r.get("timings") or None)
+        m.razonar = m.modo == "on"
+        return r, llamadas, contenido
 
-            empujones = 0
-            self.ctx.asistente(contenido, llamadas)
-            if contenido:
-                self._salida("nota", f"· {contenido[:300]}", "gris")
-            hubo_error = False
-            for c in llamadas:
-                t_llamada = time.time()
-                try:
-                    args = coaccionar(c["name"], json.loads(c["arguments"] or "{}", strict=False))
-                except ValueError as e:
-                    if r["finish_reason"] == "length":  # se acabó el máximo de una respuesta en mitad de la llamada
-                        resultado = (f"Tu llamada a {c['name']} se CORTÓ: superó el máximo de una respuesta. No la repitas "
-                                     "igual. Escribe el archivo en partes: la primera con escribir y el resto con "
-                                     "escribir(ruta, contenido, anadir=true), cada parte de unas 150 líneas como mucho; "
-                                     "o divídelo en archivos más pequeños (p. ej. css/base.css, css/productos.css).")
-                    else:
-                        resultado = f"Argumentos JSON inválidos ({e}). Repite la llamada con JSON válido."
-                    self.ctx.herramienta(c["id"], resultado)
-                    self._mostrar(paso, c["name"], {}, resultado)
-                    self._medir(c, {}, t_llamada, resultado)
-                    hubo_error = True
-                    continue
+    def _sin_llamadas(self, contenido: str, fin: str, m: _Marcha) -> str | None:
+        """El modelo respondió sin pedir nada: la respuesta final, o None si hay que empujarlo a seguir."""
+        self.ctx.asistente(contenido, [])
+        if fin == "length":
+            self.ctx.mensajes.append({"role": "user", "content": (
+                "Tu respuesta se cortó por longitud. Divide el trabajo: archivos más pequeños (módulos) "
+                "y una llamada a escribir por archivo.")})
+            return None
+        pendiente = "- [ ]" in self.h.plan_texto()
+        pregunta = contenido.rstrip().endswith("?")
+        if contenido.count("```") >= 2 and contenido.count("\n") > 25 and m.empujones < 2:
+            m.empujones += 1  # conducta: pegar código en el chat en vez de escribir archivos
+            self.ctx.mensajes.append({"role": "user", "content": (
+                "No pegues código en el chat: guárdalo con escribir (un archivo por llamada) y sigue el método.")})
+            return None
+        if pendiente and not pregunta and m.empujones < 2:
+            m.empujones += 1
+            self.ctx.mensajes.append({"role": "user", "content": (
+                "Continúa con el plan usando las herramientas (no describas, actúa). "
+                f"Pasos:\n{self.h.plan_texto()}")})
+            return None
+        self._decir(contenido)
+        self._log(f"AGENTE: {contenido}")
+        return contenido
 
-                clave = c["name"] + json.dumps(args, sort_keys=True, ensure_ascii=False)
-                if c["name"] in DEPENDEN_DEL_ESTADO:  # tras modificar archivos, repetir la prueba es progreso
-                    clave += f"|{self.h.paso_escritura}"
-                    if c["name"] not in CAMBIAN_ARCHIVOS:  # y verificar tras un comando nuevo (no el mismo repetido)
-                        clave += f"|{cambios}"
-                repeticiones[clave] = repeticiones.get(clave, 0) + 1
+    def _atender(self, c: dict, fin: str, paso: int, m: _Marcha) -> tuple[str | None, bool]:
+        """Una llamada del modelo: (respuesta final si con ella acaba la tarea, si el resultado es un error)."""
+        t_llamada = time.time()
+        try:
+            args = coaccionar(c["name"], json.loads(c["arguments"] or "{}", strict=False))
+        except ValueError as e:
+            if fin == "length":  # se acabó el máximo de una respuesta en mitad de la llamada
+                resultado = (f"Tu llamada a {c['name']} se CORTÓ: superó el máximo de una respuesta. No la repitas "
+                             "igual. Escribe el archivo en partes: la primera con escribir y el resto con "
+                             "escribir(ruta, contenido, anadir=true), cada parte de unas 150 líneas como mucho; "
+                             "o divídelo en archivos más pequeños (p. ej. css/base.css, css/productos.css).")
+            else:
+                resultado = f"Argumentos JSON inválidos ({e}). Repite la llamada con JSON válido."
+            self.ctx.herramienta(c["id"], resultado)
+            self._mostrar(paso, c["name"], {}, resultado)
+            self._medir(c, {}, t_llamada, resultado)
+            return None, True
 
-                if c["name"] == "terminar":
-                    motivo = self._puede_terminar(rechazos_fin, paso)
-                    if motivo:
-                        rechazos_fin += 1
-                        resultado = motivo
-                    else:
-                        resumen = str(args.get("resumen", "")).strip()
-                        if self.h.verificacion["errores"] > 0:  # salió por la válvula anti-bucle con errores
-                            resumen = ("[AVISO: la tarea termina SIN resolver todos los errores de verificación."
-                                       f"{self._rescatar()}]\n" + resumen)
-                        self.ctx.herramienta(c["id"], "Tarea terminada.")
-                        self._mostrar(paso, "terminar", {}, "Tarea terminada")
-                        self._medir(c, args, t_llamada, "Tarea terminada.")
-                        self._guardar_resumen(resumen)
-                        self._decir(resumen)
-                        self._log(f"FIN: {resumen}")
-                        return resumen
-                elif por_aprobar and c["name"] in CAMBIAN_ARCHIVOS:
-                    resultado = ("RECHAZADO: el usuario quiere revisar el plan antes de que cambies nada. Lee lo que "
-                                 "necesites, crea el plan con plan(...) y espera su respuesta.")
-                else:
-                    self.esperar_mapa()
-                    resultado = despachar(self.h, c["name"], args)
-                    resultado += aviso_herramienta(resultado)
-                    if c["name"] == "leer":
-                        vez = (str(args.get("ruta")), self.h.paso_escritura)
-                        lecturas[vez] = lecturas.get(vez, 0) + 1
-                        if lecturas[vez] >= 5:
-                            resultado += (f"\n[AVISO: es la {lecturas[vez]}ª vez que lees {vez[0]} sin cambiar nada: el texto no va a "
-                                          "cambiar. Decide ya: corrige con editar o ejecuta algo que aporte datos nuevos.]")
-                    if c["name"] in CAMBIAN_ARCHIVOS and repeticiones[clave] == 1:
-                        cambios += 1
-                    if repeticiones[clave] >= 3:
-                        resultado += (f"\n[AVISO: es la {repeticiones[clave]}ª vez que haces exactamente esta llamada. "
-                                      "Cambia de estrategia: lee el error, investiga con web_buscar o pregunta al usuario.]")
-                    if repeticiones[clave] >= 5:
-                        self.ctx.herramienta(c["id"], resultado)
-                        msg = f"Detenido: el modelo repitió '{c['name']}' 5 veces sin avanzar." + self._rescatar()
-                        self._salida("aviso", msg, "rojo")
-                        return msg
-                    if c["name"] == "ejecutar":
-                        cmd = str(args.get("comando", ""))
-                        fallos[cmd] = fallos.get(cmd, 0) + 1 if re.match(r"(exit=[1-9-]|TIMEOUT)", resultado) else 0
-                        if fallos[cmd] in (3, 6):
-                            resultado += ("\n[ATASCO: este comando falla por " + str(fallos[cmd]) + "ª vez seguida. No reescribas "
-                                          "a ciegas: lee el error y el código implicado (leer), escribe en una frase la causa raíz "
-                                          "y corrige solo eso con editar. Si no la encuentras, usa web_buscar con el error.]")
-                    if c["name"] == "plan" and (olvidados := [f for f in self.requeridos if f.lower() not in resultado.lower()]):
-                        resultado += f"\n[AVISO: el usuario pidió {', '.join(sorted(olvidados))} y el plan no lo incluye. Corrige el plan.]"
-                    if c["name"] == "plan" and por_aprobar and resultado.startswith("Plan guardado"):
-                        por_aprobar, resultado = self._aprobar_plan(resultado)
-                    siguiente = next((l[6:] for l in self.h.plan_texto().splitlines() if l.startswith("- [ ]")), "")
-                    if siguiente and c["name"] not in ("plan", "paso_hecho"):
-                        resultado += f"\n[Plan, paso pendiente: {siguiente}]"
-                self._mostrar(paso, c["name"], args, resultado)
-                self._log(f"{c['name']} {json.dumps(args, ensure_ascii=False)[:300]} -> {resultado[:300]}")
-                self._medir(c, args, t_llamada, resultado)
-                hubo_error |= bool(re.match(ES_ERROR, resultado))
+        clave = c["name"] + json.dumps(args, sort_keys=True, ensure_ascii=False)
+        if c["name"] in DEPENDEN_DEL_ESTADO:  # tras modificar archivos, repetir la prueba es progreso
+            clave += f"|{self.h.paso_escritura}"
+            if c["name"] not in CAMBIAN_ARCHIVOS:  # y verificar tras un comando nuevo (no el mismo repetido)
+                clave += f"|{m.cambios}"
+        m.repeticiones[clave] = m.repeticiones.get(clave, 0) + 1
+
+        if c["name"] == "terminar":
+            motivo = self._puede_terminar(m.rechazos_fin, paso)
+            if not motivo:
+                return self._cerrar_tarea(c, args, paso, t_llamada), False
+            m.rechazos_fin += 1
+            resultado = motivo
+        elif m.por_aprobar and c["name"] in CAMBIAN_ARCHIVOS:
+            resultado = ("RECHAZADO: el usuario quiere revisar el plan antes de que cambies nada. Lee lo que "
+                         "necesites, crea el plan con plan(...) y espera su respuesta.")
+        else:
+            self.esperar_mapa()
+            resultado = despachar(self.h, c["name"], args)
+            resultado += aviso_herramienta(resultado)
+            resultado += self._avisos_de_conducta(c["name"], args, clave, m)
+            if m.repeticiones[clave] >= 5:
                 self.ctx.herramienta(c["id"], resultado)
-            if hubo_error and modo == "auto":
-                razonar = True  # pensar solo cuando hace falta (ahorra tokens)
-        msg = f"Se alcanzó el máximo de {limite} pasos. Escribe 'continúa' para seguir." + self._rescatar()
-        self._salida("aviso", msg)
-        return msg
+                msg = f"Detenido: el modelo repitió '{c['name']}' 5 veces sin avanzar." + self._rescatar()
+                self._salida("aviso", msg, "rojo")
+                return msg, False
+            resultado += self._avisos_de_ejecucion(c["name"], args, resultado, m)
+            if c["name"] == "plan" and m.por_aprobar and resultado.startswith("Plan guardado"):
+                m.por_aprobar, resultado = self._aprobar_plan(resultado)
+            siguiente = next((l[6:] for l in self.h.plan_texto().splitlines() if l.startswith("- [ ]")), "")
+            if siguiente and c["name"] not in ("plan", "paso_hecho"):
+                resultado += f"\n[Plan, paso pendiente: {siguiente}]"
+        self._mostrar(paso, c["name"], args, resultado)
+        self._log(f"{c['name']} {json.dumps(args, ensure_ascii=False)[:300]} -> {resultado[:300]}")
+        self._medir(c, args, t_llamada, resultado)
+        self.ctx.herramienta(c["id"], resultado)
+        return None, bool(re.match(ES_ERROR, resultado))
+
+    def _cerrar_tarea(self, c: dict, args: dict, paso: int, t_llamada: float) -> str:
+        """terminar aceptado: guarda y dice el resumen."""
+        resumen = str(args.get("resumen", "")).strip()
+        if self.h.verificacion["errores"] > 0:  # salió por la válvula anti-bucle con errores
+            resumen = ("[AVISO: la tarea termina SIN resolver todos los errores de verificación."
+                       f"{self._rescatar()}]\n" + resumen)
+        self.ctx.herramienta(c["id"], "Tarea terminada.")
+        self._mostrar(paso, "terminar", {}, "Tarea terminada")
+        self._medir(c, args, t_llamada, "Tarea terminada.")
+        self._guardar_resumen(resumen)
+        self._decir(resumen)
+        self._log(f"FIN: {resumen}")
+        return resumen
+
+    def _avisos_de_conducta(self, nombre: str, args: dict, clave: str, m: _Marcha) -> str:
+        """Avisos al modelo cuando repite lo mismo sin avanzar."""
+        aviso = ""
+        if nombre == "leer":
+            vez = (str(args.get("ruta")), self.h.paso_escritura)
+            m.lecturas[vez] = m.lecturas.get(vez, 0) + 1
+            if m.lecturas[vez] >= 5:
+                aviso += (f"\n[AVISO: es la {m.lecturas[vez]}ª vez que lees {vez[0]} sin cambiar nada: el texto no va a "
+                          "cambiar. Decide ya: corrige con editar o ejecuta algo que aporte datos nuevos.]")
+        if nombre in CAMBIAN_ARCHIVOS and m.repeticiones[clave] == 1:
+            m.cambios += 1
+        if m.repeticiones[clave] >= 3:
+            aviso += (f"\n[AVISO: es la {m.repeticiones[clave]}ª vez que haces exactamente esta llamada. "
+                      "Cambia de estrategia: lee el error, investiga con web_buscar o pregunta al usuario.]")
+        return aviso
+
+    def _avisos_de_ejecucion(self, nombre: str, args: dict, resultado: str, m: _Marcha) -> str:
+        """Avisos al modelo cuando un comando falla seguido o el plan olvida lo que pidió el usuario."""
+        aviso = ""
+        if nombre == "ejecutar":
+            cmd = str(args.get("comando", ""))
+            m.fallos[cmd] = m.fallos.get(cmd, 0) + 1 if re.match(r"(exit=[1-9-]|TIMEOUT)", resultado) else 0
+            if m.fallos[cmd] in (3, 6):
+                aviso += ("\n[ATASCO: este comando falla por " + str(m.fallos[cmd]) + "ª vez seguida. No reescribas "
+                          "a ciegas: lee el error y el código implicado (leer), escribe en una frase la causa raíz "
+                          "y corrige solo eso con editar. Si no la encuentras, usa web_buscar con el error.]")
+        if nombre == "plan" and (olvidados := [f for f in self.requeridos if f.lower() not in resultado.lower()]):
+            aviso += f"\n[AVISO: el usuario pidió {', '.join(sorted(olvidados))} y el plan no lo incluye. Corrige el plan.]"
+        return aviso
 
     def _revisar(self, requisitos: str = "", enfoque: str = "") -> tuple[str, bool]:
         self.revisiones += 1

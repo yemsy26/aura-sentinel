@@ -13,7 +13,7 @@ import importlib.util
 
 from agente import ecosistemas, verificacion
 from agente.conocimiento import guia
-from agente.verificacion import Informe
+from agente.proyecto import Informe
 
 HAY_NAVEGADOR = importlib.util.find_spec("playwright") is not None
 

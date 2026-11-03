@@ -11,8 +11,9 @@ from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from . import app_tauri, config, llm
-from .verificacion import SONDA_PYGAME, _canal_navegador, _cola, _correr, _entrada_python, _rel, _Silencioso, archivos
+from . import app_tauri, config, ecosistemas, llm
+from .proyecto import archivos, cola, correr_texto, ignorado, relativa
+from .verificacion import SONDA_PYGAME, Silencioso, canal_navegador, entrada_python
 
 LOCALES = {"localhost", "127.0.0.1", "::1"}
 # Probado con Qwen3.6 (Q3 + mmproj F16) en capturas reales, 3-4 muestras: una lista de comprobación con razonamiento
@@ -257,12 +258,12 @@ def capturar_web(raiz: Path, objetivo: str, png: Path, espera: float) -> list[st
     from playwright.sync_api import sync_playwright
     servidor = None
     if not objetivo.startswith(("http://", "https://")):
-        servidor = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Silencioso, directory=str(raiz)))
+        servidor = ThreadingHTTPServer(("127.0.0.1", 0), partial(Silencioso, directory=str(raiz)))
         threading.Thread(target=servidor.serve_forever, daemon=True).start()
         objetivo = f"http://127.0.0.1:{servidor.server_port}/{urllib.parse.quote(objetivo.replace(chr(92), '/'))}"
     try:
         with sync_playwright() as p:
-            nav = _canal_navegador(p)
+            nav = canal_navegador(p)
             if nav is None:
                 raise RuntimeError("no se pudo abrir Edge/Chrome sin ventana")
             try:
@@ -288,12 +289,12 @@ def capturar_pygame(entrada: Path, python: str, png: Path, espera: float) -> lis
     """Juega sin ventana con la sonda (teclas aleatorias, reloj acelerado) y guarda la última pantalla."""
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy",
                SONDA_CAPTURA=str(png), SONDA_SEMILLA="1")
-    codigo, salida = _correr([python, str(SONDA_PYGAME), str(entrada), str(espera)], entrada.parent, espera + 25, env)
+    codigo, salida = correr_texto([python, str(SONDA_PYGAME), str(entrada), str(espera)], entrada.parent, espera + 25, env)
     m = re.search(r"^SONDA (\{.*\})$", salida, re.MULTILINE)
     if not m:
         if "No module named 'pygame'" in salida:
             raise RuntimeError("pygame no está instalado en el entorno del proyecto (.venv)")
-        raise RuntimeError("el juego no se cierra al recibir QUIT" if codigo is None else f"el juego no arrancó:\n    {_cola(salida)}")
+        raise RuntimeError("el juego no se cierra al recibir QUIT" if codigo is None else f"el juego no arrancó:\n    {cola(salida)}")
     d = json.loads(m.group(1))
     cap = d.get("captura") or {}
     if "colores" not in cap:
@@ -348,17 +349,16 @@ def _elegir(raiz: Path) -> str:
     """Sin ruta: la página principal o, si es un juego pygame, su archivo de entrada."""
     htmls = sorted(archivos(raiz, ".html", ".htm"), key=lambda p: (p.name != "index.html", len(p.parts)))
     if htmls:
-        return _rel(htmls[0], raiz)
+        return relativa(htmls[0], raiz)
     pys = archivos(raiz, ".py")
     if any("pygame" in p.read_text(encoding="utf-8", errors="replace") for p in pys if not p.name.startswith("test")):
-        entrada = _entrada_python(raiz, pys)
-        return _rel(entrada, raiz) if entrada else ""
+        entrada = entrada_python(raiz, pys)
+        return relativa(entrada, raiz) if entrada else ""
     return ""
 
 
 def _tauri(raiz: Path) -> Path | None:
     """La carpeta con tauri.conf.json (src-tauri) si el proyecto es una app Tauri."""
-    from .verificacion import ignorado
     return next((p.parent for p in sorted(raiz.rglob("tauri.conf.json")) if not ignorado(p, raiz)), None)
 
 
@@ -374,8 +374,7 @@ def _es_dev(objetivo: str, d: Path) -> bool:
 
 def ver_app(h, d: Path, png: Path, pregunta: str, espera: float) -> tuple[str, str]:
     """(informe de la ventana real de la app Tauri, o '' y el motivo si no se pudo abrir)."""
-    from .ecosistemas import ENTORNO
-    r = app_tauri.probar(d, ENTORNO, png, espera)
+    r = app_tauri.probar(d, ecosistemas.ENTORNO, png, espera)
     if r["estado"] == "omitido":
         return "", r["motivo"]
     juicio, fuente = (evaluar(png.read_bytes(), "la ventana de la app de escritorio (Tauri)", pregunta,

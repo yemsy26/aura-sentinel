@@ -18,7 +18,8 @@ from agente import __main__ as cli
 from agente import config
 from agente.entorno import completo, limpio
 from agente.herramientas import Herramientas
-from agente.verificacion import Informe, bats, con_call
+from agente.proyecto import Informe
+from agente.verificacion import bats, con_call
 
 LISTO = {"content": "Listo.", "tool_calls": [], "finish_reason": "stop", "usage": {}}
 

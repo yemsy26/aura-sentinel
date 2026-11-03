@@ -9,7 +9,8 @@ import time
 
 from . import compat
 from . import modelo as cargador
-from .herramientas import ESQUEMAS
+from .esquemas import ESQUEMAS
+from .llamadas import llamadas_en_texto
 from .llm import LLM, ErrorLLM, detectar, info_modelo, listar_modelos
 
 HERRAMIENTAS = [e for e in ESQUEMAS if e["function"]["name"] in ("escribir", "terminar")]
@@ -56,7 +57,6 @@ def _args(c: dict) -> dict:
 
 
 def probar(cfg: dict, clave: str, avisar=print) -> dict:
-    from .bucle import llamadas_en_texto
     t0 = time.time()
     base = detectar(dict(cfg, modelo="auto"))[0]
     info = next((m for m in listar_modelos(base) if m.get("key") == clave and m.get("type") == "llm"), None)

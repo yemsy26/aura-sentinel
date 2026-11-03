@@ -18,8 +18,15 @@ from pathlib import Path
 
 from . import mapa
 from .contexto import Contexto
-from .herramientas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS, NO_VERSIONAR, recortar
-from .verificacion import informe_proyecto, muertos_ahora, normalizar
+from .esquemas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS
+from .herramientas import NO_VERSIONAR, despachar, recortar
+from .llamadas import coaccionar, llamadas_en_texto, sin_llamadas
+from .llm import ErrorLLM
+from .proyecto import normalizar
+from .verificacion import informe_proyecto, muertos_ahora
+
+# Respuesta de una tarea que no quedó terminada (el IDE la marca como incompleta).
+INCOMPLETA = re.compile(r"(Error del modelo|Detenido|Se alcanzó el máximo|\[AVISO: la tarea termina SIN)")
 
 EXPLICITO = re.compile(r"^\s*/grande\b|\bmodo grande\b", re.IGNORECASE)
 TRANSVERSAL = re.compile(
@@ -227,8 +234,6 @@ def validar(h, args: dict, rechazos: int) -> dict | str:
 
 
 def planificar(agente, tarea: str) -> dict | str:
-    from .bucle import coaccionar, llamadas_en_texto, sin_llamadas
-    from .llm import ErrorLLM
     h = agente.h
     docs = documentos(h.raiz)
     usuario = PLAN.format(tarea=tarea) + (f"\n\nDOCUMENTACIÓN DEL PROYECTO:\n{docs}" if docs else "") + \
@@ -276,7 +281,6 @@ def planificar(agente, tarea: str) -> dict | str:
                     rechazos += 1
                     resultado = estado
                 elif c["name"] in LECTURA:
-                    from .herramientas import despachar
                     resultado = despachar(h, c["name"], args)
                 else:
                     resultado = ("En la fase de plan solo se lee: usa mapa, listar, leer o buscar y termina con "
@@ -327,7 +331,6 @@ def _requisitos_revision(estado: dict, k: int) -> str:
 
 
 def _una_parte(agente, estado: dict, k: int) -> tuple[bool, str]:
-    from .bucle import INCOMPLETA
     h, parte, n = agente.h, estado["partes"][k - 1], len(estado["partes"])
     quedan_despues = any(p["estado"] != "hecha" for p in estado["partes"][k:])
     h.errores_previos = set(estado.get("errores_previos", []))

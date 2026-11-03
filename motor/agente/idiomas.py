@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
-from .verificacion import IGNORAR, es_codigo
+from .proyecto import IGNORAR, es_codigo
 
 CARPETAS = {"locales", "locale", "i18n", "lang", "langs", "languages", "translations", "translation", "messages",
             "l10n", "idiomas", "traducciones", "lenguajes", "textos"}

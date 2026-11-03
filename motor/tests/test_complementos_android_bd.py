@@ -15,8 +15,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente import android, complementos, conocimiento, ecosistemas, matematicas, prompts
-from agente.herramientas import LICENCIA, PELIGROSOS, Herramientas, bd_remota, despachar, externo
-from agente.verificacion import Informe
+from agente.herramientas import Herramientas, despachar
+from agente.permisos import LICENCIA, PELIGROSOS, bd_remota, externo
+from agente.proyecto import Informe
 
 NO_EJECUTAR = mock.patch("agente.herramientas.subprocess.Popen", side_effect=AssertionError("no debe ejecutarse"))
 HUNT = complementos.ruta("sat-hibrido")
@@ -157,7 +158,7 @@ class Blockchain(Temporal):
             return (1, SALIDA_ANCHOR) if fallar else (0, "ok")
 
         with mock.patch.object(ecosistemas.shutil, "which", return_value="anchor.exe"), \
-                mock.patch.object(ecosistemas, "_correr", correr), \
+                mock.patch.object(ecosistemas, "correr_texto", correr), \
                 mock.patch.object(ecosistemas, "_version_de", lambda c: (0, 32, 1) if c[0] == "anchor" else (1, 18, 26)):
             fallar, inf = True, Informe()
             ecosistemas.anchor(self.dir, self.dir, inf)
@@ -186,7 +187,7 @@ class Blockchain(Temporal):
         self.assertIn("forge init", inf.avisos[0])
 
     def test_las_dependencias_de_foundry_no_son_del_proyecto(self):
-        from agente.verificacion import archivos, ignorado
+        from agente.proyecto import archivos, ignorado
         (self.dir / "foundry.toml").write_text("[profile.default]", encoding="utf-8")
         for rel in ("lib/forge-std/scripts/vm.py", "lib/forge-std/package.json", "broadcast/D.s.sol/1/run.json",
                     "src/Boveda.sol", "scripts/analisis.py"):

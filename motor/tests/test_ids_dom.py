@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agente.verificacion import Informe, ids_dom, verificar
+from agente.proyecto import Informe
+from agente.verificacion import ids_dom, verificar
 
 # Aura-Monitor (Tauri 2, r490): main.ts busca "cpu-percent" y el index.html tiene "cpu-usage".
 INDEX = """<!doctype html>

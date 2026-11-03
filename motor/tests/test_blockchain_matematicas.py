@@ -20,7 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente import conocimiento, matematicas, prompts
 from agente.bucle import DEPENDEN_DEL_ESTADO, aviso_herramienta
-from agente.herramientas import CRIPTO, CRIPTO_CONFIG, ESQUEMAS, Herramientas, despachar, externo, transaccion
+from agente.esquemas import ESQUEMAS
+from agente.herramientas import Herramientas, despachar
+from agente.permisos import CRIPTO, CRIPTO_CONFIG, externo, transaccion
 
 NO_EJECUTAR = mock.patch("agente.herramientas.subprocess.Popen", side_effect=AssertionError("no debe ejecutarse"))
 

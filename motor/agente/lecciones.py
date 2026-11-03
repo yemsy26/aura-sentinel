@@ -13,8 +13,8 @@ from pathlib import Path
 from .config import RAIZ_INSTALACION
 from .conocimiento import ALIAS, DIR_GUIAS
 from .pasajes import raices
+from .proyecto import IGNORAR
 from .revision import TEMAS
-from .verificacion import IGNORAR
 
 ARCHIVO = RAIZ_INSTALACION / "lecciones.md"
 USO = RAIZ_INSTALACION / "lecciones_uso.json"

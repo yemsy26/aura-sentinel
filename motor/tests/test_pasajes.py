@@ -10,7 +10,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente import pasajes
-from agente.herramientas import ESQUEMAS, Herramientas, despachar
+from agente.esquemas import ESQUEMAS
+from agente.herramientas import Herramientas, despachar
 
 DIA = pasajes.DIA
 T0 = 1_800_000_000.0

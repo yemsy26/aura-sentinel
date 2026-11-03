@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agente import __main__ as cli
 from agente import compat, config, llm, prueba_modelo
 from agente import modelo as cargador
-from agente.bucle import llamadas_en_texto, sin_llamadas
+from agente.llamadas import llamadas_en_texto, sin_llamadas
 
 QWEN = {"key": "qwen3.6-35b-a3b", "type": "llm", "display_name": "Qwen3.6", "size_bytes": 17 * 2**30,
         "max_context_length": 262144, "architecture": "qwen35moe", "quantization": {"name": "Q3_K_XL"},

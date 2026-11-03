@@ -7,7 +7,8 @@ from pathlib import Path
 
 from . import __version__, compat, config
 from . import modelo as cargador
-from .bucle import INCOMPLETA, Agente, color
+from .bucle import Agente, color
+from .grande import INCOMPLETA
 from .llm import ErrorLLM, detectar
 from .prompts import LECCIONES, REGLAS_USUARIO
 

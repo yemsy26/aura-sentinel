@@ -15,9 +15,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agente import lecciones
-from agente.bucle import archivos_pedidos, coaccionar, llamadas_en_texto
 from agente.contexto import Contexto
-from agente.herramientas import INSTALACIONES, MIN_INSTALACION, Herramientas, despachar, recortar
+from agente.herramientas import INSTALACIONES, MIN_INSTALACION, Herramientas, archivos_pedidos, despachar, recortar
+from agente.llamadas import coaccionar, llamadas_en_texto
 from agente.modelo import fraccion_expertos, guardar_config, leer_gguf
 
 

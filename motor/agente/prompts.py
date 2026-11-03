@@ -4,7 +4,9 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import android, ecosistemas, matematicas
 from .config import RAIZ_INSTALACION
+from .permisos import red_solana_por_defecto
 
 REGLAS_USUARIO = RAIZ_INSTALACION / "reglas.md"
 LECCIONES = RAIZ_INSTALACION / "lecciones.md"
@@ -26,17 +28,15 @@ def _corta(texto: str, palabras: int = 2) -> str:
 
 def _blockchain() -> list[str]:
     """Herramientas de blockchain y la red por defecto de Solana (si es mainnet, cada comando debe llevar --url)."""
-    from .herramientas import _red_solana_por_defecto
     partes = ["Foundry (forge, cast, anvil)" if shutil.which("forge") else "", "Anchor" if shutil.which("anchor") else ""]
     if shutil.which("solana"):
-        red = _red_solana_por_defecto()
+        red = red_solana_por_defecto()
         partes.append("Solana CLI (red por defecto: MAINNET; pasa siempre --url localhost o -ud)" if red == "principal"
                       else f"Solana CLI (red por defecto: {red})")
     return partes
 
 
 def _android_y_bd() -> list[str]:
-    from . import android
     partes = []
     if (sdk := android.sdk()):
         api, avd = android.plataformas(sdk), android.emuladores()
@@ -53,17 +53,15 @@ def _android_y_bd() -> list[str]:
 
 
 def _sat() -> str:
-    from .matematicas import ruta_sat
-    return "resolvedor SAT activado (resolver_sat)" if ruta_sat() else "resolvedor SAT NO activado"
+    return "resolvedor SAT activado (resolver_sat)" if matematicas.ruta_sat() else "resolvedor SAT NO activado"
 
 
 def entorno() -> str:
     """Herramientas instaladas, para que el modelo sepa qué puede usar (y que Docker apagado no sirve todavía)."""
-    from .ecosistemas import docker_activo
     node, java = _version(["node", "--version"]), _version(["java", "-version"])
     docker = ""
     if shutil.which("docker"):
-        docker = "Docker (en marcha)" if docker_activo() else "Docker (APAGADO: pide al usuario que abra Docker Desktop)"
+        docker = "Docker (en marcha)" if ecosistemas.docker_activo() else "Docker (APAGADO: pide al usuario que abra Docker Desktop)"
     partes = [_version(["python", "--version"]), f"Node {node}" if node else "", java, _corta(_version(["git", "--version"]), 3),
               "uv" if shutil.which("uv") else "", "Maven" if shutil.which("mvn") else "",
               "Gradle" if shutil.which("gradle") else "", _corta(_version(["cargo", "--version"])),

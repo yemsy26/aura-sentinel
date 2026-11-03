@@ -12,7 +12,8 @@ import shutil
 from pathlib import Path
 
 from . import android, app_tauri
-from .verificacion import Informe, _correr, _rel, ignorado
+from .permisos import transaccion
+from .proyecto import Informe, correr_texto, ignorado, relativa
 
 COMPILAR = 600   # segundos: la primera compilación descarga dependencias
 CONSTRUIR = 900  # docker build
@@ -41,7 +42,7 @@ def _diagnosticos(salida: str, patron: str, cwd: Path, raiz: Path, inf: Informe,
     vistos, errores = set(), 0
     for m in re.finditer(patron, salida, re.MULTILINE):
         archivo = cwd / m.group("archivo").lstrip(".\\/")
-        detalle = f"{prefijo}{_rel(archivo, raiz)}:{m.group('linea')} {m.group('texto').strip()}"
+        detalle = f"{prefijo}{relativa(archivo, raiz)}:{m.group('linea')} {m.group('texto').strip()}"
         if detalle in vistos:
             continue
         vistos.add(detalle)
@@ -73,8 +74,8 @@ def rust(base: Path, raiz: Path, inf: Informe) -> None:
         inf.errores.append("Hay Cargo.toml pero Rust no está instalado: https://rustup.rs/ (pide al usuario que lo instale).")
         return
     for d in proyectos:
-        rel = _rel(d, raiz)
-        codigo, salida = _correr(["cargo", "build", "--all-targets", "--message-format", "short"], d, COMPILAR, ENTORNO)
+        rel = relativa(d, raiz)
+        codigo, salida = correr_texto(["cargo", "build", "--all-targets", "--message-format", "short"], d, COMPILAR, ENTORNO)
         if codigo is None:
             inf.errores.append(f"{rel}: cargo build no terminó en {COMPILAR} s.")
             continue
@@ -83,7 +84,7 @@ def rust(base: Path, raiz: Path, inf: Informe) -> None:
             if not errores:
                 inf.errores.append(f"{rel}: cargo build falla:\n    {_fallo(salida)}")
             continue
-        codigo, salida = _correr(["cargo", "test", "--quiet"], d, COMPILAR, ENTORNO)
+        codigo, salida = correr_texto(["cargo", "test", "--quiet"], d, COMPILAR, ENTORNO)
         pasadas = sum(int(n) for n in re.findall(r"test result: \w+\. (\d+) passed", salida))
         if codigo is None:
             inf.errores.append(f"{rel}: cargo test no terminó en {COMPILAR} s (¿una prueba espera datos o no acaba?).")
@@ -93,8 +94,8 @@ def rust(base: Path, raiz: Path, inf: Informe) -> None:
             inf.avisos.append(f"{rel}: no hay pruebas. Añade #[cfg(test)] mod tests con #[test] que prueben los requisitos.")
         else:
             inf.ok.append(f"{rel}: compila y pasan {pasadas} pruebas (cargo test)")
-        if codigo == 0 and _correr(["cargo", "clippy", "--version"], d, 30, ENTORNO)[0] == 0:
-            _, salida = _correr(["cargo", "clippy", "--all-targets", "--message-format", "short"], d, COMPILAR, ENTORNO)
+        if codigo == 0 and correr_texto(["cargo", "clippy", "--version"], d, 30, ENTORNO)[0] == 0:
+            _, salida = correr_texto(["cargo", "clippy", "--all-targets", "--message-format", "short"], d, COMPILAR, ENTORNO)
             _diagnosticos(salida, CLIPPY, d, raiz, inf, "clippy: ")
 
 
@@ -123,7 +124,7 @@ def tauri(base: Path, raiz: Path, inf: Informe) -> None:
         return
     inf.tipos.append("tauri")
     for conf in confs:
-        d, rel = conf.parent, _rel(conf, raiz)
+        d, rel = conf.parent, relativa(conf, raiz)
         try:
             cfg = json.loads(_leer(conf))
         except ValueError:
@@ -148,7 +149,7 @@ def tauri(base: Path, raiz: Path, inf: Informe) -> None:
                                   "ejecútalo para comprobar que el frontend compila.")
             else:
                 inf.errores.append(f"{rel}: frontendDist '{dist}' no existe y no hay beforeBuildCommand que lo cree.")
-        carpeta = _rel(d, raiz)
+        carpeta = relativa(d, raiz)
         if (d / "Cargo.toml").exists() and not (d / "build.rs").exists():
             inf.errores.append(f"{carpeta}: falta build.rs con `fn main() {{ tauri_build::build() }}`: sin él la app no "
                                "lleva su configuración, sus permisos ni su icono.")
@@ -171,7 +172,7 @@ def tauri(base: Path, raiz: Path, inf: Informe) -> None:
         for p, t in rust.items():
             if (re.search(r"System::new\w*\(", t) and re.search(r"\bcpu_usage\(\)", t)
                     and not re.search(r"MINIMUM_CPU_UPDATE_INTERVAL|sleep\(|State<", t)):
-                inf.avisos.append(f"{_rel(p, raiz)}: lee el uso de CPU de un System recién creado y sysinfo da 0 % en la "
+                inf.avisos.append(f"{relativa(p, raiz)}: lee el uso de CPU de un System recién creado y sysinfo da 0 % en la "
                                   "primera lectura. Guarda el System en el estado (Mutex<System>) y refréscalo en cada llamada.")
         web = {p: _leer(p) for p in _buscar(d.parent, lambda p, d=d: p.suffix.lower() in FRONTEND and d not in p.parents)}
         parsea = any("JSON.parse(" in t for t in web.values())
@@ -180,19 +181,19 @@ def tauri(base: Path, raiz: Path, inf: Informe) -> None:
                 cuerpo = t[m.end():m.end() + 4000]
                 fin = re.search(r"#\[tauri::command|\n(?:pub\s+)?fn\s", cuerpo)
                 if "serde_json::to_string" in cuerpo[:fin.start() if fin else None] and not parsea:
-                    inf.errores.append(f"{_rel(p, raiz)}: el comando {m.group(1)} devuelve el JSON ya convertido en texto "
+                    inf.errores.append(f"{relativa(p, raiz)}: el comando {m.group(1)} devuelve el JSON ya convertido en texto "
                                        "(serde_json::to_string): en JS llega una cadena y data.campo vale undefined. "
                                        "Devuelve el struct (-> Result<MiStruct, String>): Tauri lo convierte a JSON.")
         for p, t in web.items():
             for n in sorted({n for n in INVOKE.findall(t) if ":" not in n} - registrados):
-                inf.errores.append(f"{_rel(p, raiz)}: invoke(\"{n}\") no corresponde a ningún comando registrado en "
+                inf.errores.append(f"{relativa(p, raiz)}: invoke(\"{n}\") no corresponde a ningún comando registrado en "
                                    "generate_handler! de src-tauri.")
             if GLOBAL_TAURI.search(t) and app.get("withGlobalTauri") is not True:
-                inf.errores.append(f"{_rel(p, raiz)}: usa window.__TAURI__, que solo existe con \"app\": "
+                inf.errores.append(f"{relativa(p, raiz)}: usa window.__TAURI__, que solo existe con \"app\": "
                                    "{\"withGlobalTauri\": true}: dentro de la app valdrá undefined. Para saber si corre en "
                                    "Tauri usa isTauri() de @tauri-apps/api/core.")
             if (m := IMPORT_TAURI1.search(t)):
-                inf.errores.append(f"{_rel(p, raiz)}: importa de '@tauri-apps/api/{m.group(1)}', que no existe en Tauri 2: "
+                inf.errores.append(f"{relativa(p, raiz)}: importa de '@tauri-apps/api/{m.group(1)}', que no existe en Tauri 2: "
                                    'usa `import { invoke } from "@tauri-apps/api/core"`.')
         inf.ok.append(f"{rel}: configuración de Tauri 2 revisada ({len(registrados)} comandos registrados)")
         abrir_app(d, rel, raiz, inf)
@@ -228,9 +229,9 @@ def go(base: Path, raiz: Path, inf: Informe) -> None:
         inf.errores.append("Hay go.mod pero Go no está instalado: https://go.dev/dl/ (pide al usuario que lo instale).")
         return
     for d in proyectos:
-        rel = _rel(d, raiz)
+        rel = relativa(d, raiz)
         # go vet compila: detecta errores de compilación y fallos típicos (formatos, copias de locks...).
-        codigo, salida = _correr(["go", "vet", "./..."], d, COMPILAR, ENTORNO)
+        codigo, salida = correr_texto(["go", "vet", "./..."], d, COMPILAR, ENTORNO)
         if codigo is None:
             inf.errores.append(f"{rel}: go vet no terminó en {COMPILAR} s.")
             continue
@@ -238,7 +239,7 @@ def go(base: Path, raiz: Path, inf: Informe) -> None:
             if not _diagnosticos(salida, GOC, d, raiz, inf):
                 inf.errores.append(f"{rel}: go vet falla:\n    {_fallo(salida, r'.')}")
             continue
-        codigo, salida = _correr(["go", "test", "./..."], d, COMPILAR, ENTORNO)
+        codigo, salida = correr_texto(["go", "test", "./..."], d, COMPILAR, ENTORNO)
         paquetes = len(re.findall(r"^ok\s", salida, re.MULTILINE))
         if codigo is None:
             inf.errores.append(f"{rel}: go test no terminó en {COMPILAR} s (¿una prueba no acaba?).")
@@ -248,7 +249,7 @@ def go(base: Path, raiz: Path, inf: Informe) -> None:
             inf.avisos.append(f"{rel}: no hay pruebas. Crea archivos *_test.go con func TestXxx(t *testing.T).")
         else:
             inf.ok.append(f"{rel}: compila, go vet limpio y pasan las pruebas de {paquetes} paquete(s)")
-        _, salida = _correr(["gofmt", "-l", "."], d, 60, ENTORNO)
+        _, salida = correr_texto(["gofmt", "-l", "."], d, 60, ENTORNO)
         sin_formato = [l.strip() for l in salida.splitlines() if l.strip().endswith(".go")]
         if sin_formato:
             inf.avisos.append(f"{rel}: sin formato estándar: {', '.join(sin_formato[:5])} (ejecuta gofmt -w .)")
@@ -270,17 +271,17 @@ def dotnet(base: Path, raiz: Path, inf: Informe) -> None:
         return
     compila = True
     for objetivo in soluciones[:1] or proyectos:
-        codigo, salida = _correr(["dotnet", "build", str(objetivo), "-nologo", "-v", "q", "-clp:NoSummary"],
+        codigo, salida = correr_texto(["dotnet", "build", str(objetivo), "-nologo", "-v", "q", "-clp:NoSummary"],
                                  objetivo.parent, COMPILAR, ENTORNO)
         if codigo is None:
-            inf.errores.append(f"{_rel(objetivo, raiz)}: dotnet build no terminó en {COMPILAR} s.")
+            inf.errores.append(f"{relativa(objetivo, raiz)}: dotnet build no terminó en {COMPILAR} s.")
             compila = False
             continue
         errores = _diagnosticos(salida, DOTNET, objetivo.parent, raiz, inf)
         if codigo != 0:
             compila = False
             if not errores:
-                inf.errores.append(f"{_rel(objetivo, raiz)}: dotnet build falla:\n    {_fallo(salida)}")
+                inf.errores.append(f"{relativa(objetivo, raiz)}: dotnet build falla:\n    {_fallo(salida)}")
     if not compila:
         return
     pruebas = [p for p in proyectos if re.search(r"Microsoft\.NET\.Test\.Sdk|xunit|nunit|mstest",
@@ -290,11 +291,11 @@ def dotnet(base: Path, raiz: Path, inf: Informe) -> None:
         inf.avisos.append("No hay proyecto de pruebas (.NET): crea uno con 'dotnet new xunit' y referencia el código.")
         return
     for t in pruebas:
-        codigo, salida = _correr(["dotnet", "test", str(t), "--no-build", "-nologo", "-v", "q"], t.parent, COMPILAR, ENTORNO)
+        codigo, salida = correr_texto(["dotnet", "test", str(t), "--no-build", "-nologo", "-v", "q"], t.parent, COMPILAR, ENTORNO)
         if codigo == 0:
-            inf.ok.append(f"{_rel(t, raiz)}: dotnet test OK")
+            inf.ok.append(f"{relativa(t, raiz)}: dotnet test OK")
         else:
-            inf.errores.append(f"{_rel(t, raiz)}: dotnet test falla:\n    {_fallo(salida)}")
+            inf.errores.append(f"{relativa(t, raiz)}: dotnet test falla:\n    {_fallo(salida)}")
 
 
 # ---------------------------------------------------------------- Node / TypeScript
@@ -311,7 +312,7 @@ def node(base: Path, raiz: Path, inf: Informe) -> None:
         inf.errores.append("Hay package.json pero Node.js no está instalado: https://nodejs.org/")
         return
     for d in paquetes:
-        rel = _rel(d, raiz)
+        rel = relativa(d, raiz)
         try:
             pkg = json.loads((d / "package.json").read_text(encoding="utf-8"))
         except ValueError as e:
@@ -325,13 +326,13 @@ def node(base: Path, raiz: Path, inf: Informe) -> None:
         if (d / "tsconfig.json").exists():
             tsc = d / "node_modules" / ".bin" / "tsc.cmd"
             if tsc.exists():
-                codigo, salida = _correr([str(tsc), "--noEmit", "-p", "."], d, 300, ENTORNO)
+                codigo, salida = correr_texto([str(tsc), "--noEmit", "-p", "."], d, 300, ENTORNO)
                 if codigo != 0 and not _diagnosticos(salida, TSC, d, raiz, inf):
                     inf.errores.append(f"{rel}: tsc falla:\n    {_fallo(salida)}")
             else:
                 inf.avisos.append(f"{rel}: hay tsconfig.json pero TypeScript no está instalado: npm install -D typescript")
         if "build" in scripts:
-            codigo, salida = _correr("npm run build --silent", d, COMPILAR, ENTORNO)
+            codigo, salida = correr_texto("npm run build --silent", d, COMPILAR, ENTORNO)
             if codigo != 0:
                 inf.errores.append(f"{rel}: npm run build falla:\n    {_fallo(salida)}")
                 continue
@@ -341,7 +342,7 @@ def node(base: Path, raiz: Path, inf: Informe) -> None:
                 continue  # las pruebas de Hardhat las ejecuta solidity()
             inf.avisos.append(f"{rel}: no hay pruebas: añade scripts.test en package.json (p. ej. \"node --test\").")
             continue
-        codigo, salida = _correr("npm test --silent", d, COMPILAR, ENTORNO)
+        codigo, salida = correr_texto("npm test --silent", d, COMPILAR, ENTORNO)
         if codigo is None:
             inf.errores.append(f"{rel}: npm test no terminó en {COMPILAR} s (¿modo watch? usa vitest run / jest --ci).")
         elif codigo != 0:
@@ -359,8 +360,8 @@ HARDHAT_CONFIG = ("hardhat.config.ts", "hardhat.config.js", "hardhat.config.cjs"
 
 
 def _foundry(d: Path, raiz: Path, inf: Informe) -> None:
-    rel = _rel(d, raiz)
-    codigo, salida = _correr(["forge", "build"], d, COMPILAR, ENTORNO)
+    rel = relativa(d, raiz)
+    codigo, salida = correr_texto(["forge", "build"], d, COMPILAR, ENTORNO)
     if codigo is None:
         inf.errores.append(f"{rel}: forge build no terminó en {COMPILAR} s.")
         return
@@ -369,7 +370,7 @@ def _foundry(d: Path, raiz: Path, inf: Informe) -> None:
         if not errores:
             inf.errores.append(f"{rel}: forge build falla:\n    {_fallo(salida)}")
         return
-    codigo, salida = _correr(["forge", "test"], d, COMPILAR, ENTORNO)
+    codigo, salida = correr_texto(["forge", "test"], d, COMPILAR, ENTORNO)
     m = re.search(r"(\d+) tests? passed, (\d+) failed", salida)
     pasadas, fallidas = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
     if codigo is None:
@@ -385,10 +386,10 @@ def _foundry(d: Path, raiz: Path, inf: Informe) -> None:
 
 
 def _hardhat(d: Path, raiz: Path, inf: Informe) -> None:
-    rel = _rel(d, raiz)
+    rel = relativa(d, raiz)
     if not (d / "node_modules").is_dir():
         return  # node() ya pide npm install
-    codigo, salida = _correr("npx --no-install hardhat compile", d, COMPILAR, ENTORNO)
+    codigo, salida = correr_texto("npx --no-install hardhat compile", d, COMPILAR, ENTORNO)
     errores = _diagnosticos(salida, SOLC, d, raiz, inf)
     if codigo != 0:
         if not errores:
@@ -397,7 +398,7 @@ def _hardhat(d: Path, raiz: Path, inf: Informe) -> None:
     if not any((d / "test").glob("*.*")):
         inf.avisos.append(f"{rel}: no hay pruebas en test/: añade tests de los contratos (npx hardhat test).")
         return
-    codigo, salida = _correr("npx --no-install hardhat test", d, COMPILAR, ENTORNO)
+    codigo, salida = correr_texto("npx --no-install hardhat test", d, COMPILAR, ENTORNO)
     pasadas = sum(int(n) for n in re.findall(r"(\d+) passing", salida))
     if codigo is None:
         inf.errores.append(f"{rel}: hardhat test no terminó en {COMPILAR} s.")
@@ -428,13 +429,12 @@ def solidity(base: Path, raiz: Path, inf: Informe) -> None:
 
 
 def _version_de(cmd: list[str]) -> tuple[int, ...]:
-    codigo, salida = _correr(cmd, Path.cwd(), 30, ENTORNO)
+    codigo, salida = correr_texto(cmd, Path.cwd(), 30, ENTORNO)
     m = re.search(r"(\d+)\.(\d+)\.(\d+)", salida) if codigo == 0 else None
     return tuple(map(int, m.groups())) if m else ()
 
 
 def anchor(base: Path, raiz: Path, inf: Informe) -> None:
-    from .herramientas import transaccion  # aquí: herramientas importa este módulo al verificar
     proyectos = _raices(_buscar(base, lambda p: p.name == "Anchor.toml"))
     if not proyectos:
         return
@@ -443,8 +443,8 @@ def anchor(base: Path, raiz: Path, inf: Informe) -> None:
         inf.errores.append("Hay Anchor.toml pero Anchor no está instalado: https://www.anchor-lang.com/docs/installation")
         return
     for d in proyectos:
-        rel = _rel(d, raiz)
-        codigo, salida = _correr(["anchor", "build"], d, CONSTRUIR, ENTORNO)
+        rel = relativa(d, raiz)
+        codigo, salida = correr_texto(["anchor", "build"], d, CONSTRUIR, ENTORNO)
         if codigo is None:
             inf.errores.append(f"{rel}: anchor build no terminó en {CONSTRUIR} s (la primera vez descarga las "
                                "herramientas de Solana).")
@@ -463,7 +463,7 @@ def anchor(base: Path, raiz: Path, inf: Informe) -> None:
             inf.avisos.append(f"{rel}: Anchor.toml apunta a una red que no es local: anchor test desplegaría allí. Pon "
                               "cluster = \"Localnet\" para probar.")
         elif (d / "node_modules").is_dir() and any((d / "tests").glob("*.*")):
-            codigo, salida = _correr(["anchor", "test"], d, CONSTRUIR, ENTORNO)
+            codigo, salida = correr_texto(["anchor", "test"], d, CONSTRUIR, ENTORNO)
             if codigo == 0:
                 inf.ok.append(f"{rel}: anchor test OK (validador local)")
             else:
@@ -553,13 +553,13 @@ def android_gradle(base: Path, raiz: Path, inf: Informe) -> None:
         inf.errores.append(f"Java {mayor} no vale para el plugin de Android 8: hace falta JDK 17 o superior en JAVA_HOME.")
         return
     for d in sorted(set(proyectos)):
-        rel = _rel(d, raiz)
+        rel = relativa(d, raiz)
         if not (d / "gradlew.bat").exists():
             local = android.gradle_local()
             orden = f'"{local[1]}" wrapper --gradle-version {local[0]}' if local else "abrir_android_studio"
             inf.errores.append(f"{rel}: falta el Gradle wrapper (gradlew.bat). Créalo con: {orden}")
             continue
-        codigo, salida = _correr("gradlew.bat assembleDebug --console=plain", d, CONSTRUIR, ENTORNO)
+        codigo, salida = correr_texto("gradlew.bat assembleDebug --console=plain", d, CONSTRUIR, ENTORNO)
         if codigo is None:
             inf.errores.append(f"{rel}: assembleDebug no terminó en {CONSTRUIR} s (la primera vez descarga el plugin y "
                                "las librerías; vuelve a verificar).")
@@ -568,8 +568,8 @@ def android_gradle(base: Path, raiz: Path, inf: Informe) -> None:
             _fallo_gradle(rel, "assembleDebug", salida, d, raiz, inf)
             continue
         apk = next(iter(sorted(d.glob("**/build/outputs/apk/debug/*.apk"))), None)
-        inf.ok.append(f"{rel}: compila (assembleDebug)" + (f"; APK en {_rel(apk, raiz)}" if apk else ""))
-        codigo, salida = _correr("gradlew.bat testDebugUnitTest --console=plain", d, CONSTRUIR, ENTORNO)
+        inf.ok.append(f"{rel}: compila (assembleDebug)" + (f"; APK en {relativa(apk, raiz)}" if apk else ""))
+        codigo, salida = correr_texto("gradlew.bat testDebugUnitTest --console=plain", d, CONSTRUIR, ENTORNO)
         if codigo is None:
             inf.errores.append(f"{rel}: testDebugUnitTest no terminó en {CONSTRUIR} s.")
         else:
@@ -582,23 +582,23 @@ def flutter(base: Path, raiz: Path, inf: Informe) -> None:
         return
     inf.tipos.append("flutter")
     for d in proyectos:
-        rel = _rel(d, raiz)
+        rel = relativa(d, raiz)
         es_flutter = re.search(r"^\s*sdk:\s*flutter\b", (d / "pubspec.yaml").read_text("utf-8", "replace"), re.MULTILINE)
         cli = "flutter" if es_flutter else "dart"
         if not shutil.which(cli):
             inf.errores.append(f"Hay pubspec.yaml pero falta {cli.capitalize()}: https://docs.flutter.dev/get-started/install")
             continue
         if not (d / ".dart_tool" / "package_config.json").exists():
-            codigo, salida = _correr(f"{cli} pub get", d, COMPILAR, ENTORNO)
+            codigo, salida = correr_texto(f"{cli} pub get", d, COMPILAR, ENTORNO)
             if codigo != 0:
                 inf.errores.append(f"{rel}: {cli} pub get falla:\n    {_fallo(salida)}")
                 continue
         analizar = "flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings" if es_flutter else "dart analyze"
-        _, salida = _correr(analizar, d, COMPILAR, ENTORNO)
+        _, salida = correr_texto(analizar, d, COMPILAR, ENTORNO)
         if _diagnosticos(salida, DART, d, raiz, inf):
             continue
         if any((d / "test").glob("**/*_test.dart")):
-            codigo, salida = _correr(f"{cli} test" + (" --no-pub" if es_flutter else ""), d, COMPILAR, ENTORNO)
+            codigo, salida = correr_texto(f"{cli} test" + (" --no-pub" if es_flutter else ""), d, COMPILAR, ENTORNO)
             m = re.search(r"\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)", salida)
             if codigo is None:
                 inf.errores.append(f"{rel}: {cli} test no terminó en {COMPILAR} s.")
@@ -610,7 +610,7 @@ def flutter(base: Path, raiz: Path, inf: Informe) -> None:
         else:
             inf.avisos.append(f"{rel}: no hay pruebas: añade test/x_test.dart (flutter_test).")
         if es_flutter and (d / "android").is_dir() and android.sdk():
-            codigo, salida = _correr("flutter build apk --debug --no-pub", d, CONSTRUIR, ENTORNO)
+            codigo, salida = correr_texto("flutter build apk --debug --no-pub", d, CONSTRUIR, ENTORNO)
             if codigo is None:
                 inf.errores.append(f"{rel}: flutter build apk no terminó en {CONSTRUIR} s (la primera vez descarga Gradle "
                                    "y el plugin de Android; vuelve a verificar).")
@@ -629,7 +629,7 @@ def es_dockerfile(p: Path) -> bool:
 def docker_activo() -> bool:
     if not shutil.which("docker"):
         return False
-    codigo, salida = _correr(["docker", "info", "--format", "{{.ServerVersion}}"], None, 20, ENTORNO)
+    codigo, salida = correr_texto(["docker", "info", "--format", "{{.ServerVersion}}"], None, 20, ENTORNO)
     return codigo == 0 and bool(re.fullmatch(r"[\w.\-+]+", salida.strip()))
 
 
@@ -674,7 +674,7 @@ def _credencial(args: str) -> bool:
 
 
 def revisar_dockerfile(f: Path, raiz: Path, inf: Informe, contexto_listo: bool = True) -> None:
-    rel, contexto = _rel(f, raiz), f.parent
+    rel, contexto = relativa(f, raiz), f.parent
     pasos = _instrucciones(f.read_text(encoding="utf-8", errors="replace"))
     if not any(ins == "FROM" for _, ins, _ in pasos):
         inf.errores.append(f"{rel}: no tiene FROM (toda imagen parte de una base).")
@@ -694,7 +694,7 @@ def revisar_dockerfile(f: Path, raiz: Path, inf: Informe, contexto_listo: bool =
             for o in _origenes(args):
                 if not re.match(r"https?://", o) and "$" not in o and not _existe(contexto, o):
                     inf.errores.append(f"{rel}:{n} {ins} '{o}': no existe en el contexto de construcción "
-                                       f"({_rel(contexto, raiz)}).")
+                                       f"({relativa(contexto, raiz)}).")
         elif ins in ("ENV", "ARG") and _credencial(args):
             inf.errores.append(f"{rel}:{n} {ins} con una credencial escrita en la imagen: pásala al ejecutar (-e o secrets).")
     if not any(ins == "USER" for _, ins, _ in pasos):
@@ -718,9 +718,9 @@ def docker(base: Path, raiz: Path, inf: Informe) -> None:
                           "Docker Desktop (https://docs.docker.com/desktop/) para construir y probar la imagen.")
         return
     for c in composes:
-        codigo, salida = _correr(["docker", "compose", "-f", str(c), "config", "-q"], c.parent, 60, ENTORNO)
+        codigo, salida = correr_texto(["docker", "compose", "-f", str(c), "config", "-q"], c.parent, 60, ENTORNO)
         if codigo != 0:
-            inf.errores.append(f"{_rel(c, raiz)}: docker compose config falla:\n    {_fallo(salida, r'.')}")
+            inf.errores.append(f"{relativa(c, raiz)}: docker compose config falla:\n    {_fallo(salida, r'.')}")
     if not dockerfiles or len(inf.errores) > errores_antes:  # con COPY rotos el build falla igual: primero eso
         return
     if not docker_activo():
@@ -729,21 +729,21 @@ def docker(base: Path, raiz: Path, inf: Informe) -> None:
         return
     for f in dockerfiles:
         etiqueta = "aura-verificar-" + hashlib.sha1(str(f).encode()).hexdigest()[:10]
-        codigo, salida = _correr(["docker", "build", "-f", str(f), "-t", etiqueta, str(f.parent)], f.parent,
+        codigo, salida = correr_texto(["docker", "build", "-f", str(f), "-t", etiqueta, str(f.parent)], f.parent,
                                  CONSTRUIR, ENTORNO)
         if codigo is None:
-            inf.errores.append(f"{_rel(f, raiz)}: docker build no terminó en {CONSTRUIR} s.")
+            inf.errores.append(f"{relativa(f, raiz)}: docker build no terminó en {CONSTRUIR} s.")
         elif codigo != 0:
-            inf.errores.append(f"{_rel(f, raiz)}: docker build falla:\n    {_fallo(salida, r'error|failed|not found|denied')}")
+            inf.errores.append(f"{relativa(f, raiz)}: docker build falla:\n    {_fallo(salida, r'error|failed|not found|denied')}")
         else:
-            inf.ok.append(f"{_rel(f, raiz)}: la imagen se construye (docker build)")
-            _correr(["docker", "image", "rm", "-f", etiqueta], None, 60, ENTORNO)
+            inf.ok.append(f"{relativa(f, raiz)}: la imagen se construye (docker build)")
+            correr_texto(["docker", "image", "rm", "-f", etiqueta], None, 60, ENTORNO)
 
 
 def tabuladores_yaml(f: Path, raiz: Path) -> str:
     for n, linea in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         if re.match(r" *\t", linea):
-            return f"{_rel(f, raiz)}:{n} YAML no admite tabuladores para sangrar: usa espacios."
+            return f"{relativa(f, raiz)}:{n} YAML no admite tabuladores para sangrar: usa espacios."
     return ""
 
 
@@ -764,15 +764,15 @@ def chequeo_rapido(raiz: Path, p: Path, inf: Informe) -> None:
     """Tras escribir un archivo: solo lo inmediato (sintaxis de Go y Rust, Dockerfile, tabuladores en YAML)."""
     suf = p.suffix.lower()
     if suf == ".go" and shutil.which("gofmt"):
-        codigo, salida = _correr(["gofmt", "-e", "-l", str(p)], p.parent, 30, ENTORNO)
+        codigo, salida = correr_texto(["gofmt", "-e", "-l", str(p)], p.parent, 30, ENTORNO)
         if codigo != 0:
-            inf.errores.extend(f"{_rel(p, raiz)}:{m.group(1)} {m.group(2)}"
+            inf.errores.extend(f"{relativa(p, raiz)}:{m.group(1)} {m.group(2)}"
                                for m in re.finditer(r":(\d+):\d+: (.+)$", salida, re.MULTILINE))
     elif suf == ".rs" and shutil.which("rustfmt"):
-        _, salida = _correr(["rustfmt", "--check", "--edition", "2021", str(p)], p.parent, 30, ENTORNO)
+        _, salida = correr_texto(["rustfmt", "--check", "--edition", "2021", str(p)], p.parent, 30, ENTORNO)
         for m in re.finditer(r"^error: (.+)\n\s*--> [^\n]*?:(\d+):\d+", salida, re.MULTILINE):
             if "file not found for module" not in m.group(1):  # el módulo puede estar aún por crear
-                inf.errores.append(f"{_rel(p, raiz)}:{m.group(2)} {m.group(1)}")
+                inf.errores.append(f"{relativa(p, raiz)}:{m.group(2)} {m.group(1)}")
     elif es_dockerfile(p):
         revisar_dockerfile(p, raiz, inf, contexto_listo=False)  # lo que copia puede estar aún por crear
     elif suf in (".yml", ".yaml") and (error := tabuladores_yaml(p, raiz)):

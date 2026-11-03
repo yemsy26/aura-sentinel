@@ -12,8 +12,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agente import llm, pantalla
-from agente.bucle import ICONOS, coaccionar
-from agente.herramientas import ESQUEMAS, PELIGROSOS, Herramientas, despachar
+from agente.bucle import ICONOS
+from agente.esquemas import ESQUEMAS
+from agente.herramientas import Herramientas, despachar
+from agente.llamadas import coaccionar
+from agente.permisos import PELIGROSOS
 
 HAY_GIT = shutil.which("git") is not None
 HAY_NAVEGADOR = importlib.util.find_spec("playwright") is not None

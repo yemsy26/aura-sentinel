@@ -264,7 +264,8 @@ si la misión acaba en `FINISH`.
 - `setup.ps1`: instalación completa en un equipo nuevo; `start.bat`: arranque diario (con
   `scripts\preparar-inicio.ps1`).
 - `motor/`: Agente Local (Python): el agente, sus pruebas, el instalador, la descarga del modelo y el ajuste a la
-  VRAM. Su guía: `motor/LEEME.md`. Los motores complementarios activados quedan en `motor/complementos/`.
+  VRAM. Su guía: `motor/LEEME.md`; cómo está organizado por dentro: `motor/ARQUITECTURA.md`. Los motores
+  complementarios activados quedan en `motor/complementos/`.
 - `src/`: interfaz React. `App.tsx` (estado y conexiones), `components/` (barras, lateral, editor, panel
   inferior, agente, diálogos) y `lib/` (comandos de Tauri tipados, estado del agente, Monaco y utilidades).
 - `src-tauri/src/lib.rs`: inicialización de Tauri y comandos.

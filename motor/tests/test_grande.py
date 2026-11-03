@@ -14,8 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_agente import borrar, sin_lecciones_reales
 
 from agente import config, grande, idiomas, mapa
-from agente.herramientas import ESQUEMA_MAPA, ESQUEMAS, Herramientas, despachar
-from agente.verificacion import Informe, normalizar
+from agente.esquemas import ESQUEMA_MAPA, ESQUEMAS
+from agente.herramientas import Herramientas, despachar
+from agente.proyecto import Informe, normalizar
 
 setUpModule = sin_lecciones_reales
 
@@ -557,8 +558,7 @@ class TestFlujo(Temporal):
                                             "prueba": "verificar"}]), *sin_fin, *sin_fin]
         r = a.tarea("/grande cambia algo en todos los módulos")
         self.assertTrue(r.startswith("Detenido: la parte 1/1 (Ventas)"), r)
-        from agente.bucle import INCOMPLETA
-        self.assertTrue(INCOMPLETA.match(r))
+        self.assertTrue(grande.INCOMPLETA.match(r))
         self.assertEqual(grande.cargar(a.h.dir_agente)["estado"], "detenido")
         self.assertIn("- [ ] 1. Parte: Ventas", a.h.archivo_plan.read_text(encoding="utf-8"))  # el IDE ofrece continuar
         self.assertEqual(grande.modo("continúa", False, a.h.dir_agente), "reanudar")

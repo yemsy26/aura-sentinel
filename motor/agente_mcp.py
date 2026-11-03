@@ -13,7 +13,8 @@ try:  # mcp 2.x renombró FastMCP a MCPServer (misma API de decoradores)
 except ImportError:
     from mcp.server.fastmcp import FastMCP
 
-from agente.herramientas import ESQUEMAS, Herramientas
+from agente.esquemas import ESQUEMAS
+from agente.herramientas import Herramientas
 
 D = {e["function"]["name"]: e["function"]["description"] for e in ESQUEMAS}
 MAX_CHARS = int(os.environ.get("AGENTE_MAX_CHARS", "6000"))

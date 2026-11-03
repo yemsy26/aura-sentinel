@@ -15,7 +15,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -25,27 +24,14 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import procesos
+from . import ecosistemas
+from .idiomas import verificar_idiomas
+from .proyecto import Informe, archivos, cola, correr_texto, normalizar, relativa
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
 SONDA_PYGAME = Path(__file__).resolve().parent / "sondas" / "pygame_sonda.py"
-IGNORAR = {".git", ".venv", "venv", "env", "node_modules", "__pycache__", "dist", "build", ".next", ".agente",
-           "target", "out", "obj", ".idea", ".vscode", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages"}
-# Lo que el agente trata como código (revisión, mapa, puntos de restauración, protección contra reescrituras).
-CODIGO = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".html", ".htm", ".css", ".scss",
-          ".java", ".kt", ".kts", ".gradle", ".rs", ".go", ".cs", ".fs", ".csproj", ".fsproj", ".sln", ".c", ".h",
-          ".cpp", ".hpp", ".bat", ".cmd", ".ps1", ".sh", ".sql", ".proto", ".json", ".yml", ".yaml", ".toml", ".xml",
-          ".sol", ".dart"}
-NOMBRES_CODIGO = {"dockerfile", "makefile", "go.mod", ".dockerignore", ".gitignore", ".env.example", "procfile"}
 
 
-def es_codigo(p: Path) -> bool:
-    nombre = p.name.lower()
-    return (p.suffix.lower() in CODIGO or nombre in NOMBRES_CODIGO or nombre.startswith("dockerfile.")
-            or nombre.endswith(".dockerfile"))
-
-
-SIN_VENTANA = 0x08000000  # CREATE_NO_WINDOW
 # Atributos que leen las librerías (pygame Rect/Sprite, tkinter, unittest...), no el propio código: no son "código muerto".
 ATRIBUTOS_DE_LIBRERIA = {
     "args", "kwargs", "image", "rect", "mask", "radius", "layer", "dirty", "visible", "blendmode", "source_rect",
@@ -59,91 +45,6 @@ TEXTO_RUFF = {"F841": "variable asignada y NUNCA usada (¿lógica sin terminar?)
               "B018": "expresión sin efecto", "F632": "comparación 'is' con literal"}
 
 
-class Informe:
-    def __init__(self):
-        self.errores, self.avisos, self.ok, self.tipos = [], [], [], []
-        self.previos: list[str] = []  # modo grande: errores que ya estaban antes de empezar (no cuentan)
-
-    def texto(self, maximo: int) -> str:
-        cab = (f"VERIFICACIÓN ({', '.join(self.tipos) or 'sin código'}): {len(self.errores)} ERRORES, "
-               f"{len(self.avisos)} AVISOS")
-        partes = [cab]
-        for titulo, lista in (("ERRORES (corrígelos todos)", self.errores), ("AVISOS (revisa cada uno)", self.avisos),
-                              ("OK", self.ok)):
-            if lista:
-                partes.append(f"{titulo}:\n" + "\n".join(f"- {x}" for x in lista[:25]))
-        if self.previos:
-            partes.append(f"PREEXISTENTES ({len(self.previos)}; ya estaban antes de esta tarea: no los toques salvo que "
-                          "el usuario lo pida):\n" + "\n".join(f"- {x[:160]}" for x in self.previos[:5]))
-        txt = "\n".join(partes)
-        return txt if len(txt) <= maximo else txt[:maximo - 40] + "\n[... informe recortado]"
-
-
-def ignorado(p: Path, raiz: Path) -> bool:
-    """Carpetas que no son código del proyecto: entornos, compilados y dependencias (también lib/ de Foundry, con
-    forge-std y OpenZeppelin, que traen sus propios scripts y package.json, y sus cache/ y broadcast/; y gen/ e icons/
-    junto a tauri.conf.json, que Tauri regenera al compilar: sus esquemas, ~300 KB, tapaban el código al revisor)."""
-    partes = p.relative_to(raiz).parts[:-1]
-    if IGNORAR & set(partes):
-        return True
-    return any((parte in ("lib", "cache", "broadcast") and (raiz.joinpath(*partes[:i]) / "foundry.toml").exists())
-               or (parte in ("gen", "icons") and (raiz.joinpath(*partes[:i]) / "tauri.conf.json").exists())
-               for i, parte in enumerate(partes))
-
-
-def archivos(raiz: Path, *exts: str) -> list[Path]:
-    return sorted(p for p in raiz.rglob("*") if p.suffix.lower() in exts and p.is_file() and not ignorado(p, raiz))
-
-
-def _rel(p: Path, raiz: Path) -> str:
-    try:
-        return str(p.resolve().relative_to(raiz))
-    except ValueError:
-        return str(p)
-
-
-def correr(cmd, cwd, timeout, entorno=None, quedan: list | None = None) -> tuple[int | None, bytes]:
-    """(código o None si se pasó del tiempo, salida en bruto). Si se pasa del tiempo, cierra su trabajo entero (solo
-    sus procesos: ver procesos.py).
-
-    La salida va a un archivo temporal y no a una tubería: si el comando deja algo en segundo plano (`start /b`, un
-    servidor), ese proceso hereda la salida y con una tubería la espera no acabaría nunca. Lo que deje abierto (una
-    ventana con `start`, el demonio de Gradle o el compilador de .NET, que aceleran la siguiente compilación) sigue
-    abierto como antes, también si el motor acaba; con `quedan`, su trabajo se añade ahí para poder cerrarlo."""
-    with tempfile.TemporaryFile() as archivo:
-        proc, trabajo = procesos.lanzar(cmd, cwd=cwd, env=entorno, stdin=subprocess.DEVNULL, stdout=archivo,
-                                        stderr=subprocess.STDOUT, creationflags=SIN_VENTANA, shell=isinstance(cmd, str))
-        try:
-            codigo = proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            procesos.detener(proc, trabajo)
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
-            codigo = None
-        if trabajo:
-            trabajo.matar_al_cerrar(False)  # lo que quede abierto sobrevive al motor, como antes
-            if quedan is not None and trabajo.pids():
-                quedan.append((proc, trabajo))
-            else:
-                trabajo.cerrar()
-        archivo.seek(0)
-        return codigo, archivo.read()
-
-
-def _correr(cmd, cwd, timeout=60, entorno=None) -> tuple[int | None, str]:
-    """(código o None si timeout, salida como texto)."""
-    codigo, salida = correr(cmd, cwd, timeout, entorno)
-    try:
-        texto = salida.decode("utf-8")
-    except UnicodeDecodeError:
-        texto = salida.decode("cp850", "replace")
-    return codigo, texto.strip()
-
-
-def _cola(texto: str, n: int = 12) -> str:
-    return "\n    ".join(texto.strip().splitlines()[-n:])
 
 
 def _traza_limpia(tb: str) -> str:
@@ -171,14 +72,14 @@ def lint_python(raiz: Path, rutas: list[Path], inf: Informe, rapido: bool = Fals
     if not ruff.exists() or not rutas:
         return
     sel = "E9,F821,F822,F823,F811,F841,F632,B006" if rapido else "E9,F,B006,B012,B018,E722,PLE"
-    _, salida = _correr([str(ruff), "check", "--no-cache", "--output-format", "concise", "--select", sel,
+    _, salida = correr_texto([str(ruff), "check", "--no-cache", "--output-format", "concise", "--select", sel,
                          "--ignore", "F403,F405,F541", *map(str, rutas)], raiz, 60)
     for linea in salida.splitlines():
         m = re.match(r"(.+?):(\d+):\d+: (\w+) (.*)", linea)
         if not m:
             continue
         archivo, num, codigo, msg = m.groups()
-        detalle = f"{_rel(Path(archivo), raiz)}:{num} {TEXTO_RUFF.get(codigo, '')} [{codigo}: {msg}]".replace("  ", " ")
+        detalle = f"{relativa(Path(archivo), raiz)}:{num} {TEXTO_RUFF.get(codigo, '')} [{codigo}: {msg}]".replace("  ", " ")
         if codigo.startswith(("E9", "PLE")) or codigo in RUFF_ERRORES:
             inf.errores.append(detalle)
         elif codigo != "F401":  # imports sin usar: inofensivos, y "arreglarlos" rompe código que funciona
@@ -192,7 +93,7 @@ def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None
     vulture = BIN / "vulture.exe"
     if not vulture.exists() or not rutas:
         return
-    _, salida = _correr([str(vulture), *map(str, rutas), "--min-confidence", "60"], raiz, 60)
+    _, salida = correr_texto([str(vulture), *map(str, rutas), "--min-confidence", "60"], raiz, 60)
     decorados: dict[str, set[int]] = {}  # funciones/clases con decorador las registra un framework (rutas, eventos)
     for r in rutas:
         try:
@@ -221,10 +122,10 @@ def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None
         traduccion = {"function": "función", "method": "método", "class": "clase", "variable": "variable",
                       "attribute": "atributo", "property": "propiedad"}.get(tipo, tipo)
         if tipo in ("class", "function"):  # en código generado casi siempre es una pieza que falta conectar
-            lista, texto = inf.errores, (f"{_rel(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' NUNCA se usa: el "
+            lista, texto = inf.errores, (f"{relativa(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' NUNCA se usa: el "
                                          f"programa no la crea ni la llama. Conéctala al flujo principal (o bórrala si sobra).")
         else:
-            lista, texto = inf.avisos, (f"{_rel(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' se define pero NUNCA "
+            lista, texto = inf.avisos, (f"{relativa(Path(archivo), raiz)}:{num} {traduccion} '{nombre}' se define pero NUNCA "
                                         f"se usa (¿falta llamarla/conectarla al flujo principal?)")
         lista.append(texto)
         n += normalizar(texto) not in (previos or ())
@@ -260,14 +161,14 @@ def tests_python(raiz: Path, rutas: list[Path], python: str, inf: Informe) -> No
         importados |= {a.name.split(".")[0] for n in ast.walk(arbol) if isinstance(n, ast.Import) for a in n.names}
         asserts = sum(isinstance(n, ast.Assert) for n in ast.walk(arbol)) + len(re.findall(r"\.assert\w+\(|pytest\.raises", t.read_text(encoding="utf-8", errors="replace")))
         if not (importados & propios):
-            inf.avisos.append(f"{_rel(t, raiz)} no importa ningún módulo del proyecto: NO prueba tu código.")
+            inf.avisos.append(f"{relativa(t, raiz)} no importa ningún módulo del proyecto: NO prueba tu código.")
         elif asserts == 0:
-            inf.avisos.append(f"{_rel(t, raiz)} no tiene ningún assert: no comprueba nada.")
+            inf.avisos.append(f"{relativa(t, raiz)} no tiene ningún assert: no comprueba nada.")
     env = dict(os.environ, SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy", PYTHONUTF8="1", MPLBACKEND="Agg")
-    codigo, _ = _correr([python, "-c", "import pytest"], raiz, 30, env)
+    codigo, _ = correr_texto([python, "-c", "import pytest"], raiz, 30, env)
     cmd = ([python, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider"] if codigo == 0
            else [python, "-m", "unittest", "discover", "-p", "test*.py"])
-    codigo, salida = _correr(cmd, raiz, 180, env)
+    codigo, salida = correr_texto(cmd, raiz, 180, env)
     if codigo is None:
         inf.errores.append("Los tests no terminan en 180 s (¿bucle infinito o esperan input()?).")
     elif codigo == 5 and "pytest" in cmd:
@@ -282,7 +183,7 @@ def tests_python(raiz: Path, rutas: list[Path], python: str, inf: Informe) -> No
         inf.ok.append(f"tests: {resumen.strip()}")
 
 
-def _entrada_python(raiz: Path, rutas: list[Path]) -> Path | None:
+def entrada_python(raiz: Path, rutas: list[Path]) -> Path | None:
     for nombre in ("main.py", "app.py", "juego.py", "game.py", "run.py", "__main__.py"):
         c = [p for p in rutas if p.name == nombre]
         if c:
@@ -311,13 +212,13 @@ def _pantalla_fija(d: dict) -> str:
 
 
 def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, segundos: int) -> None:
-    entrada = _entrada_python(raiz, rutas)
+    entrada = entrada_python(raiz, rutas)
     if entrada is None:
         return
     fuente = entrada.read_text(encoding="utf-8", errors="replace")
     usa_pygame = any("pygame" in p.read_text(encoding="utf-8", errors="replace") for p in rutas
                      if not p.name.startswith("test"))
-    rel = _rel(entrada, raiz)
+    rel = relativa(entrada, raiz)
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy")
     if usa_pygame:
         if "pygame" not in inf.tipos:
@@ -325,7 +226,7 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
         tramo = max(2.0, segundos / 3)
         total = {"frames": 0, "juego": 0, "pantallas": 0}
         for semilla in (1, 2, 3):  # tres partidas distintas pero reproducibles
-            codigo, salida = _correr([python, str(SONDA_PYGAME), str(entrada), str(tramo)], entrada.parent, tramo + 25,
+            codigo, salida = correr_texto([python, str(SONDA_PYGAME), str(entrada), str(tramo)], entrada.parent, tramo + 25,
                                      dict(env, SONDA_SEMILLA=str(semilla)))
             m = re.search(r"^SONDA (\{.*\})$", salida, re.MULTILINE)
             if codigo is None or not m:
@@ -336,7 +237,7 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
                     inf.errores.append(f"{rel}: el juego NO se cierra al recibir QUIT (o se bloquea). Maneja pygame.QUIT "
                                        "en el bucle de eventos.")
                 else:
-                    inf.errores.append(f"{rel}: falló al arrancar:\n    {_cola(salida)}")
+                    inf.errores.append(f"{rel}: falló al arrancar:\n    {cola(salida)}")
                 return
             d = json.loads(m.group(1))
             if d["error"]:
@@ -368,13 +269,13 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
     if re.search(r"\b(tkinter|PyQt|PySide|customtkinter|wx)\b", fuente):
         inf.avisos.append(f"{rel}: app con ventana (GUI): no se abre aquí; prueba su lógica con tests.")
         return
-    codigo, salida = _correr([python, str(entrada)], entrada.parent, segundos, env)
+    codigo, salida = correr_texto([python, str(entrada)], entrada.parent, segundos, env)
     if codigo is None:
         inf.ok.append(f"{rel} sigue en ejecución tras {segundos} s (servidor o bucle): arrancó sin errores")
     elif "EOFError" in salida:
         inf.avisos.append(f"{rel} pide datos con input(): pruébalo con tests o con 'echo datos| python {entrada.name}'.")
     elif codigo != 0:
-        inf.errores.append(f"{rel} termina con error (exit {codigo}):\n    {_cola(salida)}")
+        inf.errores.append(f"{rel} termina con error (exit {codigo}):\n    {cola(salida)}")
     else:
         inf.ok.append(f"{rel} se ejecuta sin errores")
 
@@ -457,7 +358,7 @@ def librerias_cdn(raiz: Path, htmls: list[Path], inf: Informe) -> None:
             if actual and _atrasada(usada, actual):
                 consejo = (' como módulo ES: <script type="importmap"> + import * as THREE from "three" (guia web)'
                            if paquete == "three" else "")
-                inf.errores.append(f"{_rel(h, raiz)}: {nombre} {usada} está DESACTUALIZADA (la actual es {actual}). "
+                inf.errores.append(f"{relativa(h, raiz)}: {nombre} {usada} está DESACTUALIZADA (la actual es {actual}). "
                                    f"Usa la versión actual{consejo}.")
 
 
@@ -466,17 +367,17 @@ def html_estatico(raiz: Path, htmls: list[Path], jss: list[Path], inf: Informe) 
         p = _HtmlInfo()
         p.feed(h.read_text(encoding="utf-8", errors="replace"))
         for i in {x for x in p.ids if p.ids.count(x) > 1}:
-            inf.avisos.append(f"{_rel(h, raiz)}: id '{i}' repetido.")
+            inf.avisos.append(f"{relativa(h, raiz)}: id '{i}' repetido.")
         for ref in p.refs:
             if not ((raiz / ref.lstrip("/")) if ref.startswith("/") else (h.parent / ref)).exists():
-                inf.errores.append(f"{_rel(h, raiz)} referencia '{ref}' y NO existe.")
+                inf.errores.append(f"{relativa(h, raiz)} referencia '{ref}' y NO existe.")
         abiertas = [t for t in p.mal_cerradas + p.pila if t not in ("html", "body", "head", "p", "li", "td", "tr", "option")]
         if abiertas:
-            inf.avisos.append(f"{_rel(h, raiz)}: etiquetas sin cerrar: {', '.join(sorted(set(abiertas)))[:120]}")
+            inf.avisos.append(f"{relativa(h, raiz)}: etiquetas sin cerrar: {', '.join(sorted(set(abiertas)))[:120]}")
         for i, s in enumerate(p.scripts):
-            _node_check(raiz, s, f"{_rel(h, raiz)} <script> #{i + 1}", inf, p.modulo)
+            _node_check(raiz, s, f"{relativa(h, raiz)} <script> #{i + 1}", inf, p.modulo)
     for j in jss:
-        _node_check(raiz, j, _rel(j, raiz), inf)
+        _node_check(raiz, j, relativa(j, raiz), inf)
 
 
 # getElementById("x") / querySelector("#x ...") con texto literal: una plantilla (${...}), una variable o una suma
@@ -524,7 +425,7 @@ def ids_dom(raiz: Path, base: Path, inf: Informe) -> None:
                 if "//" in antes or antes.lstrip().startswith(("*", "/*")):
                     continue  # comentado
                 linea = texto.count("\n", 0, desde + m.start()) + 1
-                usos.setdefault(m[m.lastindex], []).append(f"{_rel(p, raiz)}:{linea}")
+                usos.setdefault(m[m.lastindex], []).append(f"{relativa(p, raiz)}:{linea}")
     for i, sitios in usos.items():
         if i in definidos:
             continue
@@ -545,7 +446,7 @@ def _node_check(raiz: Path, codigo_o_ruta, nombre: str, inf: Informe, modulo: bo
             f.write(codigo_o_ruta)
         ruta = Path(temporal)
     try:
-        codigo, salida = _correr(["node", "--check", str(ruta)], raiz, 30)
+        codigo, salida = correr_texto(["node", "--check", str(ruta)], raiz, 30)
     finally:
         if temporal:
             os.unlink(temporal)
@@ -556,12 +457,12 @@ def _node_check(raiz: Path, codigo_o_ruta, nombre: str, inf: Informe, modulo: bo
         inf.errores.append(f"{nombre}:{donde} ERROR DE SINTAXIS JS: {detalle[:160]}")
 
 
-class _Silencioso(SimpleHTTPRequestHandler):
+class Silencioso(SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
 
-def _canal_navegador(p):
+def canal_navegador(p):
     for canal in ("msedge", "chrome", None):
         try:
             return p.chromium.launch(channel=canal, headless=True) if canal else p.chromium.launch(headless=True)
@@ -602,7 +503,7 @@ def paginas_vite(raiz: Path, fuentes: list[Path], inf: Informe) -> None:
                 inf.ok[antes:] = [o + " (en un navegador normal, FUERA de Tauri: invoke no existe y sin sus datos es lo "
                                   "esperado; la app de verdad se prueba aparte)" for o in inf.ok[antes:]]
         else:
-            inf.avisos.append(f"{_rel(h, raiz)}: es la página fuente de Vite (carga {fuente_vite(h)}) y no se abre tal cual; "
+            inf.avisos.append(f"{relativa(h, raiz)}: es la página fuente de Vite (carga {fuente_vite(h)}) y no se abre tal cual; "
                               "se prueba la compilada de dist/ cuando `npm run build` funciona.")
 
 
@@ -614,18 +515,18 @@ def navegador(raiz: Path, htmls: list[Path], inf: Informe, raiz_web: Path | None
         return
     paginas = sorted(htmls, key=lambda p: (p.name != "index.html", len(p.parts)))[:2]
     web = raiz_web or raiz  # dist/ de Vite se sirve desde su carpeta: sus rutas /assets/... son absolutas
-    servidor = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Silencioso, directory=str(web)))
+    servidor = ThreadingHTTPServer(("127.0.0.1", 0), partial(Silencioso, directory=str(web)))
     threading.Thread(target=servidor.serve_forever, daemon=True).start()
     capturas = raiz / ".agente" / "capturas"
     capturas.mkdir(parents=True, exist_ok=True)
     try:
         with sync_playwright() as p:
-            nav = _canal_navegador(p)
+            nav = canal_navegador(p)
             if nav is None:
                 inf.avisos.append("No se pudo abrir Edge/Chrome sin ventana para probar la página.")
                 return
             for h in paginas:
-                rel, url = _rel(h, raiz).replace("\\", "/"), h.relative_to(web).as_posix()
+                rel, url = relativa(h, raiz).replace("\\", "/"), h.relative_to(web).as_posix()
                 pag = nav.new_page(viewport={"width": 1024, "height": 768})
                 problemas = []
                 pag.on("pageerror", lambda e, problemas=problemas: problemas.append(("error", f"EXCEPCIÓN JS: {e}")))
@@ -707,8 +608,8 @@ def _de_android(p: Path, base: Path) -> bool:
 def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
     if (raiz / "pom.xml").exists():
         if shutil.which("mvn"):
-            codigo, salida = _correr("mvn -q -B test", raiz, 600)
-            (inf.ok.append("mvn test OK") if codigo == 0 else inf.errores.append(f"mvn test falla:\n    {_cola(salida, 25)}"))
+            codigo, salida = correr_texto("mvn -q -B test", raiz, 600)
+            (inf.ok.append("mvn test OK") if codigo == 0 else inf.errores.append(f"mvn test falla:\n    {cola(salida, 25)}"))
             return
         inf.avisos.append("Hay pom.xml pero Maven no está instalado: compilo con javac (sin dependencias ni JUnit).")
     if not shutil.which("javac"):
@@ -720,13 +621,13 @@ def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
     principales = [f for f in fuentes if "src\\test" not in str(f) and "/test/" not in f.as_posix()]
     lista = raiz / ".agente" / "java_fuentes.txt"
     lista.write_text("\n".join(f'"{f.as_posix()}"' for f in principales), encoding="utf-8")
-    codigo, salida = _correr(["javac", "-encoding", "UTF-8", "-Xlint:all", "-d", str(salida_dir), f"@{lista}"], raiz, 180)
+    codigo, salida = correr_texto(["javac", "-encoding", "UTF-8", "-Xlint:all", "-d", str(salida_dir), f"@{lista}"], raiz, 180)
     for m in re.finditer(r"^(.+?\.java):(\d+): (error|warning): (.+)$", salida, re.MULTILINE):
-        detalle = f"{_rel(Path(m.group(1)), raiz)}:{m.group(2)} {m.group(4)}"
+        detalle = f"{relativa(Path(m.group(1)), raiz)}:{m.group(2)} {m.group(4)}"
         (inf.errores if m.group(3) == "error" else inf.avisos).append(detalle)
     if codigo != 0:
         if not inf.errores:
-            inf.errores.append(f"javac falla:\n    {_cola(salida)}")
+            inf.errores.append(f"javac falla:\n    {cola(salida)}")
         return
     inf.ok.append(f"javac: {len(principales)} archivos compilan")
     for f in principales:
@@ -734,7 +635,7 @@ def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
         if re.search(r"static\s+void\s+main\s*\(", texto):
             paquete = re.search(r"^\s*package\s+([\w.]+)\s*;", texto, re.MULTILINE)
             clase = f"{paquete.group(1)}.{f.stem}" if paquete else f.stem
-            codigo, salida = _correr(["java", "-Djava.awt.headless=true", "-cp", str(salida_dir), clase], raiz, segundos)
+            codigo, salida = correr_texto(["java", "-Djava.awt.headless=true", "-cp", str(salida_dir), clase], raiz, segundos)
             if codigo is None:
                 inf.ok.append(f"{clase} sigue en ejecución tras {segundos} s (bucle/servidor): arrancó sin errores")
             elif "NoSuchElementException" in salida:
@@ -742,7 +643,7 @@ def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
             elif "HeadlessException" in salida:
                 inf.avisos.append(f"{clase} abre ventana (Swing/AWT): no se prueba aquí; separa y prueba la lógica.")
             elif codigo != 0:
-                inf.errores.append(f"{clase} termina con excepción:\n    {_cola(salida)}")
+                inf.errores.append(f"{clase} termina con excepción:\n    {cola(salida)}")
             else:
                 inf.ok.append(f"{clase} se ejecuta sin errores")
             break
@@ -796,7 +697,7 @@ def con_call(linea: str, carpeta: Path | None = None) -> str:
 def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
     for b in lista:
         texto = b.read_text(encoding="utf-8", errors="replace")
-        rel = _rel(b, raiz)
+        rel = relativa(b, raiz)
         if not re.search(r'cd\s+/d\s+"?%~dp0', texto, re.IGNORECASE) and re.search(r"\b(python|py|node|java|javac)\b", texto, re.IGNORECASE):
             inf.avisos.append(f"{rel}: no hace cd /d \"%~dp0\": fallará si se abre desde otra carpeta.")
         lineas = [l.strip() for l in texto.splitlines()]
@@ -824,9 +725,6 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
 
 
 # ---------------------------------------------------------------- entrada
-def normalizar(error: str) -> str:
-    """Un error sin números (líneas, recuentos): reconoce los que ya estaban aunque el código se mueva."""
-    return re.sub(r"\d+", "N", error)
 
 
 def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maximo: int = 6000,
@@ -860,7 +758,7 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
             try:
                 compile(p.read_text(encoding="utf-8", errors="replace"), str(p), "exec")
             except SyntaxError as e:
-                inf.errores.append(f"{_rel(p, raiz)}:{e.lineno} ERROR DE SINTAXIS: {e.msg}")
+                inf.errores.append(f"{relativa(p, raiz)}:{e.lineno} ERROR DE SINTAXIS: {e.msg}")
         sintaxis_ok = len(inf.errores) == errores_antes
         lint_python(raiz, pys, inf)
         if base == raiz:
@@ -884,11 +782,10 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         java(raiz, javas, inf, segundos)
     if bat:
         bats(raiz, bat, inf)
-    from . import ecosistemas  # aquí para evitar el import circular (ecosistemas usa las utilidades de este módulo)
     ecosistemas.verificar_todos(base, raiz, inf)
     if (vite := [h for h in htmls if fuente_vite(h)]):  # después de node(): su npm run build deja dist/
         paginas_vite(raiz, vite, inf)
-    from .idiomas import verificar_idiomas  # solo añade algo si el proyecto tiene archivos de idioma
+    # solo añade algo si el proyecto tiene archivos de idioma
     verificar_idiomas(raiz, inf, idiomas_parcial)
     if not inf.tipos and not bat:
         inf.avisos.append(f"No encontré código que verificar en '{ruta}': nada se ha comprobado.")
@@ -902,12 +799,11 @@ def chequeo_rapido(raiz: Path, p: Path) -> str:
     if suf == ".py":
         lint_python(raiz, [p], inf, rapido=True)
     elif suf in (".js", ".mjs"):
-        _node_check(raiz, p, _rel(p, raiz), inf)
+        _node_check(raiz, p, relativa(p, raiz), inf)
     elif suf in (".bat", ".cmd"):
         bats(raiz, [p], inf)
     elif suf in (".go", ".rs", ".yml", ".yaml") or p.name.lower() == "dockerfile" or ".dockerfile" in p.name.lower():
-        from . import ecosistemas
-        ecosistemas.chequeo_rapido(raiz, p, inf)
+            ecosistemas.chequeo_rapido(raiz, p, inf)
     elif suf in (".html", ".htm"):
         html_estatico(raiz, [p], [], inf)
         # Recién escrito el HTML, el JS y el CSS pueden estar aún por crear: se recuerdan, no son errores.
