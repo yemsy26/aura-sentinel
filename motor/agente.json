@@ -2,7 +2,7 @@
   "servidor": "auto",
   "modelo": "auto",
   "razonamiento": "auto",
-  "max_pasos": 100,
+  "max_pasos": 150,
   "max_chars_resultado": 0,
   "timeout_comando": 120,
   "confirmar_peligrosos": true,

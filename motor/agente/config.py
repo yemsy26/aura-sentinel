@@ -15,7 +15,8 @@ DEFECTO = {
     "modelo": "auto",
     # auto: razona al planificar y tras errores; off: nunca; on: siempre
     "razonamiento": "auto",
-    "max_pasos": 100,
+    # medido con un sistema de negocio completo: con 100 se quedaba a medias (1 de 2), con 150 terminaba 3 de 3
+    "max_pasos": 150,
     # 0 = automático (proporcional al contexto cargado)
     "max_chars_resultado": 0,
     "timeout_comando": 120,
