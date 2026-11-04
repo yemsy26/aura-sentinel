@@ -5,6 +5,22 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.2] — 2026-11-05 (verificar sin errores falsos en las webs con servidor)
+
+- **Páginas sin su servidor:** `verificar` abre los `.html` como archivos sueltos, así que lo que solo da el servidor
+  (una ruta `/api/...`, un `{{ url_for(...) }}` de una plantilla) fallaba y salía como error. Las misiones perseguían
+  esos errores hasta quedarse sin pasos: de 12 misiones guardadas que no terminaron, 4 nunca verificaron sin errores por
+  esto. Ahora las plantillas de servidor no se prueban como HTML suelto, y una petición que falla no es error si la ruta
+  la define el servidor del proyecto (queda un aviso para probarla con el servidor en marcha). Una ruta que no define
+  nadie sigue siendo error. Medido en 23 sistemas guardados: 31 errores, todos falsos, pasan a 0 y no aparece ninguno
+  nuevo.
+- **Atributos que lee una librería** (`conn.row_factory`, `app.secret_key`, `login_manager.login_view`…) ya no salen
+  como «se define pero NUNCA se usa»: la revisión los convertía en CRITICO y rechazaba sistemas que funcionaban.
+- **Un `.bat` que abre otro puerto que el del programa es un error:** un `run.bat` abría `http://localhost:5000` y la
+  app escuchaba en 5055, así que con doble clic se veía «no se puede acceder». El puerto sale del código y la
+  configuración del proyecto (y de los valores por defecto de Flask, uvicorn o `http.server`); sin puerto conocido, o con
+  Docker, no se mira. En 40 sistemas guardados con `.bat` solo avisa en el caso real.
+
 ## [4.12.1] — 2026-11-04 (Los .bat del agente abren con doble clic)
 
 - **Los `.bat` que crea el agente abren con doble clic:** con doble clic el `.bat` recibe el PATH del Explorador, que
