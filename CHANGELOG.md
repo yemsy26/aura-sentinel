@@ -5,11 +5,12 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
-## [4.12.0] — 2026-11-03 (Misiones largas que terminan, y el motor ordenado por dentro)
+## [4.12.0] — 2026-11-03 (Más margen para las misiones largas, y el motor ordenado por dentro)
 
 - **150 pasos por defecto (antes 100):** con una orden corriente de sistema de negocio (productos, ventas, facturas,
-  ganancias y roles), con 100 pasos terminaba 1 de cada 2 veces y no se podía usar; con 150 termina 3 de 3 y 2 de ellos
-  se usan de principio a fin. Las tareas cortas acaban antes del límite y no cambian.
+  ganancias y roles), con 100 pasos terminaba 1 de 2 y no se podía usar; con 150 terminan 3 de 6 (medido en dos días; el
+  primero salieron 3 de 3) y 2 de esos 3 se usan de principio a fin. Las tareas cortas acaban antes del límite y no
+  cambian.
 - **El motor, ordenado por capas:** sin ciclos entre módulos, cada conexión a la vista en la cabecera de su archivo y
   `motor/ARQUITECTURA.md` explica dónde va cada cosa; una prueba comprueba esas reglas. No cambia lo que hace el agente.
 
