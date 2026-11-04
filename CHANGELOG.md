@@ -5,6 +5,15 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.1] — 2026-11-04 (Los .bat del agente abren con doble clic)
+
+- **Los `.bat` que crea el agente abren con doble clic:** con doble clic el `.bat` recibe el PATH del Explorador, que
+  puede no traer Python, y decía «"python" no se reconoce» aunque el agente lo había probado bien. Ahora `crear_bat`
+  busca los programas que lanza cada orden, también dentro de `start` y de `cmd /c` o `/k`; si falta alguno, recupera el
+  PATH del usuario o usa el lanzador `py`, y si no lo encuentra lo dice y para. Medido: con 4.12.0, un `.bat` de
+  `crear_bat` falla 4 de 4 sin Python en el PATH del sistema; con el arreglo abre 4 de 4.
+- **`verificar` da error si un `.bat` lleva códigos de HTML** (`&gt;`, `&amp;`…), que cmd ejecuta tal cual.
+
 ## [4.12.0] — 2026-11-03 (Más margen para las misiones largas, y el motor ordenado por dentro)
 
 - **150 pasos por defecto (antes 100):** con una orden corriente de sistema de negocio (productos, ventas, facturas,
