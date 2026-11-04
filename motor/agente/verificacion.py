@@ -694,7 +694,31 @@ def con_call(linea: str, carpeta: Path | None = None) -> str:
     return "".join(partes)
 
 
+# Dónde escucha el programa: port=5055, WEB_PORT = 8765, PUERTO = 8765, def servir(port: int = 8765),
+# os.environ.get("PORT", 5055), "port": 3000, add_argument("--port", default=8765), app.listen(3000),
+# HTTPServer(("", 8000), ...), --port 8000, python -m http.server 8000, set PORT=5000. Un número de más solo calla el aviso.
+ESCUCHA = re.compile(r"""\b\w*(?:port|puerto)\w*['"]?\s*(?::\s*int\s*=|[:=])\s*(?:int\(\s*)?"""
+                     r"""(?:os\.(?:environ\.get|getenv)\(\s*['"]\w+['"]\s*,\s*)?['"]?(\d{2,5})"""
+                     r"""|add_argument\(\s*['"]-[-\w]*port\w*['"][^)]*?\bdefault\s*=\s*(\d{2,5})"""
+                     r"""|\.listen\(\s*(\d{2,5})|Server\(\s*\(\s*['"][^'"]*['"]\s*,\s*(\d{2,5})|--port[= ](\d{2,5})"""
+                     r"""|-m\s+http\.server\s+(\d{2,5})|\bset\s+"?PORT=(\d{2,5})""", re.IGNORECASE)
+# Sin puerto escrito: Flask 5000, uvicorn y python -m http.server 8000; las herramientas de frontend usan los suyos.
+POR_DEFECTO = ((r"\bapp\.run\((?![^)]*\bport\b)", {5000}), (r"\bflask\s+run\b(?!.*--port)", {5000}),
+               (r"\buvicorn\b(?!.*--port)", {8000}), (r"-m\s+http\.server(?!\s+\d)", {8000}),
+               (r"\b(?:npm|npx|yarn|pnpm|vite|ng)\b", {3000, 4173, 4200, 5173, 8080}))
+URL_LOCAL = re.compile(r"https?://(?:localhost|127\.0\.0\.1):(\d{2,5})", re.IGNORECASE)
+
+
+def puertos_escucha(raiz: Path) -> set[int]:
+    """Los puertos en los que puede escuchar el programa, según su código, su configuración y sus .bat."""
+    rutas = archivos(raiz, ".py", ".js", ".mjs", ".cjs", ".ts", ".json", ".toml", ".ini", ".cfg", ".yml", ".yaml", ".bat", ".cmd")
+    texto = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in rutas + [raiz / ".env"] if p.is_file())
+    puertos = {int(next(g for g in m.groups() if g)) for m in ESCUCHA.finditer(texto)}
+    return puertos.union(*(p for patron, p in POR_DEFECTO if re.search(patron, texto, re.IGNORECASE)))
+
+
 def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
+    escucha = puertos_escucha(raiz) if lista else set()
     for b in lista:
         texto = b.read_text(encoding="utf-8", errors="replace")
         rel = relativa(b, raiz)
@@ -719,6 +743,16 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
                 if despues:
                     inf.errores.append(f"{rel}: '{l[:60]}' bloquea (el servidor no termina) y las líneas siguientes "
                                        f"('{despues[0][:40]}') nunca se ejecutan. Pon 'start \"\" http://...' ANTES del servidor.")
+        # Un run.bat abría http://localhost:5000 y la app escuchaba en 5055: con doble clic, «no se puede acceder». La
+        # revisión lo vio como MEDIO en 1 de 6 revisiones. Con Docker el puerto de fuera lo decide el mapeo: no se mira.
+        if escucha and not re.search(r"\bdocker\b", texto, re.IGNORECASE):
+            for i, l in enumerate(lineas):
+                if re.match(r"(?i)(rem\b|::)", l):
+                    continue
+                for p in sorted({int(x) for x in URL_LOCAL.findall(l)} - escucha):
+                    inf.errores.append(f"{rel}:{i + 1} abre http://localhost:{p}, pero el programa escucha en "
+                                       f"{', '.join(map(str, sorted(escucha)))}: con doble clic el usuario no verá el "
+                                       "sistema. Pon el mismo puerto en los dos sitios.")
         patron = r'(?:\b(?:python|py(?: -3\.\d+)?|node|java -jar)|%PY%)\s+(?:"([^"]+\.(?:py|js|mjs|jar))"|(?!-)([^\s"&|<>]+\.(?:py|js|mjs|jar))\b)'
         for m in re.finditer(patron, texto, re.IGNORECASE):
             destino = (m.group(1) or m.group(2)).strip()
