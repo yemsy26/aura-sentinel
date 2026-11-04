@@ -37,7 +37,12 @@ ATRIBUTOS_DE_LIBRERIA = {
     "args", "kwargs", "image", "rect", "mask", "radius", "layer", "dirty", "visible", "blendmode", "source_rect",
     "x", "y", "top", "left", "bottom", "right", "topleft", "topright", "bottomleft", "bottomright", "midtop",
     "midleft", "midbottom", "midright", "center", "centerx", "centery", "size", "width", "height", "w", "h",
-    "maxDiff", "longMessage", "daemon", "title", "geometry", "protocol"}
+    "maxDiff", "longMessage", "daemon", "title", "geometry", "protocol",
+    # los lee la librería al usar el objeto: sqlite3, Flask, Flask-Login, http.server/socketserver
+    "row_factory", "text_factory", "isolation_level", "secret_key", "permanent_session_lifetime", "session_cookie_name",
+    "json_provider_class", "template_folder", "static_folder", "login_view", "login_message", "login_message_category",
+    "refresh_view", "needs_refresh_message", "session_protection", "server_version", "sys_version", "protocol_version",
+    "allow_reuse_address", "daemon_threads"}
 RUFF_ERRORES = {"F821", "F822", "F823", "F811", "F631", "F632", "F702", "F704", "F706", "F707", "B006", "B012"}
 TEXTO_RUFF = {"F841": "variable asignada y NUNCA usada (¿lógica sin terminar?)", "F821": "nombre NO definido",
               "F811": "definición repetida que pisa a la anterior", "F401": "import sin usar",
@@ -362,6 +367,11 @@ def librerias_cdn(raiz: Path, htmls: list[Path], inf: Informe) -> None:
                                    f"Usa la versión actual{consejo}.")
 
 
+def es_plantilla(h: Path, raiz: Path) -> bool:
+    """Plantilla de servidor (Jinja, Django): {{ url_for(...) }} y {% %} no son HTML ni JS hasta que el servidor la entrega."""
+    return "templates" in h.relative_to(raiz).parts or "{%" in h.read_text(encoding="utf-8", errors="replace")
+
+
 def html_estatico(raiz: Path, htmls: list[Path], jss: list[Path], inf: Informe) -> None:
     for h in htmls:
         p = _HtmlInfo()
@@ -507,6 +517,34 @@ def paginas_vite(raiz: Path, fuentes: list[Path], inf: Informe) -> None:
                               "se prueba la compilada de dist/ cuando `npm run build` funciona.")
 
 
+# Rutas que define el servidor del proyecto (@app.route("/api/me"), @router.get("/x/{id}"), url_prefix, o
+# `if path == "/api/x"` en http.server). Abierta como archivo, sin el servidor, la página no puede pedirlas: daban 404
+# falsos que una misión persiguió hasta quedarse sin pasos.
+RUTA_PY = re.compile(r"""\.(?:route|get|post|put|patch|delete|api_route)\(\s*[rRuU]?['"](/[^'"]*)['"]"""
+                     r"""|add_url_rule\(\s*['"](/[^'"]*)['"]|\b(?:path|ruta|url)\s*==\s*['"](/[^'"]*)['"]""")
+EMPIEZA_PY = re.compile(r"""\b(?:path|ruta|url)\.startswith\(\s*['"](/[^'"]+)['"]""")
+PREFIJO_PY = re.compile(r"""(?:url_prefix|prefix)\s*=\s*['"](/[^'"]*)['"]""")
+JSON_ROTO = re.compile(r"not valid JSON|Unexpected token '<'|Unexpected end of JSON|Failed to fetch|NetworkError")
+
+
+def rutas_servidor(raiz: Path) -> list[re.Pattern]:
+    rutas, empiezan, prefijos = set(), set(), {""}
+    for p in archivos(raiz, ".py"):
+        texto = p.read_text(encoding="utf-8", errors="replace")
+        rutas |= {next(x for x in grupos if x) for grupos in RUTA_PY.findall(texto)}
+        empiezan |= set(EMPIEZA_PY.findall(texto))
+        prefijos |= set(PREFIJO_PY.findall(texto))
+    return ([re.compile("[^/]+".join(map(re.escape, re.split(r"<[^>]*>|\{[^}]*\}", (pre + r).strip("/")))))
+             for r in rutas for pre in prefijos]
+            + [re.compile(re.escape(e.strip("/")) + ".*") for e in empiezan])
+
+
+def del_servidor(ruta: str, rutas: list[re.Pattern]) -> bool:
+    """¿La pide la página a su servidor? Un {{ url_for }} sin procesar, o una ruta que define el servidor del proyecto."""
+    ruta = urllib.parse.unquote(ruta.split("?")[0].split("#")[0])
+    return "{{" in ruta or "{%" in ruta or any(p.fullmatch(ruta.strip("/")) for p in rutas)
+
+
 def navegador(raiz: Path, htmls: list[Path], inf: Informe, raiz_web: Path | None = None) -> None:
     try:
         from playwright.sync_api import sync_playwright
@@ -514,6 +552,7 @@ def navegador(raiz: Path, htmls: list[Path], inf: Informe, raiz_web: Path | None
         inf.avisos.append("Prueba en navegador no disponible (falta playwright en el agente: ejecuta instalar.bat).")
         return
     paginas = sorted(htmls, key=lambda p: (p.name != "index.html", len(p.parts)))[:2]
+    rutas = rutas_servidor(raiz) if raiz_web is None else []
     web = raiz_web or raiz  # dist/ de Vite se sirve desde su carpeta: sus rutas /assets/... son absolutas
     servidor = ThreadingHTTPServer(("127.0.0.1", 0), partial(Silencioso, directory=str(web)))
     threading.Thread(target=servidor.serve_forever, daemon=True).start()
@@ -566,12 +605,22 @@ def navegador(raiz: Path, htmls: list[Path], inf: Informe, raiz_web: Path | None
                 texto = texto[:160]
                 vistos = set()
                 con_http = {m.split(": ", 1)[1] for _, m in problemas if m.startswith("HTTP ")}
+                pedidas = sorted({m.split(": ", 1)[1] if m.startswith("HTTP ") else m[9:] for _, m in problemas
+                                  if (m.startswith("HTTP ") and del_servidor(m.split(": ", 1)[1], rutas))
+                                  or (m.startswith("no cargó ") and del_servidor(m[9:], rutas))})
                 for nivel, msg in problemas:
                     if (msg in vistos or "Failed to load resource" in msg
-                            or (msg.startswith("no cargó ") and msg[9:] in con_http)):
+                            or (msg.startswith("no cargó ") and msg[9:] in con_http)
+                            or (msg.startswith(("HTTP ", "no cargó ")) and (msg.split(": ", 1)[-1] in pedidas or msg[9:] in pedidas))):
                         continue
                     vistos.add(msg)
+                    if pedidas and JSON_ROTO.search(msg):
+                        nivel = "aviso"  # le llegó la página de error de una ruta que sí sirve el servidor
                     (inf.errores if nivel == "error" else inf.avisos).append(f"{rel}: {msg}")
+                if pedidas:
+                    inf.avisos.append(f"{rel}: abierta como archivo, sin tu servidor, no pudo pedir "
+                                      f"{', '.join(urllib.parse.unquote(x) for x in pedidas[:4])}: esas rutas las sirve tu servidor. "
+                                      "Pruébalas con el servidor en marcha (ejecutar en segundo plano y ver_pantalla).")
                 for c in canvas:
                     if c["colores"] == 1:
                         inf.errores.append(f"{rel}: el canvas '{c['id']}' está VACÍO (no se dibuja nada).")
@@ -806,10 +855,11 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
             ejecutar_python(raiz, pys, python, inf, segundos)
     if htmls or jss:
         inf.tipos.append("web")
-        html_estatico(raiz, htmls, jss, inf)
+        sueltas = [h for h in htmls if not es_plantilla(h, raiz)]
+        html_estatico(raiz, sueltas, jss, inf)
         ids_dom(raiz, base, inf)
         librerias_cdn(raiz, htmls, inf)
-        directas = [h for h in htmls if not fuente_vite(h)]
+        directas = [h for h in sueltas if not fuente_vite(h)]
         if directas:
             navegador(raiz, directas, inf)
     javas = [p for p in javas if not _de_android(p, base)]  # esos los compila Gradle (android_gradle, flutter)
