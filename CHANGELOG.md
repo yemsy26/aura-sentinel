@@ -5,6 +5,17 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.4] — 2026-11-05 (el servidor viejo ya no tapa al nuevo, y los comandos de varias líneas se rechazan)
+
+- **Un servidor viejo del agente en el mismo puerto se cierra:** el servidor de la parte anterior de una misión seguía
+  en el puerto 5000 con el código de antes. Windows dejó escuchar también al nuevo y las peticiones iban al viejo, así
+  que la misión reinició el nuevo 8 veces sin ver su cambio. Ahora, al lanzar un proceso en segundo plano (y al
+  mirarlo con `procesos`), si un proceso más antiguo del agente escucha en el mismo puerto, se detiene y se avisa. Si el
+  nuevo no llega a arrancar, se dice qué proceso del agente ocupa el puerto. Solo se tocan procesos del agente.
+- **`ejecutar` rechaza los comandos de varias líneas:** cmd ejecuta solo la primera línea y calla el resto, así que un
+  `python -c "…"` de varias líneas daba exit=0 sin salida y el agente creía que el código no imprimía. Ahora se le pide
+  que use `experimentar` o un archivo `.py`. En las misiones guardadas había 111 comandos así, en 26 misiones.
+
 ## [4.12.3] — 2026-11-05 (tres fallos de una misión real: leer, .bat con Python y contraseña del resumen)
 
 - **`leer` ya no deja al agente leyendo en bucle:** el modelo pedía `lineas=86` creyendo que era el número de línea
