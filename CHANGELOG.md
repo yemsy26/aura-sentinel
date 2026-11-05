@@ -5,6 +5,20 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.3] — 2026-11-05 (tres fallos de una misión real: leer, .bat con Python y contraseña del resumen)
+
+- **`leer` ya no deja al agente leyendo en bucle:** el modelo pedía `lineas=86` creyendo que era el número de línea
+  (es cuántas líneas leer), recibía otra vez las líneas 1-86 y repetía hasta que el motor lo detenía sin contestar al
+  usuario. Ahora, si ya leyó el principio y el archivo no ha cambiado, se le explica cómo leer desde la línea que busca.
+  En 91 misiones guardadas pasó en 4, y en una se perdieron así 59 llamadas.
+- **Un `.bat` que lanza `python` o `pip` sin buscarlo es un error de `verificar`:** `crear_bat` busca Python, pero una
+  misión cambió su `run.bat` con `editar` por `python main.py` y con doble clic salía «"python" no se reconoce». Vale si
+  el `.bat` recupera el PATH del usuario, usa `%PY%` o el `.venv`. En 164 `.bat` guardados marca 12, todos reales.
+- **`terminar` se rechaza si el resumen da una contraseña que no está en el proyecto:** el programa creaba el usuario
+  `admin` con `admin123` (así lo decían el código y el README) y el resumen final dijo «contraseña admin», así que la
+  dueña no podía entrar. Si el proyecto no dice ninguna contraseña, no se comprueba. Entre 14 resúmenes guardados con
+  contraseña, solo marca este.
+
 ## [4.12.2] — 2026-11-05 (verificar sin errores falsos en las webs con servidor)
 
 - **Páginas sin su servidor:** `verificar` abre los `.html` como archivos sueltos, así que lo que solo da el servidor
