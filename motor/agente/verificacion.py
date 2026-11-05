@@ -704,6 +704,10 @@ def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
 LOTES = {"npm", "npx", "yarn", "pnpm", "ng", "vite", "tauri", "tsc", "expo", "eas", "ionic", "cordova", "flutter",
          "gradle", "gradlew", "mvn", "mvnw", "conda", "az", "gcloud", "firebase", "vercel", "netlify", "code"}
 SEPARADOR_BAT = re.compile(r"&&|\|\||&")
+# «start "" /min cmd /k python app.py» lanza python app.py en otra ventana, que hereda el PATH de este .bat: hay que
+# buscar ese programa (una misión lo escribió así y con doble clic la ventana nueva no encontraba Python).
+LANZADOR = r'(?:start\s+(?:"[^"]*"\s+)?(?:/\w+\s+)*)?(?:cmd(?:\.exe)?\s+/[ck]\s+"?)?'
+PYTHON_SUELTO = re.compile(r"(?i)(python3?|pip3?)(?=[\s\"]|$)")
 
 
 def ordenes_bat(linea: str) -> list[str]:
@@ -802,11 +806,57 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
                     inf.errores.append(f"{rel}:{i + 1} abre http://localhost:{p}, pero el programa escucha en "
                                        f"{', '.join(map(str, sorted(escucha)))}: con doble clic el usuario no verá el "
                                        "sistema. Pon el mismo puerto en los dos sitios.")
+        # Con doble clic el .bat recibe el PATH del Explorador, que puede no traer Python: crear_bat lo busca, pero una
+        # misión cambió su run.bat con editar por «python main.py» y al usuario le salió «"python" no se reconoce».
+        if not re.search(r"reg query HKCU\\Environment|%PY%|\.venv\\Scripts\\", texto, re.IGNORECASE):
+            for i, l in enumerate(lineas):
+                if re.match(r"(?i)(rem\b|::|@?echo\b)", l):
+                    continue
+                ordenes = [re.sub(f"(?i)^(?:call\\s+)?{LANZADOR}", "", o.strip().lstrip("@(").strip()) for o in ordenes_bat(l)[::2]]
+                if (m := next(filter(None, map(PYTHON_SUELTO.match, ordenes)), None)):
+                    inf.errores.append(f"{rel}:{i + 1} lanza '{m[1]}' sin buscarlo: con doble clic Windows puede no "
+                                       f"tener Python en el PATH y el usuario verá «\"{m[1]}\" no se reconoce», aunque en "
+                                       "tus pruebas funcione. Rehaz el .bat con crear_bat, que busca Python y recupera el PATH.")
+                    break
         patron = r'(?:\b(?:python|py(?: -3\.\d+)?|node|java -jar)|%PY%)\s+(?:"([^"]+\.(?:py|js|mjs|jar))"|(?!-)([^\s"&|<>]+\.(?:py|js|mjs|jar))\b)'
         for m in re.finditer(patron, texto, re.IGNORECASE):
             destino = (m.group(1) or m.group(2)).strip()
             if "%" not in destino and not (b.parent / destino).exists():
                 inf.errores.append(f"{rel} ejecuta '{destino}' y ese archivo NO existe junto al .bat.")
+
+
+# ---------------------------------------------------------------- resumen
+# Una misión terminó diciendo «usuario admin, contraseña admin» y el programa creaba admin con admin123 (así lo decían
+# el código y el README): la dueña no pudo entrar. La contraseña que da el resumen tiene que estar en el proyecto.
+CLAVE_RESUMEN = re.compile(r"(?i)\b(?:contrase[ñn]a|clave|password|pass|pwd)\b[^`'\"\n]{0,15}?"
+                           r"(?:`([^`\s]{1,40})`|\*\*([^*\s]{1,40})\*\*|\"([^\"\s]{1,40})\"|'([^'\s]{1,40})')")
+CLAVE_CODIGO = re.compile(r"""(?i)(?:hash\w*|passw\w*|pass|pwd|contrase\w*|clave\w*)['"]?\s*(?:\(|[:=,])\s*['"]([^'"\s]{1,40})['"]""")
+NO_ES_CLAVE = re.compile(r"^\.?[\w-]+\.\w{1,8}$|[/\\()=<>{}]|^[A-Z][A-Z0-9_]+$")  # archivo, ruta, llamada, variable
+
+
+def claves_inventadas(raiz: Path, resumen: str) -> str:
+    """Contraseñas que el resumen da al usuario y no aparecen en el proyecto; '' si están o si no se sabe cuáles son."""
+    dichas = {next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(resumen)}
+    dichas = {d for d in dichas if not NO_ES_CLAVE.search(d)}
+    if not dichas:
+        return ""
+    conocidas = set()
+    for p in archivos(raiz, ".py", ".js", ".ts", ".mjs", ".cjs", ".php", ".rb", ".go", ".java", ".cs", ".rs", ".sql", ".json",
+                      ".toml", ".ini", ".cfg", ".yml", ".yaml", ".env", ".md", ".txt", ".html", ".bat"):
+        if p.name.startswith(".") and not p.name.startswith(".env"):  # .fenix_chat.json guarda el propio resumen
+            continue
+        try:
+            texto = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        conocidas |= set(CLAVE_CODIGO.findall(texto))
+        conocidas |= {next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(texto)}
+    malas = sorted(dichas - conocidas)
+    if not conocidas or not malas:
+        return ""
+    return (f"el resumen da la contraseña {', '.join(f'«{c}»' for c in malas)}, pero no aparece en el proyecto (allí "
+            f"están: {', '.join(f'«{c}»' for c in sorted(conocidas)[:6])}). Con la del resumen el usuario no podrá entrar. "
+            "Busca en el código cuál crea el programa y corrige el resumen.")
 
 
 # ---------------------------------------------------------------- entrada

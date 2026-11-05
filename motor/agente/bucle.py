@@ -16,6 +16,7 @@ from .llamadas import coaccionar, llamadas_en_texto, sin_llamadas
 from .prompts import REGLAS_USUARIO, entorno, sistema
 from .proyecto import es_codigo, ignorado
 from .revision import mtime_fuentes, revisar
+from .verificacion import claves_inventadas
 
 ICONOS = {"plan": "PLAN", "paso_hecho": "HECHO", "listar": "ls", "leer": "leer", "buscar": "grep", "escribir": "+",
           "editar": "~", "ejecutar": ">", "procesos": "ps", "crear_bat": "bat", "web_buscar": "web", "web_leer": "web",
@@ -327,7 +328,7 @@ class Agente:
         m.repeticiones[clave] = m.repeticiones.get(clave, 0) + 1
 
         if c["name"] == "terminar":
-            motivo = self._puede_terminar(m.rechazos_fin, paso)
+            motivo = self._puede_terminar(m.rechazos_fin, paso, str(args.get("resumen", "")))
             if not motivo:
                 return self._cerrar_tarea(c, args, paso, t_llamada), False
             m.rechazos_fin += 1
@@ -412,7 +413,7 @@ class Agente:
         self._log(f"REVISIÓN ({'aprobada' if ok else 'cambios'}): {texto[:1500]}")
         return texto, ok
 
-    def _puede_terminar(self, rechazos: int, paso: int) -> str:
+    def _puede_terminar(self, rechazos: int, paso: int, resumen: str = "") -> str:
         """Puerta de calidad: lo que un agente avanzado comprueba antes de decir 'hecho'."""
         if rechazos >= 4:
             return ""
@@ -452,6 +453,8 @@ class Agente:
         if pendientes:
             return ("RECHAZADO: quedan pasos del plan sin marcar:\n" + "\n".join(pendientes) +
                     "\nComplétalos o márcalos con paso_hecho si ya están hechos.")
+        if (malas := claves_inventadas(self.h.raiz, resumen)):
+            return "RECHAZADO: " + malas
         return ""
 
     def _repo_grande(self) -> bool:

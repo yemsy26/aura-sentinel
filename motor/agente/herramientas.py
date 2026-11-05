@@ -38,7 +38,7 @@ from .permisos import (
     transaccion,
 )
 from .proyecto import IGNORAR, correr, es_codigo, ignorado
-from .verificacion import chequeo_rapido, con_call, muertos_ahora, ordenes_bat, verificar
+from .verificacion import LANZADOR, chequeo_rapido, con_call, muertos_ahora, ordenes_bat, verificar
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
           "what", "este", "esta", "esto", "hay", "hacer", "puedo", "cual", "cuál", "cómo", "qué", "use", "using"}
@@ -63,9 +63,6 @@ INTERNAS_CMD = {"assoc", "call", "cd", "chdir", "cls", "copy", "del", "dir", "ec
                 "shift", "start", "title", "type", "ver", "vol"}
 PATH_DEL_USUARIO = ('if defined FALTA for /f "skip=2 tokens=2,*" %%A in (\'reg query HKCU\\Environment /v Path 2^>nul\') '
                     'do call set "PATH=%%PATH%%;%%B"')
-# «start "" /min cmd /k python app.py» lanza python app.py en otra ventana, que hereda el PATH de este .bat: hay que
-# buscar ese programa (una misión lo escribió así y con doble clic la ventana nueva no encontraba Python).
-LANZADOR = r'(?:start\s+(?:"[^"]*"\s+)?(?:/\w+\s+)*)?(?:cmd(?:\.exe)?\s+/[ck]\s+"?)?'
 MAX_PREGUNTAS = 3  # por tarea: más es pedir al usuario lo que el agente puede decidir
 # Archivos que se nombran en un texto (petición del usuario o paso del plan); no las librerías como three.js.
 # Con varios puntos en el nombre (tauri.conf.json, vite.config.ts): antes solo se tomaba lo último («conf.json»).
@@ -143,6 +140,7 @@ class Herramientas:
         self.revisar_cb = None      # lo conecta el bucle o el servidor MCP (necesita el modelo)
         self.cfg_llm = None         # config del agente (servidor/modelo) para ver_pantalla; None = agente.json
         self.reescrituras: dict[str, int] = {}
+        self.leidos: dict[Path, tuple] = {}  # leído desde la línea 1 en la tarea: (mtime, tamaño, última línea)
         self.inicio_tarea = 0
         self.checkpoints: list[dict] = []   # estados que pasaron verificar sin errores
         self.fallos_desde_verde = 0
@@ -155,6 +153,7 @@ class Herramientas:
 
     def nueva_tarea(self, paso_inicio: int = 0, texto: str = "") -> None:
         self.reescrituras.clear()
+        self.leidos.clear()
         self.evidencia.clear()
         self.preguntas = 0
         self.inicio_tarea = paso_inicio
@@ -274,15 +273,27 @@ class Herramientas:
         extra = f"\n[... límite de {limite} entradas]" if len(lineas) >= limite else ""
         return f"{self.rel(base)}/\n" + "\n".join(lineas) + extra
 
-    def leer(self, ruta: str, desde: int = 1, lineas: int = 200) -> str:
+    def leer(self, ruta: str, desde: int | None = None, lineas: int | None = None) -> str:
         p = self.ruta(ruta)
         if not p.is_file():
             return f"No existe el archivo: {ruta}. Usa listar para ver los nombres reales."
         todas = p.read_text(encoding="utf-8", errors="replace").splitlines()
-        desde = max(1, int(desde))
-        sel = todas[desde - 1: desde - 1 + max(1, min(int(lineas), 400))]
+        firma = (p.stat().st_mtime_ns, p.stat().st_size)
+        # Una misión pedía lineas=86 para ver la línea 86: recibía otra vez las líneas 1-86, repetía y se detenía sin
+        # contestar. Sin desde y con el principio ya leído, pedir 'lineas' no da nada nuevo: se le explica.
+        if desde is None and lineas is not None and (previo := self.leidos.get(p)) and previo[:2] == firma:
+            n, visto = int(lineas), previo[2]
+            seguir = (f"Para seguir donde lo dejaste usa desde={visto + 1}; " if visto < len(todas) else
+                      "Ya lo tienes entero; ")
+            return (f"{self.rel(p)}: ya leíste este archivo desde la línea 1 (hasta la {visto} de {len(todas)}) y no ha "
+                    f"cambiado. 'lineas' es CUÁNTAS líneas leer, no el número de línea. {seguir}para empezar en la "
+                    f"línea {n}, desde={n}. Si de verdad quieres otra vez el principio, pide desde=1.")
+        desde = max(1, int(desde or 1))
+        sel = todas[desde - 1: desde - 1 + max(1, min(int(lineas or 200), 400))]
         cuerpo = "\n".join(f"{i}| {l}" for i, l in enumerate(sel, desde))
         fin = desde + len(sel) - 1
+        if desde == 1:
+            self.leidos[p] = (*firma, fin)
         resto = f"\n[líneas {desde}-{fin} de {len(todas)}; usa desde={fin + 1} para seguir]" if fin < len(todas) else ""
         return recortar(f"{self.rel(p)} ({len(todas)} líneas)\n{cuerpo}{resto}", self.max_chars)
 
