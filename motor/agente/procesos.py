@@ -139,6 +139,24 @@ def cerrar_pid(pid: int) -> bool:
         _k32.CloseHandle(h)
 
 
+def escuchando() -> dict[int, set[int]]:
+    """Puerto TCP en escucha -> procesos que escuchan en él, según netstat (vacío fuera de Windows o si falla). En
+    Windows dos servidores pueden escuchar a la vez en el mismo puerto, y las peticiones van a uno de ellos."""
+    if not EN_WINDOWS:
+        return {}
+    try:
+        salida = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, timeout=10, check=False,
+                                creationflags=subprocess.CREATE_NO_WINDOW).stdout.decode(errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    puertos: dict[int, set[int]] = {}
+    for linea in salida.splitlines():
+        partes = linea.split()  # TCP  127.0.0.1:5000  0.0.0.0:0  LISTENING  5852 (el estado va traducido)
+        if len(partes) == 5 and partes[0] == "TCP" and partes[2].endswith(":0") and partes[4].isdigit():
+            puertos.setdefault(int(partes[1].rsplit(":", 1)[1]), set()).add(int(partes[4]))
+    return puertos
+
+
 def matar_arbol(pid: int) -> None:
     """Solo para procesos sin trabajo (fuera de Windows o si no se pudo crear): el método antiguo."""
     subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False)

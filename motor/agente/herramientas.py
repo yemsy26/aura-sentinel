@@ -551,6 +551,12 @@ class Herramientas:
                 "comando en segundo plano usa procesos(accion='detener', id=N).")
 
     def ejecutar(self, comando: str, segundos: int = 0, fondo: bool = False) -> str:
+        # cmd ejecuta solo la primera línea y calla el resto: un «python -c "» de varias líneas daba exit=0 sin salida,
+        # y una misión dio vueltas creyendo que el código no imprimía (754 comandos así en 45 misiones guardadas).
+        if "\n" in comando.strip():
+            return ("RECHAZADO: el comando tiene varias líneas y cmd solo ejecuta la primera; el resto se ignora sin "
+                    "error (saldría exit=0 y nada más). Para código de Python de varias líneas usa experimentar(codigo=...)"
+                    " o escríbelo en un .py y ejecútalo; para varias órdenes, únelas con && en una sola línea.")
         if (cerrado := self._cerrar_propios(comando)) is not None:
             return cerrado
         if (bloqueo := self._permitido(comando) or self._npm_fuera(comando)):
@@ -613,7 +619,33 @@ class Herramientas:
         estado = f"TERMINÓ (exit={proc.returncode})" if proc.poll() is not None else "en ejecución"
         if proc.poll() is None:
             self.paso_prueba = self.paso
-        return f"Proceso #{n} {estado}. Log inicial:\n{self._cola_log(n)}\nUsa procesos(accion='ver', id={n}) o 'detener'."
+        return (f"Proceso #{n} {estado}. Log inicial:\n{self._cola_log(n)}\nUsa procesos(accion='ver', id={n}) o "
+                f"'detener'.{self._mismo_puerto(n)}")
+
+    def _mismo_puerto(self, n: int) -> str:
+        """Un servidor de la parte anterior seguía en el puerto 5000 con el código viejo; Windows dejó escuchar también
+        al nuevo y las peticiones iban al viejo: la misión reinició el nuevo 8 veces sin ver su cambio. Se cierra el
+        viejo (es del agente: salió de uno de sus trabajos)."""
+        nuevo = self.procesos[n].get("trabajo")
+        otros = {k: p for k, p in self.procesos.items() if k < n and p.get("trabajo") and self._vivo(k)}
+        if not nuevo or not otros:
+            return ""
+        puertos, mios, vivo = procesos.escuchando(), set(nuevo.pids()), self._vivo(n)
+        avisos = []
+        for k, p in otros.items():
+            suyos = set(p["trabajo"].pids())
+            viejos = sorted(pt for pt, pids in puertos.items() if pids & suyos)
+            compartidos = [pt for pt in viejos if puertos[pt] & mios]
+            if compartidos:
+                procesos.detener(p["proc"], p["trabajo"])
+                avisos.append(f"Tu proceso #{k} ({p['comando'][:80]}) también escuchaba en el puerto "
+                              f"{', '.join(map(str, compartidos))}, con el código de antes, y las peticiones podían ir "
+                              "a él. Lo he detenido: ahora responde este.")
+            elif viejos and not vivo:
+                avisos.append(f"Sigue vivo tu proceso #{k} ({p['comando'][:80]}) en el puerto "
+                              f"{', '.join(map(str, viejos))}. Si es el mismo programa, detenlo con "
+                              f"procesos(accion='detener', id={k}) y vuelve a lanzarlo.")
+        return "".join(f"\n[{a}]" for a in avisos)
 
     def _vivo(self, n: int) -> bool:
         p = self.procesos[n]
@@ -638,7 +670,7 @@ class Herramientas:
             procesos.detener(self.procesos[id]["proc"], self.procesos[id].get("trabajo"))
             return f"Proceso #{id} detenido (solo lo que lanzó ese comando; nada más del equipo)."
         vivo = self._vivo(id)
-        return f"#{id} {'vivo' if vivo else 'terminado'}. Log:\n{self._cola_log(id, self.max_chars)}"
+        return f"#{id} {'vivo' if vivo else 'terminado'}. Log:\n{self._cola_log(id, self.max_chars)}{self._mismo_puerto(id)}"
 
     def _miembros(self, n: int) -> str:
         t = self.procesos[n].get("trabajo")
