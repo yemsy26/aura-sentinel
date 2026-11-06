@@ -234,7 +234,7 @@ class TestVerPantalla(Base):
     def test_juicio_del_modelo_con_vision(self):
         self.escribir("index.html", "<p>hola</p>")
 
-        def captura(raiz, objetivo, png, espera):
+        def captura(raiz, objetivo, png, espera, sesion=None):
             png.write_bytes(b"PNG")
             return []
         respuesta = {"choices": [{"message": {"content": "VISUAL: PROBLEMAS\n- el título se sale por la derecha"}}]}
@@ -249,7 +249,7 @@ class TestVerPantalla(Base):
     def test_veredicto_en_la_ultima_linea(self):
         self.escribir("index.html", "<h1>Ropa</h1>")
 
-        def captura(raiz, objetivo, png, espera):
+        def captura(raiz, objetivo, png, espera, sesion=None):
             png.write_bytes(b"PNG")
             return []
         respuesta = {"choices": [{"message": {"content": "1) Título: sí, una figura 3D lo tapa\n2) Bordes: no\nVISUAL: PROBLEMAS"}}]}

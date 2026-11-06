@@ -158,6 +158,7 @@ class Herramientas:
         self.preguntas = 0
         self.inicio_tarea = paso_inicio
         if texto.strip():
+            (self.dir_agente / pantalla.SESION).unlink(missing_ok=True)  # «continúa» conserva la sesión del navegador
             self._anotar_checkpoints(texto)
             self.muertos_previos = muertos_ahora(self.raiz) - set(self._foto().get("sin_conectar", []))
             self._guardar_foto(foto=sorted(self.muertos_previos))
@@ -417,7 +418,7 @@ class Herramientas:
             return "Lenguajes de experimentar: python, node, powershell, bat. Para otros, usa un proyecto temporal."
         carpeta = self.dir_agente / "experimento"
         shutil.rmtree(carpeta, ignore_errors=True)
-        carpeta.mkdir(parents=True)
+        carpeta.mkdir(parents=True, exist_ok=True)  # en Windows el borrado puede tardar: mkdir fallaba a veces
         archivo = carpeta / f"prueba{extension}"
         archivo.write_text(codigo, encoding="utf-8")
         if extension in (".ps1", ".bat"):

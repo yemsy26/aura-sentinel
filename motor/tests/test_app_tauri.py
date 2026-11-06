@@ -147,7 +147,7 @@ class VerPantalla(Base):
 
     def test_si_no_se_puede_abrir_avisa_de_que_el_navegador_no_es_la_app(self):
         """El caso real: capturas sin datos del frontend en un navegador llevaron al agente a «arreglar» lo que iba."""
-        captura = mock.patch.object(pantalla, "capturar_web", side_effect=lambda raiz, que, png, espera: (png.write_bytes(b"x"), [])[1])
+        captura = mock.patch.object(pantalla, "capturar_web", side_effect=lambda raiz, que, png, espera, sesion=None: (png.write_bytes(b"x"), [])[1])
         with self.probar("omitido", "el puerto 1420 de devUrl ya lo usa otro programa"), captura:
             r = self.h.ver_pantalla(f"http://localhost:{self.puerto}")
         self.assertIn("NOTA: no pude abrir la app de verdad (el puerto 1420", r)

@@ -253,8 +253,11 @@ def _fondo_cargado(pag, aux) -> tuple[bytes, list[str]]:
     return capturas[peor], problemas
 
 
-def capturar_web(raiz: Path, objetivo: str, png: Path, espera: float) -> list[str]:
-    """objetivo: URL local o ruta relativa de un .html (se sirve la carpeta del proyecto). Devuelve los problemas."""
+def capturar_web(raiz: Path, objetivo: str, png: Path, espera: float, sesion: Path | None = None) -> list[str]:
+    """objetivo: URL local o ruta relativa de un .html (se sirve la carpeta del proyecto). Devuelve los problemas.
+
+    sesion: archivo con las cookies del navegador. Cada captura abría un navegador nuevo y la sesión se perdía: una
+    misión capturó /login/admin y luego /agenda, que salía como la pantalla de entrar. Se cargan y se guardan."""
     from playwright.sync_api import sync_playwright
     servidor = None
     if not objetivo.startswith(("http://", "https://")):
@@ -267,7 +270,9 @@ def capturar_web(raiz: Path, objetivo: str, png: Path, espera: float) -> list[st
             if nav is None:
                 raise RuntimeError("no se pudo abrir Edge/Chrome sin ventana")
             try:
-                pag = nav.new_page(viewport={"width": 1024, "height": 768})
+                previa = str(sesion) if sesion and sesion.is_file() else None
+                contexto = nav.new_context(viewport={"width": 1024, "height": 768}, storage_state=previa)
+                pag = contexto.new_page()
                 errores = []
                 pag.on("pageerror", lambda e: errores.append(f"excepción JS: {str(e)[:160]}"))
                 pag.goto(objetivo, wait_until="load", timeout=20000)
@@ -276,6 +281,8 @@ def capturar_web(raiz: Path, objetivo: str, png: Path, espera: float) -> list[st
                 datos, fondo = _fondo_cargado(pag, aux)
                 png.write_bytes(datos)
                 problemas = pag.evaluate(JS_PROBLEMAS) + fondo + errores[:2]
+                if sesion is not None:
+                    contexto.storage_state(path=str(sesion))
                 return problemas + _pixeles(aux.evaluate(JS_PIXELES, base64.b64encode(datos).decode()))
             finally:
                 nav.close()
@@ -423,8 +430,10 @@ def ver(h, ruta: str = "", pregunta: str = "", segundos: float = 2) -> str:
     carpeta = h.dir_agente / "capturas"
     carpeta.mkdir(parents=True, exist_ok=True)
     png = carpeta / f"pantalla_{nombre}.png"
+    sesion = h.dir_agente / SESION if que.startswith(("http://", "https://")) else None
+    antes = _cookies(sesion)
     try:
-        problemas = (capturar_web(h.raiz, que, png, espera) if tipo == "web"
+        problemas = (capturar_web(h.raiz, que, png, espera, sesion) if tipo == "web"
                      else capturar_pygame(p, h.python_proyecto(), png, espera))
     except ImportError:
         return "ERROR: falta playwright en el agente (ejecuta instalar.bat)."
@@ -442,4 +451,19 @@ def ver(h, ruta: str = "", pregunta: str = "", segundos: float = 2) -> str:
     else:
         partes.append("Solo comprobaciones automáticas (texto cortado o sobre fondo cargado, fuera de pantalla, pantalla en "
                       "negro). Para el juicio visual hace falta un modelo con visión cargado (o su mmproj).")
+    if sesion is not None and (despues := _cookies(sesion)) and despues != antes:
+        partes.append("Sesión del navegador guardada (cookies): las próximas capturas de esta tarea entran con ella. Para "
+                      "ver una página que pide entrar, captura antes la que inicia la sesión.")
     return "\n".join(partes) + nota
+
+
+SESION = "sesion_navegador.json"  # se borra al empezar cada tarea (Herramientas.nueva_tarea)
+
+
+def _cookies(sesion: Path | None) -> list:
+    """Las cookies guardadas (nombre, valor y dominio), o [] si no hay sesión."""
+    try:
+        datos = json.loads(sesion.read_text(encoding="utf-8")) if sesion and sesion.is_file() else {}
+    except (OSError, ValueError):
+        return []
+    return sorted((c.get("name"), c.get("value"), c.get("domain")) for c in datos.get("cookies", []))
