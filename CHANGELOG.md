@@ -5,6 +5,23 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.5] — 2026-11-06 (ver_pantalla conserva la sesión, y otros modelos se pierden menos)
+
+- **`ver_pantalla` conserva el inicio de sesión:** cada captura abría un navegador nuevo, así que una misión capturó
+  `/login/admin` y luego `/agenda`, que salía como la pantalla de elegir rol, y gastó pasos escribiendo un script para
+  probar con sesión. Ahora las cookies pasan de una captura a la siguiente dentro de la misma tarea; un encargo nuevo
+  empieza sin sesión y «continúa» la conserva. Sirve para entrar con un enlace o una redirección; un formulario de
+  usuario y contraseña todavía no se puede rellenar desde `ver_pantalla`.
+- **Con ventana pequeña (menos de 32K) se compacta al 75 % en vez de al 60 %:** las instrucciones y herramientas ocupan
+  unos 5.800 tokens fijos y con 16K solo quedaban unos 4.000 para trabajar; un modelo que no cabía en la VRAM
+  compactaba cada pocos pasos. Con la ventana de Qwen3.6 (64K) no cambia nada.
+- **Acabar con texto con el plan a medias pasa la misma puerta que `terminar`:** una misión con otro modelo dijo «He
+  completado todas las fases» con un paso sin hacer, sin verificar ni revisar. En 125 tareas guardadas solo habría
+  actuado en las 2 de esa misión.
+- **Aviso si el modelo no está entrenado para herramientas** y contesta un encargo sin hacer nada.
+- **Las métricas guardan con qué modelo y qué ventana se hizo cada tarea.**
+- La prueba de `experimentar` ya no falla a veces en Windows.
+
 ## [4.12.4] — 2026-11-05 (el servidor viejo ya no tapa al nuevo, y los comandos de varias líneas se rechazan)
 
 - **Un servidor viejo del agente en el mismo puerto se cierra:** el servidor de la parte anterior de una misión seguía
