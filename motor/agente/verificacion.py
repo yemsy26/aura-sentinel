@@ -332,6 +332,14 @@ def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: in
         inf.errores.append(f"{rel}: EXCEPCIÓN al {FASE_TK[e['fase']]}: el usuario se queda ahí sin poder seguir "
                            f"(verificar usa la app sin enseñar la ventana):\n    {e['traza']}")
         return
+    if d.get("sin_ventana"):
+        cuando = ("al abrir el programa" if d["sin_ventana"] == "arranque" else
+                  f"después de entrar (como «{d['entrar']['usuario']}»)")
+        inf.errores.append(f"{rel}: {cuando} no queda ninguna ventana a la vista: la app oculta o cierra la que el "
+                           "usuario tiene que ver (withdraw(), iconify() o destroy()) y no ve nada. Si la ventana "
+                           "principal se construye en la misma raíz que la de entrar, no la ocultes: quita solo los "
+                           "widgets del formulario de entrar.")
+        return
     for e in [e for e in d["errores"] if e["fase"] == "botones"][:2]:
         inf.avisos.append(f"{rel}: EXCEPCIÓN al pulsar un botón con los campos vacíos (la sonda pulsa cada botón una vez):"
                           f"\n    {e['traza']}")
@@ -344,6 +352,8 @@ def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: in
                      f"pantalla de entrar: no dio con usuario y contraseña del código (probó {ent['intentos']}); lo de "
                      "después no se probó")
     hecho.append(f"{d['pestanas']} pestañas y {d['botones']} botones pulsados, {len(d['mensajes'])} mensajes")
+    if d.get("abiertos"):
+        hecho.append(f"{len(d['abiertos'])} archivos o programas que abriría fuera de la app (no se abrieron)")
     inf.ok.append(f"{rel}: ventana usada sin enseñarla, sin excepciones ({'; '.join(hecho)})")
 
 

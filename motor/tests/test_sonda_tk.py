@@ -124,6 +124,57 @@ class SondaTk(unittest.TestCase):
         self.assertEqual(inf.errores, [])
         self.assertIn("3 pestañas", inf.ok[0])
 
+    def test_ventana_oculta_al_entrar(self):
+        # 4.12.6: la principal se construía en la misma raíz que la de entrar y luego root.withdraw(): no se veía nada
+        inf = self.probar('''
+            import tkinter as tk
+            from tkinter import ttk
+            USUARIO = "duena"
+            PASSWORD = "clave2026"
+            root = tk.Tk()
+            u = ttk.Entry(root); u.pack(); c = ttk.Entry(root, show="*"); c.pack()
+            def entrar():
+                if (u.get(), c.get()) == (USUARIO, PASSWORD):
+                    nb = ttk.Notebook(root); nb.pack()
+                    for n in ("Agenda", "Clientes", "Servicios"):
+                        nb.add(ttk.Frame(nb), text=n)
+                    root.withdraw()  # ocultar el login
+            ttk.Button(root, text="Entrar", command=entrar).pack()
+            root.mainloop()
+        ''')
+        self.assertEqual(len(inf.errores), 1, inf.errores)
+        self.assertIn("después de entrar (como «duena») no queda ninguna ventana a la vista", inf.errores[0])
+
+    def test_entrar_en_toplevel_con_la_raiz_oculta(self):
+        inf = self.probar('''
+            import tkinter as tk
+            from tkinter import ttk
+            USUARIO = "duena"
+            PASSWORD = "clave2026"
+            root = tk.Tk(); root.withdraw()
+            top = tk.Toplevel(root)
+            u = ttk.Entry(top); u.pack(); c = ttk.Entry(top, show="*"); c.pack()
+            def entrar():
+                if (u.get(), c.get()) == (USUARIO, PASSWORD):
+                    top.destroy(); root.deiconify()
+                    nb = ttk.Notebook(root); nb.pack(); nb.add(ttk.Frame(nb), text="Agenda")
+            ttk.Button(top, text="Entrar", command=entrar).pack()
+            root.mainloop()
+        ''')
+        self.assertEqual(inf.errores, [])
+        self.assertIn("entró como «duena»", inf.ok[0])
+
+    def test_no_abre_nada_fuera_de_la_app(self):
+        # un «Exportar» que llama a os.startfile abría Excel en el escritorio; si no se interceptara, este daría error
+        inf = self.probar('''
+            import os, tkinter as tk
+            root = tk.Tk()
+            tk.Button(root, text="Exportar", command=lambda: os.startfile("no_existe_sonda.xyz")).pack()
+            root.mainloop()
+        ''')
+        self.assertEqual((inf.errores, inf.avisos), ([], []))
+        self.assertIn("1 archivos o programas que abriría fuera de la app (no se abrieron)", inf.ok[0])
+
     def test_falla_al_abrir_la_ventana(self):
         inf = self.probar('''
             import tkinter as tk
