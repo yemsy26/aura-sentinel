@@ -274,7 +274,8 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
         return
     if any(re.search(r"^\s*(?:import tkinter|from tkinter|import customtkinter|from customtkinter)\b",
                      p.read_text(encoding="utf-8", errors="replace"), re.MULTILINE) for p in rutas if not p.name.startswith("test")):
-        probar_tk(raiz, entrada, python, inf, segundos)
+        lanzado = entrada_bat(raiz)
+        probar_tk(raiz, lanzado[1] if lanzado else entrada, python, inf, segundos, lanzado[0] if lanzado else None)
         return
     if re.search(r"\b(PyQt|PySide|wx)\b", fuente):
         inf.avisos.append(f"{rel}: app con ventana (GUI): no se abre aquí; prueba su lógica con tests.")
@@ -296,7 +297,38 @@ FASE_TK = {"arranque": "abrir la ventana", "entrar": "entrar (usuario y contrase
 COPIA_FUERA = (".venv", "venv", "node_modules", ".git", "__pycache__", ".agente", "dist", "build", "target", ".pytest_cache")
 
 
-def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: int) -> None:
+# Una peluquería terminó con run.bat lanzando «python -m app»: app.py solo definía funciones y la ventana se abría en
+# __main__.py. Con doble clic no se veía nada y verificar, que había elegido app.py por su nombre, decía «se ejecuta sin
+# errores». La app se prueba por donde la abre el .bat de doble clic.
+NO_ABRE = re.compile(r"(?i)^(test|prueba|instal|setup|build|compil)")
+OBJETIVO_PY = re.compile(r'(?i)(?:\b(?:python[w3]?|pyw?)(?:\.exe)?(?:\s+-3(?:\.\d+)?)?|%PY%)"?\s+'
+                         r'(?:-m\s+([\w.]+)|"([^"]+\.pyw?)"|([^\s"&|<>]+\.pyw?)\b|(\.)(?=[\s"]|$))')
+
+
+def entrada_bat(raiz: Path) -> tuple[Path, Path] | None:
+    """(.bat, .py que abre) para el .bat de doble clic: python app.py, "%PY%" -m app, python . (su __main__.py)."""
+    lotes = sorted((b for b in raiz.glob("*.bat") if not NO_ABRE.match(b.stem)),
+                   key=lambda b: (not re.match(r"(?i)(run|abrir|iniciar|ejecutar|start|app|main)", b.stem), b.name.lower()))
+    for b in lotes:
+        for linea in b.read_text(encoding="utf-8", errors="replace").splitlines():
+            if re.match(r"(?i)\s*@?(rem\b|::|echo\b)", linea):
+                continue
+            for m in OBJETIVO_PY.finditer(linea):
+                modulo, citado, suelto, punto = m.groups()
+                if modulo:
+                    base = raiz / modulo.replace(".", "/")
+                    candidatos = [base.with_name(base.name + ".py"), base / "__main__.py"]
+                elif punto:
+                    candidatos = [raiz / "__main__.py"]
+                else:
+                    candidatos = [raiz / (citado or suelto).replace("%~dp0", "")]
+                for c in candidatos:
+                    if "%" not in str(c) and c.is_file() and not c.name.startswith("test"):
+                        return b, c
+    return None
+
+
+def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: int, bat: Path | None = None) -> None:
     rel = relativa(entrada, raiz)
     tramo = min(20, max(5, segundos))
     copia = Path(tempfile.mkdtemp(prefix="agente_tk_")) / "p"
@@ -344,6 +376,15 @@ def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: in
         inf.avisos.append(f"{rel}: EXCEPCIÓN al pulsar un botón con los campos vacíos (la sonda pulsa cada botón una vez):"
                           f"\n    {e['traza']}")
     if not d["bucle"]:
+        ventanas = [p for p in archivos(raiz, ".py", ".pyw") if not p.name.startswith("test")
+                    and re.search(r"\bmainloop\s*\(", p.read_text(encoding="utf-8", errors="replace"))]
+        if bat and ventanas:
+            otros = [relativa(p, raiz) for p in ventanas if p.resolve() != entrada.resolve()]
+            inf.errores.append(f"{relativa(bat, raiz)} abre {rel}, que termina sin abrir ninguna ventana: con doble clic el "
+                               "usuario no ve nada. " + (f"La ventana se abre en {', '.join(otros[:2])}: haz que {bat.name} "
+                               "ejecute ese archivo." if otros else "Su mainloop() nunca se ejecuta: llama a lo que crea "
+                               "la ventana."))
+            return
         inf.ok.append(f"{rel} se ejecuta sin errores (no llega a abrir el bucle de la ventana)")
         return
     hecho = []

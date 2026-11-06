@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente.proyecto import Informe
-from agente.verificacion import probar_tk, usuarios_del_proyecto, verificar
+from agente.verificacion import entrada_bat, probar_tk, usuarios_del_proyecto, verificar
 
 try:
     import tkinter  # noqa: F401
@@ -192,6 +192,40 @@ class SondaTk(unittest.TestCase):
         texto, errores = verificar(self.dir, sys.executable, segundos=10)
         self.assertGreaterEqual(errores, 1)
         self.assertIn("EXCEPCIÓN al entrar", texto)
+
+    def test_bat_que_abre_un_archivo_sin_ventana(self):
+        # m4127_pelu2: run.bat lanzaba «python -m app» y la ventana se abría en __main__.py; con doble clic, nada.
+        (self.dir / "app.py").write_text("import tkinter as tk\n\ndef pantalla(root):\n    tk.Label(root, text='Agenda')"
+                                         ".pack()\n", encoding="utf-8")
+        (self.dir / "__main__.py").write_text("import tkinter as tk\nfrom app import pantalla\n\nroot = tk.Tk()\n"
+                                              "pantalla(root)\nroot.mainloop()\n", encoding="utf-8")
+        bat = '@echo off\r\ncd /d "%~dp0"\r\nset "PY=python"\r\necho [1/1] python -m app\r\n{}\r\n'
+        (self.dir / "run.bat").write_text(bat.format("%PY% -m app"), encoding="utf-8")
+        texto, errores = verificar(self.dir, sys.executable, segundos=10)
+        self.assertGreaterEqual(errores, 1, texto)
+        self.assertIn("run.bat abre app.py, que termina sin abrir ninguna ventana", texto)
+        self.assertIn("La ventana se abre en __main__.py", texto)
+        (self.dir / "run.bat").write_text(bat.format("%PY% ."), encoding="utf-8")
+        texto, _ = verificar(self.dir, sys.executable, segundos=10)
+        self.assertNotIn("sin abrir ninguna ventana", texto)
+        self.assertIn("__main__.py: ventana usada sin enseñarla", texto)
+
+
+class EntradaBat(unittest.TestCase):
+    def test_lo_que_abre_el_bat_de_doble_clic(self):
+        raiz = Path(tempfile.mkdtemp(prefix="agente_entrada_bat_"))
+        self.addCleanup(shutil.rmtree, raiz, ignore_errors=True)
+        for nombre in ("app.py", "main.py", "test_app.py", "paquete/__main__.py"):
+            (raiz / nombre).parent.mkdir(exist_ok=True)
+            (raiz / nombre).write_text("", encoding="utf-8")
+        (raiz / "test.bat").write_text("python test_app.py\r\n", encoding="utf-8")
+        casos = {"echo python main.py\r\n%PY% -m pip install -r requirements.txt\r\n%PY% -m app": "app.py",
+                 '"%PY%" main.py': "main.py", '".venv\\Scripts\\python.exe" "%~dp0main.py"': "main.py",
+                 "python -m paquete": "paquete/__main__.py", "python -m venv .venv\r\npython test_app.py": None}
+        for texto, esperado in casos.items():
+            (raiz / "run.bat").write_text(texto + "\r\n", encoding="utf-8")
+            r = entrada_bat(raiz)
+            self.assertEqual(r and (r[0].name, r[1].relative_to(raiz).as_posix()), esperado and ("run.bat", esperado), texto)
 
 
 if __name__ == "__main__":
