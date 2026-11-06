@@ -830,7 +830,10 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
 # el código y el README): la dueña no pudo entrar. La contraseña que da el resumen tiene que estar en el proyecto.
 CLAVE_RESUMEN = re.compile(r"(?i)\b(?:contrase[ñn]a|clave|password|pass|pwd)\b[^`'\"\n]{0,15}?"
                            r"(?:`([^`\s]{1,40})`|\*\*([^*\s]{1,40})\*\*|\"([^\"\s]{1,40})\"|'([^'\s]{1,40})')")
-CLAVE_CODIGO = re.compile(r"""(?i)(?:hash\w*|passw\w*|pass|pwd|contrase\w*|clave\w*)['"]?\s*(?:\(|[:=,])\s*['"]([^'"\s]{1,40})['"]""")
+# La 4.12.5 rechazó «empleada123», que estaba en hashlib.sha256("empleada123".encode()): también vale lo que se pasa a
+# una función de hash (sha256(, md5(, hashpw(b"...").
+CLAVE_CODIGO = re.compile(r"""(?i)(?:hash\w*|passw\w*|pass|pwd|contrase\w*|clave\w*|sha\d{0,3}|md5|blake2\w?|\w*crypt\w*|"""
+                          r"""pbkdf2\w*)['"]?\s*(?:\(|[:=,])\s*b?['"]([^'"\s]{1,40})['"]""")
 NO_ES_CLAVE = re.compile(r"^\.?[\w-]+\.\w{1,8}$|[/\\()=<>{}]|^[A-Z][A-Z0-9_]+$")  # archivo, ruta, llamada, variable
 
 
@@ -851,6 +854,7 @@ def claves_inventadas(raiz: Path, resumen: str) -> str:
             continue
         conocidas |= set(CLAVE_CODIGO.findall(texto))
         conocidas |= {next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(texto)}
+    conocidas = {c for c in conocidas if not NO_ES_CLAVE.search(c)}  # text="Contraseña:").pack(anchor= no es una
     malas = sorted(dichas - conocidas)
     if not conocidas or not malas:
         return ""

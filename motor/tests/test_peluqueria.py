@@ -73,6 +73,23 @@ class Peluqueria(unittest.TestCase):
         self.assertEqual(claves_inventadas(self.dir, "contraseña `s3creta`"), "")
         self.assertIn("«secreta»", claves_inventadas(self.dir, "contraseña `secreta`"))
 
+    def test_contrasena_dentro_de_una_funcion_de_hash(self):
+        # 4.12.5: «empleada123» estaba en hashlib.sha256("empleada123".encode()) y se rechazó terminar dos veces.
+        (self.dir / "db.py").write_text(
+            '# Usuario admin por defecto: admin / admin123\n'
+            'hash_admin = hashlib.sha256("admin123".encode()).hexdigest()\n'
+            'hash_empleada = hashlib.sha256("empleada123".encode()).hexdigest()\n', encoding="utf-8")
+        (self.dir / "app.py").write_text(
+            'ttk.Label(frame, text="Usuario:").pack(anchor="w")\n'
+            'ttk.Label(frame, text="Contraseña:").pack(anchor="w")\n', encoding="utf-8")
+        resumen = "- Admin (dueña): usuario `admin`, contraseña `admin123`\n- Empleada: usuario `empleado`, contraseña `empleada123`"
+        self.assertEqual(claves_inventadas(self.dir, resumen), "")
+        mal = claves_inventadas(self.dir, "contraseña `empleado123`")
+        self.assertIn("«empleado123»", mal)
+        self.assertNotIn("pack(", mal)  # la etiqueta de la pantalla no es una contraseña
+        (self.dir / "auth.py").write_text('h = bcrypt.hashpw(b"duena2026", bcrypt.gensalt())\n', encoding="utf-8")
+        self.assertEqual(claves_inventadas(self.dir, "contraseña `duena2026`"), "")
+
     def test_leer_lineas_como_numero_de_linea(self):
         h = Herramientas(self.dir, max_chars=30000, timeout=30)
         self.addCleanup(h.detener_todos)
