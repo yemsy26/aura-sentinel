@@ -61,6 +61,8 @@ class _Marcha:
     fallos: dict[str, int] = field(default_factory=dict)
     rechazos_fin: int = 0
     empujones: int = 0
+    encargo: bool = False  # mandato largo (no una pregunta ni «continúa»): se hace con herramientas
+    actuo: bool = False  # el modelo llamó a alguna herramienta en esta tarea
 
 
 class Agente:
@@ -218,7 +220,7 @@ class Agente:
                     continue
                 return respuesta
 
-            m.empujones = 0
+            m.empujones, m.actuo = 0, True
             self.ctx.asistente(contenido, llamadas)
             if contenido:
                 self._salida("nota", f"· {contenido[:300]}", "gris")
@@ -254,8 +256,12 @@ class Agente:
         por_aprobar = self.revisar_plan and max_pasos is None and self.responder is not None and not sigue
         self.h.nueva_tarea(self.pasos_totales + 1, texto if max_pasos is None and not sigue else "")
         self.inicio_tarea, self.revisiones = self.pasos_totales + 1, 0
+        metricas.anotar(self.h.dir_agente, tipo="tarea", paso=self.pasos_totales + 1,  # sin esto no se sabía el modelo
+                        modelo=getattr(self.llm, "modelo", None), ventana=getattr(self.llm, "contexto", None))
         modo = self.cfg["razonamiento"]
-        return _Marcha(modo=modo, razonar=modo in ("on", "auto"), por_aprobar=por_aprobar)  # planificar con razonamiento
+        encargo = not sigue and len(texto.strip()) >= 150 and not texto.rstrip().endswith("?")
+        return _Marcha(modo=modo, razonar=modo in ("on", "auto"), por_aprobar=por_aprobar,  # planificar con razonamiento
+                       encargo=encargo)
 
     def _pedir_al_modelo(self, m: _Marcha) -> tuple[dict, list, str]:
         """Un turno del modelo: su respuesta, las llamadas que pide (también si las escribió como texto) y lo que dijo."""
@@ -298,6 +304,18 @@ class Agente:
                 "Continúa con el plan usando las herramientas (no describas, actúa). "
                 f"Pasos:\n{self.h.plan_texto()}")})
             return None
+        # Acabar con texto se saltaba la puerta de terminar: con otro modelo, una misión dijo «He completado todas las
+        # fases» con un paso del plan sin hacer, sin verificar ni revisar. Con el plan a medias y archivos cambiados en
+        # la tarea, pasa la misma puerta (un arreglo pequeño que acaba con texto y sin plan pendiente, no).
+        if pendiente and not pregunta and self.h.paso_escritura >= self.inicio_tarea and \
+                (motivo := self._puede_terminar(m.rechazos_fin, self.pasos_totales, contenido)):
+            m.rechazos_fin += 1
+            self.ctx.mensajes.append({"role": "user", "content": f"{motivo}\nCuando esté, llama a terminar."})
+            return None
+        caps = (getattr(self.llm, "info", None) or {}).get("capabilities") or {}
+        if m.encargo and not m.actuo and caps.get("trained_for_tool_use") is False:
+            contenido = (f"[AVISO: el modelo {self.llm.modelo} no está entrenado para usar herramientas y no ha hecho "
+                         "nada en el proyecto. Elige uno con «tool use», como qwen3.6-35b-a3b.]\n" + contenido)
         self._decir(contenido)
         self._log(f"AGENTE: {contenido}")
         return contenido

@@ -89,8 +89,11 @@ class Contexto:
     def hace_falta(self, salida_minima: int = 2048) -> bool:
         t = self.tokens()
         sin_espacio = self.ventana - t < salida_minima + 512
+        # Instrucciones y herramientas ocupan ~5.800 tokens fijos: con 16K y el 60 % quedaban ~4.000 para trabajar y un
+        # modelo que no cabía en VRAM compactaba cada pocos pasos (30-40 s cada vez). Con ventana pequeña, al 75 %.
+        umbral = 0.6 if self.ventana >= 32768 else 0.75
         # Tras compactar no se repite hasta que el historial crezca otro 10 % (no rehacer en cada paso).
-        return sin_espacio or (t > self.ventana * 0.6 and t > self.tras_compactar + self.ventana * 0.1)
+        return sin_espacio or (t > self.ventana * umbral and t > self.tras_compactar + self.ventana * 0.1)
 
     def compactar(self, llm, plan: str, forzar: bool = False) -> str:
         antes = self.tokens()
