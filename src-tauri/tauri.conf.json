@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AuraSentinel",
-  "version": "4.12.6",
+  "version": "4.12.7",
   "identifier": "com.yemsy.aurasentinel",
   "build": {
     "frontendDist": "../dist",

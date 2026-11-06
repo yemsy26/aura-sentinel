@@ -5,6 +5,19 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.7] — 2026-11-06 (la ventana que desaparece al entrar es un error, y verificar no abre nada fuera de la app)
+
+- **Una app que se queda sin ventana a la vista al entrar no pasa `verificar`:** en una misión de la 4.12.6, la prueba de
+  tkinter cazó un fallo al entrar y el agente lo «arregló» construyendo la ventana principal en la misma ventana del
+  login y ocultándola después: al entrar no se veía nada. La prueba solo dio un aviso, porque oculta ella misma las
+  ventanas y no supo que había entrado. Ahora anota cuándo la app oculta o muestra sus ventanas: si al abrir o después
+  de entrar no queda ninguna a la vista, es un error. También sabe que entró cuando la app oculta la ventana de entrar o
+  la llena con la principal.
+- **`verificar` ya no abre nada fuera de la app:** un botón «Exportar» que llamaba a `os.startfile` abrió Excel en el
+  escritorio mientras la prueba usaba la app. Ahora abrir archivos, el navegador, el Explorador, el Bloc de notas o
+  Excel se anota y no se hace.
+- En los 6 sistemas tkinter guardados caza ese fallo y los demás quedan igual.
+
 ## [4.12.6] — 2026-11-06 (verificar usa las apps de escritorio con tkinter, y la contraseña del resumen sin rechazos falsos)
 
 - **`verificar` usa las apps de escritorio hechas con tkinter:** en una misión de la 4.12.5, la peluquería terminó con
