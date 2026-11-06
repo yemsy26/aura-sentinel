@@ -5,6 +5,22 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.6] — 2026-11-06 (verificar usa las apps de escritorio con tkinter, y la contraseña del resumen sin rechazos falsos)
+
+- **`verificar` usa las apps de escritorio hechas con tkinter:** en una misión de la 4.12.5, la peluquería terminó con
+  `verificar` en verde y fallaba nada más entrar (las pestañas de la ventana principal se añadían de una forma que Tk no
+  permite). Antes `verificar` no abría las apps con ventana, y si `main.py` solo importaba la app la daba por buena al
+  llegar a su bucle de eventos. Ahora la usa sobre una copia del proyecto, sin enseñar ninguna ventana: los avisos y los
+  diálogos se contestan solos; si hay pantalla de entrar prueba los usuarios y contraseñas que aparecen en el código;
+  luego cambia a cada pestaña y pulsa cada botón que no sea de salir o borrar. Una excepción al abrir la ventana, al
+  entrar o al cambiar de pestaña es un error, con la línea del proyecto; al pulsar un botón con los campos vacíos, un
+  aviso. En los 4 sistemas tkinter guardados caza ese fallo y no da ningún error en los otros 3. PyQt, PySide y wx
+  siguen sin abrirse.
+- **La contraseña del resumen ya no se rechaza si el programa la pasa a una función de hash:** la comprobación de la
+  4.12.3 no veía «empleada123» dentro de `hashlib.sha256("empleada123".encode())`, rechazó terminar dos veces y el
+  resumen acabó diciendo «contraseña (ver en db.py línea 80)». En 18 resúmenes guardados con contraseña sigue marcando
+  solo el caso real («admin» en vez de «admin123»).
+
 ## [4.12.5] — 2026-11-06 (ver_pantalla conserva la sesión, y otros modelos se pierden menos)
 
 - **`ver_pantalla` conserva el inicio de sesión:** cada captura abría un navegador nuevo, así que una misión capturó
