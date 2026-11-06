@@ -30,6 +30,7 @@ from .proyecto import Informe, archivos, cola, correr_texto, normalizar, relativ
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
 SONDA_PYGAME = Path(__file__).resolve().parent / "sondas" / "pygame_sonda.py"
+SONDA_TK = Path(__file__).resolve().parent / "sondas" / "tk_sonda.py"
 
 
 # Atributos que leen las librerías (pygame Rect/Sprite, tkinter, unittest...), no el propio código: no son "código muerto".
@@ -55,7 +56,7 @@ TEXTO_RUFF = {"F841": "variable asignada y NUNCA usada (¿lógica sin terminar?)
 def _traza_limpia(tb: str) -> str:
     """Traceback sin marcas ~~~^^^ ni marcos internos: archivo/línea del proyecto + la excepción final."""
     lineas = [l for l in tb.splitlines() if l.strip() and not re.fullmatch(r"\s*[~^\s]+", l)
-              and "<frozen" not in l and "runpy" not in l and "pygame_sonda" not in l]
+              and "<frozen" not in l and "runpy" not in l and "pygame_sonda" not in l and "tk_sonda" not in l]
     return "\n    ".join(l.rstrip() for l in lineas[-10:])
 
 
@@ -271,7 +272,11 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
         inf.ok.append(f"3 partidas simuladas: {total['juego']} s de juego ({total['frames']} frames, teclas aleatorias "
                       f"reproducibles), {total['pantallas']} pantallas distintas, sin excepciones")
         return
-    if re.search(r"\b(tkinter|PyQt|PySide|customtkinter|wx)\b", fuente):
+    if any(re.search(r"^\s*(?:import tkinter|from tkinter|import customtkinter|from customtkinter)\b",
+                     p.read_text(encoding="utf-8", errors="replace"), re.MULTILINE) for p in rutas if not p.name.startswith("test")):
+        probar_tk(raiz, entrada, python, inf, segundos)
+        return
+    if re.search(r"\b(PyQt|PySide|wx)\b", fuente):
         inf.avisos.append(f"{rel}: app con ventana (GUI): no se abre aquí; prueba su lógica con tests.")
         return
     codigo, salida = correr_texto([python, str(entrada)], entrada.parent, segundos, env)
@@ -283,6 +288,63 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
         inf.errores.append(f"{rel} termina con error (exit {codigo}):\n    {cola(salida)}")
     else:
         inf.ok.append(f"{rel} se ejecuta sin errores")
+
+
+# Una peluquería en tkinter terminó con verificar en verde y fallaba nada más entrar (ttk.Notebook.add de un frame
+# nieto): la app solo se ejecutaba hasta su bucle de eventos. La sonda la usa sin enseñar ventanas, sobre una copia.
+FASE_TK = {"arranque": "abrir la ventana", "entrar": "entrar (usuario y contraseña)", "pestanas": "cambiar de pestaña"}
+COPIA_FUERA = (".venv", "venv", "node_modules", ".git", "__pycache__", ".agente", "dist", "build", "target", ".pytest_cache")
+
+
+def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: int) -> None:
+    rel = relativa(entrada, raiz)
+    tramo = min(20, max(5, segundos))
+    copia = Path(tempfile.mkdtemp(prefix="agente_tk_")) / "p"
+    try:
+        shutil.copytree(raiz, copia, ignore=shutil.ignore_patterns(*COPIA_FUERA))
+        claves = claves_del_proyecto(raiz)
+        env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", SONDA_CLAVES=json.dumps(claves),
+                   SONDA_USUARIOS=json.dumps(usuarios_del_proyecto(raiz, claves)))
+        destino = copia / entrada.relative_to(raiz)
+        codigo, salida = correr_texto([python, str(SONDA_TK), str(destino), str(tramo)], destino.parent, tramo + 25, env)
+    finally:
+        shutil.rmtree(copia.parent, ignore_errors=True)
+    salida = salida.replace(str(copia) + os.sep, "")
+    m = re.search(r"^SONDA_TK (\{.*\})$", salida, re.MULTILINE)
+    if not m:
+        if codigo is None and "SONDA_TK_VENTANA" in salida:
+            inf.avisos.append(f"{rel}: la ventana no se pudo recorrer en {tramo} s (¿espera algo sin volver al bucle de "
+                              "eventos?).")
+        elif codigo is None:
+            inf.ok.append(f"{rel} sigue en ejecución tras {tramo} s (servidor o bucle): arrancó sin errores")
+        elif "No module named 'tkinter'" in salida or "No module named '_tkinter'" in salida:
+            inf.avisos.append(f"{rel}: el Python del proyecto no tiene tkinter: la ventana no se ha probado.")
+        else:
+            inf.errores.append(f"{rel}: falló al arrancar:\n    {cola(salida)}")
+        return
+    d = json.loads(m.group(1))
+    for e in d["errores"]:  # sin la carpeta de la copia ni los marcos de dentro de tkinter (su línea de código va detrás)
+        e["traza"] = re.sub(r'\n\s*File "[^"\n]*[\\/]tkinter[\\/][^\n]*\n[^\n]*', "",
+                            _traza_limpia(e["traza"]).replace(str(copia) + os.sep, ""))
+    graves = [e for e in d["errores"] if e["fase"] in FASE_TK]
+    if graves:
+        e = graves[0]
+        inf.errores.append(f"{rel}: EXCEPCIÓN al {FASE_TK[e['fase']]}: el usuario se queda ahí sin poder seguir "
+                           f"(verificar usa la app sin enseñar la ventana):\n    {e['traza']}")
+        return
+    for e in [e for e in d["errores"] if e["fase"] == "botones"][:2]:
+        inf.avisos.append(f"{rel}: EXCEPCIÓN al pulsar un botón con los campos vacíos (la sonda pulsa cada botón una vez):"
+                          f"\n    {e['traza']}")
+    if not d["bucle"]:
+        inf.ok.append(f"{rel} se ejecuta sin errores (no llega a abrir el bucle de la ventana)")
+        return
+    hecho = []
+    if (ent := d["entrar"]) is not None:
+        hecho.append(f"entró como «{ent['usuario']}»" if ent["usuario"] is not None else
+                     f"pantalla de entrar: no dio con usuario y contraseña del código (probó {ent['intentos']}); lo de "
+                     "después no se probó")
+    hecho.append(f"{d['pestanas']} pestañas y {d['botones']} botones pulsados, {len(d['mensajes'])} mensajes")
+    inf.ok.append(f"{rel}: ventana usada sin enseñarla, sin excepciones ({'; '.join(hecho)})")
 
 
 # ---------------------------------------------------------------- HTML / JS
@@ -837,24 +899,52 @@ CLAVE_CODIGO = re.compile(r"""(?i)(?:hash\w*|passw\w*|pass|pwd|contrase\w*|clave
 NO_ES_CLAVE = re.compile(r"^\.?[\w-]+\.\w{1,8}$|[/\\()=<>{}]|^[A-Z][A-Z0-9_]+$")  # archivo, ruta, llamada, variable
 
 
+def _textos_proyecto(raiz: Path):
+    for p in archivos(raiz, ".py", ".js", ".ts", ".mjs", ".cjs", ".php", ".rb", ".go", ".java", ".cs", ".rs", ".sql", ".json",
+                      ".toml", ".ini", ".cfg", ".yml", ".yaml", ".env", ".md", ".txt", ".html", ".bat"):
+        if p.name.startswith(".") and not p.name.startswith(".env"):  # .fenix_chat.json guarda el propio resumen
+            continue
+        try:
+            yield p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+
+def claves_del_proyecto(raiz: Path) -> list[str]:
+    """Contraseñas que da el proyecto (código, README...), en el orden en que aparecen."""
+    conocidas: dict[str, None] = {}
+    for texto in _textos_proyecto(raiz):
+        conocidas.update(dict.fromkeys(CLAVE_CODIGO.findall(texto)))
+        conocidas.update(dict.fromkeys(next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(texto)))
+    return [c for c in conocidas if not NO_ES_CLAVE.search(c)]  # text="Contraseña:").pack(anchor= no es una
+
+
+LITERAL = re.compile(r"""[`'"]([A-Za-z][\w.@-]{2,30})[`'"]""")
+
+
+def usuarios_del_proyecto(raiz: Path, claves: list[str]) -> list[str]:
+    """Posibles usuarios: los textos entre comillas cerca (6 líneas) de donde el proyecto da una contraseña."""
+    cerca: dict[str, int] = {}
+    for texto in _textos_proyecto(raiz):
+        lineas = texto.splitlines()
+        for i, linea in enumerate(lineas):
+            if not any(re.search(rf"[`'\"]{re.escape(c)}[`'\"]", linea) for c in claves):
+                continue
+            for j in range(max(0, i - 6), min(len(lineas), i + 7)):
+                for u in LITERAL.findall(lineas[j]):
+                    if u not in claves and not NO_ES_CLAVE.search(u) and u.lower() not in ("utf-8", "utf8", "ascii"):
+                        cerca[u] = min(cerca.get(u, 99), abs(i - j))
+    usuarios = sorted(cerca, key=cerca.get)[:12]
+    return usuarios if "admin" in usuarios else [*usuarios[:11], "admin"]
+
+
 def claves_inventadas(raiz: Path, resumen: str) -> str:
     """Contraseñas que el resumen da al usuario y no aparecen en el proyecto; '' si están o si no se sabe cuáles son."""
     dichas = {next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(resumen)}
     dichas = {d for d in dichas if not NO_ES_CLAVE.search(d)}
     if not dichas:
         return ""
-    conocidas = set()
-    for p in archivos(raiz, ".py", ".js", ".ts", ".mjs", ".cjs", ".php", ".rb", ".go", ".java", ".cs", ".rs", ".sql", ".json",
-                      ".toml", ".ini", ".cfg", ".yml", ".yaml", ".env", ".md", ".txt", ".html", ".bat"):
-        if p.name.startswith(".") and not p.name.startswith(".env"):  # .fenix_chat.json guarda el propio resumen
-            continue
-        try:
-            texto = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        conocidas |= set(CLAVE_CODIGO.findall(texto))
-        conocidas |= {next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(texto)}
-    conocidas = {c for c in conocidas if not NO_ES_CLAVE.search(c)}  # text="Contraseña:").pack(anchor= no es una
+    conocidas = set(claves_del_proyecto(raiz))
     malas = sorted(dichas - conocidas)
     if not conocidas or not malas:
         return ""
