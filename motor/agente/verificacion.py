@@ -328,15 +328,14 @@ def entrada_bat(raiz: Path) -> tuple[Path, Path] | None:
     return None
 
 
-def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: int, bat: Path | None = None) -> None:
-    rel = relativa(entrada, raiz)
-    tramo = min(20, max(5, segundos))
+def _sonda_tk(raiz: Path, entrada: Path, python: str, tramo: int, claves: list[str], usuarios: list[str],
+              excluir: list[str]) -> tuple[int | None, str, dict | None]:
+    """Una pasada de la sonda sobre una copia nueva del proyecto: (código, salida, lo que imprime la sonda)."""
     copia = Path(tempfile.mkdtemp(prefix="agente_tk_")) / "p"
     try:
         shutil.copytree(raiz, copia, ignore=shutil.ignore_patterns(*COPIA_FUERA))
-        claves = claves_del_proyecto(raiz)
         env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", SONDA_CLAVES=json.dumps(claves),
-                   SONDA_USUARIOS=json.dumps(usuarios_del_proyecto(raiz, claves)))
+                   SONDA_USUARIOS=json.dumps(usuarios), SONDA_EXCLUIR=json.dumps(excluir))
         destino = copia / entrada.relative_to(raiz)
         codigo, salida = correr_texto([python, str(SONDA_TK), str(destino), str(tramo)], destino.parent, tramo + 25, env)
     finally:
@@ -344,6 +343,57 @@ def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: in
     salida = salida.replace(str(copia) + os.sep, "")
     m = re.search(r"^SONDA_TK (\{.*\})$", salida, re.MULTILINE)
     if not m:
+        return codigo, salida, None
+    d = json.loads(m.group(1))
+    for e in d["errores"]:  # sin la carpeta de la copia ni los marcos de dentro de tkinter (su línea de código va detrás)
+        e["traza"] = re.sub(r'\n\s*File "[^"\n]*[\\/]tkinter[\\/][^\n]*\n[^\n]*', "",
+                            _traza_limpia(e["traza"]).replace(str(copia) + os.sep, ""))
+    return codigo, salida, d
+
+
+def _fallo_grave(rel: str, d: dict, inf: Informe) -> bool:
+    """Excepción al abrir, entrar o cambiar de pestaña, o ninguna ventana a la vista: ERROR."""
+    como = f" (como «{d['entrar']['usuario']}»)" if d.get("entrar") and d["entrar"]["usuario"] is not None else ""
+    graves = [e for e in d["errores"] if e["fase"] in FASE_TK]
+    if graves:
+        e = graves[0]
+        inf.errores.append(f"{rel}: EXCEPCIÓN al {FASE_TK[e['fase']]}{como if e['fase'] != 'arranque' else ''}: el "
+                           "usuario se queda ahí sin poder seguir (verificar usa la app sin enseñar la ventana):\n    "
+                           f"{e['traza']}")
+        return True
+    if d.get("sin_ventana"):
+        cuando = "al abrir el programa" if d["sin_ventana"] == "arranque" else f"después de entrar{como}"
+        inf.errores.append(f"{rel}: {cuando} no queda ninguna ventana a la vista: la app oculta o cierra la que el "
+                           "usuario tiene que ver (withdraw(), iconify() o destroy()) y no ve nada. Si la ventana "
+                           "principal se construye en la misma raíz que la de entrar, no la ocultes: quita solo los "
+                           "widgets del formulario de entrar.")
+        return True
+    return False
+
+
+# Dos peluquerías con dueña y empleada terminaron con roles que no limitaban nada: en una, la empleada veía las
+# ganancias; en otra, cualquiera pulsaba «Entrar como Dueña» sin contraseña. La sonda entra como cada usuario del código
+# y compara lo que ve y puede hacer cada uno (pestañas, botones, menús y mensajes al usarlos).
+ROLES = re.compile(r"(?i)\b(?:rol|role|roles|perfil|permisos?|es_admin|is_admin)\b")
+
+
+def _vista(d: dict, usuarios: list[str]) -> tuple:
+    # Rutas (cada pasada usa otra carpeta temporal), usuarios y números no distinguen un rol de otro.
+    quitar = re.compile("|".join([r"[A-Za-z]:[\\/][^\s'\"]*", *map(re.escape, sorted(usuarios, key=len, reverse=True)),
+                                  r"\d+"]), re.IGNORECASE)
+    v = d.get("vista") or {}
+    limpio = [{quitar.sub("", str(t)).strip() for t in v.get(k, [])} - {""} for k in ("pestanas", "botones", "menus")]
+    limpio.append({quitar.sub("", m["texto"]).strip() for m in d["mensajes"] if m["fase"] in ("pestanas", "botones")})
+    return tuple(tuple(sorted(s)) for s in limpio)
+
+
+def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: int, bat: Path | None = None) -> None:
+    rel = relativa(entrada, raiz)
+    tramo = min(20, max(5, segundos))
+    claves = claves_del_proyecto(raiz)
+    usuarios = usuarios_del_proyecto(raiz, claves)
+    codigo, salida, d = _sonda_tk(raiz, entrada, python, tramo, claves, usuarios, [])
+    if d is None:
         if codigo is None and "SONDA_TK_VENTANA" in salida:
             inf.avisos.append(f"{rel}: la ventana no se pudo recorrer en {tramo} s (¿espera algo sin volver al bucle de "
                               "eventos?).")
@@ -354,27 +404,11 @@ def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: in
         else:
             inf.errores.append(f"{rel}: falló al arrancar:\n    {cola(salida)}")
         return
-    d = json.loads(m.group(1))
-    for e in d["errores"]:  # sin la carpeta de la copia ni los marcos de dentro de tkinter (su línea de código va detrás)
-        e["traza"] = re.sub(r'\n\s*File "[^"\n]*[\\/]tkinter[\\/][^\n]*\n[^\n]*', "",
-                            _traza_limpia(e["traza"]).replace(str(copia) + os.sep, ""))
-    graves = [e for e in d["errores"] if e["fase"] in FASE_TK]
-    if graves:
-        e = graves[0]
-        inf.errores.append(f"{rel}: EXCEPCIÓN al {FASE_TK[e['fase']]}: el usuario se queda ahí sin poder seguir "
-                           f"(verificar usa la app sin enseñar la ventana):\n    {e['traza']}")
-        return
-    if d.get("sin_ventana"):
-        cuando = ("al abrir el programa" if d["sin_ventana"] == "arranque" else
-                  f"después de entrar (como «{d['entrar']['usuario']}»)")
-        inf.errores.append(f"{rel}: {cuando} no queda ninguna ventana a la vista: la app oculta o cierra la que el "
-                           "usuario tiene que ver (withdraw(), iconify() o destroy()) y no ve nada. Si la ventana "
-                           "principal se construye en la misma raíz que la de entrar, no la ocultes: quita solo los "
-                           "widgets del formulario de entrar.")
+    if _fallo_grave(rel, d, inf):
         return
     for e in [e for e in d["errores"] if e["fase"] == "botones"][:2]:
-        inf.avisos.append(f"{rel}: EXCEPCIÓN al pulsar un botón con los campos vacíos (la sonda pulsa cada botón una vez):"
-                          f"\n    {e['traza']}")
+        inf.avisos.append(f"{rel}: EXCEPCIÓN al pulsar un botón o una opción del menú con los campos vacíos (la sonda "
+                          f"pulsa cada uno una vez):\n    {e['traza']}")
     if not d["bucle"]:
         ventanas = [p for p in archivos(raiz, ".py", ".pyw") if not p.name.startswith("test")
                     and re.search(r"\bmainloop\s*\(", p.read_text(encoding="utf-8", errors="replace"))]
@@ -393,6 +427,32 @@ def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: in
                      f"pantalla de entrar: no dio con usuario y contraseña del código (probó {ent['intentos']}); lo de "
                      "después no se probó")
     hecho.append(f"{d['pestanas']} pestañas y {d['botones']} botones pulsados, {len(d['mensajes'])} mensajes")
+    con_roles = any(ROLES.search(p.read_text(encoding="utf-8", errors="replace"))
+                    for p in archivos(raiz, ".py", ".pyw") if not p.name.startswith("test"))
+    if con_roles and ent is not None and ent["usuario"] is not None:
+        vistas = [(ent["usuario"], _vista(d, usuarios))]
+        for _ in range(2):  # hasta 3 usuarios distintos
+            _, _, d2 = _sonda_tk(raiz, entrada, python, tramo, claves, usuarios, [u for u, _ in vistas])
+            if d2 is None or not d2.get("entrar") or d2["entrar"]["usuario"] is None:
+                break
+            if _fallo_grave(rel, d2, inf):
+                return
+            vistas.append((d2["entrar"]["usuario"], _vista(d2, usuarios)))
+        nombres = " y ".join(f"«{u}»" for u, _ in vistas)
+        if len(vistas) >= 2 and all(v == vistas[0][1] for _, v in vistas[1:]):
+            p, b, m, _ = vistas[0][1]
+            inf.errores.append(f"{rel}: como {nombres} se ve y se puede hacer exactamente lo mismo ({len(p)} pestañas, "
+                               f"{len(b)} botones y {len(m)} órdenes de menú, con los mismos mensajes): los roles no "
+                               "limitan nada. Haz que cada rol vea y use solo lo suyo.")
+            return
+        if len(vistas) >= 2:
+            hecho.append(f"entró también como {' y '.join(f'«{u}»' for u, _ in vistas[1:])}: cada uno ve distinto")
+    elif con_roles and ent is None and len(set(d.get("como_rol", []))) >= 2:
+        botones = ", ".join(f"«{t}»" for t in sorted(set(d["como_rol"]))[:3])
+        inf.errores.append(f"{rel}: deja elegir el rol con botones ({botones}) sin pedir contraseña: cualquiera entra con "
+                           "el rol que quiera y ve lo que ese rol tiene prohibido. Pide usuario y contraseña al abrir y "
+                           "aplica el rol de quien entra.")
+        return
     if d.get("abiertos"):
         hecho.append(f"{len(d['abiertos'])} archivos o programas que abriría fuera de la app (no se abrieron)")
     inf.ok.append(f"{rel}: ventana usada sin enseñarla, sin excepciones ({'; '.join(hecho)})")
@@ -986,6 +1046,10 @@ def usuarios_del_proyecto(raiz: Path, claves: list[str]) -> list[str]:
                     if u not in claves and not NO_ES_CLAVE.search(u) and u.lower() not in ("utf-8", "utf8", "ascii"):
                         cerca[u] = min(cerca.get(u, 99), abs(i - j))
     usuarios = sorted(cerca, key=cerca.get)[:12]
+    # «duena123» suele ser la contraseña de «duena»: también se prueba ese usuario, detrás de los de cerca.
+    usuarios += [b for b in dict.fromkeys(re.sub(r"\d+$", "", c) for c in claves if re.search(r"\d$", c))
+                 if len(b) >= 3 and b not in usuarios]
+    usuarios = usuarios[:12]
     return usuarios if "admin" in usuarios else [*usuarios[:11], "admin"]
 
 

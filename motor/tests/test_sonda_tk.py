@@ -56,6 +56,36 @@ NIETO = '''    def principal(self):
         nb = ttk.Notebook(self.root); nb.pack()
         ttk.Frame(nb, name="tab_agenda")
         nb.add(tk.Frame(nb.nametowidget("tab_agenda")), text="Agenda")'''
+ROLES = '''
+import tkinter as tk
+from tkinter import ttk, messagebox
+USUARIOS = [
+    {"usuario": "duena", "password": "duena2026", "rol": "duena"},
+    {"usuario": "ana", "password": "ana2026", "rol": "empleada"},
+]
+
+
+def entrar(root, u, c):
+    dato = next((x for x in USUARIOS if x["usuario"] == u.get() and x["password"] == c.get()), None)
+    if dato is None:
+        messagebox.showerror("Error", "Usuario o contraseña incorrectos")
+        return
+    for w in root.winfo_children():
+        w.destroy()
+    rol = dato["rol"]
+    nb = ttk.Notebook(root); nb.pack()
+    for nombre in ("Agenda", "Clientes"):
+        nb.add(ttk.Frame(nb), text=nombre)
+    if {condicion}:
+        nb.add(ttk.Frame(nb), text="Ganancias")
+
+
+root = tk.Tk()
+u = ttk.Entry(root); u.pack()
+c = ttk.Entry(root, show="*"); c.pack()
+ttk.Button(root, text="Entrar", command=lambda: entrar(root, u, c)).pack()
+root.mainloop()
+'''
 
 
 @unittest.skipUnless(TK, "sin tkinter")
@@ -209,6 +239,59 @@ class SondaTk(unittest.TestCase):
         texto, _ = verificar(self.dir, sys.executable, segundos=10)
         self.assertNotIn("sin abrir ninguna ventana", texto)
         self.assertIn("__main__.py: ventana usada sin enseñarla", texto)
+
+    def test_cada_rol_ve_lo_suyo(self):
+        inf = self.probar(ROLES.replace("{condicion}", "rol == 'duena'"))
+        self.assertEqual(inf.errores, [])
+        self.assertIn("entró como «duena»", inf.ok[0])
+        self.assertIn("entró también como «ana»: cada uno ve distinto", inf.ok[0])
+
+    def test_roles_que_no_limitan_nada(self):
+        inf = self.probar(ROLES.replace("{condicion}", "True"))
+        self.assertEqual(len(inf.errores), 1, inf.errores)
+        self.assertIn("como «duena» y «ana» se ve y se puede hacer exactamente lo mismo (3 pestañas", inf.errores[0])
+
+    def test_rol_elegido_con_botones_sin_contrasena(self):
+        # m4127_pelu1: pestaña Roles con «Entrar como Dueña» y «Entrar como Empleada», sin pedir contraseña.
+        inf = self.probar('''
+            import tkinter as tk
+            from tkinter import ttk
+            rol = None
+
+            def entrar(r):
+                global rol
+                rol = r
+
+            root = tk.Tk()
+            nb = ttk.Notebook(root); nb.pack()
+            f = ttk.Frame(nb); nb.add(f, text="Roles")
+            ttk.Button(f, text="Entrar como Dueña", command=lambda: entrar("duena")).pack()
+            ttk.Button(f, text="Entrar como Empleada", command=lambda: entrar("empleada")).pack()
+            root.mainloop()
+        ''')
+        self.assertEqual(len(inf.errores), 1, inf.errores)
+        self.assertIn("deja elegir el rol con botones («Entrar como Dueña», «Entrar como Empleada») sin pedir contraseña",
+                      inf.errores[0])
+
+    def test_usa_las_opciones_del_menu(self):
+        # m4127_pelu2: la pantalla de Informes, que solo se abre desde el menú, mezclaba pack y grid y se rompía.
+        inf = self.probar('''
+            import tkinter as tk
+            root = tk.Tk()
+            barra = tk.Menu(root); ir = tk.Menu(barra, tearoff=0)
+            ir.add_command(label="Agenda", command=lambda: None)
+            ir.add_command(label="Informes", command=lambda: int("informe"))
+            ir.add_command(label="Salir", command=root.destroy)
+            barra.add_cascade(label="Ir a", menu=ir); root.config(menu=barra)
+            root.mainloop()
+        ''')
+        self.assertEqual(inf.errores, [])
+        self.assertTrue(any("opción del menú" in a and 'label="Informes"' in a for a in inf.avisos), inf.avisos)
+        self.assertIn("2 botones pulsados", inf.ok[0])  # Agenda e Informes; Salir no
+
+    def test_usuario_de_una_contrasena_con_numeros(self):
+        (self.dir / "db.py").write_text('USUARIOS = [("admin", "x"), ]\nclave = "duena123"\n', encoding="utf-8")
+        self.assertIn("duena", usuarios_del_proyecto(self.dir, ["duena123"]))
 
 
 class EntradaBat(unittest.TestCase):

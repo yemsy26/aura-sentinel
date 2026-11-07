@@ -25,11 +25,15 @@ sys.path.insert(0, os.path.dirname(destino))
 sys.argv = [destino]
 CLAVES = json.loads(os.environ.get("SONDA_CLAVES", "[]"))
 USUARIOS = json.loads(os.environ.get("SONDA_USUARIOS", "[]"))
+EXCLUIR = set(json.loads(os.environ.get("SONDA_EXCLUIR", "[]")))  # usuarios ya probados: se entra como otro
+# «Entrar como Dueña» / «Entrar como Empleada» sin contraseña: cualquiera elige el rol.
+COMO_ROL = re.compile(r"(?i)\b(?:entrar|ingresar|acceder|iniciar(?: sesi[oó]n)?|conectar(?:se)?|soy)\s+como\b")
 NO_PULSAR = re.compile(r"(?i)salir|cerrar|exit|quit|logout|eliminar|borrar|delete|remove|apagar|desconectar|reiniciar|"
                        r"restablecer|vaciar|limpiar todo")
 ENTRAR = re.compile(r"(?i)entrar|ingresar|acceder|iniciar|login|log in|sign in|aceptar|continuar|^ok$")
 estado = {"fase": "arranque", "errores": [], "mensajes": [], "ventanas": 0, "entrar": None, "pestanas": 0,
-          "botones": 0, "bucle": False, "sin_ventana": None, "impreso": False, "inicio": time.time()}
+          "botones": 0, "bucle": False, "sin_ventana": None, "impreso": False, "inicio": time.time(),
+          "vista": {"pestanas": [], "botones": [], "menus": []}, "como_rol": []}
 nuevas: list = []  # Toplevel creadas desde la última mirada
 raices: list = []  # una app puede destruir su Tk al entrar y crear otro
 todas: list = []  # Tk y Toplevel creadas, para saber si al usuario le queda alguna a la vista
@@ -230,7 +234,10 @@ def _entrar(raiz) -> None:
               and not str(w.cget("show")).strip()]
     boton = next((b for b in _widgets(ventana) if hasattr(b, "invoke") and ENTRAR.search(_texto(b))), None)
     boton = boton or next((b for b in _widgets(ventana) if isinstance(b, (tk.Button, ttk.Button))), None)
-    intentos = [(u, c) for c in CLAVES[:6] for u in (USUARIOS[:12] or [""])][:40]
+    otros = [u for u in USUARIOS if u not in EXCLUIR]
+    if USUARIOS and not otros:
+        return
+    intentos = [(u, c) for c in CLAVES[:6] for u in (otros[:12] or [""])][:40]
     estado["entrar"] = {"intentos": 0, "usuario": None}
     for usuario, contrasena in intentos:
         if not _vive(clave):
@@ -264,6 +271,7 @@ def _explorar(raiz) -> None:
             estado["sin_ventana"] = estado["sin_ventana"] or "entrar"
         estado["fase"] = "pestanas"
         for nb in [w for w in _widgets(raiz) if isinstance(w, ttk.Notebook)]:
+            estado["vista"]["pestanas"] += [str(nb.tab(p, "text")) for p in nb.tabs() if str(nb.tab(p, "state")) == "normal"]
             for pestana in list(nb.tabs()):
                 try:
                     nb.select(pestana)
@@ -284,15 +292,64 @@ def _explorar(raiz) -> None:
                 vistos.add(str(b))
                 try:
                     if b.winfo_exists() and str(b.cget("state")) != "disabled":
+                        estado["vista"]["botones"].append(_texto(b).strip())
+                        if estado["entrar"] is None and COMO_ROL.search(_texto(b)):
+                            estado["como_rol"].append(_texto(b).strip())
                         b.invoke()
                         estado["botones"] += 1
                 except tk.TclError:
                     pass
                 _cerrar_nuevas(raiz)
+        _menus(raiz)
     except Exception:
         _registrar(*sys.exc_info())
     _imprimir()
     os._exit(0)
+
+
+def _entradas_menu(menu, vistos):
+    """(menú, índice, etiqueta) de cada orden del menú y sus submenús."""
+    if str(menu) in vistos:
+        return
+    vistos.add(str(menu))
+    try:
+        ultimo = menu.index("end")
+    except tk.TclError:
+        return
+    for i in range(0 if ultimo is None else ultimo + 1):
+        try:
+            tipo = menu.type(i)
+            if tipo == "cascade":
+                yield from _entradas_menu(menu.nametowidget(menu.entrycget(i, "menu")), vistos)
+            elif tipo == "command":
+                yield menu, i, str(menu.entrycget(i, "label"))
+        except (tk.TclError, KeyError):
+            pass
+
+
+# Una peluquería con menú «Agenda / Informes» decía «No tienes permiso» a la empleada solo al elegir Informes: cada
+# orden del menú se usa como un botón (salvo salir o borrar) y entra en lo que ve cada usuario.
+def _menus(raiz) -> None:
+    vistos = set()
+    for v in [r for r in raices if _existe(r)] + [t for t in todas if _existe(t)]:
+        try:
+            nombre = str(v.cget("menu"))
+        except tk.TclError:
+            continue
+        if not nombre:
+            continue
+        for menu, i, etiqueta in list(_entradas_menu(v.nametowidget(nombre), vistos)):
+            if estado["botones"] >= 60 or time.time() - estado["inicio"] > duracion or NO_PULSAR.search(etiqueta):
+                continue
+            try:
+                if str(menu.entrycget(i, "state")) == "disabled":
+                    continue
+                estado["vista"]["menus"].append(etiqueta)
+                menu.invoke(i)
+                estado["botones"] += 1
+            except tk.TclError:
+                pass
+            _cerrar_nuevas(raiz)
 
 
 def _imprimir():
