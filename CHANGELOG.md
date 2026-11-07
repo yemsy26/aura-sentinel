@@ -5,6 +5,21 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.9] — 2026-11-07 (el código que escribe el agente ya no puede borrar fuera del proyecto)
+
+- **Un test generado vació la carpeta temporal del usuario:** en una misión de prueba, el modelo escribió un test que en
+  `tearDown` borraba la carpeta que contiene su carpeta temporal (`shutil.rmtree(os.path.dirname(tempfile.mkdtemp()))`),
+  es decir, todo `%TEMP%`, sin papelera, cada vez que se pasaban los tests. Ahora:
+  - Los comandos del proyecto (tests, la app, pip...) usan su propia carpeta temporal, `.agente\tmp` dentro del
+    proyecto, que no se puede borrar mientras el agente trabaja. Un test así solo puede vaciar esa carpeta.
+  - Aura revisa el código Python antes de ejecutarlo. Si borra la carpeta temporal entera, la del usuario, una del
+    sistema o el propio proyecto, avisa al escribir el archivo, `verificar` da error sin ejecutar los tests, y
+    `ejecutar`, `experimentar` y `ver_pantalla` no ejecutan nada hasta que se corrija.
+  - Si la tarea acaba con un borrado así sin corregir, el resumen empieza avisando de no abrir los tests ni el programa.
+  - El servidor MCP también usa la carpeta temporal propia de cada proyecto.
+  - La guía de tests pide `tmp_path`, `TemporaryDirectory` o `addCleanup`.
+- Revisados 1051 archivos `.py` de 59 proyectos guardados: detecta el test de esa misión y no da ningún aviso falso.
+
 ## [4.12.8] — 2026-11-07 (verificar abre la app por el .bat, entra como cada usuario y compara lo que ve cada rol)
 
 - **La app de escritorio se prueba por donde la abre el `.bat`:** en una misión de la 4.12.7, `run.bat` ejecutaba
