@@ -289,6 +289,26 @@ class SondaTk(unittest.TestCase):
         self.assertTrue(any("opción del menú" in a and 'label="Informes"' in a for a in inf.avisos), inf.avisos)
         self.assertIn("2 botones pulsados", inf.ok[0])  # Agenda e Informes; Salir no
 
+    def test_nadie_puede_entrar_con_lo_que_da_el_proyecto(self):
+        # m4128_pelu2: la base de datos se creaba antes de mirar si era la primera vez y nunca se creaba admin/admin123.
+        inf = self.probar(ROLES.replace("dato = next(", "dato = None and next(").replace("{condicion}", "True"))
+        self.assertEqual(len(inf.errores), 1, inf.errores)
+        self.assertIn("con los usuarios y contraseñas que da el proyecto («duena» / «duena2026», «ana» / «ana2026») no "
+                      "se puede entrar (la app dice «Error: Usuario o contraseña incorrectos»)", inf.errores[0])
+
+    def test_escribe_el_usuario_en_el_formulario_de_entrar(self):
+        # m4128_pelu2 ocultaba la pantalla principal con pack_forget(): su campo de fecha seguía en la ventana, antes
+        # que el del usuario.
+        oculta = ("root = tk.Tk()\nprincipal = ttk.Frame(root); principal.pack()\nttk.Entry(principal).pack()\n"
+                  "principal.pack_forget()\nlogin = ttk.Frame(root); login.pack()\n"
+                  "u = ttk.Entry(login); u.pack()\nc = ttk.Entry(login, show=\"*\"); c.pack()\n"
+                  "ttk.Button(login, text=\"Entrar\", command=lambda: entrar(root, u, c)).pack()\n")
+        codigo = ROLES.replace("{condicion}", "rol == 'duena'")
+        inicio = codigo.index("root = tk.Tk()")
+        inf = self.probar(codigo[:inicio] + oculta + "root.mainloop()\n")
+        self.assertEqual(inf.errores, [])
+        self.assertIn("entró como «duena»", inf.ok[0])
+
     def test_usuario_de_una_contrasena_con_numeros(self):
         (self.dir / "db.py").write_text('USUARIOS = [("admin", "x"), ]\nclave = "duena123"\n', encoding="utf-8")
         self.assertIn("duena", usuarios_del_proyecto(self.dir, ["duena123"]))

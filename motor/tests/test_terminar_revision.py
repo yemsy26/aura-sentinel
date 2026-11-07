@@ -76,6 +76,16 @@ class TerminarConRevisionPendiente(unittest.TestCase):
         self.assertTrue(r[0].startswith("RECHAZADO: la revisión independiente pide cambios"), r[0])
         self.assertTrue(r[1].startswith("RECHAZADO: la última revisión pidió cambios"), r[1])
 
+    def test_el_resumen_rechazado_por_la_contrasena_queda_entero_en_el_registro(self):
+        cola = " Y una explicación larga que pasa de los 300 caracteres del registro." * 6
+        r = self.mision([llamada("escribir", ruta="main.py", contenido='PASSWORD = "admin123"\nprint("hola")\n'),
+                         llamada("terminar", resumen="Entra con usuario `admin`, contraseña `admin`." + cola), APROBADO,
+                         llamada("terminar", resumen="Entra con usuario `admin`, contraseña `admin123`.")])
+        self.assertTrue(r[0].startswith("RECHAZADO: el resumen da la contraseña «admin»"), r[0])
+        self.assertEqual(r[1], "Tarea terminada.")
+        registro = (self.dir / ".agente" / "registro.log").read_text(encoding="utf-8")
+        self.assertIn("RESUMEN RECHAZADO (contraseña):\nEntra con usuario `admin`, contraseña `admin`." + cola, registro)
+
     def test_tras_corregir_se_vuelve_a_revisar_y_termina(self):
         r = self.mision([llamada("escribir", ruta="main.py", contenido="print('adiós')\n"),
                          llamada("revisar"), CAMBIOS,

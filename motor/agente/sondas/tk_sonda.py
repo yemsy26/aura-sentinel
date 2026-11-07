@@ -230,15 +230,21 @@ def _entrar(raiz) -> None:
         return
     estado["fase"] = "entrar"
     ventana = clave.winfo_toplevel()
-    textos = [w for w in _widgets(ventana) if isinstance(w, (tk.Entry, ttk.Entry)) and w is not clave
-              and not str(w.cget("show")).strip()]
-    boton = next((b for b in _widgets(ventana) if hasattr(b, "invoke") and ENTRAR.search(_texto(b))), None)
-    boton = boton or next((b for b in _widgets(ventana) if isinstance(b, (tk.Button, ttk.Button))), None)
+    # Primero lo del mismo formulario que la contraseña: una peluquería ocultaba sus pantallas con pack_forget() y el
+    # usuario se escribía en el campo de fecha de la agenda, que seguía en la ventana.
+    def cerca(w):
+        return w.master is not clave.master, not _vive(w)
+
+    textos = sorted((w for w in _widgets(ventana) if isinstance(w, (tk.Entry, ttk.Entry)) and w is not clave
+                     and not str(w.cget("show")).strip()), key=cerca)
+    pulsables = sorted((b for b in _widgets(ventana) if hasattr(b, "invoke")), key=cerca)
+    boton = next((b for b in pulsables if ENTRAR.search(_texto(b))), None)
+    boton = boton or next((b for b in pulsables if isinstance(b, (tk.Button, ttk.Button))), None)
     otros = [u for u in USUARIOS if u not in EXCLUIR]
     if USUARIOS and not otros:
         return
     intentos = [(u, c) for c in CLAVES[:6] for u in (otros[:12] or [""])][:40]
-    estado["entrar"] = {"intentos": 0, "usuario": None}
+    estado["entrar"] = {"intentos": 0, "usuario": None, "campo_usuario": bool(textos)}
     for usuario, contrasena in intentos:
         if not _vive(clave):
             break

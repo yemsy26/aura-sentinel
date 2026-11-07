@@ -422,7 +422,24 @@ def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: in
         inf.ok.append(f"{rel} se ejecuta sin errores (no llega a abrir el bucle de la ventana)")
         return
     hecho = []
-    if (ent := d["entrar"]) is not None:
+    # Una peluquería creaba la base de datos antes de mirar si era la primera vez y nunca creaba admin/admin123: con lo
+    # que decían el código y el resumen no entraba nadie. Si el proyecto da un usuario y su contraseña juntos y la
+    # pantalla de entrar los rechaza, el usuario no podrá usar la app.
+    if (ent := d["entrar"]) is not None and ent["usuario"] is None and ent.get("campo_usuario"):
+        pares = {}  # el primer usuario de cada contraseña
+        for u, c in pares_del_proyecto(raiz, claves, usuarios):
+            if u in usuarios[:12] and c in claves[:6]:
+                pares.setdefault(c, u)
+        pares = [(u, c) for c, u in pares.items()]
+        if pares:
+            dice = next((m["texto"] for m in d["mensajes"] if m["fase"] == "entrar"), "")
+            inf.errores.append(f"{rel}: con los usuarios y contraseñas que da el proyecto ("
+                               + ", ".join(f"«{u}» / «{c}»" for u, c in pares[:2]) + ") no se puede entrar"
+                               + (f" (la app dice «{dice[:120]}»)" if dice else "") + ": nadie podrá usar la app. "
+                               "Comprueba que esos usuarios existen de verdad al abrirla, también cuando la base de "
+                               "datos ya estaba creada.")
+            return
+    if ent is not None:
         hecho.append(f"entró como «{ent['usuario']}»" if ent["usuario"] is not None else
                      f"pantalla de entrar: no dio con usuario y contraseña del código (probó {ent['intentos']}); lo de "
                      "después no se probó")
@@ -1031,6 +1048,24 @@ def claves_del_proyecto(raiz: Path) -> list[str]:
 
 
 LITERAL = re.compile(r"""[`'"]([A-Za-z][\w.@-]{2,30})[`'"]""")
+
+
+def pares_del_proyecto(raiz: Path, claves: list[str], usuarios: list[str]) -> list[tuple[str, str]]:
+    """(usuario, contraseña) que el proyecto da juntos: en la misma línea o en la de al lado."""
+    pares: dict[tuple[str, str], None] = {}
+    candidatos = sorted(usuarios, key=lambda u: u.lower() in CAMPOS)  # {"usuario": "duena", ...}: primero «duena»
+    for texto in _textos_proyecto(raiz):
+        lineas = texto.splitlines()
+        for i, linea in enumerate(lineas):
+            for c in [c for c in claves if re.search(rf"[`'\"]{re.escape(c)}[`'\"]", linea)]:
+                for zona in (linea, " ".join(lineas[max(0, i - 1):i + 2])):  # primero los de la misma línea
+                    pares.update(dict.fromkeys((u, c) for u in candidatos
+                                               if u != c and re.search(rf"[`'\"]{re.escape(u)}[`'\"]", zona)))
+    return list(pares)
+
+
+CAMPOS = {"usuario", "usuarios", "user", "users", "username", "nombre", "password", "contraseña", "clave", "rol", "role",
+          "email", "correo"}
 
 
 def usuarios_del_proyecto(raiz: Path, claves: list[str]) -> list[str]:

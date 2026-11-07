@@ -472,6 +472,8 @@ class Agente:
             return ("RECHAZADO: quedan pasos del plan sin marcar:\n" + "\n".join(pendientes) +
                     "\nComplétalos o márcalos con paso_hecho si ya están hechos.")
         if (malas := claves_inventadas(self.h.raiz, resumen)):
+            # registro.log corta cada llamada a 300 caracteres: sin el resumen entero no se podía saber si fue justo.
+            self._log("RESUMEN RECHAZADO (contraseña):\n" + resumen)
             return "RECHAZADO: " + malas
         return ""
 
