@@ -85,11 +85,14 @@ def aislar_temporales(carpeta: Path, *otros: dict) -> None:
     ella, Python tomaría otra vez la del usuario). El motor sigue usando la de siempre (tempfile la guarda aquí)."""
     global _EN_USO
     tempfile.gettempdir()
+    if _EN_USO:  # el servidor MCP cambia de proyecto: suelta la carpeta del anterior
+        _EN_USO.close()
     shutil.rmtree(carpeta, ignore_errors=True)  # lo que dejó la tarea anterior
     carpeta.mkdir(parents=True, exist_ok=True)
     _EN_USO = open(carpeta / "aura_en_uso", "a")  # noqa: SIM115 -- abierto hasta soltar_temporales
     for env in (os.environ, *otros):
-        _ANTES.append((env, {k: env.get(k) for k in TEMPORALES}))
+        if not any(e is env for e, _ in _ANTES):  # se guarda el TEMP de antes de la primera vez
+            _ANTES.append((env, {k: env.get(k) for k in TEMPORALES}))
         env.update(dict.fromkeys(TEMPORALES, str(carpeta)))
 
 

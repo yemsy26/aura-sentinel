@@ -1002,7 +1002,7 @@ class Herramientas:
                 f"{len(cp['archivos'])} archivos.{extra}{self._dijo_despues(cp)} Haz cambios pequeños y verifica tras cada uno.")
 
     def ver_pantalla(self, ruta: str = "", pregunta: str = "", segundos: int = 2) -> str:
-        return pantalla.ver(self, ruta, pregunta, segundos)
+        return self._sin_borrados() or pantalla.ver(self, ruta, pregunta, segundos)  # abre juegos y apps del proyecto
 
     def preguntar(self, pregunta: str, opciones: list | None = None) -> str:
         pregunta = (pregunta or "").strip()

@@ -12,12 +12,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente import entorno
 from agente.borrados import peligrosos
+from agente.bucle import Agente
 from agente.herramientas import Herramientas
 
 # El test de la misión, con el borrado en un método que nadie llama (el detector no mira quién llama).
@@ -158,7 +160,8 @@ class AntesDeEjecutar(unittest.TestCase):
 
     def test_ejecutar_y_experimentar_se_bloquean(self):
         (self.dir / "test_app.py").write_text(TEST_MISION, encoding="utf-8")
-        for r in (self.h.ejecutar(f'"{sys.executable}" -m unittest'), self.h.experimentar("print(1)")):
+        for r in (self.h.ejecutar(f'"{sys.executable}" -m unittest'), self.h.experimentar("print(1)"),
+                  self.h.ver_pantalla("test_app.py")):
             self.assertIn("BLOQUEADO", r)
             self.assertIn("test_app.py:15", r)
         self.assertFalse((self.dir / "SE_EJECUTO").exists())
@@ -170,6 +173,32 @@ class AntesDeEjecutar(unittest.TestCase):
         r = self.h.experimentar("import shutil, tempfile\ndef nunca():\n    shutil.rmtree(tempfile.gettempdir())")
         self.assertIn("BLOQUEADO", r)
         self.assertIn("experimento:3", r)
+
+    def test_el_resumen_avisa_si_queda_un_borrado(self):
+        agente = SimpleNamespace(h=self.h)
+        self.assertEqual(Agente._peligro_borrados(agente), "")
+        (self.dir / "test_app.py").write_text(TEST_MISION, encoding="utf-8")
+        aviso = Agente._peligro_borrados(agente)
+        self.assertTrue(aviso.startswith("[PELIGRO: el código aún borra fuera del proyecto"))
+        self.assertIn("test_app.py:15", aviso)
+
+
+class CambioDeProyecto(unittest.TestCase):
+    """El servidor MCP aísla cada proyecto que elige; al cerrar, TEMP vuelve a ser el de antes del primero."""
+
+    def test_suelta_el_anterior_y_recuerda_el_original(self):
+        base = Path(tempfile.mkdtemp(prefix="test_borrados_"))
+        self.addCleanup(shutil.rmtree, base, True)
+        uno, dos = base / "uno" / ".agente" / "tmp", base / "dos" / ".agente" / "tmp"
+        with mock.patch.dict(os.environ, dict.fromkeys(entorno.TEMPORALES, str(base))):
+            try:
+                entorno.aislar_temporales(uno)
+                entorno.aislar_temporales(dos)
+                self.assertEqual(os.environ["TMP"], str(dos))
+                (uno / "aura_en_uso").unlink()  # el archivo del primero ya no está abierto
+            finally:
+                entorno.soltar_temporales()
+            self.assertEqual(os.environ["TEMP"], str(base))
 
 
 if __name__ == "__main__":

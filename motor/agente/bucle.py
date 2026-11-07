@@ -16,7 +16,7 @@ from .llamadas import coaccionar, llamadas_en_texto, sin_llamadas
 from .prompts import REGLAS_USUARIO, entorno, sistema
 from .proyecto import es_codigo, ignorado
 from .revision import mtime_fuentes, revisar
-from .verificacion import claves_inventadas
+from .verificacion import borrados_fuera, claves_inventadas
 
 ICONOS = {"plan": "PLAN", "paso_hecho": "HECHO", "listar": "ls", "leer": "leer", "buscar": "grep", "escribir": "+",
           "editar": "~", "ejecutar": ">", "procesos": "ps", "crear_bat": "bat", "web_buscar": "web", "web_leer": "web",
@@ -232,7 +232,8 @@ class Agente:
                 hubo_error |= error
             if hubo_error and m.modo == "auto":
                 m.razonar = True  # pensar solo cuando hace falta (ahorra tokens)
-        msg = f"Se alcanzó el máximo de {limite} pasos. Escribe 'continúa' para seguir." + self._rescatar()
+        msg = (self._peligro_borrados() + f"Se alcanzó el máximo de {limite} pasos. Escribe 'continúa' para seguir."
+               + self._rescatar())
         self._salida("aviso", msg)
         return msg
 
@@ -376,12 +377,22 @@ class Agente:
         self.ctx.herramienta(c["id"], resultado)
         return None, bool(re.match(ES_ERROR, resultado))
 
+    def _peligro_borrados(self) -> str:
+        """Lo primero que lee el usuario si el código entregado aún borra fuera del proyecto: su test.bat y su programa
+        usan su %TEMP% de verdad (la carpeta temporal propia solo protege los comandos del agente)."""
+        hallados = borrados_fuera(self.h.raiz)
+        if not hallados:
+            return ""
+        return ("[PELIGRO: el código aún borra fuera del proyecto, sin papelera. No abras los tests ni el programa hasta "
+                "corregirlo:\n" + "\n".join(f"- {h}" for h in hallados[:5]) + "]\n")
+
     def _cerrar_tarea(self, c: dict, args: dict, paso: int, t_llamada: float) -> str:
         """terminar aceptado: guarda y dice el resumen."""
         resumen = str(args.get("resumen", "")).strip()
         if self.h.verificacion["errores"] > 0:  # salió por la válvula anti-bucle con errores
             resumen = ("[AVISO: la tarea termina SIN resolver todos los errores de verificación."
                        f"{self._rescatar()}]\n" + resumen)
+        resumen = self._peligro_borrados() + resumen
         self.ctx.herramienta(c["id"], "Tarea terminada.")
         self._mostrar(paso, "terminar", {}, "Tarea terminada")
         self._medir(c, args, t_llamada, "Tarea terminada.")

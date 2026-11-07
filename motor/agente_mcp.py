@@ -13,12 +13,16 @@ try:  # mcp 2.x renombró FastMCP a MCPServer (misma API de decoradores)
 except ImportError:
     from mcp.server.fastmcp import FastMCP
 
+from agente import ecosistemas
+from agente.entorno import aislar_temporales
 from agente.esquemas import ESQUEMAS
 from agente.herramientas import Herramientas
 
 D = {e["function"]["name"]: e["function"]["description"] for e in ESQUEMAS}
 MAX_CHARS = int(os.environ.get("AGENTE_MAX_CHARS", "6000"))
 H = Herramientas(os.environ.get("AGENTE_RAIZ") or Path.home() / "Proyectos", MAX_CHARS)
+if os.environ.get("AGENTE_RAIZ"):  # sin ella es la carpeta de todos los proyectos: se aísla al elegir uno
+    aislar_temporales(H.dir_agente / "tmp", ecosistemas.ENTORNO)
 mcp = FastMCP("agente-local")
 atexit.register(lambda: H.detener_todos())
 
@@ -30,6 +34,7 @@ def proyecto(ruta: str = "") -> str:
     if ruta:
         H.detener_todos()
         H = Herramientas(ruta, MAX_CHARS)
+        aislar_temporales(H.dir_agente / "tmp", ecosistemas.ENTORNO)  # TEMP propio: ver entorno.aislar_temporales
     plan = H.plan_texto()
     return f"Proyecto: {H.raiz}\n{H.listar('.', 1)}" + (f"\nPlan:\n{plan}" if plan else "")
 
