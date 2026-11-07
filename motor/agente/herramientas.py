@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import android, conocimiento, lecciones, matematicas, pantalla, procesos
 from . import mapa as mapa_repo
+from .borrados import aviso, peligrosos
 from .idiomas import resumen_idiomas
 from .mapa import PATRONES_MAPA
 from .permisos import (
@@ -38,7 +39,15 @@ from .permisos import (
     transaccion,
 )
 from .proyecto import IGNORAR, correr, es_codigo, ignorado
-from .verificacion import LANZADOR, chequeo_rapido, con_call, muertos_ahora, ordenes_bat, verificar
+from .verificacion import (
+    LANZADOR,
+    borrados_fuera,
+    chequeo_rapido,
+    con_call,
+    muertos_ahora,
+    ordenes_bat,
+    verificar,
+)
 
 VACIAS = {"como", "para", "que", "con", "los", "las", "una", "uno", "del", "por", "the", "and", "for", "with", "how",
           "what", "este", "esta", "esto", "hay", "hacer", "puedo", "cual", "cuál", "cómo", "qué", "use", "using"}
@@ -410,6 +419,15 @@ class Herramientas:
                 "componentes del SDK que falten (las licencias y descargas las acepta el usuario en su ventana). "
                 "Cuando termine, compila con verificar.")
 
+    def _sin_borrados(self, experimento: str = "") -> str | None:
+        """Nada se ejecuta mientras el código del proyecto (o el del experimento) borre fuera de lo suyo: la carpeta
+        temporal propia de los comandos (entorno.aislar_temporales) no protege la del usuario ni el propio proyecto."""
+        hallados = borrados_fuera(self.raiz) + [aviso("experimento", *h) for h in peligrosos(experimento)]
+        if not hallados:
+            return None
+        return ("BLOQUEADO: no ejecuto nada mientras el código borre fuera de lo suyo (sin papelera):\n"
+                + "\n".join(f"- {h}" for h in hallados[:5]) + "\nCorrígelo y vuelve a intentarlo.")
+
     def experimentar(self, codigo: str, lenguaje: str = "python", segundos: int = 60) -> str:
         """Prueba mínima en .agente/experimento (fuera del proyecto entregable) para comprobar una API o una idea."""
         extension = {"python": ".py", "node": ".js", "javascript": ".js", "powershell": ".ps1", "bat": ".bat",
@@ -425,6 +443,8 @@ class Herramientas:
             for linea in (l.strip() for l in codigo.splitlines()):
                 if linea and not COMENTARIO.match(linea) and (bloqueo := self._permitido(linea)):
                     return bloqueo
+        if (bloqueo := self._sin_borrados(codigo if extension == ".py" else "")):
+            return bloqueo
         orden = {".py": f'"{self.python_proyecto()}" prueba.py', ".js": "node prueba.js",
                  ".ps1": "powershell -NoProfile -ExecutionPolicy Bypass -File prueba.ps1", ".bat": "cmd /c prueba.bat"}
         limite = max(5, min(int(segundos or 60), 300))
@@ -560,7 +580,7 @@ class Herramientas:
                     " o escríbelo en un .py y ejecútalo; para varias órdenes, únelas con && en una sola línea.")
         if (cerrado := self._cerrar_propios(comando)) is not None:
             return cerrado
-        if (bloqueo := self._permitido(comando) or self._npm_fuera(comando)):
+        if (bloqueo := self._permitido(comando) or self._npm_fuera(comando) or self._sin_borrados()):
             return bloqueo
         if fondo:
             return self._fondo(comando)

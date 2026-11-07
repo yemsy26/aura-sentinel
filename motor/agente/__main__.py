@@ -5,9 +5,10 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, compat, config
+from . import __version__, compat, config, ecosistemas
 from . import modelo as cargador
 from .bucle import Agente, color
+from .entorno import aislar_temporales, soltar_temporales
 from .grande import INCOMPLETA
 from .llm import ErrorLLM, detectar
 from .prompts import LECCIONES, REGLAS_USUARIO
@@ -78,6 +79,7 @@ def _protocolo(cfg: dict, carpeta: str, canal) -> int:
     except ErrorLLM as e:
         emitir("error", texto=str(e))
         return 2
+    aislar_temporales(agente.h.dir_agente / "tmp", ecosistemas.ENTORNO)
     agente.emitir, agente.responder = emitir, responder
     info = getattr(agente.llm, "info", {})  # ficha del modelo en Bionic/LM Studio
     for aviso in compat.avisos(info, agente.llm.contexto, int(cfg["carga"]["contexto_min"])):
@@ -123,6 +125,7 @@ def _protocolo(cfg: dict, carpeta: str, canal) -> int:
             emitir("fin", orden=tipo, estado=estado, respuesta=respuesta, uso=agente.ctx.uso(), datos=datos)
     finally:
         agente.cerrar()
+        soltar_temporales()
     return 0
 
 
@@ -168,6 +171,7 @@ def main() -> int:
     except ErrorLLM as e:
         print(color(f"[ERROR] {e}", "rojo"))
         return 2
+    aislar_temporales(agente.h.dir_agente / "tmp", ecosistemas.ENTORNO)
 
     print(color(f"Agente Local {__version__}", "negrita") +
           color(f"  modelo={agente.llm.modelo}  contexto={agente.llm.contexto}  servidor={agente.llm.base}", "gris"))
@@ -213,6 +217,7 @@ def main() -> int:
         pass
     finally:
         agente.cerrar()
+        soltar_temporales()
     return 0
 
 

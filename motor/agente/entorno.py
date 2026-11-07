@@ -4,6 +4,9 @@ Aura abierto en desarrollo (cargo run, npm run tauri dev) pasa al motor CARGO_TA
 TAURI_CONFIG... y los heredaban los comandos del proyecto del usuario: cargo compilaba su app en la carpeta de Aura."""
 import os
 import re
+import shutil
+import tempfile
+from pathlib import Path
 
 # Los ponen cargo run y npm run para el programa que lanzan: nunca son del proyecto del usuario.
 DEL_LANZADOR = re.compile(r"(CARGO_(MANIFEST_DIR|MANIFEST_PATH|PKG_\w+|CRATE_NAME|BIN_NAME|PRIMARY_PACKAGE)|"
@@ -13,6 +16,9 @@ DEL_USUARIO = re.compile(r"(CARGO_TARGET_DIR|CARGO_BUILD_TARGET_DIR|RUSTUP_TOOLC
                          r"DEV_\w+))", re.IGNORECASE)
 BIN_NODE = re.compile(r"[\\/]node_modules[\\/]\.bin[\\/]?$", re.IGNORECASE)  # npm run lo pone delante en el PATH
 SISTEMA = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+TEMPORALES = ("TEMP", "TMP", "TMPDIR")
+_EN_USO = None
+_ANTES: list[tuple[dict, dict]] = []  # (entorno, sus TEMP de antes) para soltar_temporales
 
 
 def guardada(nombre: str) -> str | None:
@@ -70,6 +76,36 @@ def limpio(env: dict, guardada=guardada) -> dict:
     for clave in [k for k in env if k.upper() == "PATH"]:
         env[clave] = os.pathsep.join(d for d in env[clave].split(os.pathsep) if not BIN_NODE.search(d))
     return env
+
+
+def aislar_temporales(carpeta: Path, *otros: dict) -> None:
+    """Los comandos del proyecto (tests, la app, pip...) usan su propia carpeta temporal y no el %TEMP% del usuario: un
+    test generado hacía shutil.rmtree(os.path.dirname(tempfile.mkdtemp())) y vaciaba %TEMP%; así solo vacía esta.
+    Queda abierto un archivo dentro mientras viva el motor: Windows no deja borrarlo y la carpeta no desaparece (sin
+    ella, Python tomaría otra vez la del usuario). El motor sigue usando la de siempre (tempfile la guarda aquí)."""
+    global _EN_USO
+    tempfile.gettempdir()
+    shutil.rmtree(carpeta, ignore_errors=True)  # lo que dejó la tarea anterior
+    carpeta.mkdir(parents=True, exist_ok=True)
+    _EN_USO = open(carpeta / "aura_en_uso", "a")  # noqa: SIM115 -- abierto hasta soltar_temporales
+    for env in (os.environ, *otros):
+        _ANTES.append((env, {k: env.get(k) for k in TEMPORALES}))
+        env.update(dict.fromkeys(TEMPORALES, str(carpeta)))
+
+
+def soltar_temporales() -> None:
+    """Deja TEMP como estaba al cerrar el motor (las pruebas llaman a main y modo_json dentro de su proceso)."""
+    global _EN_USO
+    while _ANTES:
+        env, antes = _ANTES.pop()
+        for nombre, valor in antes.items():
+            if valor is None:
+                env.pop(nombre, None)
+            else:
+                env[nombre] = valor
+    if _EN_USO:
+        _EN_USO.close()
+        _EN_USO = None
 
 
 def limpiar_proceso() -> None:

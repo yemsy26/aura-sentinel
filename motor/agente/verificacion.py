@@ -25,10 +25,12 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import ecosistemas
+from .borrados import aviso, peligrosos
 from .idiomas import verificar_idiomas
-from .proyecto import Informe, archivos, cola, correr_texto, normalizar, relativa
+from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, normalizar, relativa
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
+_LEIDOS: dict[Path, tuple[tuple[int, int], list]] = {}  # borrados_fuera: lo hallado en cada .py mientras no cambie
 SONDA_PYGAME = Path(__file__).resolve().parent / "sondas" / "pygame_sonda.py"
 SONDA_TK = Path(__file__).resolve().parent / "sondas" / "tk_sonda.py"
 
@@ -73,6 +75,27 @@ def _resumen_fallo(salida: str, n: int = 18) -> str:
 
 
 # ---------------------------------------------------------------- Python
+def borrados_fuera(raiz: Path, rutas: list[Path] | None = None) -> list[str]:
+    """Cada borrado del código Python fuera de lo suyo (borrados.py), con archivo y línea. Sin rutas, todo el proyecto:
+    ejecutar lo mira antes de cada comando, y solo se vuelve a leer un archivo si cambió."""
+    if rutas is None:
+        rutas = []
+        for carpeta, dirs, nombres in os.walk(raiz):
+            dirs[:] = [d for d in dirs if d not in IGNORAR]
+            rutas += [Path(carpeta) / n for n in nombres if n.endswith(".py")]
+    hallados = []
+    for p in rutas:
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        marca = (st.st_mtime_ns, st.st_size)
+        if p not in _LEIDOS or _LEIDOS[p][0] != marca:
+            _LEIDOS[p] = (marca, peligrosos(p.read_text(encoding="utf-8", errors="replace")))
+        hallados += [aviso(relativa(p, raiz), *h) for h in _LEIDOS[p][1]]
+    return hallados
+
+
 def lint_python(raiz: Path, rutas: list[Path], inf: Informe, rapido: bool = False) -> None:
     ruff = BIN / "ruff.exe"
     if not ruff.exists() or not rutas:
@@ -1139,12 +1162,16 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
             except SyntaxError as e:
                 inf.errores.append(f"{relativa(p, raiz)}:{e.lineno} ERROR DE SINTAXIS: {e.msg}")
         sintaxis_ok = len(inf.errores) == errores_antes
+        peligro = borrados_fuera(raiz, pys)
+        inf.errores += peligro
         lint_python(raiz, pys, inf)
         if base == raiz:
             codigo_muerto(raiz, pys, inf, previos=previos)
         else:  # una subcarpeta: quien usa sus funciones puede estar fuera
             codigo_muerto(raiz, archivos(raiz, ".py"), inf, solo=base, previos=previos)
-        if sintaxis_ok:  # con errores de sintaxis no tiene sentido ejecutar
+        if peligro:
+            inf.avisos.append("No ejecuté los tests ni el programa: borrarían fuera del proyecto. Corrige antes esos borrados.")
+        elif sintaxis_ok:  # con errores de sintaxis no tiene sentido ejecutar
             tests_python(raiz, pys, python, inf)
             ejecutar_python(raiz, pys, python, inf, segundos)
     if htmls or jss:
@@ -1177,6 +1204,7 @@ def chequeo_rapido(raiz: Path, p: Path) -> str:
     inf = Informe()
     suf = p.suffix.lower()
     if suf == ".py":
+        inf.errores += borrados_fuera(raiz, [p])
         lint_python(raiz, [p], inf, rapido=True)
     elif suf in (".js", ".mjs"):
         _node_check(raiz, p, relativa(p, raiz), inf)

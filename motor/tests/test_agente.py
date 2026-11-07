@@ -276,9 +276,12 @@ class TestModoJson(unittest.TestCase):
         with mock.patch.object(cli, "detectar", falso), mock.patch("agente.bucle.cliente.detectar", falso), \
                 mock.patch("agente.bucle.cliente.LLM", LLMGuion), mock.patch("agente.bucle.entorno", lambda: "prueba"), \
                 mock.patch.object(sys, "stdin", entrada), mock.patch.object(sys, "stdout", salida):
+            temp = os.environ.get("TEMP")
             self.assertEqual(cli.modo_json(config.cargar(), str(self.dir)), 0)
             self.assertIs(sys.stdout, salida)  # restaura la salida al terminar
         self.assertIs(sys.stdout, real)
+        self.assertTrue((self.dir / ".agente" / "tmp").is_dir())  # los comandos tuvieron su propia carpeta temporal
+        self.assertEqual(os.environ.get("TEMP"), temp)  # y al cerrar el motor, TEMP vuelve a ser el de antes
         eventos = [json.loads(linea) for linea in salida.getvalue().splitlines()]
         tipos = [e["tipo"] for e in eventos]
         self.assertEqual(tipos[0], "listo")

@@ -17,7 +17,7 @@ De abajo arriba; cada capa usa solo las anteriores.
 | Capa | Módulos | Qué hacen |
 | --- | --- | --- |
 | Base | `config`, `entorno`, `procesos`, `llm`, `metricas`, `android` | Configuración, entorno de los comandos, control de procesos, cliente del modelo, métricas |
-| Contratos y reglas | `esquemas`, `permisos`, `proyecto` | Qué puede pedir el modelo; qué se puede hacer sin preguntar; qué es código, el `Informe` y cómo correr un comando |
+| Contratos y reglas | `esquemas`, `permisos`, `borrados`, `proyecto` | Qué puede pedir el modelo; qué se puede hacer sin preguntar; qué código borra fuera de lo suyo; qué es código, el `Informe` y cómo correr un comando |
 | Modelo | `compat`, `modelo`, `descargar`, `prueba_modelo`, `llamadas` | Fichas de modelos, carga en la VRAM, descargas, prueba de un modelo, lectura de las llamadas que escribe |
 | Conocimiento | `pasajes`, `conocimiento`, `lecciones`, `mapa`, `idiomas`, `complementos`, `matematicas` | Lo investigado, guías, lecciones, mapa del repositorio, idiomas, motores opcionales y cálculo exacto |
 | Comprobación | `app_tauri`, `ecosistemas`, `verificacion`, `revision`, `pantalla` | Control de calidad por lenguaje, revisión independiente, ver la interfaz de verdad |
