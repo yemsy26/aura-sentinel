@@ -5,6 +5,24 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.12.8] — 2026-11-07 (verificar abre la app por el .bat, entra como cada usuario y compara lo que ve cada rol)
+
+- **La app de escritorio se prueba por donde la abre el `.bat`:** en una misión de la 4.12.7, `run.bat` ejecutaba
+  `python -m app`, pero la ventana se abría en `__main__.py` y no en `app.py`: con doble clic no se veía nada. `verificar`
+  eligió `app.py` por el nombre y lo dio por bueno. Ahora prueba el archivo que abre el `.bat` de doble clic, y si ese
+  archivo termina sin abrir ninguna ventana mientras otro sí la abre, es un error.
+- **Cada rol tiene que ver lo suyo:** si el código habla de roles o permisos, la prueba de tkinter entra como hasta 3
+  usuarios distintos y compara lo que ve cada uno (pestañas, botones y opciones de menú activos, y lo que dicen al
+  usarlos). Si todos ven y pueden hacer exactamente lo mismo, es un error. También lo es dejar elegir el rol con botones
+  «Entrar como…» sin pedir contraseña, como hacía otra misión de la 4.12.7. La prueba usa ahora también las opciones de
+  los menús.
+- **Si nadie puede entrar, es un error:** en una misión de prueba de esta versión la app creaba los usuarios solo cuando
+  no existía la base de datos, pero la creaba antes de mirarlo, así que no había ningún usuario. Ahora, si el proyecto da
+  usuarios y contraseñas y la pantalla de entrar los rechaza, `verificar` lo dice. La prueba escribe el usuario en el
+  mismo formulario que la contraseña, no en campos ocultos de otra pantalla.
+- En los 11 sistemas tkinter guardados caza esos fallos y los demás quedan igual. En 2 misiones de prueba no dio ningún
+  error falso.
+
 ## [4.12.7] — 2026-11-06 (la ventana que desaparece al entrar es un error, y verificar no abre nada fuera de la app)
 
 - **Una app que se queda sin ventana a la vista al entrar no pasa `verificar`:** en una misión de la 4.12.6, la prueba de

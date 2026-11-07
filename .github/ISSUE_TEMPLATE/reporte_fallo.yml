@@ -23,7 +23,7 @@ body:
     id: version
     attributes:
       label: Versión de Aura Sentinel
-      placeholder: "4.12.7"
+      placeholder: "4.12.8"
     validations:
       required: true
   - type: input
