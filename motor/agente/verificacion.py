@@ -333,12 +333,13 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
     copia = Path(tempfile.mkdtemp(prefix="agente_web_")) / "p"
     try:
         shutil.copytree(raiz, copia, ignore=shutil.ignore_patterns(*COPIA_FUERA))
-        r = recorrer(copia / entrada.relative_to(raiz), python, accesos)
+        r = recorrer(copia / entrada.relative_to(raiz), python, accesos, abrir_navegador=canal_navegador)
     finally:
         shutil.rmtree(copia.parent, ignore_errors=True)
     if r is None:
         return False
     rel = relativa(entrada, raiz)
+    nav = r["navegador"]
     for p in r["plantillas"][:4]:
         pista = (" En Jinja se escribe {{ '%.2f' % x }} o {{ '{:.2f}'.format(x) }}, no {{ x:.2f }}."
                  if "got ':'" in p["error"] else "")
@@ -351,14 +352,21 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
     if r["sin_entrar"]:
         inf.avisos.append(f"{rel}: no pude entrar en la web con los usuarios y contraseñas que da el proyecto "
                           f"({min(len(accesos), 12)} probados): solo recorrí lo que se ve sin entrar.")
-    elif r["entrar_js"]:
-        inf.avisos.append(f"{rel}: la pantalla de entrar se envía con JavaScript y el recorrido no la usa: solo recorrí "
-                          "lo que se ve sin entrar. Prueba lo de dentro con tests que inicien sesión.")
+    elif r["entrar_js"] and not nav:
+        inf.avisos.append(f"{rel}: la pantalla de entrar se envía con JavaScript y no hay navegador para usarla: solo "
+                          "recorrí lo que se ve sin entrar. Prueba lo de dentro con tests que inicien sesión.")
+    elif nav and nav["sin_entrar"]:
+        inf.avisos.append(f"{rel}: no pude entrar (con el navegador) con los usuarios y contraseñas que da el proyecto: "
+                          "solo vi lo que se ve sin entrar.")
+    if nav and nav["avisos_js"]:
+        inf.avisos.append(f"{rel}: errores de JavaScript en la página: " + " | ".join(nav["avisos_js"][:3]))
     if r["rotos"]:
         inf.avisos.append(f"{rel}: enlaces que dan 404: {', '.join(r['rotos'][:5])}")
     if not r["errores"] and not r["plantillas"]:
-        inf.ok.append(f"{rel}: usé la web de verdad: {r['paginas']} páginas y {r['formularios']} formularios enviados"
-                      + (f" entrando como {r['usuario']}" if r["usuario"] else "") + ", sin errores")
+        hecho = (f"{nav['secciones']} secciones y {nav['formularios']} formularios guardados con el navegador" if nav
+                 else f"{r['paginas']} páginas y {r['formularios']} formularios enviados")
+        inf.ok.append(f"{rel}: usé la web de verdad: {hecho}" + (f" entrando como {r['usuario']}" if r["usuario"] else "")
+                      + ", sin errores")
     return True
 
 

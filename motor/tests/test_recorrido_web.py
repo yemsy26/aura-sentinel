@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente.herramientas import Herramientas
 from agente.recorrido_web import _forma, recorrer
+from agente.verificacion import canal_navegador
 
 WEB = r'''import traceback
 import urllib.parse
@@ -194,6 +195,88 @@ class SegundaVuelta(unittest.TestCase):
         [plantilla] = r["plantillas"]
         self.assertEqual((plantilla["plantilla"], plantilla["linea"]), ("venta.html", 1))
         self.assertIn("got ':'", plantilla["error"])
+        self.assertEqual(r["errores"], [])
+
+
+WEB_JS = r'''import json
+import traceback
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PAGINA = """<!doctype html><html><body>
+<div id="entrar"><input id="email" type="email"><input id="clave" type="password"><button onclick="entrar()">Entrar</button></div>
+<div id="app" style="display:none">
+  <nav><button data-section="productos" onclick="ver('productos')">Productos</button>
+       <button data-section="salir" onclick="location.href='/salir'">Salir</button></nav>
+  <section id="productos" style="display:none"><button onclick="document.getElementById('form').style.display='block'">+ Nuevo</button>
+    <div id="form" style="display:none"><input id="nombre"><input id="precio" type="number" value="0">
+      <button onclick="guardar()">Guardar</button></div></section>
+</div>
+<script>
+async function entrar() {
+  const r = await fetch('/api/login', {method: 'POST', body: JSON.stringify({email: email.value, clave: clave.value})});
+  if (r.ok) { document.getElementById('entrar').style.display = 'none'; document.getElementById('app').style.display = 'block'; }
+}
+function ver(s) { document.getElementById(s).style.display = 'block'; }
+async function guardar() {
+  await fetch('/api/productos', {method: 'POST', body: JSON.stringify({nombre: nombre.value, precio: precio.value})});
+}
+</script></body></html>"""
+
+
+class Web(BaseHTTPRequestHandler):
+    def responder(self, estado, cuerpo, tipo="text/html"):
+        self.send_response(estado)
+        self.send_header("Content-Type", tipo)
+        self.end_headers()
+        self.wfile.write(cuerpo.encode())
+
+    def do_GET(self):
+        self.responder(200, PAGINA) if self.path == "/" else self.responder(404, "no")
+
+    def do_POST(self):
+        datos = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path == "/api/login":
+            ok = datos == {"email": "ana@tienda.com", "clave": "pan123"}
+            return self.responder(200 if ok else 401, "{}", "application/json")
+        try:
+            float(datos["precio"]) / 0  # guardar un producto da 500
+        except Exception:
+            traceback.print_exc()
+            self.responder(500, "{}", "application/json")
+
+
+if __name__ == "__main__":
+    HTTPServer(("0.0.0.0", 5000), Web).serve_forever()
+'''
+
+
+class ConNavegador(unittest.TestCase):
+    """La entrada se envía con JavaScript (campos sin name): lo de dentro se usa con el navegador oculto."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="test_recorrido_"))
+        (self.dir / "app.py").write_text(WEB_JS, encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_entra_abre_la_seccion_y_guarda_el_formulario_que_falla(self):
+        r = recorrer(self.dir / "app.py", sys.executable, [("admin", "admin"), ("ana@tienda.com", "pan123")],
+                     abrir_navegador=canal_navegador)
+        if r["navegador"] is None:
+            self.skipTest("sin navegador")
+        self.assertTrue(r["entrar_js"])
+        self.assertEqual(r["usuario"], "ana@tienda.com")
+        [error] = r["errores"]
+        self.assertEqual((error["que"], error["estado"]), ("guardar el formulario de «Productos» (POST /api/productos)", 500))
+        self.assertIn("nombre=Prueba", error["datos"])
+        self.assertIn("precio=15", error["datos"])  # el value="0" de un precio se cambia por uno de verdad
+        self.assertIn("ZeroDivisionError", error["traza"])
+
+    def test_sin_navegador_solo_avisa(self):
+        r = recorrer(self.dir / "app.py", sys.executable, [("ana@tienda.com", "pan123")])
+        self.assertTrue(r["entrar_js"])
+        self.assertIsNone(r["navegador"])
         self.assertEqual(r["errores"], [])
 
 

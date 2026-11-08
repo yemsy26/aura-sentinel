@@ -291,6 +291,9 @@ class _Recorrido:
                 continue
             pagina = self._leer(texto)
             entrar = next((f for f in pagina.formularios if _es_entrar(f)), None)
+            if (entrar is None and not self.intento_entrar and re.search(r"""type\s*=\s*["']?password""", texto, re.IGNORECASE)
+                    and not any(c["tipo"] == "password" and c.get("name") for f in pagina.formularios for c in f["campos"])):
+                self.entrar_js = True  # una clave fuera de todo formulario con name: la envía JavaScript
             if entrar is not None and not (self.intento_entrar or self.entrar_js) and self.accesos:
                 self.entrar(self.dentro(final, final) or ruta, entrar)
                 vistas.discard(ruta)
@@ -330,7 +333,156 @@ class _Recorrido:
         return quedan
 
 
-def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: dict | None = None) -> dict | None:
+# Webs que entran con JavaScript (fetch, campos sin name): se usan con un navegador oculto. Cada elemento visible que
+# interesa se marca con data-aura-i para poder pulsarlo o rellenarlo después.
+LISTAR = r"""(tipo) => {
+  const vis = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
+  let n = Number(document.body.dataset.auraN || 0);
+  const marca = e => (e.dataset.auraI = e.dataset.auraI || String(++n));
+  const texto = e => (e.innerText || e.value || e.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+  let r;
+  if (tipo === 'menu') {
+    r = [...document.querySelectorAll('nav a, nav button, aside a, aside button, .sidebar a, .sidebar button, .nav-link, ' +
+          '[data-section], [data-page], [data-view], [data-tab], [role=tab]')].filter(vis).map(e => ({i: marca(e), texto: texto(e)}));
+  } else if (tipo === 'botones') {
+    r = [...document.querySelectorAll('button, a.btn, input[type=submit], input[type=button]')].filter(vis)
+          .map(e => ({i: marca(e), texto: texto(e), submit: e.type === 'submit'}));
+  } else {
+    r = [...document.querySelectorAll('input, select, textarea')].filter(vis)
+          .filter(e => !['hidden', 'submit', 'button', 'image', 'reset', 'file', 'search'].includes(e.type))
+          .map(e => ({i: marca(e), tipo: e.tagName === 'SELECT' ? 'select' : e.tagName === 'TEXTAREA' ? 'textarea' : (e.type || 'text'),
+                      name: e.name || e.id || e.placeholder || '', value: e.value || '', min: e.min || '', max: e.max || '',
+                      opciones: e.tagName === 'SELECT' ? [...e.options].map(o => ({valor: o.value, texto: o.text, desactivada: o.disabled})) : []}));
+  }
+  document.body.dataset.auraN = String(n);
+  return r;
+}"""
+BOTON_ENTRAR = re.compile(r"(?i)entrar|ingresar|acceder|iniciar|login|log in|sign in|continuar")
+ABRIR_FORM = re.compile(r"(?i)^\W*\+|nuev[oa]|crear|agregar|añadir|registrar")
+GUARDAR = re.compile(r"(?i)guardar|crear|registrar|finalizar|aceptar|agregar|añadir|enviar|confirmar|grabar|vender|cobrar")
+BUSCADOR = re.compile(r"(?i)buscar|search|filtr")
+
+
+def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, limite: float) -> dict | None:
+    """Entra, pulsa cada sección del menú, rellena y guarda el formulario de «Nuevo» de cada una, y da otra vuelta por
+    las secciones. Errores: respuestas 500 del servidor (con su traza). None si no hay navegador."""
+    from playwright.sync_api import sync_playwright
+
+    r = {"errores": [], "avisos_js": [], "usuario": None, "sin_entrar": False, "secciones": 0, "formularios": 0}
+    hoy, malas, js, desde = date.today().isoformat(), [], [], [log.stat().st_size]
+    with sync_playwright() as p:
+        nav = abrir(p)
+        if nav is None:
+            return None
+        try:
+            pag = nav.new_context(accept_downloads=False, viewport={"width": 1280, "height": 900}).new_page()
+            pag.on("dialog", lambda d: d.dismiss())  # confirm() -> Cancelar: nunca confirma un borrado
+            pag.on("response", lambda resp: malas.append((resp.request.method, resp.url, resp.status))
+                   if resp.status >= 500 else None)
+            pag.on("pageerror", lambda e: js.append(str(e)[:160]))
+
+            def esperar():
+                try:
+                    pag.wait_for_load_state("networkidle", timeout=4000)
+                except Exception:
+                    pass
+                pag.wait_for_timeout(200)
+
+            def mirar(que: str, datos: str = "") -> None:
+                with open(log, "rb") as f:
+                    f.seek(desde[0])
+                    traza = _traza(f.read().decode("utf-8", "replace"))
+                desde[0] = log.stat().st_size
+                for metodo, url, estado in malas:
+                    error = {"que": f"{que} ({metodo} {url[len(base) - 1:] if url.startswith(base) else url})",
+                             "estado": estado, "traza": traza, "datos": datos}
+                    if not any(e["que"] == error["que"] and e["traza"] == traza for e in r["errores"]):
+                        r["errores"].append(error)
+                malas.clear()
+                r["avisos_js"] += [e for e in js if e not in r["avisos_js"]]
+                js.clear()
+
+            def clic(i: str) -> bool:
+                try:
+                    pag.locator(f"[data-aura-i='{i}']").first.click(timeout=3000)
+                    return True
+                except Exception:
+                    return False
+
+            def visible_clave() -> bool:
+                return pag.locator("input[type=password]:visible").count() > 0
+
+            pag.goto(base, wait_until="domcontentloaded", timeout=15000)
+            esperar()
+            mirar("abrir /")
+            if visible_clave():
+                for usuario, clave in accesos[:12]:
+                    campos = pag.evaluate(LISTAR, "campos")
+                    quien = next((c for c in campos if c["tipo"] in ("text", "email")), None)
+                    secreto = next((c for c in campos if c["tipo"] == "password"), None)
+                    if not (quien and secreto) or time.time() > limite:
+                        break
+                    pag.locator(f"[data-aura-i='{quien['i']}']").fill(usuario)
+                    pag.locator(f"[data-aura-i='{secreto['i']}']").fill(clave)
+                    botones = pag.evaluate(LISTAR, "botones")
+                    boton = (next((b for b in botones if BOTON_ENTRAR.search(b["texto"])), None)
+                             or next((b for b in botones if b["submit"]), None))
+                    if not (boton and clic(boton["i"])):
+                        pag.locator(f"[data-aura-i='{secreto['i']}']").press("Enter")
+                    esperar()
+                    mirar(f"entrar como {usuario}")
+                    if not visible_clave():
+                        r["usuario"] = usuario
+                        break
+                r["sin_entrar"] = r["usuario"] is None
+            hechas = set()
+            for _ in range(2):  # la segunda vuelta ve las secciones ya con los datos creados
+                textos = list(dict.fromkeys(m["texto"] for m in pag.evaluate(LISTAR, "menu")
+                                            if m["texto"] and not NO_TOCAR.search(m["texto"])))[:15]
+                for texto in textos:
+                    menu = next((m for m in pag.evaluate(LISTAR, "menu") if m["texto"] == texto), None)
+                    if time.time() > limite or not menu or not clic(menu["i"]):
+                        continue
+                    esperar()
+                    r["secciones"] += 1
+                    mirar(f"abrir «{texto}»")
+                    if texto in hechas:
+                        continue
+                    hechas.add(texto)
+                    nuevo = next((b for b in pag.evaluate(LISTAR, "botones")
+                                  if ABRIR_FORM.search(b["texto"]) and not NO_TOCAR.search(b["texto"])), None)
+                    if nuevo and clic(nuevo["i"]):
+                        esperar()
+                    datos = []
+                    for c in pag.evaluate(LISTAR, "campos"):
+                        valor = None if BUSCADOR.search(c["name"]) else _valor(c, hoy)
+                        if valor is None:
+                            continue
+                        campo = pag.locator(f"[data-aura-i='{c['i']}']")
+                        try:
+                            if c["tipo"] == "select":
+                                campo.select_option(value=valor, timeout=2000)
+                            elif c["tipo"] in ("checkbox", "radio"):
+                                campo.check(timeout=2000)
+                            else:
+                                campo.fill(valor, timeout=2000)
+                            datos.append(f"{c['name']}={valor}")
+                        except Exception:
+                            continue
+                    guardar = [b for b in pag.evaluate(LISTAR, "botones")
+                               if GUARDAR.search(b["texto"]) and not NO_TOCAR.search(b["texto"])]
+                    if datos and guardar and clic(guardar[-1]["i"]):  # el del formulario, que va detrás del de abrirlo
+                        esperar()
+                        r["formularios"] += 1
+                        mirar(f"guardar el formulario de «{texto}»", ", ".join(datos[:8]))
+                    pag.keyboard.press("Escape")
+        finally:
+            nav.close()
+    return r
+
+
+def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: dict | None = None,
+             abrir_navegador=None) -> dict | None:
     """Arranca entrada (en una copia del proyecto que el llamador borra después) y la recorre. None si no llegó a
     escuchar (no es un servidor, falta algo o tarda): entonces se prueba como un programa cualquiera."""
     puerto = _libre()
@@ -352,6 +504,12 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
             return None
         r = _Recorrido(f"http://127.0.0.1:{puerto}/", log, accesos)
         r.recorrer(time.time() + MAX_SEGUNDOS)
+        navegador = None
+        if r.entrar_js and abrir_navegador is not None:  # lo de dentro solo se ve con un navegador
+            navegador = _con_navegador(r.base, log, accesos, abrir_navegador, time.time() + MAX_SEGUNDOS)
+            if navegador:
+                r.errores += [e for e in navegador.pop("errores") if e not in r.errores]
+                r.usuario = navegador["usuario"]
         texto = log.read_text(encoding="utf-8", errors="replace")
         plantillas = [json.loads(m) for m in re.findall(r"^WEB_PLANTILLA (\{.*\})\s*$", texto, re.MULTILINE)]
         if plantillas:  # el 500 de una página por esa plantilla ya va en su error de plantilla
@@ -359,7 +517,7 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                          and "TemplateAssertionError" not in e["traza"]]
         return {"errores": r.errores, "plantillas": plantillas, "rotos": r.rotos, "raros": r.raros,
                 "enviados": r.enviados, "paginas": r.paginas, "formularios": r.formularios, "usuario": r.usuario,
-                "sin_entrar": r.intento_entrar and not r.usuario, "entrar_js": r.entrar_js}
+                "sin_entrar": r.intento_entrar and not r.usuario, "entrar_js": r.entrar_js, "navegador": navegador}
     finally:
         procesos.detener(proc, trabajo)
         try:
