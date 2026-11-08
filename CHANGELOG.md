@@ -5,6 +5,28 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.0] — 2026-11-08 (verificar usa la web del proyecto de verdad)
+
+- **Las webs se prueban usándolas, no solo arrancándolas:** en una misión de negocio, la web daba error 500 al
+  registrar una venta. Sus tests pasaban, la revisión la aprobó y `verificar` solo comprobaba que el servidor
+  arrancaba. Ahora, en las webs de Python (Flask, FastAPI, http.server), `verificar`:
+  - arranca la web sobre una copia del proyecto, en un puerto libre y sin abrir el navegador;
+  - entra con los usuarios y contraseñas que da el proyecto;
+  - abre sus páginas y envía cada formulario con datos válidos (precios, stock, fechas, la primera opción de cada
+    lista), y después vuelve a pasar por las páginas, ya con los datos creados;
+  - da como error cada página o formulario que responde 500 o con una traza, o que va a una ruta que no existe, con
+    la línea del proyecto donde falla;
+  - con Flask, comprueba al arrancar que todas las plantillas del proyecto compilan, también las de páginas a las que
+    el recorrido no llega.
+  No pulsa salir, borrar ni cancelar.
+- Las contraseñas que se pasan sin nombre a funciones como `crear_usuario("Administrador", "admin", "admin123")`
+  también se usan para entrar.
+- Medido: en 49 webs guardadas no da ningún error falso, tarda 1,3 s de mediana y encuentra fallos reales (500 o
+  plantillas que no compilan) en 14 de ellas, entre ellas las 4 entregas de negocio de la versión anterior. En 4 misiones de negocio con Qwen3.6, el agente
+  corrigió durante la misión 7 errores reales que le dio el recorrido; las 4 terminan, y 2 de las 4 entregas son
+  usables a mano, frente a ninguna de las 4 de referencia.
+- Las webs que entran con JavaScript (`fetch`) todavía no se recorren por dentro: `verificar` lo avisa.
+
 ## [4.12.9] — 2026-11-07 (el código que escribe el agente ya no puede borrar fuera del proyecto)
 
 - **Un test generado vació la carpeta temporal del usuario:** en una misión de prueba, el modelo escribió un test que en
