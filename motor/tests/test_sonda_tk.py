@@ -330,6 +330,19 @@ class EntradaBat(unittest.TestCase):
             r = entrada_bat(raiz)
             self.assertEqual(r and (r[0].name, r[1].relative_to(raiz).as_posix()), esperado and ("run.bat", esperado), texto)
 
+    def test_prepara_datos_y_despues_abre_la_app(self):
+        # Un run.bat hacía «python seed.py» y luego «python app.py»: se probaba seed.py y la web nunca se usó.
+        raiz = Path(tempfile.mkdtemp(prefix="agente_entrada_bat_"))
+        self.addCleanup(shutil.rmtree, raiz, ignore_errors=True)
+        (raiz / "seed.py").write_text("import sqlite3\nprint('datos')\n", encoding="utf-8")
+        (raiz / "app.py").write_text("from flask import Flask\napp = Flask(__name__)\napp.run()\n", encoding="utf-8")
+        (raiz / "informe.py").write_text("print('fin')\n", encoding="utf-8")
+        for texto in ("%PY% seed.py\r\n%PY% app.py", "%PY% seed.py\r\n%PY% app.py\r\n%PY% informe.py"):
+            (raiz / "run.bat").write_text(texto + "\r\n", encoding="utf-8")
+            self.assertEqual(entrada_bat(raiz)[1].name, "app.py", texto)
+        (raiz / "run.bat").write_text("%PY% seed.py\r\n%PY% informe.py\r\n", encoding="utf-8")
+        self.assertEqual(entrada_bat(raiz)[1].name, "informe.py")  # ninguno arranca nada: el último
+
 
 if __name__ == "__main__":
     unittest.main()

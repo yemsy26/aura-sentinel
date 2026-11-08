@@ -412,11 +412,18 @@ OBJETIVO_PY = re.compile(r'(?i)(?:\b(?:python[w3]?|pyw?)(?:\.exe)?(?:\s+-3(?:\.\
                          r'(?:-m\s+([\w.]+)|"([^"]+\.pyw?)"|([^\s"&|<>]+\.pyw?)\b|(\.)(?=[\s"]|$))')
 
 
+# Lo que deja la app abierta: un servidor o una ventana. Un run.bat hacía «python seed.py» y luego «python app.py»;
+# verificar probaba seed.py (siembra datos y termina) y la web, con el login roto, nunca se usó.
+ARRANCA = re.compile(r"\bFlask\s*\(|\bFastAPI\s*\(|\.run\s*\(|uvicorn\.run|serve_forever|mainloop\s*\(|\.exec_?\s*\(")
+
+
 def entrada_bat(raiz: Path) -> tuple[Path, Path] | None:
-    """(.bat, .py que abre) para el .bat de doble clic: python app.py, "%PY%" -m app, python . (su __main__.py)."""
+    """(.bat, .py que abre) para el .bat de doble clic: python app.py, "%PY%" -m app, python . (su __main__.py). Si el
+    .bat lanza varios (preparar datos y después la app), el que arranca algo; si no se distingue, el último."""
     lotes = sorted((b for b in raiz.glob("*.bat") if not NO_ABRE.match(b.stem)),
                    key=lambda b: (not re.match(r"(?i)(run|abrir|iniciar|ejecutar|start|app|main)", b.stem), b.name.lower()))
     for b in lotes:
+        encontrados: list[Path] = []
         for linea in b.read_text(encoding="utf-8", errors="replace").splitlines():
             if re.match(r"(?i)\s*@?(rem\b|::|echo\b)", linea):
                 continue
@@ -429,9 +436,11 @@ def entrada_bat(raiz: Path) -> tuple[Path, Path] | None:
                     candidatos = [raiz / "__main__.py"]
                 else:
                     candidatos = [raiz / (citado or suelto).replace("%~dp0", "")]
-                for c in candidatos:
-                    if "%" not in str(c) and c.is_file() and not c.name.startswith("test"):
-                        return b, c
+                encontrados += [c for c in candidatos if "%" not in str(c) and c.is_file() and not c.name.startswith("test")
+                                and c not in encontrados][:1]
+        if encontrados:
+            arrancan = [c for c in encontrados if ARRANCA.search(c.read_text(encoding="utf-8", errors="replace"))]
+            return b, (arrancan or encontrados)[-1]
     return None
 
 
@@ -1238,20 +1247,49 @@ def claves_del_proyecto(raiz: Path) -> list[str]:
 
 
 LITERAL = re.compile(r"""[`'"]([A-Za-z][\w.@-]{2,30})[`'"]""")
+# «usuario: admin / contraseña: admin123», «Usuario=`admin`», «login es admin»: el valor va tras la etiqueta, con o sin
+# comillas. Un comentario así daba admin/admin123 y, sin comillas, no se emparejaba: la pareja caía fuera de las primeras
+# que se prueban y «nadie puede entrar» saltaba en falso.
+# Tras «:» (también «:** `x`» de un README) o tras «=» con comillas: «password = request.form.get(...)» es código.
+_TRAS_ETIQUETA = r"\s*(?::\s*\**\s*[`'\"]?|=\s*[`'\"]|\s+es\s+[`'\"]?)"
+USUARIO_ETIQ = re.compile(r"(?i)\b(?:usuario|username|user|login)\b" + _TRAS_ETIQUETA + r"([A-Za-z][\w.@-]{1,38})(?!\()")
+CLAVE_ETIQ = re.compile(r"(?i)\b(?:contrase[ñn]a|clave|password|passwd|pwd)\b" + _TRAS_ETIQUETA +
+                        r"([^\s`'\"<>*()\[\]{},;|]{3,39})(?!\()")
+NO_ES_VALOR = {"str", "int", "bool", "float", "bytes", "dict", "list", "any", "none", "null", "true", "false", "string",
+               "text", "optional", "self", "required"}  # def entrar(usuario: str, password: str)
+
+
+def _valor_etiquetado(v: str) -> bool:
+    """Un usuario o una contraseña de verdad, no un tipo, un campo ni un atributo (request.form)."""
+    return (not NO_ES_CLAVE.search(v) and v.lower() not in CAMPOS and v.lower() not in NO_ES_VALOR
+            and not (re.search(r"[A-Za-z_]\.[A-Za-z_]", v) and "@" not in v))
 
 
 def pares_del_proyecto(raiz: Path, claves: list[str], usuarios: list[str]) -> list[tuple[str, str]]:
-    """(usuario, contraseña) que el proyecto da juntos: en la misma línea o en la de al lado."""
+    """(usuario, contraseña) que el proyecto da juntos: en la misma línea o en la de al lado. Primero las parejas con
+    etiqueta («usuario: X ... contraseña: Y»), que son las más fiables."""
+    etiquetados: dict[tuple[str, str], None] = {}
     pares: dict[tuple[str, str], None] = {}
     candidatos = sorted(usuarios, key=lambda u: u.lower() in CAMPOS)  # {"usuario": "duena", ...}: primero «duena»
     for texto in _textos_proyecto(raiz):
         lineas = texto.splitlines()
         for i, linea in enumerate(lineas):
+            zona2 = " ".join(lineas[max(0, i - 1):i + 2])
+            for zona in (linea, zona2):  # etiquetados: usuario y contraseña con su etiqueta, en la zona
+                us = [u.rstrip(".") for u in USUARIO_ETIQ.findall(zona)]
+                cs = [c.rstrip(".") for c in CLAVE_ETIQ.findall(zona)]
+                us = [u for u in us if len(u) >= 2 and _valor_etiquetado(u)]
+                cs = [c for c in cs if len(c) >= 3 and _valor_etiquetado(c)]
+                etiquetados.update(dict.fromkeys((u, c) for u in us for c in cs if u != c))
             for c in [c for c in claves if re.search(rf"[`'\"]{re.escape(c)}[`'\"]", linea)]:
-                for zona in (linea, " ".join(lineas[max(0, i - 1):i + 2])):  # primero los de la misma línea
+                for zona in (linea, zona2):  # primero los de la misma línea
                     pares.update(dict.fromkeys((u, c) for u in candidatos
                                                if u != c and re.search(rf"[`'\"]{re.escape(u)}[`'\"]", zona)))
-    return list(pares)
+    # admin/admin123 es lo que dan casi todas las webs de negocio: detrás de las parejas que da el proyecto (adivinada,
+    # no debe tapar ni a «duena»/«duena2026» ni salir antes en los mensajes), pero antes de todas las combinaciones.
+    por_defecto = ([("admin", c) for c in claves if re.search(r"\d", c) and c != "admin"][:2]
+                   if "admin" in usuarios else [])
+    return list(dict.fromkeys([*etiquetados, *pares, *por_defecto]))
 
 
 CAMPOS = {"usuario", "usuarios", "user", "users", "username", "nombre", "password", "contraseña", "clave", "rol", "role",

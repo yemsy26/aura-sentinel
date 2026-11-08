@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente.herramientas import Herramientas
 from agente.recorrido_web import _forma, recorrer
-from agente.verificacion import canal_navegador
+from agente.verificacion import canal_navegador, claves_del_proyecto, pares_del_proyecto, usuarios_del_proyecto
 
 WEB = r'''import traceback
 import urllib.parse
@@ -401,8 +401,44 @@ class EnVerificar(unittest.TestCase):
         (self.dir / "app.py").write_text(WEB.replace('if datos == {"usuario": "ana", "clave": "pan123"}:',
                                                      'if datos["no_existe"]:'), encoding="utf-8")
         r = Herramientas(self.dir).verificar_cmd()
-        self.assertIn("app.py: al entrar como ana", r)
+        self.assertIn("app.py: al entrar como ", r)
+        self.assertIn("KeyError", r)
         self.assertNotIn("nadie puede entrar", r)
+
+
+class Credenciales(unittest.TestCase):
+    """Una entrega daba admin/admin123 en un comentario sin comillas: la pareja quedaba la 15.ª de 96 y solo se prueban
+    12, así que «nadie puede entrar» saltó en falso y el agente gastó la misión intentando arreglar una web que iba bien."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="test_credenciales_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def accesos(self) -> list[tuple[str, str]]:
+        claves = claves_del_proyecto(self.dir)
+        usuarios = usuarios_del_proyecto(self.dir, claves)
+        return list(dict.fromkeys(pares_del_proyecto(self.dir, claves, usuarios) + [(u, c) for c in claves for u in usuarios]))
+
+    def test_pareja_en_un_comentario_sin_comillas_va_primero(self):
+        (self.dir / "app.py").write_text(
+            'def entrar(usuario: str, password: str):\n'
+            '    password = request.form.get("password")\n'
+            '    user = buscar_usuario(usuario)\n'
+            '    return user\n\n'
+            'def crear_admin():\n'
+            '    # Crear admin por defecto (usuario: admin / contraseña: admin123)\n'
+            '    clave = hashlib.sha256("admin123".encode()).hexdigest()\n'
+            '    datos = {"nombre": "Administrador", "rol": "admin", "empleado": "Demo", "activo": 1}\n', encoding="utf-8")
+        acc = self.accesos()
+        self.assertEqual(acc[0], ("admin", "admin123"))
+        self.assertFalse([p for p in acc if "request.form.get" in p or "str" in p])  # el código no son credenciales
+
+    def test_readme_con_etiquetas_y_login_por_email(self):
+        (self.dir / "README.md").write_text("- **Usuario:** `dueña@tienda.com`\n- **Contraseña:** `tienda2026`\n",
+                                            encoding="utf-8")
+        self.assertEqual(self.accesos()[0], ("dueña@tienda.com", "tienda2026"))
 
 
 if __name__ == "__main__":
