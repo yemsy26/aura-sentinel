@@ -26,6 +26,10 @@ ARRANQUE = Path(__file__).resolve().parent / "sondas" / "web_arranque.py"
 # Ni se siguen ni se envían: cerrarían la sesión o borrarían los datos con los que se prueba lo demás.
 NO_TOCAR = re.compile(r"(?i)log-?out|salir|cerrar[-_ ]?sesi|sign[-_ ]?out|eliminar|borrar|delete|remove|quitar|vaciar|"
                       r"reset|restablecer|desactivar|anular|cancelar")
+# Lo que abre el formulario de dar de alta algo.
+ABRIR_FORM = re.compile(r"(?i)^\W*\+|nuev[oa]|crear|agregar|añadir|registrar")
+# Una web con registro se puede usar sin los usuarios del proyecto: la primera cuenta se crea registrándose.
+REGISTRO = re.compile(r"(?i)reg[ií]str(?:ar)?(?:se|te)\b|crear (?:una )?cuenta|sign[ -]?up|/regist(?:er|ro)\b")
 ESTATICO = re.compile(r"(?i)\.(?:css|js|mjs|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|map|pdf|xlsx?|csv|zip|txt)(?:\?|$)")
 NUMERO = re.compile(r"(?i)precio|importe|cantidad|stock|monto|total|price|qty|amount|unidades|coste|costo|minimo|"
                     r"m[ií]nimo|edad|num|n[uú]mero|duraci|valor|saldo|pago|descuento|porcentaje|iva")
@@ -37,21 +41,22 @@ POR_NOMBRE = ((r"descuento|discount|iva|impuesto|tax|porcentaje|recargo", 0.0), 
               (r"m[ií]nimo|min", 5.0), (r"stock|existencia|inventario", 20.0),
               (r"venta|pvp|sale|precio|price|importe|monto|amount|total|pago", 15.0))
 CERO_VALE = re.compile(POR_NOMBRE[0][0])  # en un descuento, 0 es lo normal
-MAX_PAGINAS, MAX_FORMULARIOS, MAX_SEGUNDOS = 60, 25, 75
+MAX_PAGINAS, MAX_FORMULARIOS, MAX_SEGUNDOS, MAX_SEGUNDOS_REINTENTO = 60, 25, 75, 15
 
 
 class _Pagina(html.parser.HTMLParser):
-    """Enlaces y formularios (con sus campos y las opciones de cada select) de una página."""
+    """Enlaces (y su texto) y formularios (con sus campos y las opciones de cada select) de una página."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.enlaces, self.formularios = [], []
-        self._form = self._select = self._opcion = None
+        self.enlaces, self.formularios, self.textos = [], [], {}
+        self._form = self._select = self._opcion = self._enlace = None
 
     def handle_starttag(self, tag, attrs):
         a = {k: v or "" for k, v in attrs}
         if tag == "a" and a.get("href"):
             self.enlaces.append(a["href"])
+            self._enlace = [a["href"], a.get("title", "")]
         elif tag == "form":
             self._form = {"accion": a.get("action", ""), "metodo": (a.get("method") or "get").lower(), "campos": []}
             self.formularios.append(self._form)
@@ -70,9 +75,14 @@ class _Pagina(html.parser.HTMLParser):
     def handle_data(self, data):
         if self._opcion is not None:
             self._opcion["texto"] += data
+        if self._enlace is not None:
+            self._enlace[1] += data
 
     def handle_endtag(self, tag):
-        if tag == "form":
+        if tag == "a" and self._enlace is not None:
+            self.textos.setdefault(self._enlace[0], " ".join(self._enlace[1].split())[:60])
+            self._enlace = None
+        elif tag == "form":
             self._form = None
         elif tag == "select":
             self._select = None
@@ -183,7 +193,10 @@ class _Recorrido:
         self.errores, self.rotos, self.raros, self.enviados = [], [], [], []
         self.paginas = self.formularios = 0
         self.usuario: str | None = None
-        self.intento_entrar = self.entrar_js = False
+        self.intento_entrar = self.entrar_js = self.entrar_fallo = self.registro = self.entrar_get = False
+        # «+ Nuevo producto» llevaba a una ruta que, sin formulario, volvía a la lista: nadie podía dar de alta nada.
+        self.abre: dict[str, tuple[str, str]] = {}  # destino -> (texto del enlace, página donde está)
+        self.sin_formulario: dict[str, list[bool]] = {}  # destino -> en cada vuelta, ¿volvió sin formulario?
 
     def pedir(self, ruta: str, datos: list | None = None, metodo: str = "get") -> tuple[int, str, str]:
         """(estado, url final, html). Cada petición deja su salida del servidor en self.salida."""
@@ -223,12 +236,13 @@ class _Recorrido:
         if not any(c["tipo"] == "password" and c.get("name") for c in form["campos"]):
             self.entrar_js = True  # sin name, la envía JavaScript (fetch): este recorrido no la puede usar
             return
-        self.intento_entrar = True
+        self.intento_entrar, self.entrar_get = True, form["metodo"] == "get"
         accion = self.dentro(form["accion"] or ruta, urllib.parse.urljoin(self.base, ruta)) or ruta
         for usuario, clave in self.accesos[:12]:
             datos = _rellenar(form, self.hoy, usuario, clave) or []
             estado, _, texto = self.pedir(accion, datos, form["metodo"])
             if not self.mirar(f"entrar como {usuario}", estado, texto):
+                self.entrar_fallo = True  # ese error ya lo dice todo
                 return
             if not any(_es_entrar(f) for f in self._leer(texto).formularios):
                 self.usuario = usuario
@@ -290,17 +304,26 @@ class _Recorrido:
             if not self.mirar(f"abrir {ruta}", estado, texto):
                 continue
             pagina = self._leer(texto)
+            if ruta in self.abre:
+                aqui = (self.dentro(final, final) or "").split("?")[0]
+                self.sin_formulario.setdefault(ruta, []).append(
+                    aqui == self.abre[ruta][1] and not any(f["metodo"] == "post" for f in pagina.formularios))
             entrar = next((f for f in pagina.formularios if _es_entrar(f)), None)
             if (entrar is None and not self.intento_entrar and re.search(r"""type\s*=\s*["']?password""", texto, re.IGNORECASE)
                     and not any(c["tipo"] == "password" and c.get("name") for f in pagina.formularios for c in f["campos"])):
                 self.entrar_js = True  # una clave fuera de todo formulario con name: la envía JavaScript
             if entrar is not None and not (self.intento_entrar or self.entrar_js) and self.accesos:
+                self.registro = any(REGISTRO.search(f"{h} {pagina.textos.get(h, '')}") for h in pagina.enlaces)
                 self.entrar(self.dentro(final, final) or ruta, entrar)
                 vistas.discard(ruta)
                 cola.appendleft(ruta)
                 continue
+            aqui = (self.dentro(final, final) or "").split("?")[0]
             for href in pagina.enlaces:
-                if (nueva := self.dentro(href, final)) and nueva not in vistas:
+                nueva = self.dentro(href, final)
+                if nueva and (self.usuario or not self.intento_entrar) and ABRIR_FORM.search(pagina.textos.get(href, "")) and nueva.split("?")[0] != aqui:
+                    self.abre.setdefault(nueva, (pagina.textos[href], aqui))
+                if nueva and nueva not in vistas:
                     cola.append(nueva)
             if self.enviar_formularios(ruta, final, pagina, limite):
                 pendientes.append(ruta)
@@ -357,8 +380,19 @@ LISTAR = r"""(tipo) => {
   document.body.dataset.auraN = String(n);
   return r;
 }"""
+# [¿cargó otra página?, texto que se ve fuera del menú]. Lo oculto no cuenta: en una web de una sola página, cada sección
+# es un bloque que se enseña o se oculta. Una entrega llamaba desde el menú a secciones que no existían en la página: al
+# pulsar «Productos» no cambiaba nada.
+PANTALLA = r"""() => {
+  const zona = document.querySelector('main, [role=main]') || document.body;
+  let t = zona.innerText || '';
+  if (zona === document.body)
+    for (const e of document.querySelectorAll('nav, aside, header, .sidebar')) if (e.innerText) t = t.split(e.innerText).join('');
+  const otra = window.__auraMarca !== 1;
+  window.__auraMarca = 1;
+  return [otra, t.replace(/\s+/g, ' ').trim().slice(0, 4000)];
+}"""
 BOTON_ENTRAR = re.compile(r"(?i)entrar|ingresar|acceder|iniciar|login|log in|sign in|continuar")
-ABRIR_FORM = re.compile(r"(?i)^\W*\+|nuev[oa]|crear|agregar|añadir|registrar")
 GUARDAR = re.compile(r"(?i)guardar|crear|registrar|finalizar|aceptar|agregar|añadir|enviar|confirmar|grabar|vender|cobrar")
 BUSCADOR = re.compile(r"(?i)buscar|search|filtr")
 
@@ -368,8 +402,10 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
     las secciones. Errores: respuestas 500 del servidor (con su traza). None si no hay navegador."""
     from playwright.sync_api import sync_playwright
 
-    r = {"errores": [], "avisos_js": [], "usuario": None, "sin_entrar": False, "secciones": 0, "formularios": 0}
-    hoy, malas, js, desde = date.today().isoformat(), [], [], [log.stat().st_size]
+    r = {"errores": [], "avisos_js": [], "usuario": None, "sin_entrar": False, "secciones": 0, "formularios": 0,
+         "menu_quieto": [], "nuevo_sin_campos": [], "registro": False, "otro_puerto": None, "clave_a_la_vista": False}
+    hoy, malas, js, desde, fallidas = date.today().isoformat(), [], [], [log.stat().st_size], []
+    puerto = urllib.parse.urlsplit(base).port
     with sync_playwright() as p:
         nav = abrir(p)
         if nav is None:
@@ -380,6 +416,7 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
             pag.on("response", lambda resp: malas.append((resp.request.method, resp.url, resp.status))
                    if resp.status >= 500 else None)
             pag.on("pageerror", lambda e: js.append(str(e)[:160]))
+            pag.on("requestfailed", lambda req: fallidas.append(req.url))
 
             def esperar():
                 try:
@@ -412,10 +449,18 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
             def visible_clave() -> bool:
                 return pag.locator("input[type=password]:visible").count() > 0
 
+            def pantalla() -> list:
+                try:
+                    return pag.evaluate(PANTALLA)
+                except Exception:  # cargando otra página
+                    return [True, ""]
+
             pag.goto(base, wait_until="domcontentloaded", timeout=15000)
             esperar()
             mirar("abrir /")
             if visible_clave():
+                r["registro"] = bool(REGISTRO.search(pag.content()))
+                menu_antes = len(pag.evaluate(LISTAR, "menu"))
                 for usuario, clave in accesos[:12]:
                     campos = pag.evaluate(LISTAR, "campos")
                     quien = next((c for c in campos if c["tipo"] in ("text", "email")), None)
@@ -430,20 +475,34 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
                     if not (boton and clic(boton["i"])):
                         pag.locator(f"[data-aura-i='{secreto['i']}']").press("Enter")
                     esperar()
+                    errores = len(r["errores"])
                     mirar(f"entrar como {usuario}")
-                    if not visible_clave():
-                        r["usuario"] = usuario
+                    if len(r["errores"]) > errores:
+                        break  # entrar da un 500: ese error ya lo dice todo
+                    # Una entrega dejaba a la vista la pantalla de entrar (su CSS ganaba a .hidden) y la app salía debajo.
+                    debajo = visible_clave() and len(pag.evaluate(LISTAR, "menu")) >= menu_antes + 3
+                    if not visible_clave() or debajo:
+                        r["usuario"], r["clave_a_la_vista"] = usuario, debajo
                         break
-                r["sin_entrar"] = r["usuario"] is None
-            hechas = set()
-            for _ in range(2):  # la segunda vuelta ve las secciones ya con los datos creados
+                # La página llamaba a la API en http://127.0.0.1:5000 fijo y aquí la web escucha en otro puerto.
+                r["otro_puerto"] = next((u for u in fallidas if re.match(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0)", u)
+                                         and urllib.parse.urlsplit(u).port != puerto), None)
+                r["sin_entrar"] = r["usuario"] is None and not r["errores"]
+            hechas, pulsadas, quietas = set(), 0, []
+            for vuelta in range(2):  # la segunda vuelta ve las secciones ya con los datos creados
                 textos = list(dict.fromkeys(m["texto"] for m in pag.evaluate(LISTAR, "menu")
                                             if m["texto"] and not NO_TOCAR.search(m["texto"])))[:15]
                 for texto in textos:
                     menu = next((m for m in pag.evaluate(LISTAR, "menu") if m["texto"] == texto), None)
+                    antes = pantalla()
                     if time.time() > limite or not menu or not clic(menu["i"]):
                         continue
                     esperar()
+                    despues = pantalla()
+                    if vuelta == 0:
+                        pulsadas += 1
+                        if not despues[0] and despues[1] == antes[1]:
+                            quietas.append(texto)
                     r["secciones"] += 1
                     mirar(f"abrir «{texto}»")
                     if texto in hechas:
@@ -453,6 +512,8 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
                                   if ABRIR_FORM.search(b["texto"]) and not NO_TOCAR.search(b["texto"])), None)
                     if nuevo and clic(nuevo["i"]):
                         esperar()
+                        if not any(not BUSCADOR.search(c["name"]) for c in pag.evaluate(LISTAR, "campos")):
+                            r["nuevo_sin_campos"].append({"texto": nuevo["texto"], "seccion": texto, "js": js[:1]})
                     datos = []
                     for c in pag.evaluate(LISTAR, "campos"):
                         valor = None if BUSCADOR.search(c["name"]) else _valor(c, hoy)
@@ -476,6 +537,8 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
                         r["formularios"] += 1
                         mirar(f"guardar el formulario de «{texto}»", ", ".join(datos[:8]))
                     pag.keyboard.press("Escape")
+                if vuelta == 0 and len(quietas) >= 3 and 2 * len(quietas) >= pulsadas:
+                    r["menu_quieto"] = quietas  # la sección en la que ya se estaba tampoco cambia: va en la lista
         finally:
             nav.close()
     return r
@@ -505,8 +568,12 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
         r = _Recorrido(f"http://127.0.0.1:{puerto}/", log, accesos)
         r.recorrer(time.time() + MAX_SEGUNDOS)
         navegador = None
-        if r.entrar_js and abrir_navegador is not None:  # lo de dentro solo se ve con un navegador
-            navegador = _con_navegador(r.base, log, accesos, abrir_navegador, time.time() + MAX_SEGUNDOS)
+        # Lo de dentro solo se ve con un navegador si la entrada es JavaScript. También se prueba con él si no se pudo
+        # entrar: un formulario con name que JavaScript enviaba como JSON no dejaba entrar al recorrido, y a una persona sí.
+        if abrir_navegador is not None and (r.entrar_js or (r.intento_entrar and not r.usuario and not r.entrar_fallo)):
+            # Si solo es para ver si se puede entrar, con poco tiempo: una web así tardaba 30 s en recorrerse entera.
+            plazo = MAX_SEGUNDOS if r.entrar_js else MAX_SEGUNDOS_REINTENTO
+            navegador = _con_navegador(r.base, log, accesos, abrir_navegador, time.time() + plazo)
             if navegador:
                 r.errores += [e for e in navegador.pop("errores") if e not in r.errores]
                 r.usuario = navegador["usuario"]
@@ -515,9 +582,14 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
         if plantillas:  # el 500 de una página por esa plantilla ya va en su error de plantilla
             r.errores = [e for e in r.errores if "TemplateSyntaxError" not in e["traza"]
                          and "TemplateAssertionError" not in e["traza"]]
+        # Solo si volvió sin formulario cada vez, también en la segunda vuelta: sin productos, «nueva venta» puede
+        # devolver a la lista con un aviso, y eso está bien.
+        sin_formulario = [{"texto": r.abre[a][0], "desde": r.abre[a][1], "a": a}
+                          for a, veces in r.sin_formulario.items() if len(veces) >= 2 and all(veces)]
         return {"errores": r.errores, "plantillas": plantillas, "rotos": r.rotos, "raros": r.raros,
                 "enviados": r.enviados, "paginas": r.paginas, "formularios": r.formularios, "usuario": r.usuario,
-                "sin_entrar": r.intento_entrar and not r.usuario, "entrar_js": r.entrar_js, "navegador": navegador}
+                "sin_entrar": r.intento_entrar and not r.usuario and not r.entrar_fallo, "entrar_js": r.entrar_js,
+                "navegador": navegador, "sin_formulario": sin_formulario, "registro": r.registro, "entrar_get": r.entrar_get}
     finally:
         procesos.detener(proc, trabajo)
         try:

@@ -279,6 +279,88 @@ class ConNavegador(unittest.TestCase):
         self.assertIsNone(r["navegador"])
         self.assertEqual(r["errores"], [])
 
+    def navegar(self, web: str) -> dict:
+        (self.dir / "app.py").write_text(web, encoding="utf-8")
+        r = recorrer(self.dir / "app.py", sys.executable, [("ana@tienda.com", "pan123")], abrir_navegador=canal_navegador)
+        if r["navegador"] is None:
+            self.skipTest("sin navegador")
+        return r["navegador"]
+
+    def test_menu_que_no_cambia_la_pantalla(self):
+        # Como la entrega cuyo menú llamaba a secciones que no estaban en la página: solo «Productos» enseña algo.
+        menu = "".join(f"<button data-section='{s}' onclick=\"ver('{s}')\">{s.title()}</button>"
+                       for s in ("clientes", "ventas", "reportes"))
+        nav = self.navegar(WEB_JS.replace("<nav>", "<nav>" + menu))
+        self.assertEqual(nav["menu_quieto"], ["Clientes", "Ventas", "Reportes"])
+        self.assertEqual(nav["nuevo_sin_campos"], [])
+
+    def test_boton_nuevo_que_no_abre_nada(self):
+        nav = self.navegar(WEB_JS.replace("document.getElementById('form').style.display='block'", "abrirFormulario()"))
+        [boton] = nav["nuevo_sin_campos"]
+        self.assertEqual((boton["texto"], boton["seccion"]), ("+ Nuevo", "Productos"))
+        self.assertIn("abrirFormulario", boton["js"][0])
+        self.assertEqual(nav["menu_quieto"], [])  # un menú de una sola entrada que funciona
+
+
+# «+ Nuevo producto» llevaba a una ruta que volvía a la lista sin formulario. «Nueva venta» sin productos también vuelve
+# (con un aviso), pero con productos ya enseña el suyo: eso está bien.
+WEB_NUEVO = r'''import urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PRODUCTOS = []
+PAGINAS = {
+    "/": '<a href="/productos">Productos</a> <a href="/clientes">Clientes</a> <a href="/ventas">Ventas</a>',
+    "/productos": '<a href="/productos/nuevo">+ Nuevo producto</a> <form method="get"><input name="buscar"></form>',
+    "/clientes": '<a href="/clientes/nuevo">+ Nuevo cliente</a>',
+    "/clientes/nuevo": '<form method="post" action="/clientes"><input name="nombre"><button>Guardar</button></form>',
+    "/ventas": '<a href="/ventas/nueva">Nueva venta</a> <a href="/inventario">Inventario</a>',
+    "/inventario": '<form method="post" action="/inventario"><input name="producto"><button>Dar de alta</button></form>',
+}
+
+
+class Web(BaseHTTPRequestHandler):
+    def responder(self, estado, cuerpo, cabeceras=()):
+        self.send_response(estado)
+        for k, v in cabeceras:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(cuerpo.encode())
+
+    def do_GET(self):
+        ruta = self.path.split("?")[0]
+        if ruta == "/productos/nuevo":
+            return self.responder(302, "", [("Location", "/productos")])
+        if ruta == "/ventas/nueva":
+            if not PRODUCTOS:
+                return self.responder(302, "", [("Location", "/ventas")])
+            return self.responder(200, '<form method="post" action="/ventas"><input name="cantidad"><button>Vender</button></form>')
+        self.responder(*((200, PAGINAS[ruta]) if ruta in PAGINAS else (404, "no")))
+
+    def do_POST(self):
+        datos = dict(urllib.parse.parse_qsl(self.rfile.read(int(self.headers["Content-Length"])).decode()))
+        if self.path == "/inventario":
+            PRODUCTOS.append(datos)
+        self.responder(302, "", [("Location", "/")])
+
+
+if __name__ == "__main__":
+    HTTPServer(("0.0.0.0", 5000), Web).serve_forever()
+'''
+
+
+class SinFormulario(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="test_recorrido_"))
+        (self.dir / "app.py").write_text(WEB_NUEVO, encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_nuevo_que_vuelve_a_la_lista_sin_formulario(self):
+        r = recorrer(self.dir / "app.py", sys.executable, [])
+        self.assertEqual(r["sin_formulario"], [{"texto": "+ Nuevo producto", "desde": "/productos", "a": "/productos/nuevo"}])
+        self.assertEqual(r["errores"], [])
+
 
 class EnVerificar(unittest.TestCase):
     def setUp(self):
@@ -296,6 +378,31 @@ class EnVerificar(unittest.TestCase):
         self.assertIn("ZeroDivisionError", r)
         self.assertNotIn("agente_web_", r)  # la ruta de la copia no sale
         self.assertFalse((self.dir / "visitas.txt").exists())  # se usó una copia
+
+    def test_nadie_puede_entrar_es_un_error(self):
+        # Como la entrega cuyos tests dejaron en la base real un admin de prueba: el del README ya no entraba.
+        (self.dir / "README.md").write_text("Entra con usuario `admin` y contraseña `admin123`.\n", encoding="utf-8")
+        (self.dir / "app.py").write_text(WEB.replace('"pan123"', '"pan" + "123"'), encoding="utf-8")  # ni en el código
+        r = Herramientas(self.dir).verificar_cmd()
+        self.assertIn("app.py: nadie puede entrar en la web con los usuarios y contraseñas que da el proyecto", r)
+        self.assertNotIn("usé la web de verdad", r)
+
+    def test_con_registro_solo_avisa(self):
+        # Una web cuyo README decía «regístrate para crear la cuenta de administrador»: una persona sí puede entrar.
+        (self.dir / "README.md").write_text("Entra con usuario `admin` y contraseña `admin123`.\n", encoding="utf-8")
+        web = WEB.replace('"pan123"', '"pan" + "123"').replace("<button>Entrar</button></form>",
+                                                                  '<button>Entrar</button></form><a href="/registro">Regístrate</a>')
+        (self.dir / "app.py").write_text(web, encoding="utf-8")
+        r = Herramientas(self.dir).verificar_cmd()
+        self.assertNotIn("nadie puede entrar", r)
+        self.assertIn("la web tiene registro", r)
+
+    def test_si_entrar_falla_no_lo_repite(self):
+        (self.dir / "app.py").write_text(WEB.replace('if datos == {"usuario": "ana", "clave": "pan123"}:',
+                                                     'if datos["no_existe"]:'), encoding="utf-8")
+        r = Herramientas(self.dir).verificar_cmd()
+        self.assertIn("app.py: al entrar como ana", r)
+        self.assertNotIn("nadie puede entrar", r)
 
 
 if __name__ == "__main__":

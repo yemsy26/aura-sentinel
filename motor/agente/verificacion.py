@@ -339,7 +339,7 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
     if r is None:
         return False
     rel = relativa(entrada, raiz)
-    nav = r["navegador"]
+    nav, antes = r["navegador"], len(inf.errores)
     for p in r["plantillas"][:4]:
         pista = (" En Jinja se escribe {{ '%.2f' % x }} o {{ '{:.2f}'.format(x) }}, no {{ x:.2f }}."
                  if "got ':'" in p["error"] else "")
@@ -349,20 +349,48 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
         traza = e["traza"].replace(str(copia) + os.sep, "").replace("\n", "\n    ")
         inf.errores.append(f"{rel}: al {e['que']}" + (f" con {e['datos']}" if e["datos"] else "") +
                            f", la web responde {POR_ESTADO.get(e['estado'], e['estado'])}" + (f":\n    {traza}" if traza else "."))
-    if r["sin_entrar"]:
-        inf.avisos.append(f"{rel}: no pude entrar en la web con los usuarios y contraseñas que da el proyecto "
-                          f"({min(len(accesos), 12)} probados): solo recorrí lo que se ve sin entrar.")
+    # Una entrega no dejaba entrar a nadie: sus tests escribían en la base real un admin de prueba y, como ya había un
+    # admin, el del README no se creaba. Era un aviso y el agente terminó así.
+    otro_puerto = nav and nav.get("otro_puerto")
+    if (r["sin_entrar"] or (nav and nav["sin_entrar"] and accesos)) and otro_puerto:
+        inf.avisos.append(f"{rel}: no pude entrar: la página llama a {otro_puerto}, con el puerto escrito, y aquí la web "
+                          "escuchaba en otro. Si ese puerto está ocupado o cambia, la web deja de funcionar: usa rutas "
+                          "relativas (/api/...).")
+    elif (r["sin_entrar"] or (nav and nav["sin_entrar"] and accesos)) and (r.get("registro") or nav and nav.get("registro")):
+        inf.avisos.append(f"{rel}: no pude entrar con los usuarios y contraseñas que da el proyecto; la web tiene "
+                          "registro. Si la primera cuenta se crea registrándose, dilo en el README.")
+    elif r["sin_entrar"] or (nav and nav["sin_entrar"] and accesos):
+        inf.errores.append(f"{rel}: nadie puede entrar en la web con los usuarios y contraseñas que da el proyecto "
+                           f"(probé {min(len(accesos), 12)}, entre ellos {', '.join(u for u, _ in accesos[:3])})."
+                           + (' El formulario de entrar se envía por GET: le falta method="post".' if r.get("entrar_get")
+                              else " Comprueba que la base de datos que se entrega tiene ese usuario con esa contraseña "
+                              "(si los tests escriben en la base real, dejan sus usuarios y el admin no se crea) y que "
+                              "la pantalla de entrar funciona."))
     elif r["entrar_js"] and not nav:
         inf.avisos.append(f"{rel}: la pantalla de entrar se envía con JavaScript y no hay navegador para usarla: solo "
                           "recorrí lo que se ve sin entrar. Prueba lo de dentro con tests que inicien sesión.")
     elif nav and nav["sin_entrar"]:
-        inf.avisos.append(f"{rel}: no pude entrar (con el navegador) con los usuarios y contraseñas que da el proyecto: "
-                          "solo vi lo que se ve sin entrar.")
+        inf.avisos.append(f"{rel}: no pude entrar (con el navegador): el proyecto no da usuarios ni contraseñas.")
+    for s in r.get("sin_formulario", [])[:3]:
+        inf.errores.append(f"{rel}: el enlace «{s['texto']}» de {s['desde']} no abre ningún formulario: {s['a']} vuelve a "
+                           f"{s['desde']}, también con datos ya creados. Nadie puede hacer eso desde la web: {s['a']} "
+                           "tiene que enseñar su formulario (GET) y guardarlo (POST).")
+    if nav and nav.get("clave_a_la_vista"):
+        inf.errores.append(f"{rel}: después de entrar como {nav['usuario']}, la pantalla de entrar sigue a la vista y la "
+                           "aplicación aparece debajo: quien la usa cree que no ha entrado. Revisa cómo se oculta (una "
+                           "regla CSS con display puede ganar a la clase que la oculta).")
+    if nav and nav.get("menu_quieto"):
+        inf.errores.append(f"{rel}: al pulsar en el menú {', '.join('«' + t + '»' for t in nav['menu_quieto'][:6])}, la "
+                           "pantalla no cambia: no carga otra página ni enseña otra sección. Revisa que cada entrada "
+                           "lleve a una página que existe o enseñe una sección que está en esa misma página.")
+    for b in (nav or {}).get("nuevo_sin_campos", [])[:3]:
+        inf.errores.append(f"{rel}: en «{b['seccion']}», el botón «{b['texto']}» no abre nada para rellenar"
+                           + (f" (error de JavaScript: {b['js'][0]})" if b["js"] else "") + ".")
     if nav and nav["avisos_js"]:
         inf.avisos.append(f"{rel}: errores de JavaScript en la página: " + " | ".join(nav["avisos_js"][:3]))
     if r["rotos"]:
         inf.avisos.append(f"{rel}: enlaces que dan 404: {', '.join(r['rotos'][:5])}")
-    if not r["errores"] and not r["plantillas"]:
+    if len(inf.errores) == antes:
         hecho = (f"{nav['secciones']} secciones y {nav['formularios']} formularios guardados con el navegador" if nav
                  else f"{r['paginas']} páginas y {r['formularios']} formularios enviados")
         inf.ok.append(f"{rel}: usé la web de verdad: {hecho}" + (f" entrando como {r['usuario']}" if r["usuario"] else "")
