@@ -1285,11 +1285,16 @@ def pares_del_proyecto(raiz: Path, claves: list[str], usuarios: list[str]) -> li
                 for zona in (linea, zona2):  # primero los de la misma línea
                     pares.update(dict.fromkeys((u, c) for u in candidatos
                                                if u != c and re.search(rf"[`'\"]{re.escape(u)}[`'\"]", zona)))
-    # admin/admin123 es lo que dan casi todas las webs de negocio: detrás de las parejas que da el proyecto (adivinada,
-    # no debe tapar ni a «duena»/«duena2026» ni salir antes en los mensajes), pero antes de todas las combinaciones.
+    # Las parejas sueltas con contraseña con número («duena»/«duena2026») son fiables; las de contraseña sin número son
+    # coincidencias del código (('Administrador','admin'), ('rol','admin') de los INSERT). admin/admin123 es lo que dan
+    # casi todas las webs de negocio: detrás de las etiquetadas y de las sueltas fiables (adivinada, no debe tapar a
+    # «duena»/«duena2026» ni salir antes que ellas en los mensajes), pero DELANTE de las sueltas sin número: esas, sin
+    # README, empujaban (admin,admin123) más allá de las 12 que se prueban -> «nadie puede entrar» en falso (m4133 neg1/neg3).
+    fuertes = [p for p in pares if re.search(r"\d", p[1])]
+    debiles = [p for p in pares if not re.search(r"\d", p[1])]
     por_defecto = ([("admin", c) for c in claves if re.search(r"\d", c) and c != "admin"][:2]
                    if "admin" in usuarios else [])
-    return list(dict.fromkeys([*etiquetados, *pares, *por_defecto]))
+    return list(dict.fromkeys([*etiquetados, *fuertes, *por_defecto, *debiles]))
 
 
 CAMPOS = {"usuario", "usuarios", "user", "users", "username", "nombre", "password", "contraseña", "clave", "rol", "role",
