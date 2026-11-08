@@ -1,7 +1,9 @@
 """Arranca la web de un proyecto para recorrerla. Uso: python web_arranque.py app.py PUERTO
 Se lanza sobre una copia del proyecto. Escucha solo en 127.0.0.1:PUERTO aunque el código diga otro puerto (Flask.run,
 uvicorn.run y los servidores de socketserver/http.server), sin recarga automática ni depurador, y nada sale de la app:
-ni el navegador (webbrowser, os.startfile) ni programas lanzados con start. Las trazas de los fallos salen por stderr."""
+ni el navegador (webbrowser, os.startfile) ni programas lanzados con start. Las trazas de los fallos salen por stderr.
+Con Flask, antes de servir compila las plantillas del proyecto y avisa de las que no compilan (WEB_PLANTILLA)."""
+import json
 import os
 import re
 import runpy
@@ -45,12 +47,39 @@ def _tcp_en_el_puerto(self, direccion, *a, **k):
 
 
 socketserver.TCPServer.__init__ = _tcp_en_el_puerto
+def _plantillas(app) -> None:
+    """Compila cada plantilla del proyecto: una que no compila da 500 en cuanto una página la usa, y el recorrido puede
+    no llegar a esa página (el detalle de una venta que aún no existe). Imprime 'WEB_PLANTILLA {json}' por cada una."""
+    import jinja2
+    env = app.jinja_env
+    try:
+        nombres = env.list_templates()
+    except Exception:  # un cargador que no sabe listar
+        return
+    for nombre in nombres:
+        try:
+            fuente, archivo, _ = env.loader.get_source(env, nombre)
+        except Exception:
+            continue
+        if not archivo or re.search(r"[\\/](?:site-packages|Lib)[\\/]", archivo):
+            continue  # las de las librerías (Flask-Admin, Bootstrap...) no son del proyecto
+        try:
+            env.compile(fuente, nombre, archivo)
+        except jinja2.TemplateSyntaxError as e:  # también TemplateAssertionError (filtro que no existe)
+            print("WEB_PLANTILLA " + json.dumps({"plantilla": nombre, "linea": e.lineno, "error": e.message},
+                                                ensure_ascii=False), flush=True)
+
+
 try:
     import flask
 
     def _flask_run(self, host=None, port=None, debug=None, load_dotenv=True, **opciones):
         opciones.pop("use_reloader", None)
         opciones.pop("use_debugger", None)
+        try:
+            _plantillas(self)
+        except Exception:  # comprobar no debe impedir que arranque
+            pass
         return _run(self, "127.0.0.1", PUERTO, False, load_dotenv, use_reloader=False, use_debugger=False, **opciones)
 
     _run, flask.Flask.run = flask.Flask.run, _flask_run

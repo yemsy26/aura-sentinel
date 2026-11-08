@@ -6,6 +6,7 @@ sus 12 tests pasaban, la revisión lo aprobó y verificar solo comprobaba que el
 modelo: cuenta lo que responde el servidor (500, una traza, un formulario que va a una ruta que no existe)."""
 import html.parser
 import http.cookiejar
+import json
 import os
 import re
 import socket
@@ -209,11 +210,12 @@ class _Recorrido:
         traza = _traza(self.salida) or _traza(texto)
         if estado >= 500 or estado == 0 or traza or (estado in (404, 405) and que.startswith("enviar")):
             enviado = ", ".join(f"{k}={v}" for k, v in (datos or [])[:8] if not re.search(r"(?i)csrf|token", k))
-            self.errores.append({"que": que, "estado": estado, "traza": traza, "datos": enviado})
+            if not any(e["que"] == que and e["traza"] == traza for e in self.errores):  # la 2.ª vuelta no lo repite
+                self.errores.append({"que": que, "estado": estado, "traza": traza, "datos": enviado})
             return False
-        if estado == 404:
+        if estado == 404 and que not in self.rotos:
             self.rotos.append(que)
-        elif estado >= 400:
+        elif estado >= 400 and estado != 404 and f"{que} -> {estado}" not in self.raros:
             self.raros.append(f"{que} -> {estado}")
         return estado < 400
 
@@ -255,9 +257,24 @@ class _Recorrido:
         return url[len(self.base) - 1:] or "/"
 
     def recorrer(self, limite: float) -> None:
-        self.cola, self.vistas, self.enviados_claves, formas = deque(["/"]), set(), set(), {}
-        cola, vistas, pendientes = self.cola, self.vistas, []
-        while cola and self.paginas < MAX_PAGINAS and time.time() < limite:
+        self.enviados_claves, self.orden = set(), []
+        pendientes = self.vuelta(deque(["/"]), limite)
+        for ruta in pendientes:  # al final ya hay productos, clientes... que elegir
+            if time.time() >= limite or self.formularios >= MAX_FORMULARIOS:
+                break
+            estado, final, texto = self.pedir(ruta)
+            if self.mirar(f"abrir {ruta}", estado, texto):
+                self.enviar_formularios(ruta, final, self._leer(texto), limite)
+        # Segunda vuelta: lo que crearon los formularios cambia las páginas (la de vender, con productos que elegir) y
+        # trae enlaces nuevos (la venta recién hecha). Una web abría bien «nueva venta» vacía y daba 500 con productos.
+        self.vuelta(deque(self.orden), limite)
+
+    def vuelta(self, cola: deque, limite: float) -> list[str]:
+        """Recorre desde cola: abre cada página, sigue sus enlaces y envía sus formularios nuevos. Devuelve las páginas
+        con formularios que aún no se podían enviar."""
+        self.cola, self.vistas = cola, set()
+        vistas, formas, pendientes, paginas = self.vistas, {}, [], 0
+        while cola and paginas < MAX_PAGINAS and time.time() < limite:
             if self.errores and self.errores[-1]["estado"] == 0 and not self.vivo():
                 break  # el servidor se cayó: lo demás fallaría igual
             ruta = cola.popleft()
@@ -265,8 +282,11 @@ class _Recorrido:
                 continue
             vistas.add(ruta)
             formas[_forma(ruta)] = formas.get(_forma(ruta), 0) + 1
+            if ruta not in self.orden:
+                self.orden.append(ruta)
             estado, final, texto = self.pedir(ruta)
             self.paginas += 1
+            paginas += 1
             if not self.mirar(f"abrir {ruta}", estado, texto):
                 continue
             pagina = self._leer(texto)
@@ -281,12 +301,7 @@ class _Recorrido:
                     cola.append(nueva)
             if self.enviar_formularios(ruta, final, pagina, limite):
                 pendientes.append(ruta)
-        for ruta in pendientes:  # al final ya hay productos, clientes... que elegir
-            if time.time() >= limite or self.formularios >= MAX_FORMULARIOS:
-                break
-            estado, final, texto = self.pedir(ruta)
-            if self.mirar(f"abrir {ruta}", estado, texto):
-                self.enviar_formularios(ruta, final, self._leer(texto), limite)
+        return pendientes
 
     def enviar_formularios(self, ruta: str, final: str, pagina: _Pagina, limite: float) -> bool:
         """Envía cada formulario nuevo de la página. True si alguno no se podía enviar todavía."""
@@ -337,9 +352,14 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
             return None
         r = _Recorrido(f"http://127.0.0.1:{puerto}/", log, accesos)
         r.recorrer(time.time() + MAX_SEGUNDOS)
-        return {"errores": r.errores, "rotos": r.rotos, "raros": r.raros, "enviados": r.enviados, "paginas": r.paginas,
-                "formularios": r.formularios, "usuario": r.usuario, "sin_entrar": r.intento_entrar and not r.usuario,
-                "entrar_js": r.entrar_js}
+        texto = log.read_text(encoding="utf-8", errors="replace")
+        plantillas = [json.loads(m) for m in re.findall(r"^WEB_PLANTILLA (\{.*\})\s*$", texto, re.MULTILINE)]
+        if plantillas:  # el 500 de una página por esa plantilla ya va en su error de plantilla
+            r.errores = [e for e in r.errores if "TemplateSyntaxError" not in e["traza"]
+                         and "TemplateAssertionError" not in e["traza"]]
+        return {"errores": r.errores, "plantillas": plantillas, "rotos": r.rotos, "raros": r.raros,
+                "enviados": r.enviados, "paginas": r.paginas, "formularios": r.formularios, "usuario": r.usuario,
+                "sin_entrar": r.intento_entrar and not r.usuario, "entrar_js": r.entrar_js}
     finally:
         procesos.detener(proc, trabajo)
         try:

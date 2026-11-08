@@ -339,6 +339,11 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
     if r is None:
         return False
     rel = relativa(entrada, raiz)
+    for p in r["plantillas"][:4]:
+        pista = (" En Jinja se escribe {{ '%.2f' % x }} o {{ '{:.2f}'.format(x) }}, no {{ x:.2f }}."
+                 if "got ':'" in p["error"] else "")
+        inf.errores.append(f"la plantilla {p['plantilla']} no compila (línea {p['linea']}: {p['error']}): toda página que "
+                           f"la use da error 500.{pista}")
     for e in r["errores"][:4]:
         traza = e["traza"].replace(str(copia) + os.sep, "").replace("\n", "\n    ")
         inf.errores.append(f"{rel}: al {e['que']}" + (f" con {e['datos']}" if e["datos"] else "") +
@@ -351,7 +356,7 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                           "lo que se ve sin entrar. Prueba lo de dentro con tests que inicien sesión.")
     if r["rotos"]:
         inf.avisos.append(f"{rel}: enlaces que dan 404: {', '.join(r['rotos'][:5])}")
-    if not r["errores"]:
+    if not r["errores"] and not r["plantillas"]:
         inf.ok.append(f"{rel}: usé la web de verdad: {r['paginas']} páginas y {r['formularios']} formularios enviados"
                       + (f" entrando como {r['usuario']}" if r["usuario"] else "") + ", sin errores")
     return True
