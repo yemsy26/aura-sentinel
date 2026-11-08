@@ -5,6 +5,27 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.1] — 2026-11-08 (las webs que entran con JavaScript y los botones que no hacen nada)
+
+- **Las webs que entran con JavaScript (`fetch`) ya se recorren por dentro:** en la 4.13.0, `verificar` solo avisaba
+  de que no podía entrar en ellas. Ahora sigue con un navegador oculto (el mismo Playwright que ya usaba `verificar`):
+  - entra con los usuarios y contraseñas que da el proyecto;
+  - pulsa cada sección del menú, abre los formularios de «+ / Nuevo / Crear», los rellena con datos válidos y los
+    guarda, y después da otra vuelta por las secciones;
+  - da como error cada respuesta 500 del servidor, con su traza; los errores de JavaScript de la página son un aviso.
+  Cancela los `confirm()`, no descarga nada y no pulsa salir, borrar ni cancelar. Las demás webs se recorren igual
+  que antes.
+- **Botones que al pulsarlos no hacen nada:** en varias webs de negocio, los botones «+ Nuevo producto» o «Editar»
+  llamaban desde `onclick` a funciones de un script cargado con `type="module"`, que la página no ve; el navegador
+  solo lo decía en la consola (`… is not defined`). Otra llamaba a funciones que no existían. Ahora `verificar` mira
+  los `onclick`, `onsubmit`, `onchange`… del HTML, de las plantillas y del HTML que construyen los scripts, y da error
+  si llaman a una función que no define ningún script del proyecto, o que está en un módulo sin `window.x = x`. El
+  error dice dónde está la función y cómo arreglarlo. No ejecuta nada: 0,03 s por proyecto.
+- Medido sin GPU sobre las webs guardadas, con condiciones fijadas antes de medir: el recorrido con navegador entra en
+  4 de las 6 webs de JavaScript, sin errores falsos, y las otras 43 dan lo mismo que antes. La comprobación de los
+  botones da 76 errores en 7 de 63 proyectos, todos reales (uno comprobado en el navegador), entre ellos la entrega de
+  negocio que se usaba bien a mano en la 4.13.0, cuyos botones «Editar» no funcionaban.
+
 ## [4.13.0] — 2026-11-08 (verificar usa la web del proyecto de verdad)
 
 - **Las webs se prueban usándolas, no solo arrancándolas:** en una misión de negocio, la web daba error 500 al
