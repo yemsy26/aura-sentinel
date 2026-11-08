@@ -20,7 +20,7 @@ De abajo arriba; cada capa usa solo las anteriores.
 | Contratos y reglas | `esquemas`, `permisos`, `borrados`, `proyecto` | Qué puede pedir el modelo; qué se puede hacer sin preguntar; qué código borra fuera de lo suyo; qué es código, el `Informe` y cómo correr un comando |
 | Modelo | `compat`, `modelo`, `descargar`, `prueba_modelo`, `llamadas` | Fichas de modelos, carga en la VRAM, descargas, prueba de un modelo, lectura de las llamadas que escribe |
 | Conocimiento | `pasajes`, `conocimiento`, `lecciones`, `mapa`, `idiomas`, `complementos`, `matematicas` | Lo investigado, guías, lecciones, mapa del repositorio, idiomas, motores opcionales y cálculo exacto |
-| Comprobación | `app_tauri`, `ecosistemas`, `verificacion`, `revision`, `pantalla` | Control de calidad por lenguaje, revisión independiente, ver la interfaz de verdad |
+| Comprobación | `app_tauri`, `ecosistemas`, `recorrido_web`, `verificacion`, `revision`, `pantalla` | Control de calidad por lenguaje, usar la web del proyecto de verdad, revisión independiente, ver la interfaz de verdad |
 | Prompt | `prompts`, `contexto` | Instrucciones del modelo y presupuesto de contexto |
 | Acción | `herramientas` | Ejecuta lo que pide el modelo y aplica los permisos |
 | Dirección | `grande`, `bucle` | Tareas por partes; el bucle con las puertas para terminar |

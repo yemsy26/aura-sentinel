@@ -28,6 +28,7 @@ from . import ecosistemas
 from .borrados import aviso, peligrosos
 from .idiomas import verificar_idiomas
 from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, normalizar, relativa
+from .recorrido_web import recorrer
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
 _LEIDOS: dict[Path, tuple[tuple[int, int], list]] = {}  # borrados_fuera: lo hallado en cada .py mientras no cambie
@@ -303,6 +304,10 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
     if re.search(r"\b(PyQt|PySide|wx)\b", fuente):
         inf.avisos.append(f"{rel}: app con ventana (GUI): no se abre aquí; prueba su lógica con tests.")
         return
+    if any(WEB_PY.search(p.read_text(encoding="utf-8", errors="replace")) for p in rutas if not p.name.startswith("test")):
+        lanzado = entrada_bat(raiz)
+        if probar_web(raiz, lanzado[1] if lanzado else entrada, python, inf):
+            return
     codigo, salida = correr_texto([python, str(entrada)], entrada.parent, segundos, env)
     if codigo is None:
         inf.ok.append(f"{rel} sigue en ejecución tras {segundos} s (servidor o bucle): arrancó sin errores")
@@ -312,6 +317,44 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
         inf.errores.append(f"{rel} termina con error (exit {codigo}):\n    {cola(salida)}")
     else:
         inf.ok.append(f"{rel} se ejecuta sin errores")
+
+
+# Una web de negocio daba 500 al registrar una venta y verificar solo veía que el servidor arrancaba: se usa de verdad.
+WEB_PY = re.compile(r"\bFlask\s*\(|\bFastAPI\s*\(|\b(?:Threading)?HTTPServer\s*\(|\bsocketserver\.\w*TCPServer\s*\(")
+POR_ESTADO = {0: "nada (el servidor se cayó)", 404: "404: esa ruta no existe", 405: "405: esa ruta no acepta ese método"}
+
+
+def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
+    """Recorre la web de verdad sobre una copia (recorrido_web.py). False si no llegó a escuchar: entonces se prueba
+    como un programa más."""
+    claves = claves_del_proyecto(raiz)
+    usuarios = usuarios_del_proyecto(raiz, claves)
+    accesos = list(dict.fromkeys(pares_del_proyecto(raiz, claves, usuarios) + [(u, c) for c in claves for u in usuarios]))
+    copia = Path(tempfile.mkdtemp(prefix="agente_web_")) / "p"
+    try:
+        shutil.copytree(raiz, copia, ignore=shutil.ignore_patterns(*COPIA_FUERA))
+        r = recorrer(copia / entrada.relative_to(raiz), python, accesos)
+    finally:
+        shutil.rmtree(copia.parent, ignore_errors=True)
+    if r is None:
+        return False
+    rel = relativa(entrada, raiz)
+    for e in r["errores"][:4]:
+        traza = e["traza"].replace(str(copia) + os.sep, "").replace("\n", "\n    ")
+        inf.errores.append(f"{rel}: al {e['que']}" + (f" con {e['datos']}" if e["datos"] else "") +
+                           f", la web responde {POR_ESTADO.get(e['estado'], e['estado'])}" + (f":\n    {traza}" if traza else "."))
+    if r["sin_entrar"]:
+        inf.avisos.append(f"{rel}: no pude entrar en la web con los usuarios y contraseñas que da el proyecto "
+                          f"({min(len(accesos), 12)} probados): solo recorrí lo que se ve sin entrar.")
+    elif r["entrar_js"]:
+        inf.avisos.append(f"{rel}: la pantalla de entrar se envía con JavaScript y el recorrido no la usa: solo recorrí "
+                          "lo que se ve sin entrar. Prueba lo de dentro con tests que inicien sesión.")
+    if r["rotos"]:
+        inf.avisos.append(f"{rel}: enlaces que dan 404: {', '.join(r['rotos'][:5])}")
+    if not r["errores"]:
+        inf.ok.append(f"{rel}: usé la web de verdad: {r['paginas']} páginas y {r['formularios']} formularios enviados"
+                      + (f" entrando como {r['usuario']}" if r["usuario"] else "") + ", sin errores")
+    return True
 
 
 # Una peluquería en tkinter terminó con verificar en verde y fallaba nada más entrar (ttk.Notebook.add de un frame
@@ -1048,6 +1091,9 @@ CLAVE_RESUMEN = re.compile(r"(?i)\b(?:contrase[ñn]a|clave|password|pass|pwd)\b[
 CLAVE_CODIGO = re.compile(r"""(?i)(?:hash\w*|passw\w*|pass|pwd|contrase\w*|clave\w*|sha\d{0,3}|md5|blake2\w?|\w*crypt\w*|"""
                           r"""pbkdf2\w*)['"]?\s*(?:\(|[:=,])\s*b?['"]([^'"\s]{1,40})['"]""")
 NO_ES_CLAVE = re.compile(r"^\.?[\w-]+\.\w{1,8}$|[/\\()=<>{}]|^[A-Z][A-Z0-9_]+$")  # archivo, ruta, llamada, variable
+# crear_usuario("Administrador", "admin", "admin123", "admin"): la contraseña va sin nombre; se toma la que lleva números.
+CLAVE_LLAMADA = re.compile(r"""(?i)\b\w*(?:usuario|user|empleado|cuenta|account)\w*\s*\(([^()\n]*)\)""")
+CON_NUMERO = re.compile(r"""['"]([A-Za-z][^'"\s]{2,38}\d[^'"\s]{0,10}|\d[^'"\s]{3,39})['"]""")
 
 
 def _textos_proyecto(raiz: Path):
@@ -1067,6 +1113,7 @@ def claves_del_proyecto(raiz: Path) -> list[str]:
     for texto in _textos_proyecto(raiz):
         conocidas.update(dict.fromkeys(CLAVE_CODIGO.findall(texto)))
         conocidas.update(dict.fromkeys(next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(texto)))
+        conocidas.update(dict.fromkeys(c for m in CLAVE_LLAMADA.finditer(texto) for c in CON_NUMERO.findall(m[1])))
     return [c for c in conocidas if not NO_ES_CLAVE.search(c)]  # text="Contraseña:").pack(anchor= no es una
 
 
