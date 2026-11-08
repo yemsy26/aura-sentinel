@@ -668,6 +668,26 @@ CREA_ID = re.compile(r"""\.id\s*=\s*['"`]([\w-]+)['"`]|setAttribute\(\s*['"`]id[
                      r"""(?<![\w.-])id\s*[=:]\s*\{?\s*\\?['"`]([\w-]+)\\?['"`]""")
 SCRIPT_EN_LINEA = re.compile(r"<script\b[^>]*>(.*?)</script>", re.IGNORECASE | re.DOTALL)
 FUENTES_DOM = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
+# Dos webs tenían «+ Nuevo producto» con onclick="abrirModalProducto()" y esa función no existía: al pulsar no pasaba
+# nada (el navegador lo dice en una consola que nadie mira). También vale el HTML que construyen los scripts.
+MANEJADOR = re.compile(r"""\bon(?:click|submit|change|input|keyup|keydown|keypress|blur|focus|dblclick|load)\s*=\s*"""
+                       r"""\\?(["'])(.*?)\\?\1""", re.IGNORECASE | re.DOTALL)
+LLAMADA_SUELTA = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(")
+DEFINE_FUNCION = re.compile(r"""\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*="""
+                            r"""|\b(?:window|globalThis|self)\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*['"]([\w$]+)['"]\s*\])\s*="""
+                            r"""|^\s*([A-Za-z_$][\w$]*)\s*=\s*(?:async\b|function\b|\()""", re.MULTILINE)
+A_WINDOW = re.compile(r"Object\.assign\(\s*(?:window|globalThis|self)\s*,\s*\{([^}]*)\}")
+SCRIPT_SRC = re.compile(r"""<script\b([^>]*?)\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')([^>]*)>""", re.IGNORECASE)
+SCRIPT_CON_ATRIBUTOS = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.IGNORECASE | re.DOTALL)
+PLANTILLA_EN_CODIGO = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\$\{[^}]*\}|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|"
+                                 r"`(?:\\.|[^`\\])*`|&\w+;", re.DOTALL)  # plantillas, textos entre comillas y &quot;
+GLOBALES_JS = {"if", "for", "while", "switch", "return", "function", "typeof", "new", "catch", "await", "void", "delete",
+               "alert", "confirm", "prompt", "setTimeout", "setInterval", "clearTimeout", "clearInterval", "fetch", "open",
+               "close", "print", "eval", "parseInt", "parseFloat", "Number", "String", "Boolean", "Array", "Object",
+               "Date", "JSON", "Math", "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent", "encodeURI",
+               "decodeURI", "requestAnimationFrame", "scrollTo", "scrollBy", "structuredClone", "queueMicrotask",
+               "Promise", "Error", "RegExp", "Symbol", "BigInt", "Intl", "URL", "URLSearchParams", "FormData", "Blob",
+               "Event", "CustomEvent", "Audio", "Image", "atob", "btoa", "require", "$", "jQuery", "_"}
 
 
 def _id_parecido(i: str, ids: set[str]) -> str:
@@ -712,6 +732,65 @@ def ids_dom(raiz: Path, base: Path, inf: Informe) -> None:
         inf.errores.append(f"{sitios[0]} busca el elemento id='{i}' pero no existe en ningún HTML ni lo crea ningún "
                            "script (devolverá null)." + (f" ¿Querías '{parecido}', que sí existe?" if parecido else "")
                            + (f" También en {', '.join(sitios[1:4])}." if len(sitios) > 1 else ""))
+
+
+def _globales(codigo: str, modulo: bool) -> set[str]:
+    """Las funciones que un script deja a la vista de onclick: en un módulo (type="module") solo las de window, también
+    las de Object.assign(window, {abrir, cerrar: cerrarModal})."""
+    nombres = {next(g for g in m.groups() if g) for m in DEFINE_FUNCION.finditer(codigo) if not modulo or m[3] or m[4]}
+    for m in A_WINDOW.finditer(codigo):
+        nombres |= {re.split(r"\s*:", n.strip())[0] for n in m[1].split(",") if n.strip()}
+    return nombres
+
+
+def funciones_de_botones(raiz: Path, base: Path, inf: Informe) -> None:
+    """Cada manejador (onclick="abrir()"...) de base llama a una función suelta que existe en algún script del proyecto
+    (archivos o <script> de las páginas y plantillas) o en el navegador. Dos webs cargaban app.js con type="module":
+    sus funciones no se ven desde onclick y «+ Nuevo producto» no hacía nada."""
+    todos = archivos(raiz, *FUENTES_DOM, ".html", ".htm")
+    if not any(p.suffix.lower() in (".html", ".htm") for p in todos):
+        return
+    clasicos, modulos = set(), set()  # scripts que alguna página carga como script normal / como módulo
+    for p in todos:
+        if p.suffix.lower() in (".html", ".htm"):
+            for m in SCRIPT_SRC.finditer(p.read_text(encoding="utf-8", errors="replace")):
+                src = m[2] if m[2] is not None else m[3]
+                if (flask := re.search(r"""filename\s*=\s*['"]([^'"]+)""", src)):  # url_for('static', filename=...)
+                    src = "static/" + flask[1]
+                src = src.split("?")[0]
+                destino = next((c for c in (p.parent / src, raiz / src.lstrip("/")) if c.is_file()), p.parent / src)
+                es_modulo = re.search(r"""type\s*=\s*["']?module""", m[1] + m[4], re.IGNORECASE)
+                (modulos if es_modulo else clasicos).add(destino.resolve())
+    definidas, en_modulo, usos = set(GLOBALES_JS), {}, {}  # usos: función -> ["archivo:línea", ...]
+    for p in todos:
+        texto = p.read_text(encoding="utf-8", errors="replace")
+        if p.suffix.lower() in FUENTES_DOM:
+            trozos = [(p.resolve() in modulos and p.resolve() not in clasicos, texto)]
+        else:
+            trozos = [(bool(re.search(r"""type\s*=\s*["']?module""", m[1], re.IGNORECASE)), m[2])
+                      for m in SCRIPT_CON_ATRIBUTOS.finditer(texto)]
+        for modulo, codigo in trozos:
+            definidas |= _globales(codigo, modulo)
+            if modulo:
+                en_modulo.update(dict.fromkeys(_globales(codigo, False) - _globales(codigo, True), relativa(p, raiz)))
+        if p.name.endswith(".min.js") or base not in (p, *p.parents):
+            continue
+        for m in MANEJADOR.finditer(texto):
+            linea = texto.count("\n", 0, m.start()) + 1
+            for llamada in LLAMADA_SUELTA.finditer(PLANTILLA_EN_CODIGO.sub("0", m[2])):
+                usos.setdefault(llamada[1], []).append(f"{relativa(p, raiz)}:{linea}")
+    for nombre, sitios in sorted(usos.items()):
+        if nombre in definidas:
+            continue
+        if nombre in en_modulo:
+            motivo = (f"está en {en_modulo[nombre]}, que se carga como módulo (type=\"module\"), y las funciones de un "
+                      f"módulo no se ven desde onclick. Quita type=\"module\" o añade window.{nombre} = {nombre};")
+        else:
+            parecida = difflib.get_close_matches(nombre, sorted(definidas - GLOBALES_JS), 1, 0.7)
+            motivo = "no está en ningún script del proyecto." + (f" ¿Querías {parecida[0]}()?" if parecida else "")
+        inf.errores.append(f"{sitios[0]} un botón llama a {nombre}() y al pulsarlo no pasa nada (el navegador dice "
+                           f"«{nombre} is not defined»): {motivo}"
+                           + (f" También en {', '.join(dict.fromkeys(sitios[1:4]))}." if len(sitios) > 1 else ""))
 
 
 def _node_check(raiz: Path, codigo_o_ruta, nombre: str, inf: Informe, modulo: bool = False) -> None:
@@ -1239,6 +1318,7 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         sueltas = [h for h in htmls if not es_plantilla(h, raiz)]
         html_estatico(raiz, sueltas, jss, inf)
         ids_dom(raiz, base, inf)
+        funciones_de_botones(raiz, base, inf)
         librerias_cdn(raiz, htmls, inf)
         directas = [h for h in sueltas if not fuente_vite(h)]
         if directas:
