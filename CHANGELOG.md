@@ -5,6 +5,23 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.2] — 2026-11-08 (entrar con las credenciales que da el proyecto, aunque no haya README)
+
+- **Las credenciales que el proyecto da sin comillas o solo en el código ya sirven para entrar:** `verificar` daba
+  «nadie puede entrar en la web» en falso en webs que sí entran con `admin` / `admin123`. Pasaba cuando la pareja no
+  estaba en un README, sino en un comentario sin comillas o solo en el código (`hash_password('admin123')`):
+  - ahora reconoce las parejas con etiqueta aunque vayan sin comillas («usuario: X … contraseña: Y», `Usuario=\`x\``,
+    README con `**Usuario:**`);
+  - prueba `admin` / `admin123` (lo que dan casi todas las webs de negocio) **antes** que las parejas sueltas que
+    aparecen juntas en el código (`('Administrador', 'admin')` de los `INSERT`), que antes la empujaban más allá de las
+    que se prueban, sin tapar las etiquetadas ni las parejas fiables que el propio proyecto da.
+- **Prueba la app que abre el `.bat`, no el script de datos:** cuando `run.bat` lanza varios scripts (primero
+  `seed.py` para crear la base de datos y después `app.py`), `verificar` probaba el primero y no la app. Ahora prueba
+  el que arranca algo (Flask, `.run(`, `mainloop`…) o, si no, el último.
+- Medido sin GPU sobre 57 webs guardadas, con condiciones fijadas antes: ningún cambio de comportamiento en las 57, y
+  las webs de negocio que entran con `admin` / `admin123` sin README dejan de dar el error falso. Suite del motor en
+  verde.
+
 ## [4.13.1] — 2026-11-08 (las webs que entran con JavaScript y los botones que no hacen nada)
 
 - **Las webs que entran con JavaScript (`fetch`) ya se recorren por dentro:** en la 4.13.0, `verificar` solo avisaba
