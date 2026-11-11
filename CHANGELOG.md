@@ -5,6 +5,28 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.3] — 2026-11-11 (ingeniería inversa de APK y de JS minificado, en apps propias)
+
+- **Aura sabe abrir, entender y parchear un APK que ya no tiene código** (apps propias o con permiso de su dueño):
+  datos del paquete (permisos, servidor, versión), cambio de textos, colores o URLs y APK nuevo alineado y firmado.
+  También lee el JS minificado de una web propia y corrige el fallo. Trae:
+  - una guía `ingenieria-inversa` (alias apktool, jadx, smali…) que insiste en hacer solo lo pedido, trabajar sobre una
+    copia, no descargar herramientas por su cuenta y no quitar licencias, DRM ni anuncios de apps ajenas;
+  - `instalar_herramientas.bat`: baja apktool 3.0.3 y jadx 1.5.6 (88 MB) a `%LOCALAPPDATA%\AuraSentinel\herramientas`
+    comprobando su huella SHA-256; el agente las tiene en el PATH y no necesita bajarlas de internet;
+  - `verificar` con APK: que se reconstruye (errores de smali con archivo y línea), alineado, firmado y legible, y si hay un
+    emulador encendido, que se instala, se abre y no se cierra.
+- **Credenciales de `INSERT`:** `verificar` daba «nadie puede entrar» en falso cuando el usuario solo estaba en
+  `INSERT INTO usuarios (nombre, username, password, rol) VALUES (…)`: tomaba el nombre como contraseña. Ahora cada valor
+  va con su columna. Sin cambios de comportamiento en 65 webs guardadas.
+- En las mediciones (`AGENTE_SIN_ESCRITORIO=1`) el agente ya no abre URLs ni páginas en el navegador del usuario.
+- Medido con Qwen3.6 en 4 misiones de APK y web, comparadas con la 4.13.2: correctas 4/4 frente a 3/4 (la ganancia en
+  acierto es pequeña). Lo que cambia de verdad: sin la herramienta, la 4.13.2 bajó apktool de internet sin comprobarlo y
+  en una misión sobrescribió el APK original; con ella, cero descargas y originales intactos, y las misiones de cambiar
+  un texto o un servidor van de 8,3 a 2,2 min y de 4,3 a 3,0 min. Repetida la consulta de datos (M1) con la guía
+  corregida: 2 de 2 correctas, sin descargas, en 19 y 8 pasos. No se han vuelto a medir las misiones de negocio con la
+  guía nueva.
+
 ## [4.13.2] — 2026-11-08 (entrar con las credenciales que da el proyecto, aunque no haya README)
 
 - **Las credenciales que el proyecto da sin comillas o solo en el código ya sirven para entrar:** `verificar` daba
