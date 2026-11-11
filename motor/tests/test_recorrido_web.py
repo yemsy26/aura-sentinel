@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -439,6 +440,56 @@ class Credenciales(unittest.TestCase):
         (self.dir / "README.md").write_text("- **Usuario:** `dueña@tienda.com`\n- **Contraseña:** `tienda2026`\n",
                                             encoding="utf-8")
         self.assertEqual(self.accesos()[0], ("dueña@tienda.com", "tienda2026"))
+
+    def test_usuario_solo_en_un_insert_con_columnas(self):
+        # m4134_neg1: sin README; probaba admin/Administrador y «nadie puede entrar» saltó 3 veces en falso.
+        (self.dir / "app.py").write_text(
+            'def init_db(db):\n    db.executescript("""\n'
+            "        INSERT OR IGNORE INTO usuarios (nombre, username, password, rol) "
+            "VALUES ('Administrador', 'admin', 'admin123', 'admin');\n"
+            '    """)\n\n'
+            'def crear(db, f):\n    db.execute("INSERT INTO usuarios (nombre, username, password, rol) VALUES (?,?,?,?)",\n'
+            '               (f["nombre"], f["username"], f["password"], f["rol"]))\n', encoding="utf-8")
+        self.assertEqual(self.accesos()[0], ("admin", "admin123"))
+        self.assertNotIn("Administrador", claves_del_proyecto(self.dir))
+
+    def test_usuario_por_defecto_con_barra(self):
+        (self.dir / "app.py").write_text('print("   Usuario por defecto: admin / admin123")\n', encoding="utf-8")
+        self.assertEqual(self.accesos()[0], ("admin", "admin123"))
+
+    def test_un_hash_en_el_insert_no_es_una_contrasena(self):
+        (self.dir / "seed.sql").write_text("INSERT INTO users (username, password) VALUES ('admin', "
+                                           "'$2b$12$abcdefghijklmnopqrstuvwxyz0123');\n", encoding="utf-8")
+        self.assertFalse([c for c in claves_del_proyecto(self.dir) if c.startswith("$2b$")])
+
+
+class SinEscritorio(unittest.TestCase):
+    """Durante las mediciones el agente abría el navegador del usuario con «start http://…» (m4134_neg1, m4132)."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="test_sin_escritorio_"))
+        self.corridos = []
+        self.parche = mock.patch("agente.herramientas.correr",
+                                 lambda cmd, *a, **k: (self.corridos.append(cmd), (0, b"hola"))[1])
+        self.parche.start()  # nada se ejecuta de verdad: si el arreglo fallara, no se abriría ningún navegador
+
+    def tearDown(self):
+        self.parche.stop()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_con_la_variable_no_abre_el_navegador_y_corre_lo_demas(self):
+        with mock.patch.dict(os.environ, {"AGENTE_SIN_ESCRITORIO": "1"}):
+            r = Herramientas(self.dir).ejecutar('python seed.py && start "" http://127.0.0.1:5055 && python app.py')
+        self.assertEqual(self.corridos, ["python seed.py && cd . && python app.py"])
+        self.assertIn("No se abrió http://127.0.0.1:5055 en el navegador", r)
+        self.assertIn("ver_pantalla(url='http://127.0.0.1:5055')", r)
+
+    def test_sin_url_o_sin_la_variable_nada_cambia(self):
+        with mock.patch.dict(os.environ, {"AGENTE_SIN_ESCRITORIO": "1"}):
+            Herramientas(self.dir).ejecutar("start run.bat")
+        with mock.patch.dict(os.environ, {"AGENTE_SIN_ESCRITORIO": ""}):
+            Herramientas(self.dir).ejecutar("start http://127.0.0.1:5055/login")
+        self.assertEqual(self.corridos, ["start run.bat", "start http://127.0.0.1:5055/login"])
 
 
 if __name__ == "__main__":

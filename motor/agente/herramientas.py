@@ -91,6 +91,26 @@ PLACEHOLDERS = re.compile(r"(\.\.\.\s*(resto|rest of|existing|código anterior|m
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 
 
+# Durante las mediciones el agente abría el navegador del usuario («start http://127.0.0.1:5055/login», m4134_neg1 y
+# m4132). Con AGENTE_SIN_ESCRITORIO=1 (lo ponen los scripts de medida) esa parte del comando no se ejecuta; sin la
+# variable, nada cambia.
+ABRIR_URL = re.compile(r"""(?i)(^\s*|[&|(]\s*|\s/[ck]\s+)(?:start(?:\s+/\w+)*(?:\s+"[^"]*")?|explorer(?:\.exe)?|"""
+                       r"""rundll32(?:\.exe)?\s+url\.dll,\s*FileProtocolHandler|py(?:thon[w3]?)?(?:\.exe)?\s+-m\s+webbrowser"""
+                       r"""(?:\s+-[nt])*)\s+("?)((?:https?|file)://[^\s"&|()]+|[^\s"&|<>()]+\.html?)\2(?=\s*(?:$|[&|)]))""")
+
+
+def sin_navegador(comando: str) -> tuple[str, str]:
+    """(comando sin las órdenes que abren el navegador, aviso) si AGENTE_SIN_ESCRITORIO=1; si no, (comando, "")."""
+    if os.environ.get("AGENTE_SIN_ESCRITORIO") != "1":
+        return comando, ""
+    urls = [m[3] for m in ABRIR_URL.finditer(comando)]
+    if not urls:
+        return comando, ""
+    aviso = (f"\n[No se abrió {', '.join(urls)} en el navegador: en esta sesión no se abre nada en el escritorio del "
+             f"usuario. Para ver la página usa ver_pantalla(url='{urls[0]}').]")
+    return ABRIR_URL.sub(lambda m: m[1] + "cd .", comando), aviso
+
+
 def recortar(texto: str, maximo: int) -> str:
     """Conserva inicio y (sobre todo) final: los errores suelen estar al final."""
     if len(texto) <= maximo:
@@ -572,6 +592,10 @@ class Herramientas:
                 "comando en segundo plano usa procesos(accion='detener', id=N).")
 
     def ejecutar(self, comando: str, segundos: int = 0, fondo: bool = False) -> str:
+        comando, aviso = sin_navegador(comando)
+        return self._ejecutar(comando, segundos, fondo) + aviso
+
+    def _ejecutar(self, comando: str, segundos: int = 0, fondo: bool = False) -> str:
         # cmd ejecuta solo la primera línea y calla el resto: un «python -c "» de varias líneas daba exit=0 sin salida,
         # y una misión dio vueltas creyendo que el código no imprimía (754 comandos así en 45 misiones guardadas).
         if "\n" in comando.strip():

@@ -1213,7 +1213,9 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
 # ---------------------------------------------------------------- resumen
 # Una misión terminó diciendo «usuario admin, contraseña admin» y el programa creaba admin con admin123 (así lo decían
 # el código y el README): la dueña no pudo entrar. La contraseña que da el resumen tiene que estar en el proyecto.
-CLAVE_RESUMEN = re.compile(r"(?i)\b(?:contrase[ñn]a|clave|password|pass|pwd)\b[^`'\"\n]{0,15}?"
+# «password,» o «password)» es un nombre de columna (INSERT INTO usuarios (nombre, username, password, rol) VALUES
+# ('Administrador', ...)): el texto que viene después no es su contraseña (m4134_neg1 probaba admin/Administrador).
+CLAVE_RESUMEN = re.compile(r"(?i)\b(?:contrase[ñn]a|clave|password|pass|pwd)\b(?!\s*[,)])[^`'\"\n]{0,15}?"
                            r"(?:`([^`\s]{1,40})`|\*\*([^*\s]{1,40})\*\*|\"([^\"\s]{1,40})\"|'([^'\s]{1,40})')")
 # La 4.12.5 rechazó «empleada123», que estaba en hashlib.sha256("empleada123".encode()): también vale lo que se pasa a
 # una función de hash (sha256(, md5(, hashpw(b"...").
@@ -1223,6 +1225,47 @@ NO_ES_CLAVE = re.compile(r"^\.?[\w-]+\.\w{1,8}$|[/\\()=<>{}]|^[A-Z][A-Z0-9_]+$")
 # crear_usuario("Administrador", "admin", "admin123", "admin"): la contraseña va sin nombre; se toma la que lleva números.
 CLAVE_LLAMADA = re.compile(r"""(?i)\b\w*(?:usuario|user|empleado|cuenta|account)\w*\s*\(([^()\n]*)\)""")
 CON_NUMERO = re.compile(r"""['"]([A-Za-z][^'"\s]{2,38}\d[^'"\s]{0,10}|\d[^'"\s]{3,39})['"]""")
+# En un INSERT con lista de columnas cada valor va con su columna: (username, password) -> ('admin', 'admin123').
+INSERT_SQL = re.compile(r"(?is)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+[\w.`\"\[\]]+\s*\(([^()]*)\)\s*VALUES\s*\(([^()]*)\)")
+COL_USUARIO = re.compile(r"(?i)^[`\"\[]?(?:user_?name|usuario|user|login|email|correo)[`\"\]]?$")
+COL_CLAVE = re.compile(r"(?i)^[`\"\[]?(?:password|passwd|pass|pwd|contrase[ñn]a|clave)[`\"\]]?$")
+ES_HASH = re.compile(r"(?i)^(?:\$2[aby]?\$|pbkdf2|scrypt|argon2|sha\d*\$)|^[0-9a-f]{32,}$")
+# «Usuario por defecto: admin / admin123», «Credenciales: admin / 1234», «**Usuario administrador:** `admin` / `admin123`».
+PAREJA_BARRA = re.compile(r"(?i)\b(?:usuario|user|login|credenciales|acceso)\b[^:\n]{0,25}:\s*\**\s*[`'\"]?"
+                          r"([A-Za-z][\w.@-]{1,38})[`'\"]?\s*/\s*[`'\"]?([^\s`'\"*/<>()\[\]{},;|:]{3,39})(?![\w.]*\s*:)")
+
+
+def _valores_sql(texto: str) -> list[str]:
+    """'a', 'b,c', ? -> ["'a'", "'b,c'", "?"]: separa por comas que no van entre comillas."""
+    valores, actual, comilla = [], "", ""
+    for ch in texto:
+        if comilla:
+            comilla = "" if ch == comilla else comilla
+        elif ch in "'\"":
+            comilla = ch
+        elif ch == ",":
+            valores.append(actual.strip())
+            actual = ""
+            continue
+        actual += ch
+    return [*valores, actual.strip()]
+
+
+def parejas_con_etiqueta_fija(texto: str) -> list[tuple[str, str]]:
+    """Parejas que el texto da con su etiqueta sin dudas: columnas de un INSERT y «Usuario …: X / Y»."""
+    parejas = []
+    for m in INSERT_SQL.finditer(texto):
+        columnas, valores = [c.strip() for c in m[1].split(",")], _valores_sql(m[2])
+        iu = next((i for i, c in enumerate(columnas) if COL_USUARIO.match(c)), None)
+        ic = next((i for i, c in enumerate(columnas) if COL_CLAVE.match(c)), None)
+        if iu is None or ic is None or len(columnas) != len(valores):
+            continue
+        u, c = valores[iu], valores[ic]
+        if all(len(v) > 2 and v[0] == v[-1] and v[0] in "'\"" for v in (u, c)):
+            parejas.append((u[1:-1], c[1:-1]))
+    parejas += PAREJA_BARRA.findall(texto)
+    return [(u, c) for u, c in parejas if u != c and len(c) >= 3 and not ES_HASH.search(c)
+            and _valor_etiquetado(u) and _valor_etiquetado(c)]
 
 
 def _textos_proyecto(raiz: Path):
@@ -1240,6 +1283,7 @@ def claves_del_proyecto(raiz: Path) -> list[str]:
     """Contraseñas que da el proyecto (código, README...), en el orden en que aparecen."""
     conocidas: dict[str, None] = {}
     for texto in _textos_proyecto(raiz):
+        conocidas.update(dict.fromkeys(c for _, c in parejas_con_etiqueta_fija(texto)))
         conocidas.update(dict.fromkeys(CLAVE_CODIGO.findall(texto)))
         conocidas.update(dict.fromkeys(next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(texto)))
         conocidas.update(dict.fromkeys(c for m in CLAVE_LLAMADA.finditer(texto) for c in CON_NUMERO.findall(m[1])))
@@ -1272,6 +1316,7 @@ def pares_del_proyecto(raiz: Path, claves: list[str], usuarios: list[str]) -> li
     pares: dict[tuple[str, str], None] = {}
     candidatos = sorted(usuarios, key=lambda u: u.lower() in CAMPOS)  # {"usuario": "duena", ...}: primero «duena»
     for texto in _textos_proyecto(raiz):
+        etiquetados.update(dict.fromkeys(parejas_con_etiqueta_fija(texto)))
         lineas = texto.splitlines()
         for i, linea in enumerate(lineas):
             zona2 = " ".join(lineas[max(0, i - 1):i + 2])
