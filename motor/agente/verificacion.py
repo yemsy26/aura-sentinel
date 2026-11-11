@@ -1029,9 +1029,10 @@ def navegador(raiz: Path, htmls: list[Path], inf: Informe, raiz_web: Path | None
 
 # ---------------------------------------------------------------- Java
 def _de_android(p: Path, base: Path) -> bool:
-    """¿El .java es de un proyecto Android o de la carpeta android/ de Flutter? (javac solo no tiene sus librerías)."""
+    """¿El .java es de un proyecto Android o de la carpeta android/ de Flutter? (javac solo no tiene sus librerías).
+    También el Java que saca jadx de un APK (carpeta sources/ con resources/ al lado): es para leer, no compila."""
     for d in (a for a in p.parents if a == base or base in a.parents):
-        if (d / "pubspec.yaml").exists():
+        if (d / "pubspec.yaml").exists() or (d.name == "sources" and (d.parent / "resources").is_dir()):
             return True
         for nombre in ("build.gradle", "build.gradle.kts"):
             if (d / nombre).is_file() and "com.android" in (d / nombre).read_text("utf-8", "replace"):

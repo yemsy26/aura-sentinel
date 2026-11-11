@@ -8,7 +8,8 @@ from pathlib import Path
 from . import procesos
 
 IGNORAR = {".git", ".venv", "venv", "env", "node_modules", "__pycache__", "dist", "build", ".next", ".agente",
-           "target", "out", "obj", ".idea", ".vscode", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages"}
+           "target", "out", "obj", ".idea", ".vscode", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages",
+           "jadx_out"}  # jadx_out: Java decompilado de un APK (guía de ingeniería inversa), solo para leer
 # Lo que el agente trata como código (revisión, mapa, puntos de restauración, protección contra reescrituras).
 CODIGO = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".html", ".htm", ".css", ".scss",
           ".java", ".kt", ".kts", ".gradle", ".rs", ".go", ".cs", ".fs", ".csproj", ".fsproj", ".sln", ".c", ".h",

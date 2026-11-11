@@ -51,7 +51,8 @@ ESQUEMAS = [
        {"archivo": S, "segundos": I, "modelo": S}, ["archivo"]),
     _f("guia", "Buenas prácticas ACTUALES y cómo verificar para: python, pygame, html-juego, web, api, java, rust, go, "
                "node, dotnet, docker, despliegue, android, flutter, tauri, blockchain, evm, solana, mev, bases-de-datos, "
-               "matematicas, tests, bat. Incluye lo aprendido en tareas anteriores. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
+               "matematicas, tests, bat, ingenieria-inversa (abrir y parchear un APK ya hecho, JS minificado). Incluye lo "
+               "aprendido en tareas anteriores. Llámala al empezar un proyecto.", {"tema": S}, ["tema"]),
     _f("version", "Última versión real de un paquete o imagen (evita librerías obsoletas): pypi (y si hay wheel para tu "
                   "Python), npm, maven, crates (Rust), go (ruta del módulo, p. ej. github.com/gin-gonic/gin), nuget "
                   "(.NET), docker (imagen de Docker Hub, p. ej. python o node:alpine), google (Maven de Google para Android, "

@@ -9,17 +9,19 @@ import json
 import os
 import re
 import shutil
+import tempfile
+import time
 from pathlib import Path
 
-from . import android, app_tauri
+from . import android, app_tauri, inversa
 from .permisos import transaccion
-from .proyecto import Informe, correr_texto, ignorado, relativa
+from .proyecto import Informe, cola, correr_texto, ignorado, relativa
 
 COMPILAR = 600   # segundos: la primera compilación descarga dependencias
 CONSTRUIR = 900  # docker build
-ENTORNO = android.con_android(dict(
+ENTORNO = inversa.con_herramientas(android.con_android(dict(
     os.environ, CARGO_TERM_COLOR="never", NO_COLOR="1", CI="1", DOTNET_CLI_TELEMETRY_OPTOUT="1", DOTNET_NOLOGO="1",
-    DOCKER_CLI_HINTS="false", BUILDKIT_PROGRESS="plain", GOFLAGS="-buildvcs=false", FLUTTER_SUPPRESS_ANALYTICS="true"))
+    DOCKER_CLI_HINTS="false", BUILDKIT_PROGRESS="plain", GOFLAGS="-buildvcs=false", FLUTTER_SUPPRESS_ANALYTICS="true")))
 COMPOSE = {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
 CREDENCIAL = re.compile(r"\b(\w*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY)\w*)\s*[= ]\s*"
                         r"['\"]?([^\s'\"$]{4,})", re.IGNORECASE)
@@ -754,9 +756,91 @@ def yaml(base: Path, raiz: Path, inf: Informe) -> None:
     inf.errores.extend(e for e in (tabuladores_yaml(f, raiz) for f in archivos) if e)
 
 
+# ---------------------------------------------------------------- APK ya hecho (ingeniería inversa)
+ERROR_SMALI = r"(?P<archivo>[A-Za-z]:[^\[\]\n]+?\.smali|[^\s\[\]]+\.smali)\[(?P<linea>\d+),\d+\]\s*(?P<texto>.+)"
+
+
+def _emulador() -> str | None:
+    """El primer emulador encendido (nunca un móvil: instalar ahí cambiaría el teléfono del usuario)."""
+    codigo, salida = correr_texto("adb devices", Path.cwd(), 20, ENTORNO)
+    return (next((m[1] for m in re.finditer(r"^(emulator-\d+)\s+device\s*$", salida, re.MULTILINE)), None)
+            if codigo == 0 else None)
+
+
+def apk(base: Path, raiz: Path, inf: Informe) -> None:
+    """APK ya hecho (guia ingenieria-inversa): un APK decodificado con apktool (apktool.yml) tiene que reconstruirse, y
+    el .apk más reciente del proyecto (el que se entrega) tiene que poder instalarse: aapt2 lo lee, está alineado y
+    firmado. Con un emulador encendido, se instala y se abre (un parche de smali roto se cierra al arrancar)."""
+    decodificados = [p.parent for p in _buscar(base, lambda p: p.name == "apktool.yml")]
+    apks = sorted(_buscar(base, lambda p: p.suffix.lower() == ".apk"), key=lambda p: p.stat().st_mtime)
+    if not decodificados and not apks:
+        return
+    inf.tipos.append("apk")
+    jar = inversa.apktool()
+    for d in decodificados:
+        rel = relativa(d, raiz)
+        if not jar:
+            inf.avisos.append(f"{rel}: es un APK decodificado, pero falta apktool para comprobar que se reconstruye "
+                              "(el usuario lo instala con instalar_herramientas.bat del motor).")
+            continue
+        with tempfile.TemporaryDirectory(prefix="agente_apk_") as tmp:
+            copia = Path(tmp) / d.name
+            shutil.copytree(d, copia, ignore=shutil.ignore_patterns("build", "dist"))  # sin tocar el proyecto
+            codigo, salida = correr_texto(f'java -jar "{jar}" b "{copia}" -o "{Path(tmp) / "comprobar.apk"}"',
+                                          Path(tmp), COMPILAR, ENTORNO)
+        salida = salida.replace(str(copia), str(d))  # las rutas relativas («dec\smali\...») parten de d.parent
+        if codigo is None:
+            inf.errores.append(f"{rel}: apktool b no terminó en {COMPILAR} s.")
+        elif codigo != 0 and not _diagnosticos(salida, ERROR_SMALI, d.parent, raiz, inf, "apktool b: "):
+            inf.errores.append(f"{rel}: apktool b no puede reconstruir el APK:\n    {cola(salida, 8)}")
+        elif codigo == 0:
+            inf.ok.append(f"{rel}: el APK decodificado se reconstruye (apktool b)")
+    if not apks:
+        return
+    entrega, rel = apks[-1], relativa(apks[-1], raiz)
+    if not inversa.build_tools():
+        inf.avisos.append(f"{rel}: faltan las build-tools del SDK de Android (aapt2, zipalign, apksigner) para comprobarlo.")
+        return
+    codigo, datos = correr_texto(f'aapt2 dump badging "{entrega}"', raiz, 60, ENTORNO)
+    if codigo != 0:
+        inf.errores.append(f"{rel}: aapt2 no puede leer el APK (está roto o incompleto):\n    {cola(datos, 4)}")
+        return
+    paquete = (re.search(r"package: name='([^']+)'", datos) or [None, ""])[1]
+    version = (re.search(r"versionName='([^']*)'", datos) or [None, "?"])[1]
+    alineado = correr_texto(f'zipalign -c -p 4 "{entrega}"', raiz, 60, ENTORNO)[0] == 0
+    codigo_firma, firma = correr_texto(f'apksigner verify "{entrega}"', raiz, 60, ENTORNO)
+    if not alineado:
+        inf.errores.append(f"{rel}: no está alineado y Android 11 o posterior no lo instala: zipalign -p -f 4 ANTES de "
+                           "firmar (alinear después rompe la firma).")
+    if codigo_firma != 0:
+        inf.errores.append(f"{rel}: no está firmado o su firma no vale, y Android no lo instala: fírmalo con apksigner "
+                           f"sign (guia('ingenieria-inversa')).\n    {cola(firma, 3)}")
+    if not alineado or codigo_firma != 0:
+        return
+    inf.ok.append(f"{rel}: APK {paquete} {version}: aapt2 lo lee, está alineado y firmado")
+    if not paquete or not (serie := _emulador()):
+        return
+    codigo, salida = correr_texto(f'adb -s {serie} install -r "{entrega}"', raiz, 180, ENTORNO)
+    if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in salida:
+        inf.avisos.append(f"{rel}: en el emulador ya está {paquete} con otra firma; para probar este hay que desinstalar el "
+                          "anterior, y eso borra sus datos: pregunta al usuario antes.")
+        return
+    if codigo != 0 or "Success" not in salida:
+        inf.errores.append(f"{rel}: el emulador {serie} no lo instala:\n    {cola(salida, 4)}")
+        return
+    correr_texto(f"adb -s {serie} logcat -c", raiz, 20, ENTORNO)
+    correr_texto(f"adb -s {serie} shell monkey -p {paquete} -c android.intent.category.LAUNCHER 1", raiz, 30, ENTORNO)
+    time.sleep(5)
+    _, log = correr_texto(f"adb -s {serie} logcat -d -s AndroidRuntime:E", raiz, 20, ENTORNO)
+    if "FATAL EXCEPTION" in log and paquete in log:
+        inf.errores.append(f"{rel}: se instala, pero se cierra al abrirlo en el emulador:\n    {cola(log, 10)}")
+    else:
+        inf.ok.append(f"{rel}: se instala y abre en el emulador {serie} sin cerrarse")
+
+
 # ---------------------------------------------------------------- entrada
 def verificar_todos(base: Path, raiz: Path, inf: Informe) -> None:
-    for comprobar in (rust, tauri, go, dotnet, node, solidity, anchor, android_gradle, flutter, docker, yaml):
+    for comprobar in (rust, tauri, go, dotnet, node, solidity, anchor, android_gradle, flutter, apk, docker, yaml):
         comprobar(base, raiz, inf)
 
 

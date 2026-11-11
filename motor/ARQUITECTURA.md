@@ -16,7 +16,7 @@ De abajo arriba; cada capa usa solo las anteriores.
 
 | Capa | Módulos | Qué hacen |
 | --- | --- | --- |
-| Base | `config`, `entorno`, `procesos`, `llm`, `metricas`, `android` | Configuración, entorno de los comandos, control de procesos, cliente del modelo, métricas |
+| Base | `config`, `entorno`, `procesos`, `llm`, `metricas`, `android`, `inversa` | Configuración, entorno de los comandos, control de procesos, cliente del modelo, métricas; SDK de Android y herramientas de ingeniería inversa (apktool, jadx) |
 | Contratos y reglas | `esquemas`, `permisos`, `borrados`, `proyecto` | Qué puede pedir el modelo; qué se puede hacer sin preguntar; qué código borra fuera de lo suyo; qué es código, el `Informe` y cómo correr un comando |
 | Modelo | `compat`, `modelo`, `descargar`, `prueba_modelo`, `llamadas` | Fichas de modelos, carga en la VRAM, descargas, prueba de un modelo, lectura de las llamadas que escribe |
 | Conocimiento | `pasajes`, `conocimiento`, `lecciones`, `mapa`, `idiomas`, `complementos`, `matematicas` | Lo investigado, guías, lecciones, mapa del repositorio, idiomas, motores opcionales y cálculo exacto |
@@ -44,8 +44,9 @@ Quien renombre uno de estos debe actualizar también a quien lo llama:
 
 - `agente_mcp.py`: `agente.esquemas.ESQUEMAS`, `agente.herramientas.Herramientas`, `agente.revision.revisar`.
 - `instalar.bat`: `-m agente.complementos asegurar`, `-m agente.instalar`.
+- `instalar_herramientas.bat`: `-m agente.inversa instalar` (y `inversa.resumen()` lo nombra al modelo cuando faltan).
 - `setup.ps1`: `-m agente.descargar`, `-m agente.modelo cargar`, `-m agente.instalar`.
-- `src-tauri/tauri.conf.json` (`resources`): copia `agente/*.py`, `guias/*.md`, `sondas/*.py` y `tests/*.py`. Una subcarpeta nueva dentro de `agente/` hay que añadirla ahí o no llegará al instalador.
+- `src-tauri/tauri.conf.json` (`resources`): copia `agente/*.py`, `guias/*.md`, `sondas/*.py`, `tests/*.py` y `tests/datos/*`. Una subcarpeta nueva dentro de `agente/` hay que añadirla ahí o no llegará al instalador.
 
 ## Antes de dar un cambio por bueno
 

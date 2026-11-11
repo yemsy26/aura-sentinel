@@ -1,4 +1,5 @@
 # Android (Kotlin + Jetpack Compose)
+- Si el usuario da un APK ya hecho (sin su código) para revisarlo o cambiarlo: `guia("ingenieria-inversa")`.
 - Dos caminos: Flutter (`guia("flutter")`, `flutter create` genera todo, incluido el wrapper de Gradle) o Kotlin nativo con estos archivos:
   - `settings.gradle.kts`: `pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }`, `dependencyResolutionManagement { repositories { google(); mavenCentral() } }`, `rootProject.name` e `include(":app")`.
   - `gradle/libs.versions.toml` (catálogo de versiones) y `build.gradle.kts` raíz con los plugins y `apply false`.

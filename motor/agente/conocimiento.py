@@ -35,7 +35,12 @@ ALIAS = {"juego": "pygame", "pygame-ce": "pygame", "canvas": "html-juego", "java
          "base-de-datos": "bases-de-datos", "basedatos": "bases-de-datos", "sql": "bases-de-datos",
          "postgres": "bases-de-datos", "postgresql": "bases-de-datos", "mysql": "bases-de-datos",
          "mongodb": "bases-de-datos", "mongo": "bases-de-datos", "redis": "bases-de-datos",
-         "migraciones": "bases-de-datos", "tauri2": "tauri", "tauri-app": "tauri"}
+         "migraciones": "bases-de-datos", "tauri2": "tauri", "tauri-app": "tauri",
+         "inversa": "ingenieria-inversa", "ingeniería-inversa": "ingenieria-inversa", "apktool": "ingenieria-inversa",
+         "jadx": "ingenieria-inversa", "smali": "ingenieria-inversa", "decompilar": "ingenieria-inversa",
+         "descompilar": "ingenieria-inversa", "parchear-apk": "ingenieria-inversa", "parche-apk": "ingenieria-inversa",
+         "js-minificado": "ingenieria-inversa", "minificado": "ingenieria-inversa", "reverse": "ingenieria-inversa",
+         "reverse-engineering": "ingenieria-inversa"}
 REEMPLAZOS = {"pygame": "pygame-ce", "pypdf2": "pypdf", "fuzzywuzzy": "rapidfuzz", "pycrypto": "pycryptodome",
               "sklearn": "scikit-learn", "bs4": "beautifulsoup4", "opencv": "opencv-python", "pil": "pillow"}
 

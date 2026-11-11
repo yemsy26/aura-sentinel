@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import android, conocimiento, lecciones, matematicas, pantalla, procesos
+from . import android, conocimiento, inversa, lecciones, matematicas, pantalla, procesos
 from . import mapa as mapa_repo
 from .borrados import aviso, peligrosos
 from .idiomas import resumen_idiomas
@@ -422,7 +422,7 @@ class Herramientas:
         if venv.is_dir():  # el venv del proyecto tiene prioridad
             env["PATH"] = f"{venv}{os.pathsep}{env.get('PATH', '')}"
             env["VIRTUAL_ENV"] = str(venv.parent)
-        return android.con_android(env)
+        return inversa.con_herramientas(android.con_android(env))
 
     def abrir_android_studio(self, ruta: str = ".") -> str:
         """Abre el proyecto en Android Studio, que sincroniza Gradle e instala lo que falte del SDK."""

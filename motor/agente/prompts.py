@@ -4,7 +4,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import android, ecosistemas, matematicas
+from . import android, ecosistemas, inversa, matematicas
 from .config import RAIZ_INSTALACION
 from .permisos import red_solana_por_defecto
 
@@ -46,6 +46,7 @@ def _android_y_bd() -> list[str]:
         partes.append("Android Studio")
     if (gradle := android.gradle_local()):
         partes.append(f"Gradle {gradle[0]} ya descargado")
+    partes.append(inversa.resumen())
     partes.append("Flutter" if shutil.which("flutter") else "")
     clientes = [c for c in ("psql", "mysql", "mongosh", "redis-cli", "sqlite3", "sqlcmd") if shutil.which(c)]
     partes.append(f"clientes de bases de datos: {', '.join(clientes)}" if clientes else "")

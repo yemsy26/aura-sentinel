@@ -51,6 +51,7 @@
       "../motor/agente/guias/*.md": "motor/agente/guias/",
       "../motor/agente/sondas/*.py": "motor/agente/sondas/",
       "../motor/tests/*.py": "motor/tests/",
+      "../motor/tests/datos/*": "motor/tests/datos/",
       "../motor/agente.json": "motor/agente.json",
       "../motor/agente_mcp.py": "motor/agente_mcp.py",
       "../motor/requisitos.txt": "motor/requisitos.txt",
@@ -60,6 +61,7 @@
       "../motor/cargar_modelo.bat": "motor/cargar_modelo.bat",
       "../motor/descargar_modelo.bat": "motor/descargar_modelo.bat",
       "../motor/instalar.bat": "motor/instalar.bat",
+      "../motor/instalar_herramientas.bat": "motor/instalar_herramientas.bat",
       "../motor/probar.bat": "motor/probar.bat",
       "../motor/vision.bat": "motor/vision.bat"
     },
