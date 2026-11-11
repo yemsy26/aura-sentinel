@@ -492,5 +492,61 @@ class SinEscritorio(unittest.TestCase):
         self.assertEqual(self.corridos, ["start run.bat", "start http://127.0.0.1:5055/login"])
 
 
+class ServidorAusente(unittest.TestCase):
+    """Una entrega acababa su run.bat en «python app.py», pero app.py solo definía la aplicación: nadie la ponía a servir,
+    con doble clic no se veía nada y verificar decía «se ejecuta sin errores»."""
+    SIN_SERVIR = "class FastAPI:\n    pass\n\n\napp = FastAPI()\nprint('listo', app)\n"
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="test_sin_servidor_"))
+        (self.dir / "app.py").write_text(self.SIN_SERVIR, encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def verificar(self):
+        from agente.verificacion import verificar
+        return verificar(self.dir, sys.executable, segundos=6)
+
+    def test_con_bat_de_doble_clic_es_un_error(self):
+        (self.dir / "run.bat").write_text('@echo off\ncd /d "%~dp0"\npython app.py\n', encoding="utf-8")
+        informe, errores = self.verificar()
+        self.assertIn("app.py: crea la aplicación web pero nunca la pone a servir", informe)
+        self.assertIn("lo que abre run.bat", informe)
+        self.assertNotIn("se ejecuta sin errores", informe)
+        self.assertGreaterEqual(errores, 1, informe)
+
+    def test_sin_bat_solo_avisa(self):
+        informe, errores = self.verificar()
+        self.assertIn("termina sin abrir ningún servidor", informe)
+        self.assertNotIn("nunca la pone a servir", informe)
+        self.assertNotIn("app.py se ejecuta sin errores", informe)
+        self.assertEqual(errores, 0, informe)
+
+    def test_si_el_proyecto_nombra_otra_forma_de_arrancar_no_dice_nada(self):
+        (self.dir / "README.md").write_text("Arranca con `uvicorn app:app --reload`.\n", encoding="utf-8")
+        informe, errores = self.verificar()
+        self.assertNotIn("sin abrir ningún servidor", informe)
+        self.assertIn("app.py se ejecuta sin errores", informe)
+        self.assertEqual(errores, 0, informe)
+
+    def test_un_programa_con_un_modo_web_opcional_no_se_marca(self):
+        # Gestores de gastos de consola que solo sirven con el modo web: `python app.py` abre un menú y termina.
+        (self.dir / "app.py").write_text(self.SIN_SERVIR + "\n\ndef modo_web(servidor):\n    servidor.serve_forever()\n",
+                                         encoding="utf-8")
+        (self.dir / "run.bat").write_text('@echo off\ncd /d "%~dp0"\npython app.py\n', encoding="utf-8")
+        informe, _ = self.verificar()
+        self.assertNotIn("nunca la pone a servir", informe)
+        self.assertNotIn("sin abrir ningún servidor", informe)
+
+    def test_una_web_que_si_sirve_no_cambia(self):
+        (self.dir / "app.py").write_text(WEB, encoding="utf-8")
+        (self.dir / "README.md").write_text("Entra con usuario `ana` y contraseña `pan123`.\n", encoding="utf-8")
+        (self.dir / "run.bat").write_text('@echo off\ncd /d "%~dp0"\npython app.py\n', encoding="utf-8")
+        informe, _ = self.verificar()
+        self.assertNotIn("nunca la pone a servir", informe)
+        self.assertNotIn("sin abrir ningún servidor", informe)
+
+
 if __name__ == "__main__":
     unittest.main()

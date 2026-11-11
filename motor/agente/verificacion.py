@@ -304,8 +304,9 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
     if re.search(r"\b(PyQt|PySide|wx)\b", fuente):
         inf.avisos.append(f"{rel}: app con ventana (GUI): no se abre aquí; prueba su lógica con tests.")
         return
+    web, lanzado = False, None
     if any(WEB_PY.search(p.read_text(encoding="utf-8", errors="replace")) for p in rutas if not p.name.startswith("test")):
-        lanzado = entrada_bat(raiz)
+        web, lanzado = True, entrada_bat(raiz)
         if probar_web(raiz, lanzado[1] if lanzado else entrada, python, inf):
             return
     codigo, salida = correr_texto([python, str(entrada)], entrada.parent, segundos, env)
@@ -315,7 +316,8 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
         inf.avisos.append(f"{rel} pide datos con input(): pruébalo con tests o con 'echo datos| python {entrada.name}'.")
     elif codigo != 0:
         inf.errores.append(f"{rel} termina con error (exit {codigo}):\n    {cola(salida)}")
-    else:
+    elif not (web and WEB_PY.search(fuente) and (lanzado is None or lanzado[1] == entrada)
+              and servidor_ausente(raiz, entrada, lanzado, inf)):
         inf.ok.append(f"{rel} se ejecuta sin errores")
 
 
@@ -395,6 +397,36 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                  else f"{r['paginas']} páginas y {r['formularios']} formularios enviados")
         inf.ok.append(f"{rel}: usé la web de verdad: {hecho}" + (f" entrando como {r['usuario']}" if r["usuario"] else "")
                       + ", sin errores")
+    return True
+
+
+# Una entrega acababa su run.bat en «python app.py», pero app.py solo definía create_app(): nadie la llamaba ni hacía
+# app.run, no se abría ningún servidor y verificar decía «se ejecuta sin errores». Sin .bat puede arrancarse con
+# `flask run` o un servidor de producción: entonces solo se avisa, y nada si el proyecto lo nombra.
+OTRO_ARRANQUE = re.compile(r"(?i)\bflask\s+(?:--app\b|run\b)|\b(?:uvicorn|gunicorn|waitress|hypercorn)\b|\bfastapi\s+(?:dev|run)\b")
+# Un gestor de consola con un modo web opcional también crea un HTTPServer: si el programa pone algo a servir en algún sitio
+# (aunque sea en un modo), no se marca.
+SIRVE = re.compile(r"\.run\s*\(|\bserve_forever\b|\brun_simple\s*\(|\bwaitress\.serve\b|\.serve\s*\(")
+
+
+def servidor_ausente(raiz: Path, entrada: Path, lanzado: tuple[Path, Path] | None, inf: Informe) -> bool:
+    """Marca una web cuyo programa termina sin servir nada. False si el proyecto se arranca de otra forma."""
+    if SIRVE.search(entrada.read_text(encoding="utf-8", errors="replace")):
+        return False
+    rel = relativa(entrada, raiz)
+    consejo = 'Llama a app.run(...) (Flask) o uvicorn.run(...) (FastAPI) al final, dentro de `if __name__ == "__main__":`.'
+    if lanzado:
+        inf.errores.append(f"{rel}: crea la aplicación web pero nunca la pone a servir: `python {entrada.name}` (lo que abre "
+                           f"{lanzado[0].name}) termina sin abrir ningún servidor, así que con doble clic no se ve nada. {consejo}")
+        return True
+    for p in (*raiz.glob("*.bat"), *raiz.glob("*.cmd"), *raiz.glob("*.sh"), *raiz.glob("*.md"), raiz / "Procfile"):
+        try:
+            if OTRO_ARRANQUE.search(p.read_text(encoding="utf-8", errors="replace")[:20000]):
+                return False
+        except OSError:
+            continue
+    inf.avisos.append(f"{rel}: crea la aplicación web pero al ejecutarlo termina sin abrir ningún servidor. Si se arranca con "
+                      f"`flask run` o un servidor de producción, ignóralo; si no, {consejo[0].lower() + consejo[1:]}")
     return True
 
 
