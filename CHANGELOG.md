@@ -5,6 +5,36 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.4] — 2026-11-12 (verificar ve más fallos de las webs que Aura entrega)
+
+Ocho comprobaciones nuevas de `verificar`: cada una sale de un fallo real que una entrega de Qwen3.6 tenía y
+`verificar` daba por buena. Todas se midieron sin GPU sobre 73 a 81 webs guardadas: solo cambian las webs que de verdad
+tienen el fallo (el primer pase de «administrador sin permiso» y «altas por modal» dio cuatro falsos y una web mal
+marcada; se corrigieron antes de integrar y quedó anotado).
+
+- **El `.bat` de doble clic no sirve nada:** error si `python app.py` (lo que abre el `.bat`) crea la aplicación pero
+  nunca llama a `app.run`, así que no se abre ningún servidor.
+- **El `.bat` borra la base en cada arranque:** error si el `.bat`, o un `.py` que lanza, hace `drop_all`, `DROP TABLE` o
+  borra el `.db` cada vez que arranca: quien lo abre pierde sus datos.
+- **Venta con líneas hechas por JavaScript:** el recorrido pulsa «+ Agregar Producto» con un navegador oculto, rellena,
+  guarda y da error si el servidor responde 500, deja una traza o la página enseña un error de programa con un 200.
+- **Pantalla de entrar vacía:** error si `/` manda a una página de entrar sin formulario, campos ni botones.
+- **Altas por modal:** si el botón «Nuevo» está fuera de todo formulario, el recorrido usa el navegador (hasta 40 s) y
+  caza las páginas que dan 500 cuando ya hay datos.
+- **Administrador sin permiso:** error si el administrador entra pero al abrir su sección la web responde 403 o lo manda
+  a otra página con «No tienes permiso» (solo antes de enviar ningún formulario, para no confundirlo con los cambios de
+  rol que hace el propio recorrido).
+- **Pantalla de entrar en blanco:** error si la contraseña está en la página pero un contenedor con `display:none` la
+  oculta y no se ve nada con lo que seguir; nombra el bloque culpable.
+- **401 tras entrar:** error si, ya dentro, las lecturas (`GET` con `fetch`) de la pantalla reciben 401, o 403 siendo
+  administrador: la petición sale sin credencial o el servidor rechaza la que le llega, y las listas salen vacías.
+- Medido en misiones con Qwen3.6 (4 de negocio por tanda, 150 pasos): con las tres primeras comprobaciones, terminan
+  3 de 4 (mediana 38,6 min) y 2 de 4 son usables; sumando las tres siguientes, terminan 3 de 4 (mediana 39,0 min) y 2 de 4
+  son usables contando una con reserva (1 de 4 sin ella). **En esas ocho misiones ningún aviso nuevo llegó a saltar**, así
+  que no se puede atribuir mejora ni empeoramiento a estos cambios. Las dos últimas (pantalla en blanco y 401) se midieron
+  solo sobre webs guardadas, no en misiones. En esas misiones se vieron los dos fallos que motivaron las dos últimas.
+- Solo cambia el motor de `verificar`: la interfaz y el resto del motor son los de la 4.13.3.
+
 ## [4.13.3] — 2026-11-11 (ingeniería inversa de APK y de JS minificado, en apps propias)
 
 - **Aura sabe abrir, entender y parchear un APK que ya no tiene código** (apps propias o con permiso de su dueño):
