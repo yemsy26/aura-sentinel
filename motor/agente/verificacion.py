@@ -1188,6 +1188,33 @@ def puertos_escucha(raiz: Path) -> set[int]:
     return puertos.union(*(p for patron, p in POR_DEFECTO if re.search(patron, texto, re.IGNORECASE)))
 
 
+# Un run.bat hacía «python -c "...db.drop_all(); db.create_all()"» antes de seed.py y de app.py: con cada doble clic se
+# borraba todo lo que la dueña había dado de alta (m4135_neg4). Se mira el .bat que abre el usuario, no los que existen para
+# borrar (reset, limpiar...) ni los de instalar/probar, y solo lo que se ejecuta siempre (sin un «if exist» que lo guarde).
+BAT_QUE_BORRA = re.compile(r"(?i)^(test|prueba|instal|setup|build|compil|reset|reinici|limpi|borr|clean|demo)")
+BORRA_DATOS = re.compile(r"(?i)\bdrop_all\s*\(|\bdrop\s+(?:table|database)\b|\b(?:os\.remove|\.unlink)\s*\([^)]*\.(?:db|sqlite3?)\b"
+                         r"|^(?:del|erase)\b[^\n]*\.(?:db|sqlite3?)\b|^(?:rmdir|rd)\b[^\n]*\b(?:instance|data)\b")
+
+
+def borra_datos_bat(b: Path, lineas: list[str], raiz: Path, inf: Informe) -> None:
+    if BAT_QUE_BORRA.match(b.stem):
+        return
+    guardado = 0
+    for i, l in enumerate(lineas):
+        if re.match(r"(?i)if\b.*\(\s*$", l):
+            guardado += 1
+        elif l.startswith(")") and not l.endswith("("):  # «) else (» sigue dentro del if
+            guardado = max(0, guardado - 1)
+        if guardado or not l or re.match(r"(?i)(rem\b|::|@?echo\b|if\b)", l):
+            continue
+        if (m := BORRA_DATOS.search(l)):
+            inf.errores.append(f"{relativa(b, raiz)}:{i + 1} borra la base de datos en cada arranque (`{m[0]}`): con doble clic "
+                               "se pierde lo que el usuario haya dado de alta. No borres nada al arrancar: usa db.create_all() "
+                               "(no toca lo que ya existe), haz que seed.py solo cargue datos si la tabla está vacía y deja el "
+                               "borrado para un reset.bat aparte.")
+            return
+
+
 def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
     escucha = puertos_escucha(raiz) if lista else set()
     for b in lista:
@@ -1241,6 +1268,7 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
             destino = (m.group(1) or m.group(2)).strip()
             if "%" not in destino and not (b.parent / destino).exists():
                 inf.errores.append(f"{rel} ejecuta '{destino}' y ese archivo NO existe junto al .bat.")
+        borra_datos_bat(b, lineas, raiz, inf)
 
 
 # ---------------------------------------------------------------- resumen
