@@ -378,6 +378,15 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
         inf.errores.append(f"{rel}: el enlace «{s['texto']}» de {s['desde']} no abre ningún formulario: {s['a']} vuelve a "
                            f"{s['desde']}, también con datos ya creados. Nadie puede hacer eso desde la web: {s['a']} "
                            "tiene que enseñar su formulario (GET) y guardarlo (POST).")
+    if r.get("login_vacio"):
+        inf.errores.append(f"{rel}: la web manda a {r['login_vacio']} para entrar, pero esa página sale vacía (sin formulario, "
+                           "campos, botones ni enlaces): nadie puede entrar. Mira que la plantilla de entrar rellene el bloque "
+                           "que pide la plantilla base (el nombre del {% block %} tiene que ser el mismo en las dos).")
+    for s in r.get("sin_permiso", [])[:3]:
+        cierre = "la web le responde 403" if s["a"] is None else f"la web lo manda a {s['a']} con «{s['frase']}»"
+        inf.errores.append(f"{rel}: el administrador «{s['usuario']}» entra, pero al abrir {s['ruta']} {cierre}: no puede usar "
+                           "su propia sección (crear, vender...). Revisa cómo se carga el usuario en cada petición (¿el rol "
+                           "llega bien al construirlo?) y que el administrador tenga el rol que piden esas rutas.")
     if nav and nav.get("clave_a_la_vista"):
         inf.errores.append(f"{rel}: después de entrar como {nav['usuario']}, la pantalla de entrar sigue a la vista y la "
                            "aplicación aparece debajo: quien la usa cree que no ha entrado. Revisa cómo se oculta (una "

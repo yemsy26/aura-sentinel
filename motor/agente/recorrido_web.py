@@ -27,7 +27,7 @@ ARRANQUE = Path(__file__).resolve().parent / "sondas" / "web_arranque.py"
 NO_TOCAR = re.compile(r"(?i)log-?out|salir|cerrar[-_ ]?sesi|sign[-_ ]?out|eliminar|borrar|delete|remove|quitar|vaciar|"
                       r"reset|restablecer|desactivar|anular|cancelar")
 # Lo que abre el formulario de dar de alta algo.
-ABRIR_FORM = re.compile(r"(?i)^\W*\+|nuev[oa]|crear|agregar|añadir|registrar")
+ABRIR_FORM = re.compile(r"(?i)^\W*\+(?!\s*\d)|nuev[oa]|crear|agregar|añadir|registrar")  # «+10» ajusta el stock, no da de alta
 # Una web con registro se puede usar sin los usuarios del proyecto: la primera cuenta se crea registrándose.
 REGISTRO = re.compile(r"(?i)reg[ií]str(?:ar)?(?:se|te)\b|crear (?:una )?cuenta|sign[ -]?up|/regist(?:er|ro)\b")
 ESTATICO = re.compile(r"(?i)\.(?:css|js|mjs|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|map|pdf|xlsx?|csv|zip|txt)(?:\?|$)")
@@ -42,11 +42,19 @@ POR_NOMBRE = ((r"descuento|discount|iva|impuesto|tax|porcentaje|recargo", 0.0), 
               (r"venta|pvp|sale|precio|price|importe|monto|amount|total|pago", 15.0))
 CERO_VALE = re.compile(POR_NOMBRE[0][0])  # en un descuento, 0 es lo normal
 MAX_PAGINAS, MAX_FORMULARIOS, MAX_SEGUNDOS, MAX_SEGUNDOS_REINTENTO, MAX_SEGUNDOS_LINEAS = 60, 25, 75, 15, 25
+MAX_SEGUNDOS_ALTAS = 40  # el navegador para las altas por modal: neg3 dio sus dos 500 en 20 s
 # Una venta cuyas líneas arma JavaScript («+ Agregar Producto» añade un select y una cantidad): sin JavaScript, el recorrido
 # solo enviaba el cliente y recibía «Agrega al menos un producto». La ruta de venta, la más importante del negocio, no se
 # probaba, y una entrega salió con «'sqlite3.Connection' object has no attribute 'last_insert_rowid'» al vender.
 AGREGAR_FILA = re.compile(r"(?i)(?:agregar|a[ñn]adir|add|nuev[oa]|\+)\W*(?:otro\s+|otra\s+|un[oa]?\s+)?"
                           r"(?:producto|art[ií]culo|[ií]tem|item|l[ií]nea|fila|servicio|concepto|row|line|product)")
+# El administrador entró y la web no lo deja abrir su propia sección (una entrega pasaba mal el rol al construir el usuario:
+# todos eran «True» y @permiso lo rechazaba todo con «No tienes permiso»). Un vendedor sin permiso es normal: solo se mira
+# a quien se llama admin.
+SIN_CODIGO = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+ES_ADMIN = re.compile(r"(?i)^(?:admin|administrador|root|owner|due[ñn]o)\b")
+SIN_PERMISO = re.compile(r"(?i)[^<>\n]{0,40}(?:no tienes permisos?|sin permisos?|acceso denegado|no autorizad[oa]|not authori[sz]ed|"
+                         r"permission denied|no tiene permisos|no puedes acceder|no est[aá]s autorizad[oa])[^<>\n]{0,60}")
 SIN_STOCK = re.compile(r"(?i)\b(?:stock|existencias?|disp\w*)\s*:?\s*0\b|agotad|sin\s+stock")
 # Un error de programación que la propia web enseña (la venta capturaba la excepción y la mostraba con un 200). Las
 # restricciones de la base (UNIQUE, NOT NULL) no: pueden venir de datos repetidos.
@@ -65,10 +73,14 @@ class _Pagina(html.parser.HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.enlaces, self.formularios, self.textos = [], [], {}
-        self._form = self._select = self._opcion = self._enlace = self._boton = None
+        self.botones_sueltos: list[str] = []  # textos de los <button> que están fuera de todo formulario (un modal, fetch)
+        self._form = self._select = self._opcion = self._enlace = self._boton = self._suelto = None
 
     def handle_starttag(self, tag, attrs):
         a = {k: v or "" for k, v in attrs}
+        if tag == "button" and self._form is None:
+            self.botones_sueltos.append("")
+            self._suelto = len(self.botones_sueltos) - 1
         if tag == "a" and a.get("href"):
             self.enlaces.append(a["href"])
             self._enlace = [a["href"], a.get("title", "")]
@@ -96,10 +108,12 @@ class _Pagina(html.parser.HTMLParser):
             self._enlace[1] += data
         if self._boton is not None:
             self._boton["texto"] = self._boton.get("texto", "") + data
+        if self._suelto is not None:
+            self.botones_sueltos[self._suelto] = " ".join(f"{self.botones_sueltos[self._suelto]} {data}".split())
 
     def handle_endtag(self, tag):
         if tag == "button":
-            self._boton = None
+            self._boton = self._suelto = None
         if tag == "a" and self._enlace is not None:
             self.textos.setdefault(self._enlace[0], " ".join(self._enlace[1].split())[:60])
             self._enlace = None
@@ -171,6 +185,20 @@ def _rellenar(form: dict, hoy: str, usuario: str | None = None, clave: str | Non
     return datos + ([boton] if boton else [])
 
 
+LOGIN_RUTA = re.compile(r"(?i)login|signin|sign-in|entrar|acceso|ingres|auth|iniciar")
+
+
+def _pagina_vacia(texto: str, pagina: "_Pagina") -> bool:
+    """Una página que no enseña nada que usar: ni formularios, campos, botones, enlaces ni JavaScript que los pinte, y casi sin texto.
+    Una página de entrar así (login.html no rellenaba el bloque de la plantilla) deja a todos fuera."""
+    if pagina.formularios or pagina.botones_sueltos or pagina.enlaces:
+        return False
+    if re.search(r"(?i)<(?:input|button|select|textarea|script|iframe|canvas|form)\b", texto):
+        return False
+    visible = re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<head\b.*?</head>|<!--.*?-->|<(?:script|style)\b.*?</(?:script|style)>", "", texto))
+    return len(" ".join(visible.split())) < 40
+
+
 def _es_entrar(form: dict) -> bool:
     visibles = [c for c in form["campos"] if c["tipo"] not in ("hidden", "submit", "button", "image", "checkbox")]
     return any(c["tipo"] == "password" for c in visibles) and len(visibles) <= 3
@@ -216,6 +244,10 @@ class _Recorrido:
         self.usuario: str | None = None
         self.clave: str | None = None
         self.filas_js: dict[str, str] = {}  # página -> acción de su formulario, que añade líneas con un botón (JavaScript)
+        self.sin_permiso: list[dict] = []  # el administrador que entró y no puede abrir una de sus páginas
+        self.altas_js = False  # un botón «Nuevo» suelto, fuera de todo formulario: el alta es un modal que guarda con fetch
+        self.posts = 0  # formularios POST enviados (los de buscar y filtrar son GET)
+        self.login_vacio: str | None = None  # la página de entrar a la que manda la web sale sin nada que rellenar
         self.intento_entrar = self.entrar_js = self.entrar_fallo = self.registro = self.entrar_get = False
         # «+ Nuevo producto» llevaba a una ruta que, sin formulario, volvía a la lista: nadie podía dar de alta nada.
         self.abre: dict[str, tuple[str, str]] = {}  # destino -> (texto del enlace, página donde está)
@@ -324,9 +356,16 @@ class _Recorrido:
             estado, final, texto = self.pedir(ruta)
             self.paginas += 1
             paginas += 1
+            self._sin_permiso(ruta, estado, final, texto)
             if not self.mirar(f"abrir {ruta}", estado, texto):
                 continue
             pagina = self._leer(texto)
+            destino = self.dentro(final, final) or ""
+            if ruta == "/" and destino.split("?")[0] != "/" and LOGIN_RUTA.search(destino) and _pagina_vacia(texto, pagina):
+                self.login_vacio = destino  # el login.html no rellena el bloque de la plantilla base: ni formulario ni nada
+            if (self.usuario or not self.intento_entrar) and any(
+                    ABRIR_FORM.search(b) and not NO_TOCAR.search(b) for b in pagina.botones_sueltos):
+                self.altas_js = True
             if ruta in self.abre:
                 aqui = (self.dentro(final, final) or "").split("?")[0]
                 self.sin_formulario.setdefault(ruta, []).append(
@@ -352,6 +391,22 @@ class _Recorrido:
                 pendientes.append(ruta)
         return pendientes
 
+    def _sin_permiso(self, ruta: str, estado: int, final: str, texto: str) -> None:
+        """Al administrador que acaba de entrar la web le cierra una página: un 403, o lo manda a otra con «No tienes permiso»."""
+        # Solo antes de enviar ningún formulario POST: el recorrido edita usuarios (rellena el rol con la primera opción) y
+        # podría quitarle el rol de administrador a quien acaba de entrar; lo que viniera después no sería un fallo de la web.
+        if not (self.usuario and ES_ADMIN.match(self.usuario)) or len(self.sin_permiso) >= 3 or self.posts:
+            return
+        destino = (self.dentro(final, final) or "").split("?")[0]
+        if any(s["ruta"] == ruta for s in self.sin_permiso):
+            return
+        if estado == 403:
+            self.sin_permiso.append({"usuario": self.usuario, "ruta": ruta, "a": None, "frase": "403"})
+        elif (estado < 400 and destino and destino != ruta.split("?")[0]
+              and not re.search(r"""type\s*=\s*["']?password""", texto, re.IGNORECASE)
+              and (m := SIN_PERMISO.search(SIN_CODIGO.sub("", texto)))):
+            self.sin_permiso.append({"usuario": self.usuario, "ruta": ruta, "a": destino, "frase": " ".join(m[0].split())})
+
     def enviar_formularios(self, ruta: str, final: str, pagina: _Pagina, limite: float) -> bool:
         """Envía cada formulario nuevo de la página. True si alguno no se podía enviar todavía."""
         quedan = False
@@ -374,6 +429,7 @@ class _Recorrido:
             self.enviados_claves.add(clave)
             estado, final_f, texto_f = self.pedir(accion, datos, form["metodo"])
             self.formularios += 1
+            self.posts += form["metodo"] == "post"
             self.enviados.append(f"{form['metodo'].upper()} {accion} -> {estado}")
             if self.mirar(f"enviar el formulario de {ruta} ({form['metodo'].upper()} {accion})", estado, texto_f, datos):
                 for href in self._leer(texto_f).enlaces:
@@ -707,13 +763,18 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
         navegador = None
         # Lo de dentro solo se ve con un navegador si la entrada es JavaScript. También se prueba con él si no se pudo
         # entrar: un formulario con name que JavaScript enviaba como JSON no dejaba entrar al recorrido, y a una persona sí.
-        if abrir_navegador is not None and (r.entrar_js or (r.intento_entrar and not r.usuario and not r.entrar_fallo)):
+        # También cuando las altas son un modal que guarda con fetch (un botón «Nuevo» fuera de todo formulario) y el recorrido
+        # sin JavaScript no pudo enviar ningún formulario: no habría creado nada ni visto las páginas que fallan con datos.
+        solo_altas = r.altas_js and r.posts == 0 and not r.entrar_js and bool(r.usuario or not r.intento_entrar)
+        if abrir_navegador is not None and (r.entrar_js or solo_altas or (r.intento_entrar and not r.usuario and not r.entrar_fallo)):
             # Si solo es para ver si se puede entrar, con poco tiempo: una web así tardaba 30 s en recorrerse entera.
-            plazo = MAX_SEGUNDOS if r.entrar_js else MAX_SEGUNDOS_REINTENTO
+            plazo = MAX_SEGUNDOS if r.entrar_js else MAX_SEGUNDOS_ALTAS if solo_altas else MAX_SEGUNDOS_REINTENTO
             navegador = _con_navegador(r.base, log, accesos, abrir_navegador, time.time() + plazo)
             if navegador:
                 r.errores += [e for e in navegador.pop("errores") if e not in r.errores]
-                r.usuario = navegador["usuario"]
+                if solo_altas:  # ya se entró sin JavaScript: que el navegador no lo consiga no es «nadie puede entrar»
+                    navegador["sin_entrar"] = False
+                r.usuario = navegador["usuario"] or r.usuario
         texto = log.read_text(encoding="utf-8", errors="replace")
         plantillas = [json.loads(m) for m in re.findall(r"^WEB_PLANTILLA (\{.*\})\s*$", texto, re.MULTILINE)]
         if plantillas:  # el 500 de una página por esa plantilla ya va en su error de plantilla
@@ -726,7 +787,8 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
         return {"errores": r.errores, "plantillas": plantillas, "rotos": r.rotos, "raros": r.raros,
                 "enviados": r.enviados, "paginas": r.paginas, "formularios": r.formularios, "usuario": r.usuario,
                 "sin_entrar": r.intento_entrar and not r.usuario and not r.entrar_fallo, "entrar_js": r.entrar_js,
-                "navegador": navegador, "lineas": lineas, "sin_formulario": sin_formulario, "registro": r.registro, "entrar_get": r.entrar_get}
+                "navegador": navegador, "lineas": lineas, "sin_formulario": sin_formulario, "registro": r.registro,
+                "entrar_get": r.entrar_get, "sin_permiso": r.sin_permiso, "login_vacio": r.login_vacio}
     finally:
         procesos.detener(proc, trabajo)
         try:
