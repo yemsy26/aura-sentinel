@@ -387,6 +387,21 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
         inf.errores.append(f"{rel}: el administrador «{s['usuario']}» entra, pero al abrir {s['ruta']} {cierre}: no puede usar "
                            "su propia sección (crear, vender...). Revisa cómo se carga el usuario en cada petición (¿el rol "
                            "llega bien al construirlo?) y que el administrador tenga el rol que piden esas rutas.")
+    if nav and nav.get("login_invisible"):
+        etiqueta, ident, clases, como = nav["login_invisible"]
+        quien = etiqueta + (f"#{ident}" if ident else "") + "".join("." + c for c in clases.split())
+        inf.errores.append(f"{rel}: la pantalla de entrar sale en blanco: el formulario está en la página, pero {quien} lo "
+                           f"oculta ({como}) y no se ve ningún campo, botón ni texto. Nadie puede entrar. Revisa el CSS de "
+                           "esa clase (¿existe la regla que la enseña, como .active o .visible?).")
+    if nav and nav.get("sin_autorizacion"):
+        s = nav["sin_autorizacion"]
+        rutas = ", ".join(f"GET {x['ruta']} ({x['estado']})" for x in s[:4])
+        inf.errores.append(f"{rel}: después de entrar como {s[0]['usuario']}, la pantalla pide {rutas}"
+                           + (f" y {len(s) - 4} más" if len(s) > 4 else "") + " y la API le responde que no está autorizada, "
+                           "recién entrado: o la petición sale sin su credencial (la cabecera Authorization o la cookie), o "
+                           "el servidor no acepta la que le llega (¿se compara con el valor que se guardó al entrar?). De "
+                           "las dos formas las listas salen vacías. Llama a la API con una sola función que ponga siempre la "
+                           "credencial, en vez de un fetch suelto en cada pantalla.")
     if nav and nav.get("clave_a_la_vista"):
         inf.errores.append(f"{rel}: después de entrar como {nav['usuario']}, la pantalla de entrar sigue a la vista y la "
                            "aplicación aparece debajo: quien la usa cree que no ha entrado. Revisa cómo se oculta (una "

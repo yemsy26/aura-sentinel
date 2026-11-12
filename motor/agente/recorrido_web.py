@@ -474,6 +474,23 @@ PANTALLA = r"""() => {
   window.__auraMarca = 1;
   return [otra, t.replace(/\s+/g, ' ').trim().slice(0, 4000)];
 }"""
+# Hay una contraseña en la página, ninguna se ve y no se ve nada con lo que seguir (ni enlace, ni botón, ni campo, ni texto):
+# la pantalla sale en blanco. Devuelve quién la oculta [etiqueta, id, clases, cómo]; None si algo se ve o no hay contraseña.
+# Una entrega tenía <div class="page active"> y su CSS no daba display a .page.active: todo el formulario iba dentro de un
+# bloque con display:none.
+ENTRAR_OCULTO = r"""() => {
+  const vis = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
+  const claves = [...document.querySelectorAll('input[type=password]')];
+  if (!claves.length || claves.some(vis)) return null;
+  if ([...document.querySelectorAll('a[href], button, input, select, textarea, [role=button]')].some(vis)) return null;
+  if ((document.body.innerText || '').replace(/\s+/g, ' ').trim().length >= 20) return null;
+  for (let e = claves[0]; e && e !== document.documentElement; e = e.parentElement) {
+    const c = getComputedStyle(e);
+    if (c.display === 'none' || c.visibility === 'hidden')
+      return [e.tagName.toLowerCase(), e.id, String(e.className || ''), c.display === 'none' ? 'display:none' : 'visibility:hidden'];
+  }
+  return ['input', '', '', 'sin tamaño'];
+}"""
 BOTON_ENTRAR = re.compile(r"(?i)entrar|ingresar|acceder|iniciar|login|log in|sign in|continuar")
 GUARDAR = re.compile(r"(?i)guardar|crear|registrar|finalizar|aceptar|agregar|añadir|enviar|confirmar|grabar|vender|cobrar")
 BUSCADOR = re.compile(r"(?i)buscar|search|filtr")
@@ -485,9 +502,22 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
     from playwright.sync_api import sync_playwright
 
     r = {"errores": [], "avisos_js": [], "usuario": None, "sin_entrar": False, "secciones": 0, "formularios": 0,
-         "menu_quieto": [], "nuevo_sin_campos": [], "registro": False, "otro_puerto": None, "clave_a_la_vista": False}
+         "menu_quieto": [], "nuevo_sin_campos": [], "registro": False, "otro_puerto": None, "clave_a_la_vista": False,
+         "login_invisible": None, "sin_autorizacion": []}
     hoy, malas, js, desde, fallidas = date.today().isoformat(), [], [], [log.stat().st_size], []
     puerto = urllib.parse.urlsplit(base).port
+    # Respuestas 401 (o 403 al administrador) a las lecturas que hace la pantalla con fetch desde que se pulsa «entrar»:
+    # una entrega mandaba sus peticiones sin la cabecera Authorization y la API las rechazaba, con listas y panel vacíos.
+    # Si ese intento de entrar no vale, se descartan: comprobar la sesión da 401 con normalidad.
+    intento: dict = {"usuario": None, "vistas": []}
+
+    def respuesta(resp) -> None:
+        if resp.status >= 500:
+            malas.append((resp.request.method, resp.url, resp.status))
+        elif (resp.status in (401, 403) and intento["usuario"] and resp.request.method == "GET"
+              and resp.request.resource_type in ("fetch", "xhr")
+              and (resp.status == 401 or ES_ADMIN.match(intento["usuario"]))):
+            intento["vistas"].append((resp.status, urllib.parse.urlsplit(resp.url).path))
     with sync_playwright() as p:
         nav = abrir(p)
         if nav is None:
@@ -495,8 +525,7 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
         try:
             pag = nav.new_context(accept_downloads=False, viewport={"width": 1280, "height": 900}).new_page()
             pag.on("dialog", lambda d: d.dismiss())  # confirm() -> Cancelar: nunca confirma un borrado
-            pag.on("response", lambda resp: malas.append((resp.request.method, resp.url, resp.status))
-                   if resp.status >= 500 else None)
+            pag.on("response", respuesta)
             pag.on("pageerror", lambda e: js.append(str(e)[:160]))
             pag.on("requestfailed", lambda req: fallidas.append(req.url))
 
@@ -540,6 +569,11 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
             pag.goto(base, wait_until="domcontentloaded", timeout=15000)
             esperar()
             mirar("abrir /")
+            if not visible_clave():
+                try:
+                    r["login_invisible"] = pag.evaluate(ENTRAR_OCULTO)
+                except Exception:  # cargando otra página
+                    pass
             if visible_clave():
                 r["registro"] = bool(REGISTRO.search(pag.content()))
                 menu_antes = len(pag.evaluate(LISTAR, "menu"))
@@ -551,6 +585,8 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
                         break
                     pag.locator(f"[data-aura-i='{quien['i']}']").fill(usuario)
                     pag.locator(f"[data-aura-i='{secreto['i']}']").fill(clave)
+                    intento["usuario"] = usuario
+                    intento["vistas"].clear()
                     botones = pag.evaluate(LISTAR, "botones")
                     boton = (next((b for b in botones if BOTON_ENTRAR.search(b["texto"])), None)
                              or next((b for b in botones if b["submit"]), None))
@@ -566,6 +602,7 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
                     if not visible_clave() or debajo:
                         r["usuario"], r["clave_a_la_vista"] = usuario, debajo
                         break
+                    intento["usuario"] = None  # este intento no valió: lo que respondió la API ya no cuenta
                 # La página llamaba a la API en http://127.0.0.1:5000 fijo y aquí la web escucha en otro puerto.
                 r["otro_puerto"] = next((u for u in fallidas if re.match(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0)", u)
                                          and urllib.parse.urlsplit(u).port != puerto), None)
@@ -621,6 +658,9 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
                     pag.keyboard.press("Escape")
                 if vuelta == 0 and len(quietas) >= 3 and 2 * len(quietas) >= pulsadas:
                     r["menu_quieto"] = quietas  # la sección en la que ya se estaba tampoco cambia: va en la lista
+            if r["usuario"]:
+                vistas = list(dict.fromkeys(intento["vistas"]))  # una por ruta y estado, en el orden en que salieron
+                r["sin_autorizacion"] = [{"estado": estado, "ruta": ruta, "usuario": r["usuario"]} for estado, ruta in vistas]
         finally:
             nav.close()
     return r
