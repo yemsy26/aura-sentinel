@@ -41,7 +41,22 @@ POR_NOMBRE = ((r"descuento|discount|iva|impuesto|tax|porcentaje|recargo", 0.0), 
               (r"m[ií]nimo|min", 5.0), (r"stock|existencia|inventario", 20.0),
               (r"venta|pvp|sale|precio|price|importe|monto|amount|total|pago", 15.0))
 CERO_VALE = re.compile(POR_NOMBRE[0][0])  # en un descuento, 0 es lo normal
-MAX_PAGINAS, MAX_FORMULARIOS, MAX_SEGUNDOS, MAX_SEGUNDOS_REINTENTO = 60, 25, 75, 15
+MAX_PAGINAS, MAX_FORMULARIOS, MAX_SEGUNDOS, MAX_SEGUNDOS_REINTENTO, MAX_SEGUNDOS_LINEAS = 60, 25, 75, 15, 25
+# Una venta cuyas líneas arma JavaScript («+ Agregar Producto» añade un select y una cantidad): sin JavaScript, el recorrido
+# solo enviaba el cliente y recibía «Agrega al menos un producto». La ruta de venta, la más importante del negocio, no se
+# probaba, y una entrega salió con «'sqlite3.Connection' object has no attribute 'last_insert_rowid'» al vender.
+AGREGAR_FILA = re.compile(r"(?i)(?:agregar|a[ñn]adir|add|nuev[oa]|\+)\W*(?:otro\s+|otra\s+|un[oa]?\s+)?"
+                          r"(?:producto|art[ií]culo|[ií]tem|item|l[ií]nea|fila|servicio|concepto|row|line|product)")
+SIN_STOCK = re.compile(r"(?i)\b(?:stock|existencias?|disp\w*)\s*:?\s*0\b|agotad|sin\s+stock")
+# Un error de programación que la propia web enseña (la venta capturaba la excepción y la mostraba con un 200). Las
+# restricciones de la base (UNIQUE, NOT NULL) no: pueden venir de datos repetidos.
+ERROR_DE_PROGRAMA = re.compile(
+    r"(?i)[^<>\n]{0,60}(?:object has no attribute|object is not (?:subscriptable|iterable|callable)|unsupported operand type|"
+    r"can only concatenate|takes \d+ positional arguments? but|missing \d+ required (?:positional )?arguments?|"
+    r"got an unexpected keyword argument|name '\w+' is not defined|no such (?:column|table)|has no column named|"
+    r"list index out of range|not supported between instances|error binding parameter|incorrect number of bindings|"
+    r"is not json serializable|nonetype|referenced before assignment|(?:not enough|too many) values to unpack|"
+    r"string indices must be integers|unhashable type|argument of type '\w+' is not iterable)[^<>\n]{0,60}")
 
 
 class _Pagina(html.parser.HTMLParser):
@@ -50,7 +65,7 @@ class _Pagina(html.parser.HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.enlaces, self.formularios, self.textos = [], [], {}
-        self._form = self._select = self._opcion = self._enlace = None
+        self._form = self._select = self._opcion = self._enlace = self._boton = None
 
     def handle_starttag(self, tag, attrs):
         a = {k: v or "" for k, v in attrs}
@@ -65,6 +80,8 @@ class _Pagina(html.parser.HTMLParser):
         elif tag in ("input", "textarea", "button"):
             tipo = a.get("type", "text" if tag == "input" else "submit" if tag == "button" else tag).lower()
             self._form["campos"].append({**a, "tipo": tipo})
+            if tag == "button":
+                self._boton = self._form["campos"][-1]
         elif tag == "select":
             self._select = {**a, "tipo": "select", "opciones": []}
             self._form["campos"].append(self._select)
@@ -77,8 +94,12 @@ class _Pagina(html.parser.HTMLParser):
             self._opcion["texto"] += data
         if self._enlace is not None:
             self._enlace[1] += data
+        if self._boton is not None:
+            self._boton["texto"] = self._boton.get("texto", "") + data
 
     def handle_endtag(self, tag):
+        if tag == "button":
+            self._boton = None
         if tag == "a" and self._enlace is not None:
             self.textos.setdefault(self._enlace[0], " ".join(self._enlace[1].split())[:60])
             self._enlace = None
@@ -193,6 +214,8 @@ class _Recorrido:
         self.errores, self.rotos, self.raros, self.enviados = [], [], [], []
         self.paginas = self.formularios = 0
         self.usuario: str | None = None
+        self.clave: str | None = None
+        self.filas_js: dict[str, str] = {}  # página -> acción de su formulario, que añade líneas con un botón (JavaScript)
         self.intento_entrar = self.entrar_js = self.entrar_fallo = self.registro = self.entrar_get = False
         # «+ Nuevo producto» llevaba a una ruta que, sin formulario, volvía a la lista: nadie podía dar de alta nada.
         self.abre: dict[str, tuple[str, str]] = {}  # destino -> (texto del enlace, página donde está)
@@ -245,7 +268,7 @@ class _Recorrido:
                 self.entrar_fallo = True  # ese error ya lo dice todo
                 return
             if not any(_es_entrar(f) for f in self._leer(texto).formularios):
-                self.usuario = usuario
+                self.usuario, self.clave = usuario, clave
                 return
 
     def vivo(self) -> bool:
@@ -334,6 +357,9 @@ class _Recorrido:
         quedan = False
         for form in pagina.formularios:
             accion = self.dentro(form["accion"] or final, final)
+            if form["metodo"] == "post" and any(c["tipo"] == "button" and AGREGAR_FILA.search(
+                    f"{c.get('texto', '')} {c.get('value', '')}") for c in form["campos"]):
+                self.filas_js.setdefault((self.dentro(final, final) or ruta).split("?")[0], accion or ruta)
             botones = " ".join(c.get("value", "") + " " + c.get("name", "") for c in form["campos"]
                                if c["tipo"] in ("submit", "button", "image"))
             clave = (accion and _forma(accion), form["metodo"], tuple(sorted(c.get("name", "") for c in form["campos"])))
@@ -544,6 +570,111 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
     return r
 
 
+def _lineas_con_navegador(base: str, log: Path, usuario: str | None, clave: str | None, abrir, limite: float,
+                          paginas: list[str]) -> dict | None:
+    """Hace lo que el recorrido sin JavaScript no puede: en cada página cuyo formulario añade líneas con un botón, entra,
+    lo pulsa, elige un producto y una cantidad, guarda y mira si el servidor da 500, deja una traza o la página enseña un
+    error de programa. None si no hay navegador."""
+    from playwright.sync_api import sync_playwright
+
+    r = {"errores": [], "guardados": 0}
+    hoy, malas, desde = date.today().isoformat(), [], log.stat().st_size
+    with sync_playwright() as p:
+        nav = abrir(p)
+        if nav is None:
+            return None
+        try:
+            pag = nav.new_context(accept_downloads=False, viewport={"width": 1280, "height": 900}).new_page()
+            pag.on("dialog", lambda d: d.dismiss())
+            pag.on("response", lambda resp: malas.append((resp.request.method, resp.url, resp.status))
+                   if resp.status >= 500 else None)
+
+            def esperar():
+                try:
+                    pag.wait_for_load_state("networkidle", timeout=4000)
+                except Exception:
+                    pass
+                pag.wait_for_timeout(200)
+
+            def clic(i: str) -> bool:
+                try:
+                    pag.locator(f"[data-aura-i='{i}']").first.click(timeout=3000)
+                    return True
+                except Exception:
+                    return False
+
+            pag.goto(base, wait_until="domcontentloaded", timeout=15000)
+            esperar()
+            if usuario is not None and pag.locator("input[type=password]:visible").count() > 0:
+                campos = pag.evaluate(LISTAR, "campos")
+                quien = next((c for c in campos if c["tipo"] in ("text", "email")), None)
+                secreto = next((c for c in campos if c["tipo"] == "password"), None)
+                if quien and secreto:
+                    pag.locator(f"[data-aura-i='{quien['i']}']").fill(usuario)
+                    pag.locator(f"[data-aura-i='{secreto['i']}']").fill(clave or "")
+                    botones = pag.evaluate(LISTAR, "botones")
+                    boton = (next((b for b in botones if BOTON_ENTRAR.search(b["texto"])), None)
+                             or next((b for b in botones if b["submit"]), None))
+                    if not (boton and clic(boton["i"])):
+                        pag.locator(f"[data-aura-i='{secreto['i']}']").press("Enter")
+                    esperar()
+            for ruta in paginas:
+                if time.time() > limite:
+                    break
+                pag.goto(urllib.parse.urljoin(base, ruta), wait_until="domcontentloaded", timeout=15000)
+                esperar()
+                anadir = next((b for b in pag.evaluate(LISTAR, "botones") if AGREGAR_FILA.search(b["texto"])), None)
+                if not (anadir and clic(anadir["i"])):
+                    continue
+                esperar()
+                datos = []
+                for c in pag.evaluate(LISTAR, "campos"):
+                    if c["tipo"] == "select":  # una línea con un producto sin stock no es lo que hace quien vende
+                        c = {**c, "opciones": [o for o in c["opciones"] if not SIN_STOCK.search(o["texto"])]}
+                    valor = None if BUSCADOR.search(c["name"]) else _valor(c, hoy)
+                    if valor is None:
+                        continue
+                    campo = pag.locator(f"[data-aura-i='{c['i']}']")
+                    try:
+                        if c["tipo"] == "select":
+                            campo.select_option(value=valor, timeout=2000)
+                        elif c["tipo"] in ("checkbox", "radio"):
+                            campo.check(timeout=2000)
+                        else:
+                            campo.fill(valor, timeout=2000)
+                        datos.append(f"{c['name']}={valor}")
+                    except Exception:
+                        continue
+                botones = pag.evaluate(LISTAR, "botones")
+                guardar = (next((b for b in botones if b["submit"] and not NO_TOCAR.search(b["texto"])), None)
+                           or next((b for b in reversed(botones) if GUARDAR.search(b["texto"]) and not NO_TOCAR.search(b["texto"])
+                                    and not AGREGAR_FILA.search(b["texto"])), None))
+                if not (datos and guardar):
+                    continue
+                malas.clear()
+                desde = log.stat().st_size
+                if not clic(guardar["i"]):
+                    continue
+                esperar()
+                r["guardados"] += 1
+                with open(log, "rb") as f:
+                    f.seek(desde)
+                    traza = _traza(f.read().decode("utf-8", "replace"))
+                try:
+                    visible = pag.inner_text("body", timeout=3000)
+                except Exception:
+                    visible = ""
+                fallo_visible = ERROR_DE_PROGRAMA.search(visible)
+                que = f"guardar el formulario de {ruta} (tras «{anadir['texto']}»)"
+                if malas or traza or fallo_visible:
+                    estado = malas[0][2] if malas else 200
+                    r["errores"].append({"que": que, "estado": estado, "datos": ", ".join(datos[:8]),
+                                         "traza": traza or (f"«{' '.join(fallo_visible[0].split())}»" if fallo_visible else "")})
+        finally:
+            nav.close()
+    return r
+
+
 def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: dict | None = None,
              abrir_navegador=None) -> dict | None:
     """Arranca entrada (en una copia del proyecto que el llamador borra después) y la recorre. None si no llegó a
@@ -567,6 +698,12 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
             return None
         r = _Recorrido(f"http://127.0.0.1:{puerto}/", log, accesos)
         r.recorrer(time.time() + MAX_SEGUNDOS)
+        lineas = None
+        if abrir_navegador is not None and r.filas_js and not r.entrar_js and (r.usuario or not r.intento_entrar):
+            lineas = _lineas_con_navegador(r.base, log, r.usuario, r.clave, abrir_navegador,
+                                           time.time() + MAX_SEGUNDOS_LINEAS, list(r.filas_js)[:3])
+            if lineas:
+                r.errores += [e for e in lineas["errores"] if e not in r.errores]
         navegador = None
         # Lo de dentro solo se ve con un navegador si la entrada es JavaScript. También se prueba con él si no se pudo
         # entrar: un formulario con name que JavaScript enviaba como JSON no dejaba entrar al recorrido, y a una persona sí.
@@ -589,7 +726,7 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
         return {"errores": r.errores, "plantillas": plantillas, "rotos": r.rotos, "raros": r.raros,
                 "enviados": r.enviados, "paginas": r.paginas, "formularios": r.formularios, "usuario": r.usuario,
                 "sin_entrar": r.intento_entrar and not r.usuario and not r.entrar_fallo, "entrar_js": r.entrar_js,
-                "navegador": navegador, "sin_formulario": sin_formulario, "registro": r.registro, "entrar_get": r.entrar_get}
+                "navegador": navegador, "lineas": lineas, "sin_formulario": sin_formulario, "registro": r.registro, "entrar_get": r.entrar_get}
     finally:
         procesos.detener(proc, trabajo)
         try:

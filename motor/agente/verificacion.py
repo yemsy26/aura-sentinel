@@ -323,7 +323,8 @@ def ejecutar_python(raiz: Path, rutas: list[Path], python: str, inf: Informe, se
 
 # Una web de negocio daba 500 al registrar una venta y verificar solo veía que el servidor arrancaba: se usa de verdad.
 WEB_PY = re.compile(r"\bFlask\s*\(|\bFastAPI\s*\(|\b(?:Threading)?HTTPServer\s*\(|\bsocketserver\.\w*TCPServer\s*\(")
-POR_ESTADO = {0: "nada (el servidor se cayó)", 404: "404: esa ruta no existe", 405: "405: esa ruta no acepta ese método"}
+POR_ESTADO = {0: "nada (el servidor se cayó)", 404: "404: esa ruta no existe", 405: "405: esa ruta no acepta ese método",
+              200: "200 (parece que fue bien), pero la página enseña un error de programa"}
 
 
 def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
