@@ -1196,10 +1196,61 @@ BORRA_DATOS = re.compile(r"(?i)\bdrop_all\s*\(|\bdrop\s+(?:table|database)\b|\b(
                          r"|^(?:del|erase)\b[^\n]*\.(?:db|sqlite3?)\b|^(?:rmdir|rd)\b[^\n]*\b(?:instance|data)\b")
 
 
+CONSEJO_BORRAR = ("con doble clic se pierde lo que el usuario haya dado de alta. No borres nada al arrancar: usa db.create_all() "
+                  "(no toca lo que ya existe), haz que seed.py solo cargue datos si la tabla está vacía y deja el borrado "
+                  "para un reset.bat aparte.")
+# Un seed.py o el propio app.py que borran las tablas al ejecutarse, lanzados desde el .bat: no dentro de un reset/test (se
+# llama a propósito) ni tras un «if» que lo condicione (--reset, TESTING, un archivo que ya existe).
+SE_BORRA_A_PROPOSITO = re.compile(r"(?i)reset|reinici|limpi|borr|clear|clean|wipe|drop|test|demo")
+CONDICION_DE_BORRAR = re.compile(r"(?i)argv|args|testing|reset|confirm|input|environ|getenv|exists")
+SQL_BORRA = re.compile(r"(?i)\bdrop\s+(?:table|database)\b")
+ARCHIVO_BASE = re.compile(r"(?i)\.(?:db|sqlite3?)$")
+
+
+def borra_al_arrancar(ruta: Path) -> tuple[str, int] | None:
+    """(la llamada, su línea) si el script borra tablas o el archivo de la base cuando se ejecuta."""
+    try:
+        arbol = ast.parse(ruta.read_text(encoding="utf-8", errors="replace"))
+    except (SyntaxError, ValueError):
+        return None
+
+    def buscar(nodo: ast.AST) -> tuple[str, int] | None:
+        if isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)) and SE_BORRA_A_PROPOSITO.search(nodo.name):
+            return None
+        if isinstance(nodo, ast.If) and CONDICION_DE_BORRAR.search(ast.unparse(nodo.test)):
+            return None
+        if isinstance(nodo, ast.Call):
+            f = nodo.func
+            nombre = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else ""
+            cadenas = [a.value for a in nodo.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            if nombre == "drop_all":
+                return "drop_all(", nodo.lineno
+            if nombre in ("execute", "executescript") and any(SQL_BORRA.search(c) for c in cadenas):
+                return "DROP TABLE", nodo.lineno
+            if nombre in ("remove", "unlink") and any(ARCHIVO_BASE.search(c) for c in cadenas):
+                return f"{nombre}({next(c for c in cadenas if ARCHIVO_BASE.search(c))!r})", nodo.lineno
+        return next(filter(None, map(buscar, ast.iter_child_nodes(nodo))), None)
+
+    return buscar(arbol)
+
+
+def scripts_de_linea(carpeta: Path, linea: str) -> list[Path]:
+    """Los .py que lanza la línea del .bat (python seed.py, "%PY%" -m app...) y existen junto a él."""
+    rutas: list[Path] = []
+    for m in OBJETIVO_PY.finditer(linea):
+        modulo, citado, suelto, punto = m.groups()
+        if punto:
+            continue
+        base = carpeta / (modulo.replace(".", "/") if modulo else (citado or suelto).replace("%~dp0", ""))
+        candidatos = [base.with_name(base.name + ".py"), base / "__main__.py"] if modulo else [base]
+        rutas += [c for c in candidatos if "%" not in str(c) and c.is_file() and not c.name.startswith("test")][:1]
+    return rutas
+
+
 def borra_datos_bat(b: Path, lineas: list[str], raiz: Path, inf: Informe) -> None:
     if BAT_QUE_BORRA.match(b.stem):
         return
-    guardado = 0
+    guardado, vistos, rel = 0, set(), relativa(b, raiz)
     for i, l in enumerate(lineas):
         if re.match(r"(?i)if\b.*\(\s*$", l):
             guardado += 1
@@ -1208,11 +1259,14 @@ def borra_datos_bat(b: Path, lineas: list[str], raiz: Path, inf: Informe) -> Non
         if guardado or not l or re.match(r"(?i)(rem\b|::|@?echo\b|if\b)", l):
             continue
         if (m := BORRA_DATOS.search(l)):
-            inf.errores.append(f"{relativa(b, raiz)}:{i + 1} borra la base de datos en cada arranque (`{m[0]}`): con doble clic "
-                               "se pierde lo que el usuario haya dado de alta. No borres nada al arrancar: usa db.create_all() "
-                               "(no toca lo que ya existe), haz que seed.py solo cargue datos si la tabla está vacía y deja el "
-                               "borrado para un reset.bat aparte.")
+            inf.errores.append(f"{rel}:{i + 1} borra la base de datos en cada arranque (`{m[0]}`): {CONSEJO_BORRAR}")
             return
+        for script in scripts_de_linea(b.parent, l):
+            if script not in vistos and (hay := borra_al_arrancar(script)):
+                inf.errores.append(f"{rel}:{i + 1} ejecuta {script.name}, que borra la base de datos en cada arranque "
+                                   f"(`{hay[0]}` en {relativa(script, raiz)}:{hay[1]}): {CONSEJO_BORRAR}")
+                return
+            vistos.add(script)
 
 
 def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:

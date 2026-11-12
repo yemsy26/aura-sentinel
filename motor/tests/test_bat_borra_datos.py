@@ -14,6 +14,8 @@ from agente.verificacion import bats
 CABECERA = '@echo off\ncd /d "%~dp0"\n'
 DROP = ('python -c "from app import create_app; from models import db; app=create_app(); ctx=app.app_context(); '
         'ctx.push(); db.drop_all(); db.create_all()"\n')
+SEED_BORRA = "from app import create_app\nfrom models import db\n\nwith create_app().app_context():\n    db.drop_all()\n    db.create_all()\n"
+SQL_BORRA = 'import sqlite3\nc = sqlite3.connect("x.db")\nc.execute("DROP TABLE IF EXISTS ventas")\n'
 
 
 class BatQueBorraDatos(unittest.TestCase):
@@ -21,9 +23,11 @@ class BatQueBorraDatos(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp(prefix="agente_borra_"))
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
 
-    def errores(self, cuerpo: str, nombre: str = "run.bat") -> list[str]:
+    def errores(self, cuerpo: str, nombre: str = "run.bat", **scripts: str) -> list[str]:
         (self.dir / nombre).write_text(CABECERA + cuerpo, encoding="utf-8")
         (self.dir / "app.py").write_text("print('hola')\n", encoding="utf-8")
+        for archivo, fuente in scripts.items():
+            (self.dir / (archivo + ".py")).write_text(fuente, encoding="utf-8")
         inf = Informe()
         bats(self.dir, [self.dir / nombre], inf)
         return [e for e in inf.errores if "borra la base de datos" in e]
@@ -58,6 +62,24 @@ class BatQueBorraDatos(unittest.TestCase):
 
     def test_un_echo_con_la_orden_no_cuenta(self):
         self.assertEqual(self.errores("echo [2/5] " + DROP + "python app.py\n"), [])
+
+    def test_un_script_que_lanza_el_bat_y_borra_las_tablas(self):
+        errores = self.errores("python seed.py\npython app.py\n", seed=SEED_BORRA)
+        self.assertEqual(len(errores), 1)
+        self.assertIn("run.bat:3 ejecuta seed.py, que borra la base de datos en cada arranque (`drop_all(` en seed.py:5)", errores[0])
+        self.assertTrue(self.errores("python init_db.py\npython app.py\n", init_db=SQL_BORRA))
+        self.assertTrue(self.errores("python init_db.py\n", init_db='import os\nos.remove("negocio.db")\n'))
+        self.assertTrue(self.errores("python app.py\n", app=SQL_BORRA))  # el propio programa que abre el .bat
+
+    def test_un_script_que_borra_a_proposito_o_con_condicion_no_se_marca(self):
+        self.assertEqual(self.errores("python seed.py\n", seed="def reset_db():\n    db.drop_all()\n"), [])
+        self.assertEqual(self.errores("python seed.py\n", seed='import sys\nif "--reset" in sys.argv:\n    db.drop_all()\n'), [])
+        existe = "import os\nif not os.path.exists('x.db'):\n    db.drop_all()\n    db.create_all()\n"
+        self.assertEqual(self.errores("python seed.py\n", seed=existe), [])
+        self.assertEqual(self.errores("python seed.py\n", seed="db.create_all()\n"), [])
+        self.assertEqual(self.errores("python seed.py\n", "reset.bat", seed=SEED_BORRA), [])
+        self.assertEqual(self.errores("python test_seed.py\n", test_seed="db.drop_all()\n"), [])
+        self.assertEqual(self.errores("python seed.py\n", seed="def (:\n"), [])  # no es Python válido
 
 
 if __name__ == "__main__":
