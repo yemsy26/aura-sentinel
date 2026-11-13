@@ -176,8 +176,24 @@ def _modulos_proyecto(rutas: list[Path]) -> set[str]:
     return {p.stem for p in rutas if not p.stem.startswith("test")} | {p.parent.name for p in rutas}
 
 
+NOMBRES_DE_PRUEBAS_SUELTOS = ("test.py", "tests.py")
+
+
+def _con_pruebas(p: Path) -> bool:
+    """¿Define pruebas (una clase TestCase o funciones test_*)? Un test.py que solo lanza otro archivo no cuenta."""
+    try:
+        arbol = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+    except (SyntaxError, ValueError):
+        return False
+    return any((isinstance(n, ast.ClassDef) and any(ast.unparse(b).endswith("TestCase") for b in n.bases))
+               or (isinstance(n, ast.FunctionDef) and n.name.startswith("test_")) for n in ast.walk(arbol))
+
+
 def tests_python(raiz: Path, rutas: list[Path], python: str, inf: Informe) -> None:
-    tests = [p for p in rutas if p.name.startswith("test_") or p.name.endswith("_test.py") or "tests" in p.parts]
+    # test.py y tests.py también, si definen pruebas: el nombre que eligió Aura en una entrega con 17 pruebas, que así nunca se
+    # corrieron. Un test.py que solo lanza test_app.py (m4133_neg3, p3_neg3) no es una prueba: pytest lo importaría y fallaría.
+    tests = [p for p in rutas if p.name.startswith("test_") or p.name.endswith("_test.py") or "tests" in p.parts
+             or (p.name in NOMBRES_DE_PRUEBAS_SUELTOS and _con_pruebas(p))]
     if not tests:
         if len([p for p in rutas if p.stem not in ("setup", "conftest")]) >= 1:
             inf.avisos.append("No hay tests (test_*.py). Crea tests que importen tu código y comprueben los requisitos.")
@@ -197,7 +213,9 @@ def tests_python(raiz: Path, rutas: list[Path], python: str, inf: Informe) -> No
             inf.avisos.append(f"{relativa(t, raiz)} no tiene ningún assert: no comprueba nada.")
     env = dict(os.environ, SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy", PYTHONUTF8="1", MPLBACKEND="Agg")
     codigo, _ = correr_texto([python, "-c", "import pytest"], raiz, 30, env)
-    cmd = ([python, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider"] if codigo == 0
+    # pytest solo recoge test_*.py y *_test.py: un test.py hay que dárselo por su nombre (y entonces, todos).
+    suelto = [relativa(t, raiz) for t in tests] if any(t.name in NOMBRES_DE_PRUEBAS_SUELTOS for t in tests) else []
+    cmd = ([python, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider", *suelto] if codigo == 0
            else [python, "-m", "unittest", "discover", "-p", "test*.py"])
     codigo, salida = correr_texto(cmd, raiz, 180, env)
     if codigo is None:
@@ -1295,6 +1313,34 @@ def borra_datos_bat(b: Path, lineas: list[str], raiz: Path, inf: Informe) -> Non
             vistos.add(script)
 
 
+# El README de una entrega mandaba ejecutar install.bat y run.bat, y ninguno existía (m4137_neg1): quien lo seguía no podía usar el
+# sistema. Solo se miran los nombres sueltos o con carpetas del proyecto: no los que llevan variables (%USERPROFILE%\x.bat), ni los
+# de un entorno virtual (Scripts\activate.bat), ni los de un comando conocido (npm.cmd), ni los que el README dice que se creen.
+BAT_CITADO = re.compile(r"(?<![\w%$<>{}.\\/-])((?:[\w.-]+[\\/])*[\w.-]+\.(?:bat|cmd))\b", re.IGNORECASE)
+BAT_AJENO = re.compile(r"(?i)(?:^|[\\/])(?:scripts|venv|\.venv|node_modules)[\\/]|^(?:de)?activate\.bat$|^(?:npm|npx|yarn|pip|pnpm)\.cmd$")
+SE_CREA = re.compile(r"(?i)\b(?:crea|creas|crear|cree|creal[oa]|genera|generar|escribe|escribir|guarda|guardar|nuevo archivo)\b")
+
+
+def bat_citado_que_no_existe(raiz: Path, inf: Informe) -> None:
+    """Error si un README de la raíz cita un .bat o .cmd que no está en el proyecto."""
+    existentes = {p.name.lower() for p in archivos(raiz, ".bat", ".cmd")}
+    for readme in sorted(raiz.glob("README*")):
+        if not readme.is_file() or readme.suffix.lower() not in ("", ".md", ".txt", ".rst"):
+            continue
+        faltan: list[str] = []
+        for linea in readme.read_text(encoding="utf-8", errors="replace").splitlines():
+            for m in BAT_CITADO.finditer(linea):
+                nombre = m.group(1)
+                if (BAT_AJENO.search(nombre) or SE_CREA.search(linea[:m.start()]) or nombre in faltan
+                        or re.split(r"[\\/]", nombre)[-1].lower() in existentes):
+                    continue
+                faltan.append(nombre)
+        if faltan:
+            inf.errores.append(f"{readme.name} cita {', '.join(faltan[:4])}, pero no existe en el proyecto: quien siga el README "
+                               "no puede usarlo. Crea ese archivo o cambia el README por lo que sí hay.")
+            return
+
+
 def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
     escucha = puertos_escucha(raiz) if lista else set()
     for b in lista:
@@ -1588,6 +1634,8 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         java(raiz, javas, inf, segundos)
     if bat:
         bats(raiz, bat, inf)
+    if base == raiz:
+        bat_citado_que_no_existe(raiz, inf)
     ecosistemas.verificar_todos(base, raiz, inf)
     if (vite := [h for h in htmls if fuente_vite(h)]):  # después de node(): su npm run build deja dist/
         paginas_vite(raiz, vite, inf)
