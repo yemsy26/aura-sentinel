@@ -29,6 +29,7 @@ from .borrados import aviso, peligrosos
 from .idiomas import verificar_idiomas
 from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, normalizar, relativa
 from .recorrido_web import recorrer
+from .seguridad import pruebas_borran_la_base, seguridad_web
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
 _LEIDOS: dict[Path, tuple[tuple[int, int], list]] = {}  # borrados_fuera: lo hallado en cada .py mientras no cambie
@@ -1560,6 +1561,8 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         peligro = borrados_fuera(raiz, pys)
         inf.errores += peligro
         lint_python(raiz, pys, inf)
+        pruebas_borran_la_base(raiz, pys, inf)
+        seguridad_web(raiz, pys, inf)
         if base == raiz:
             codigo_muerto(raiz, pys, inf, previos=previos)
         else:  # una subcarpeta: quien usa sus funciones puede estar fuera
