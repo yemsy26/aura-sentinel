@@ -5,6 +5,33 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.5] — 2026-11-12 (verificar ve tests que borran la base, registros abiertos, tests sin correr y READMEs rotos)
+
+Cuatro comprobaciones nuevas de `verificar`, salidas de la primera prueba real con la 4.13.4 instalada (un sistema de negocio que
+funcionaba: entraba, vendía, bajaba el stock y daba la ganancia) y de las misiones de negocio. Todas se midieron sin GPU sobre 82
+proyectos guardados, con condiciones fijadas antes y cada disparo revisado a mano.
+
+- **Un test que borra la base real de la app:** error si un test hace `os.remove` o `unlink` de un archivo `.db`/`.sqlite` con el
+  mismo nombre que usa el código de la app (y que no sale de `tempfile`): quien pulse `test.bat` pierde todo lo que guardó. En la
+  entrega de la prueba, `test.py` borraba `instance/negocio.db` antes de cada prueba. Salta en 3 de los 82 proyectos, los 3
+  reales.
+- **Registro abierto a cualquiera:** aviso si una ruta `/register`, `/registro` o `/signup` sin ninguna comprobación de quién es crea
+  cuentas en un sistema con roles. Salta en 2 proyectos, los 2 reales (en uno, el rol salía del formulario: un anónimo podía
+  registrarse como administrador). No se avisa si crear la cuenta va dentro de un `if` que mira el usuario.
+- **`test.py` y `tests.py` ya cuentan como pruebas** si definen una clase `TestCase` o funciones `test_*`: antes `verificar`
+  decía «No hay tests» y no corría las 17 pruebas de la entrega de la prueba. Un `test.py` que solo lanza `test_app.py` no cuenta.
+  Al correrlos salió un caso real: los tests de `m4134_neg3` fallaban (la venta no bajaba el stock).
+- **Un README que cita un `.bat` o `.cmd` que no existe:** error («README.md cita install.bat, pero no existe»). Salta en 5
+  proyectos, los 5 reales. No cuentan `activate.bat` de un entorno virtual, `npm.cmd`, las rutas con variables ni los que el README
+  dice que se creen.
+- Medido sin GPU: no hay falsos en los 82 proyectos tras tres ajustes hechos al ver los primeros resultados (una exclusión demasiado
+  amplia en el borrado de bases, un registro que solo crea cuentas dentro de una comprobación de administrador y los `test.py`
+  lanzadores de `test_app.py`, anotados en las condiciones). El aviso de
+  `app.run(host="0.0.0.0", debug=True)` se midió y se descartó: saltaba en el 37 % de las entregas. **No se ha medido el efecto en
+  misiones con el modelo.**
+- No cubre que un empleado vea por dirección directa lo que no le toca (ventas ajenas, `/api/ventas`, precios de compra): depende de
+  qué ve cada rol en cada negocio.
+
 ## [4.13.4] — 2026-11-12 (verificar ve más fallos de las webs que Aura entrega)
 
 Ocho comprobaciones nuevas de `verificar`: cada una sale de un fallo real que una entrega de Qwen3.6 tenía y
