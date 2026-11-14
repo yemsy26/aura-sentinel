@@ -323,10 +323,21 @@ class _Recorrido:
             if not self.mirar(f"entrar como {usuario}", estado, texto):
                 self.entrar_fallo = True  # ese error ya lo dice todo
                 return
-            if not any(_es_entrar(f) for f in self._leer(texto).formularios):
+            if not any(self._sigue_entrar(f, final, accion) for f in self._leer(texto).formularios):
                 self.usuario, self.clave = usuario, clave
                 self.aterrizaje = self.dentro(final, final)  # adonde lo lleva la web al entrar (algunas llevan «/» de vuelta a entrar)
                 return
+
+    def _sigue_entrar(self, form: dict, final: str, accion: str) -> bool:
+        """¿Esta página de después de entrar sigue enseñando la pantalla de entrar? Un formulario con contraseña que envía a OTRA parte,
+        a una ruta que no es de entrar (el alta de empleados de un panel: usuario, contraseña, nombre), no lo es (m4142)."""
+        if not _es_entrar(form):
+            return False
+        if form["accion"]:
+            destino = self.dentro(form["accion"], final)
+            if destino and destino != accion and not LOGIN_RUTA.search(destino):
+                return False
+        return True
 
     def vivo(self) -> bool:
         partes = urllib.parse.urlsplit(self.base)
