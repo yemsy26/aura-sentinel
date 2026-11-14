@@ -5,6 +5,39 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.6] — 2026-11-14 (guía de permisos por rol y comprobación del empleado en verificar)
+
+Salidas de las mediciones de negocio con la 4.13.4 y la 4.13.5: en las 3 entregas que funcionaban, el empleado veía las
+ganancias del administrador por dirección directa. Dos cambios, uno para que el modelo no lo haga y otro para que `verificar`
+lo vea si lo hace.
+
+- **Guía `roles` para negocios con empleados:** el agente la abre al leer «empleado», «permisos», «login»… Pide una tabla de
+  roles en el README, rutas cerradas por defecto con el rol exigido también en el POST, una lista por pantalla (panel, listas,
+  detalles, productos sin editar, API y JavaScript sin costo ni en `data-*`, reportes y usuarios), una pantalla de Usuarios con
+  `generate_password_hash` y una prueba de marcadores (costo `7.77`, total `60.00`, nota `NOTA-ADMIN-77`) que entra como
+  empleado y comprueba que no ve esos valores sin filtrar por el texto del marcador. Medida en 2 tandas de 4 misiones: no
+  cierra todo (las ventas y facturas ajenas siguen abiertas), pero `/reportes` y el panel sin ganancias quedaron cerrados en las
+  6 entregas que funcionaban (0 de 3 sin la guía).
+- **`verificar` entra como un empleado:** si la web tiene pantalla de usuarios con rol, crea un producto con costo `7.77` y un
+  usuario «empleado_aura» desde los formularios, entra como empleado y lee (solo GET) las páginas del administrador y las rutas
+  de API habituales. Error si el empleado ve el costo, abre una sección de gestión con ganancias, abre el alta de usuarios o ve
+  una sección igual que el administrador. Sin pantalla de usuarios con rol, con entrada por JavaScript o si el empleado no entra:
+  silencio. Se prueba antes del recorrido de siempre y con sesión propia (el recorrido edita usuarios).
+- Medido sin GPU sobre 93 webs guardadas: salta en 18, y las 18 son fugas reales (8 de costo y 10 de gestión); no hay falsos.
+  Calla en las entregas ya cerradas. Añade 1,8 s de media. **Corre entera en 21 de 93 webs (23 %)**: el resto no tiene pantalla
+  de usuarios con rol o da de alta y entra con JavaScript.
+- Al medirla salieron 4 ajustes que ya van dentro: el empleado se prueba antes del recorrido, al entrar se sigue desde donde
+  lleva la web, un informe de ganancias parcial también cuenta y los textos de prueba no son «Prueba» (chocaban con códigos
+  únicos y daban un 500 falso). 531 pruebas pasan, 2 omitidas.
+- Medido después en 4 misiones de negocio con el modelo (n=4, misma misión y carpetas vacías que las tandas anteriores): el
+  agente pidió la guía en las 4; 3 de las 4 entregas no dejan al empleado ver costo, ganancias ni ventas ajenas con la lista
+  estricta (antes, 1 de 4), sin que el modelo escondiera datos por el texto del marcador; la cuarta, la única que no escribió la
+  prueba de marcadores, deja ver al empleado las facturas del administrador. Terminó 1 de 4 (mediana 39,2 min; las otras tres
+  llegaron a 150 pasos) y cada una de las tres con permisos cerrados tiene otro fallo (informe de ganancias en 0 por defecto, error
+  500 para el empleado al ver su venta, facturas que no se guardan). La comprobación del empleado corrió entera en 3 de 4, sin
+  avisos y sin falsos; en una no pudo entrar (el único campo de nombre es el del login).
+- No cubre ventas, facturas ni panel de otro usuario, que es justo la fuga real de la cuarta entrega.
+
 ## [4.13.5] — 2026-11-12 (verificar ve tests que borran la base, registros abiertos, tests sin correr y READMEs rotos)
 
 Cuatro comprobaciones nuevas de `verificar`, salidas de la primera prueba real con la 4.13.4 instalada (un sistema de negocio que
