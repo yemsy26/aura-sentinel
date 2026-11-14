@@ -40,7 +40,10 @@ ALIAS = {"juego": "pygame", "pygame-ce": "pygame", "canvas": "html-juego", "java
          "jadx": "ingenieria-inversa", "smali": "ingenieria-inversa", "decompilar": "ingenieria-inversa",
          "descompilar": "ingenieria-inversa", "parchear-apk": "ingenieria-inversa", "parche-apk": "ingenieria-inversa",
          "js-minificado": "ingenieria-inversa", "minificado": "ingenieria-inversa", "reverse": "ingenieria-inversa",
-         "reverse-engineering": "ingenieria-inversa"}
+         "reverse-engineering": "ingenieria-inversa", "rol": "roles", "permisos": "roles", "permiso": "roles",
+         "empleados": "roles", "usuarios": "roles", "login": "roles", "auth": "roles", "autenticacion": "roles",
+         "autenticación": "roles", "autorizacion": "roles", "autorización": "roles", "flask-login": "roles",
+         "acceso": "roles", "negocio": "roles"}
 REEMPLAZOS = {"pygame": "pygame-ce", "pypdf2": "pypdf", "fuzzywuzzy": "rapidfuzz", "pycrypto": "pycryptodome",
               "sklearn": "scikit-learn", "bs4": "beautifulsoup4", "opencv": "opencv-python", "pil": "pillow"}
 

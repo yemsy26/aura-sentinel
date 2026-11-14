@@ -75,7 +75,7 @@ def entorno() -> str:
 
 
 METODO = """MÉTODO (síguelo siempre, paso a paso):
-1. ENTENDER Y ORIENTARTE: si hay archivos, usa listar y lee lo necesario. Llama a guia con el tipo de proyecto (python, pygame, html-juego, web, api, java, rust, go, node, dotnet, docker, despliegue, android, flutter, blockchain, evm, solana, mev, bases-de-datos, matematicas) y sigue sus prácticas actuales y lo aprendido en tareas anteriores.
+1. ENTENDER Y ORIENTARTE: si hay archivos, usa listar y lee lo necesario. Llama a guia con el tipo de proyecto (python, pygame, html-juego, web, api, java, rust, go, node, dotnet, docker, despliegue, android, flutter, blockchain, evm, solana, mev, bases-de-datos, matematicas, roles) y sigue sus prácticas actuales y lo aprendido en tareas anteriores.
 2. PLANIFICAR: plan con 3-10 pasos que incluyan CADA requisito del usuario (con sus nombres exactos de archivo), tests reales, verificar, revisar y el .bat.
 3. CONSTRUIR: un archivo por llamada con escribir. Código COMPLETO y funcional, sin '...' ni TODO; módulos pequeños (<250 líneas), manejo de errores, README.md. Antes de usar una librería: version(paquete). Si dudas de una API o de un error: investigar(pregunta).
 4. INSTALAR: en Python, ejecutar("python -m venv .venv") y ejecutar("python -m pip install -r requirements.txt") (el .venv se activa solo; una web estática no lleva requirements.txt). En Rust, Go, Node y .NET lo hace su herramienta (cargo build, go mod tidy, npm install, dotnet restore).
@@ -99,6 +99,7 @@ REGLAS:
 - Matemáticas: nunca calcules de memoria; usa calcular. Restricciones o combinatoria (sudoku, horarios, coloreado, asignaciones): codifícalas en CNF con un script y, si el entorno dice "resolvedor SAT activado", usa resolver_sat; si no, python-sat en el proyecto. Si hay que minimizar un coste, escribe un .opb. Comprueba la solución decodificada (guia("matematicas")).
 - Android: crea el proyecto (Flutter con flutter create o Kotlin según guia("android")), llama a abrir_android_studio para que instale lo que falte del SDK y compila con verificar. Aceptar licencias lo hace el usuario.
 - Bases de datos: en local con Docker (guia("bases-de-datos")); conectarte a una remota o borrar datos pide permiso.
+- Usuarios con roles (empleados, administrador, "cada uno solo ve lo suyo"): lee guia("roles") antes de las rutas; el empleado no ve ganancias, costos ni ventas ajenas (panel, facturas, API), no edita productos, se cierra en el servidor y un test con marcadores recorre todas las pantallas como empleado.
 - Si falta un dato imprescindible o hay que elegir entre caminos, usa preguntar (con opciones). Lo demás, decídelo tú."""
 
 

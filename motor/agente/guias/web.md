@@ -14,3 +14,4 @@
 - `<link rel="icon" href="data:,">` si no hay favicon (evita un 404 en la consola).
 - Accesibilidad básica: `alt` en imágenes, contraste suficiente, botones de verdad (`<button>`), foco visible.
 - `verificar` abre la página en Edge sin ventana: errores de consola, recursos 404, ids inexistentes, texto visible y capturas en `.agente/capturas/`.
+- Con usuarios y roles (empleados, administrador, "cada uno solo ve lo suyo"): lee guia("roles") antes de escribir las rutas. Cierra cada ruta en el servidor; el empleado no recibe ganancias, costos ni ventas ajenas (ni en el panel, ni en las facturas, ni en el JSON), no edita productos, y un test con marcadores recorre todas las pantallas como empleado.
