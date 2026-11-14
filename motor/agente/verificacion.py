@@ -418,6 +418,17 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
         inf.errores.append(f"{rel}: un empleado (creado con rol de empleado desde la pantalla de usuarios) abre {s['ruta']} {que}: "
                            "es una sección de gestión del administrador. Ciérrala al rol de empleado en la propia ruta (403, o "
                            "redirigir con un aviso), no solo quitando el enlace del menú: el empleado escribe la URL.")
+    if emp.get("error"):
+        inf.errores.append(f"{rel}: un empleado (creado con rol de empleado desde la pantalla de usuarios) recibe un error de programa "
+                           f"(500) al abrir {', '.join(emp['error'][:4])}, donde el administrador la abre bien. Revisa lo que esa ruta "
+                           "hace con un usuario que no es administrador: ¿lee una columna o una clave que no se carga para ese rol, o "
+                           "una variable que solo existe para el administrador? Mira la traza en la consola de la web.")
+    if emp.get("ajenas"):
+        inf.avisos.append(f"{rel}: un empleado (creado con rol de empleado desde la pantalla de usuarios) abre "
+                          f"{', '.join(a['ruta'] for a in emp['ajenas'][:4])}: ventas o facturas de otros usuarios (él no ha vendido "
+                          "nada). Si cada empleado solo debe ver lo suyo, filtra por el vendedor en la lista y comprueba de quién es "
+                          "en el detalle (403 o 404 si no es suyo); si en este negocio los empleados ven todas las ventas, ignora "
+                          "este aviso.")
     if nav and nav.get("login_invisible"):
         etiqueta, ident, clases, como = nav["login_invisible"]
         quien = etiqueta + (f"#{ident}" if ident else "") + "".join("." + c for c in clases.split())

@@ -19,8 +19,10 @@ COSTO = "__COSTO__"        # "muestra" u "oculta" el precio de compra al emplead
 ABRE = "__ABRE__"          # reportes y usuarios para el empleado: "si", "no" (redirige), "403" o "propio" (otra página)
 USUARIOS = "__USUARIOS__"  # "con" o "sin" formulario de alta de usuarios
 EMPLEADO_ENTRA = "__ENTRA__"
+VENTAS = "__VENTAS__"      # "no" (sin ventas), "ajenas" (el empleado ve todas), "filtra" (solo las suyas) o "500" (el detalle falla al empleado)
 USERS = {"admin": ("pan123", "admin")}
 PRODUCTOS = []
+VENTAS_HECHAS = []
 
 
 class Web(BaseHTTPRequestHandler):
@@ -47,7 +49,21 @@ class Web(BaseHTTPRequestHandler):
             return self.responder(302, "", [("Location", "/entrar")])
         admin = USERS[u][1] == "admin"
         menu = ('<nav><a href="/productos">Productos</a> <a href="/reportes">Ganancias y reportes</a> <a href="/usuarios">Usuarios</a> '
-                '<a href="/informes">Informes</a></nav>')
+                '<a href="/informes">Informes</a>' + ('<a href="/ventas">Ventas</a>' if VENTAS != "no" else "") + '</nav>')
+        if VENTAS != "no" and self.path.startswith("/ventas"):
+            if not admin and VENTAS == "filtra" and self.path != "/ventas":
+                return self.responder(302, "", [("Location", "/")])  # el detalle de una venta que no es suya: cerrado
+            if not admin and VENTAS == "500" and self.path != "/ventas":
+                return self.responder(500, "Internal Server Error")  # venta['vendedor_id'] sin esa columna para el empleado
+            if self.path == "/ventas":
+                propias = [] if (not admin and VENTAS == "filtra") else VENTAS_HECHAS
+                filas = "".join(f'<li><a href="/ventas/{i}">Venta {i}</a></li>' for i, _ in enumerate(propias, 1))
+                alta = ('<form method="post" action="/ventas/nueva"><input name="producto"><input type="number" name="cantidad">'
+                        '<button>Vender</button></form>')
+                return self.responder(200, "<h1>Ventas</h1>" + menu + (f"<ul>{filas}</ul>" if filas else "<p>No hay ventas.</p>") + alta)
+            n = self.path.rsplit("/", 1)[-1]
+            return self.responder(200, f"<h1>Venta {n}</h1>" + menu + f"<p>Venta {n} de la tienda: dos tornillos, vendedor administrador, "
+                                                                f"total 40.00, cliente de mostrador, factura F-{n} emitida y pagada.</p>")
         if self.path == "/informes":  # una sección de gestión sin la palabra ganancia: solo se nota que se ve igual
             if not admin and ABRE == "403":
                 return self.responder(403, "Forbidden")
@@ -104,6 +120,9 @@ class Web(BaseHTTPRequestHandler):
             PRODUCTOS.append((datos.get("nombre", ""), datos.get("precio_compra", ""), datos.get("precio_venta", "")))
         if self.path == "/usuarios/nuevo":
             USERS[datos.get("usuario", "")] = (datos.get("clave", ""), datos.get("rol", "empleado"))
+        if self.path == "/ventas/nueva":
+            VENTAS_HECHAS.append((datos.get("producto", ""), datos.get("cantidad", "")))
+            return self.responder(302, "", [("Location", f"/ventas/{len(VENTAS_HECHAS)}")])
         self.responder(302, "", [("Location", "/")])
 
 
@@ -117,9 +136,9 @@ class Base(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp(prefix="test_empleado_"))
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
 
-    def recorrido(self, costo="oculta", abre="no", usuarios="con", entra="si") -> dict:
+    def recorrido(self, costo="oculta", abre="no", usuarios="con", entra="si", ventas="no") -> dict:
         fuente = WEB
-        for k, v in {"COSTO": costo, "ABRE": abre, "USUARIOS": usuarios, "ENTRA": entra}.items():
+        for k, v in {"COSTO": costo, "ABRE": abre, "USUARIOS": usuarios, "ENTRA": entra, "VENTAS": ventas}.items():
             fuente = fuente.replace(f"__{k}__", v)
         (self.dir / "app.py").write_text(fuente, encoding="utf-8")
         return recorrer(self.dir / "app.py", sys.executable, [("admin", "pan123")])
@@ -167,6 +186,39 @@ class EmpleadoVeLoDelAdmin(Base):
         self.assertEqual((e["costo"], e["abre"]), ([], []))
 
 
+class EmpleadoYLasVentas(Base):
+    """m4141: el empleado veía la factura del administrador (neg4) y recibía un 500 en el detalle de una venta (neg2). La segunda lectura
+    corre DESPUÉS del recorrido de siempre, que ya vendió con los formularios de la web."""
+
+    def test_ventas_de_otros_abiertas_al_empleado(self):
+        e = self.recorrido(ventas="ajenas")["empleado"]
+        self.assertTrue(e["fase2"])
+        motivos = {a["ruta"]: a["motivo"] for a in e["ajenas"]}
+        self.assertEqual(motivos.get("/ventas/1"), "detalle")
+        self.assertEqual(motivos.get("/ventas"), "filas")
+        self.assertEqual(e["error"], [])
+
+    def test_solo_las_suyas_no_dice_nada(self):
+        e = self.recorrido(ventas="filtra")["empleado"]
+        self.assertTrue(e["fase2"])
+        self.assertEqual((e["ajenas"], e["error"]), ([], []))
+
+    def test_un_500_solo_del_empleado_en_el_detalle(self):
+        e = self.recorrido(ventas="500")["empleado"]
+        self.assertTrue(e["fase2"])
+        self.assertEqual(e["error"], ["/ventas/1"])
+
+    def test_sin_ninguna_pagina_cerrada_en_la_primera_lectura_no_se_mira(self):
+        """Sin el canario (páginas que el empleado no puede abrir) no se sabe si el recorrido lo hizo administrador: silencio."""
+        e = self.recorrido(abre="si", ventas="ajenas")["empleado"]
+        self.assertFalse(e["fase2"])
+        self.assertEqual((e["ajenas"], e["error"]), ([], []))
+
+    def test_sin_ventas_no_hay_nada_que_decir(self):
+        e = self.recorrido()["empleado"]
+        self.assertEqual((e["ajenas"], e["error"]), ([], []))
+
+
 class MensajesDeVerificar(unittest.TestCase):
     def mensajes(self, empleado: dict | None) -> list[str]:
         raiz = Path(tempfile.mkdtemp(prefix="test_empleado_msg_"))
@@ -198,6 +250,20 @@ class MensajesDeVerificar(unittest.TestCase):
         [m] = self.mensajes({"usuario": "empleado_aura", "entro": True, "producto": True, "costo": [],
                              "abre": [{"ruta": "/usuarios", "motivo": "alta de usuarios"}]})
         self.assertIn("abre /usuarios y puede dar de alta usuarios", m)
+
+    def test_error_de_programa_del_empleado(self):
+        [m] = self.mensajes({"usuario": "empleado_aura", "entro": True, "producto": True, "costo": [], "abre": [],
+                             "error": ["/ventas/1", "/factura/1"], "ajenas": []})
+        self.assertIn("recibe un error de programa (500) al abrir /ventas/1, /factura/1", m)
+        self.assertIn("donde el administrador la abre bien", m)
+
+    def test_ventas_de_otros_es_un_aviso_y_no_un_error(self):
+        self.assertEqual(self.mensajes({"usuario": "empleado_aura", "entro": True, "producto": True, "costo": [], "abre": [],
+                                        "error": [], "ajenas": [{"ruta": "/factura/1", "motivo": "detalle", "parecido": 1.0},
+                                                                {"ruta": "/facturas", "motivo": "filas"}]}), [])
+        [m] = self.inf.avisos
+        self.assertIn("abre /factura/1, /facturas: ventas o facturas de otros usuarios (él no ha vendido nada)", m)
+        self.assertIn("ignora este aviso", m)
 
     def test_nada_si_no_hay_empleado_o_todo_cerrado(self):
         self.assertEqual(self.mensajes(None), [])

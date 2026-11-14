@@ -86,6 +86,10 @@ GANANCIAS = re.compile(r"(?i)\bganancias?\b|\butilidad(?:es)?\b|\bmargen(?:es)?\
 SIN_MENU = re.compile(r"(?is)<(nav|header|aside|footer)\b.*?</\1>")
 API_HABITUAL = ("/api/productos", "/api/products", "/api/ventas", "/api/sales", "/api/reportes", "/api/usuarios", "/api/inventario")
 PARECIDO = 0.85
+# Ventas y facturas: la comprobación del empleado no vende nada, así que cualquier fila o detalle que vea es de otro usuario (m4141: el
+# empleado veía /factura/1 del administrador). Y un 500 solo del empleado es un fallo de programa (venta['vendedor_id'] sin esa columna).
+VENTAS_RUTA = re.compile(r"(?i)(?:^|/)(?:ventas?|facturas?|invoices?|sales?|pedidos?|orders?|ordenes|recibos?|tickets?)(?:/|$|\?)")
+CON_ID = re.compile(r"/\d+(?:/|$|\?)")
 
 
 class _Pagina(html.parser.HTMLParser):
@@ -611,15 +615,25 @@ def _empleado(r: _Recorrido, limite: float) -> dict | None:
         r.sin_empleado = "la pantalla de entrar no se vuelve a ver con una sesión nueva"
         return None
     e.entrar(e.dentro(final, final) or r.entrar_ruta, entrar)  # con una pantalla de entrar nueva: su CSRF es el de esta sesión
-    resultado = {"usuario": EMPLEADO_USUARIO, "entro": bool(e.usuario), "producto": producto_ok, "costo": [], "abre": []}
+    resultado = {"usuario": EMPLEADO_USUARIO, "entro": bool(e.usuario), "producto": producto_ok, "costo": [], "abre": [],
+                 "error": [], "ajenas": [], "cerradas": [], "fase2": False}
     if not e.usuario:
         return resultado
+    del_admin = {p[0]: (r.dentro(p[1], p[1]) or "").split("?")[0] for p in paginas}  # dónde acaba cada página para el administrador
     rutas = list(dict.fromkeys(["/", *[p[0] for p in paginas], *API_HABITUAL]))
     for ruta in rutas[:MAX_PAGINAS + len(API_HABITUAL)]:
         if time.time() >= limite:
             break
         estado, final, texto = e.pedir(ruta)
         destino = (e.dentro(final, final) or "").split("?")[0]
+        if estado >= 500 and ruta in del_admin:  # un 500 solo del empleado, confirmado, donde el administrador la abre bien
+            if e.pedir(ruta)[0] >= 500 and 0 < r.pedir(ruta)[0] < 400:
+                resultado["error"].append(ruta)
+            continue
+        camino = ruta.split("?")[0]
+        if ruta != "/" and ruta in del_admin and del_admin[ruta] == camino and (
+                estado in (401, 403) or (estado < 400 and destino and destino != camino and not LOGIN_RUTA.search(destino))):
+            resultado["cerradas"].append(ruta)  # cerrada al empleado por su rol: el canario de la segunda lectura
         if estado >= 400 or estado == 0 or destino == r.entrar_ruta.split("?")[0] or LOGIN_RUTA.search(destino):
             continue  # lo mandó a entrar (no con _es_entrar: un alta de usuarios con clave y rol lo parece)
         if MARCA_COSTO.search(texto):
@@ -641,6 +655,62 @@ def _empleado(r: _Recorrido, limite: float) -> dict | None:
                 if parecido >= PARECIDO:
                     resultado["abre"].append({"ruta": ruta, "motivo": "igual", "parecido": round(parecido, 2)})
     return resultado
+
+
+def _empleado_despues(r: _Recorrido, previo: _Recorrido, emp: dict | None, limite: float) -> None:
+    """Segunda lectura, DESPUÉS del recorrido de siempre (que ya vendió con los formularios de la web): el empleado vuelve a entrar y
+    abre lo que el administrador abrió. Un 500 solo suyo, o las ventas y facturas de otros (él no ha vendido nada), se anotan en emp.
+    Solo si sigue siendo empleado: ese recorrido edita usuarios y puede haberlo hecho administrador; el canario son las páginas que en
+    la primera lectura se le cerraron, que tienen que seguir cerradas (si no hubo ninguna, no hay forma de saberlo y no se mira)."""
+    if not emp or not emp.get("entro") or not emp.get("cerradas") or not previo.entrar_ruta:
+        return
+    accesos = [(u, c) for c in (EMPLEADO_CLAVE, "Prueba1234!") for u in (EMPLEADO_USUARIO, f"{EMPLEADO_USUARIO}@example.com")]
+    e = _Recorrido(r.base, r.log, accesos)
+    estado, final, texto = e.pedir(previo.entrar_ruta)
+    entrar = next((f for f in e._leer(texto).formularios if _es_entrar(f)), None)
+    if entrar is None:
+        return
+    e.entrar(e.dentro(final, final) or previo.entrar_ruta, entrar)
+    if not e.usuario:
+        return
+    for ruta in emp["cerradas"]:
+        estado, final, _ = e.pedir(ruta)
+        if estado < 400 and (e.dentro(final, final) or "").split("?")[0] == ruta.split("?")[0]:
+            return  # una página que le estaba cerrada se le abre: el recorrido pudo ascenderlo, no se le culpa a la web
+    emp["fase2"] = True
+    rutas = list(dict.fromkeys(r.orden))[:30]
+    # Las ventas que armó el navegador con JavaScript no están en lo que abrió el recorrido: se buscan en los enlaces de sus listas.
+    for lista in [x for x in rutas if VENTAS_RUTA.search(x.split("?")[0]) and not CON_ID.search(x.split("?")[0])][:3]:
+        estado_a, final_a, texto_a = r.pedir(lista)
+        if not 0 < estado_a < 400:
+            continue
+        for href in r._leer(texto_a).enlaces:
+            nueva = r.dentro(href, final_a)
+            if (nueva and len(rutas) < 36 and nueva not in rutas and VENTAS_RUTA.search(nueva.split("?")[0])
+                    and CON_ID.search(nueva.split("?")[0])):
+                rutas.append(nueva)
+    for ruta in rutas:
+        if time.time() >= limite:
+            break
+        camino = ruta.split("?")[0]
+        estado, final, texto = e.pedir(ruta)
+        if estado >= 500:
+            if e.pedir(ruta)[0] >= 500 and 0 < r.pedir(ruta)[0] < 400 and ruta not in emp["error"]:
+                emp["error"].append(ruta)
+            continue
+        destino = (e.dentro(final, final) or "").split("?")[0]
+        if estado >= 400 or destino != camino or not VENTAS_RUTA.search(camino):
+            continue
+        estado_a, _, ajeno = r.pedir(ruta)
+        if not 0 < estado_a < 400:
+            continue  # el administrador ya no la abre: nada con qué comparar
+        suyo = _visible(texto)
+        if CON_ID.search(camino):
+            parecido = difflib.SequenceMatcher(None, _visible(ajeno)[:3000], suyo[:3000]).ratio() if len(suyo) >= 80 else 0.0
+            if parecido >= PARECIDO:
+                emp["ajenas"].append({"ruta": ruta, "motivo": "detalle", "parecido": round(parecido, 2)})
+        elif any(CON_ID.search(h) and VENTAS_RUTA.search(h.split("?")[0]) for h in e._leer(texto).enlaces):
+            emp["ajenas"].append({"ruta": ruta, "motivo": "filas"})
 
 
 # Webs que entran con JavaScript (fetch, campos sin name): se usan con un navegador oculto. Cada elemento visible que
@@ -1019,6 +1089,10 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                                            time.time() + MAX_SEGUNDOS_LINEAS, list(r.filas_js)[:3])
             if lineas:
                 r.errores += [e for e in lineas["errores"] if e not in r.errores]
+        try:  # cuando ya hay ventas (las de los formularios y las que el navegador armó con JavaScript)
+            _empleado_despues(r, previo, empleado, time.time() + MAX_SEGUNDOS_EMPLEADO)
+        except Exception:  # una web rara no debe estropear el recorrido
+            pass
         navegador = None
         # Lo de dentro solo se ve con un navegador si la entrada es JavaScript. También se prueba con él si no se pudo
         # entrar: un formulario con name que JavaScript enviaba como JSON no dejaba entrar al recorrido, y a una persona sí.
