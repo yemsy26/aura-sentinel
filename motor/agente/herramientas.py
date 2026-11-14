@@ -1,6 +1,7 @@
 """Herramientas del agente. Devuelven texto compacto (barato en tokens y fácil de leer para modelos pequeños)."""
 import base64
 import html.parser
+import inspect
 import json
 import os
 import re
@@ -1156,6 +1157,30 @@ class Herramientas:
         return "\n".join(l for l in self.archivo_plan.read_text(encoding="utf-8").splitlines() if l.startswith("- ["))
 
 
+def _llamada_mal_hecha(nombre: str, funcion, args: dict) -> str | None:
+    """Si el TypeError fue por la forma de la LLAMADA (faltan o sobran argumentos) explica qué y da la firma;
+    None si vino de dentro de la herramienta (ahí vale el mensaje de Python)."""
+    try:
+        firma = inspect.signature(funcion)
+    except (TypeError, ValueError):
+        return None
+    try:
+        firma.bind(**args)
+        return None
+    except TypeError:
+        pass
+    params = list(firma.parameters.values())
+    faltan = [p.name for p in params if p.default is p.empty and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+              and p.name not in args]
+    sobran = [] if any(p.kind is p.VAR_KEYWORD for p in params) else [k for k in args if k not in firma.parameters]
+    partes = ([f"falta {', '.join(f'«{n}»' for n in faltan)}"] if faltan else []) + \
+             ([f"sobra {', '.join(f'«{n}»' for n in sobran)}"] if sobran else [])
+    if not partes:
+        return None
+    uso = ", ".join(p.name if p.default is p.empty else f"{p.name}=…" for p in params)
+    return f"{' y '.join(partes)}. Recibí: {', '.join(args) or 'ningún argumento'}. Uso: {nombre}({uso})."
+
+
 def despachar(h: Herramientas, nombre: str, args: dict) -> str:
     tabla = {"plan": h.plan, "paso_hecho": h.paso_hecho, "listar": h.listar, "leer": h.leer, "buscar": h.buscar,
              "escribir": h.escribir, "editar": h.editar, "ejecutar": h.ejecutar, "procesos": h.procesos_cmd,
@@ -1170,6 +1195,9 @@ def despachar(h: Herramientas, nombre: str, args: dict) -> str:
     try:
         return tabla[nombre](**args)
     except TypeError as e:
+        causa = _llamada_mal_hecha(nombre, tabla[nombre], args)
+        if causa:
+            return f"Argumentos inválidos para {nombre}: {causa} Vuelve a llamarla con todos los obligatorios."
         return f"Argumentos inválidos para {nombre}: {e}"
     except Exception as e:  # el modelo debe ver el error, no el agente caerse
         return f"ERROR en {nombre}: {type(e).__name__}: {e}"
