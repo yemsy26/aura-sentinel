@@ -406,6 +406,18 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
         inf.errores.append(f"{rel}: el administrador «{s['usuario']}» entra, pero al abrir {s['ruta']} {cierre}: no puede usar "
                            "su propia sección (crear, vender...). Revisa cómo se carga el usuario en cada petición (¿el rol "
                            "llega bien al construirlo?) y que el administrador tenga el rol que piden esas rutas.")
+    emp = r.get("empleado") or {}
+    if emp.get("costo"):
+        inf.errores.append(f"{rel}: un empleado (creado con rol de empleado desde la pantalla de usuarios) ve el costo de un producto "
+                           f"(el precio de compra 7.77 que puso la prueba) en {', '.join(emp['costo'][:4])}. El costo es del "
+                           "administrador: quítalo de lo que recibe el empleado en el servidor (que la plantilla o el JSON no lo "
+                           "incluyan, también en atributos data-* o scripts; ocultarlo con CSS o JavaScript no sirve, el dato ya viajó).")
+    for s in emp.get("abre", [])[:3]:
+        que = {"ganancias": "y enseña ganancias, utilidades o costos", "alta de usuarios": "y puede dar de alta usuarios"}.get(
+            s["motivo"], f"y la ve igual que el administrador (parecido {s.get('parecido')})")
+        inf.errores.append(f"{rel}: un empleado (creado con rol de empleado desde la pantalla de usuarios) abre {s['ruta']} {que}: "
+                           "es una sección de gestión del administrador. Ciérrala al rol de empleado en la propia ruta (403, o "
+                           "redirigir con un aviso), no solo quitando el enlace del menú: el empleado escribe la URL.")
     if nav and nav.get("login_invisible"):
         etiqueta, ident, clases, como = nav["login_invisible"]
         quien = etiqueta + (f"#{ident}" if ident else "") + "".join("." + c for c in clases.split())
@@ -440,7 +452,8 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
         hecho = (f"{nav['secciones']} secciones y {nav['formularios']} formularios guardados con el navegador" if nav
                  else f"{r['paginas']} páginas y {r['formularios']} formularios enviados")
         inf.ok.append(f"{rel}: usé la web de verdad: {hecho}" + (f" entrando como {r['usuario']}" if r["usuario"] else "")
-                      + ", sin errores")
+                      + (" y como un empleado creado desde la pantalla de usuarios (no ve el costo ni las secciones de gestión)"
+                         if emp.get("entro") else "") + ", sin errores")
     return True
 
 

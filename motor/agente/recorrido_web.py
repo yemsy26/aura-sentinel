@@ -4,6 +4,7 @@ usuarios que da el proyecto, abre sus páginas y envía cada formulario con dato
 Una misión de negocio entregó un sistema que daba error 500 al registrar una venta (db.get_or_404 con dos argumentos):
 sus 12 tests pasaban, la revisión lo aprobó y verificar solo comprobaba que el servidor arrancaba. Aquí no juzga el
 modelo: cuenta lo que responde el servidor (500, una traza, un formulario que va a una ruta que no existe)."""
+import difflib
 import html.parser
 import http.cookiejar
 import json
@@ -65,6 +66,26 @@ ERROR_DE_PROGRAMA = re.compile(
     r"list index out of range|not supported between instances|error binding parameter|incorrect number of bindings|"
     r"is not json serializable|nonetype|referenced before assignment|(?:not enough|too many) values to unpack|"
     r"string indices must be integers|unhashable type|argument of type '\w+' is not iterable)[^<>\n]{0,60}")
+
+
+# Un negocio con empleados («cada empleado solo debe ver lo que le corresponde»): tres entregas seguidas dejaban al empleado abrir
+# /reportes con las ganancias, y otras le enseñaban el precio de compra en la lista de productos o en la API. Tras recorrer la web
+# como administrador, se crea un empleado desde su propia pantalla de usuarios y se mira qué ve. Solo se actúa si se puede completar
+# (pantalla de usuarios con rol, el empleado entra); si no, ni una palabra.
+MAX_SEGUNDOS_EMPLEADO, MAX_SEGUNDOS_EXPLORAR = 20, 10
+EMPLEADO_USUARIO, EMPLEADO_CLAVE = "empleado_aura", "Empleado1234!"
+COSTO_PRUEBA, VENTA_PRUEBA = "7.77", "21.31"  # números que ningún precio normal de la web repite
+CAMPO_COSTO = re.compile(r"(?i)compra|coste|costo|cost")
+CAMPO_VENTA = re.compile(r"(?i)venta|pvp|sale|precio|price")
+CAMPO_ROL = re.compile(r"(?i)rol|role|perfil|permiso|nivel|cargo|tipo")
+ROL_EMPLEADO = re.compile(r"(?i)emplead|vendedor|cajer|operador|staff|seller|clerk|worker|\buser\b|usuario")
+ROL_JEFE = re.compile(r"(?i)admin|gerente|manager|due[ñn]o|owner|root|super")
+GESTION = re.compile(r"(?i)report|ganancia|utilidad|finanz|informe|margen|costos?\b|usuarios?\b|users?\b|empleados?\b|admin")
+MARCA_COSTO = re.compile(r"(?<![\d.,])7[.,]77(?!\d)")
+GANANCIAS = re.compile(r"(?i)\bganancias?\b|\butilidad(?:es)?\b|\bmargen(?:es)?\b|\bbeneficios?\b|precio de compra|costo total")
+SIN_MENU = re.compile(r"(?is)<(nav|header|aside|footer)\b.*?</\1>")
+API_HABITUAL = ("/api/productos", "/api/products", "/api/ventas", "/api/sales", "/api/reportes", "/api/usuarios", "/api/inventario")
+PARECIDO = 0.85
 
 
 class _Pagina(html.parser.HTMLParser):
@@ -249,6 +270,9 @@ class _Recorrido:
         self.posts = 0  # formularios POST enviados (los de buscar y filtrar son GET)
         self.login_vacio: str | None = None  # la página de entrar a la que manda la web sale sin nada que rellenar
         self.intento_entrar = self.entrar_js = self.entrar_fallo = self.registro = self.entrar_get = False
+        self.entrar_ruta: str | None = None  # la página con el formulario de entrar que usó el recorrido
+        self.sin_empleado = ""  # por qué no se pudo probar con un empleado (para diagnosticar; no se enseña al modelo)
+        self.aterrizaje: str | None = None  # la página a la que llegó al entrar
         # «+ Nuevo producto» llevaba a una ruta que, sin formulario, volvía a la lista: nadie podía dar de alta nada.
         self.abre: dict[str, tuple[str, str]] = {}  # destino -> (texto del enlace, página donde está)
         self.sin_formulario: dict[str, list[bool]] = {}  # destino -> en cada vuelta, ¿volvió sin formulario?
@@ -291,16 +315,17 @@ class _Recorrido:
         if not any(c["tipo"] == "password" and c.get("name") for c in form["campos"]):
             self.entrar_js = True  # sin name, la envía JavaScript (fetch): este recorrido no la puede usar
             return
-        self.intento_entrar, self.entrar_get = True, form["metodo"] == "get"
-        accion = self.dentro(form["accion"] or ruta, urllib.parse.urljoin(self.base, ruta)) or ruta
+        self.intento_entrar, self.entrar_get, self.entrar_ruta = True, form["metodo"] == "get", ruta
+        accion =self.dentro(form["accion"] or ruta, urllib.parse.urljoin(self.base, ruta)) or ruta
         for usuario, clave in self.accesos[:12]:
             datos = _rellenar(form, self.hoy, usuario, clave) or []
-            estado, _, texto = self.pedir(accion, datos, form["metodo"])
+            estado, final, texto = self.pedir(accion, datos, form["metodo"])
             if not self.mirar(f"entrar como {usuario}", estado, texto):
                 self.entrar_fallo = True  # ese error ya lo dice todo
                 return
             if not any(_es_entrar(f) for f in self._leer(texto).formularios):
                 self.usuario, self.clave = usuario, clave
+                self.aterrizaje = self.dentro(final, final)  # adonde lo lleva la web al entrar (algunas llevan «/» de vuelta a entrar)
                 return
 
     def vivo(self) -> bool:
@@ -324,6 +349,35 @@ class _Recorrido:
         if not url.startswith(self.base) or ESTATICO.search(url) or NO_TOCAR.search(url):
             return None
         return url[len(self.base) - 1:] or "/"
+
+    def explorar(self, limite: float, maximo: int = 40) -> None:
+        """Solo lee: entra con el primer formulario de entrar y abre las páginas que enlaza la web (nada se envía, nada se
+        borra). Lo que abre queda en self.orden."""
+        self.orden, cola, vistas, formas = [], deque(["/"]), set(), {}
+        while cola and len(self.orden) < maximo and time.time() < limite:
+            ruta = cola.popleft()
+            if ruta in vistas or formas.get(_forma(ruta), 0) >= 2:  # dos páginas de la misma forma (/productos/7, /productos/8) bastan
+                continue
+            vistas.add(ruta)
+            formas[_forma(ruta)] = formas.get(_forma(ruta), 0) + 1
+            estado, final, texto = self.pedir(ruta)
+            if estado >= 400 or estado == 0:
+                continue
+            pagina = self._leer(texto)
+            entrar = next((f for f in pagina.formularios if _es_entrar(f)), None)
+            if entrar is not None and not (self.intento_entrar or self.entrar_js) and self.accesos:
+                self.entrar(self.dentro(final, final) or ruta, entrar)
+                if self.usuario:  # sin sesión (una entrada con JavaScript, o credenciales que no valen) no se vuelve a pedir en bucle
+                    vistas.discard(ruta)
+                    cola.appendleft(ruta)
+                    if self.aterrizaje:
+                        cola.appendleft(self.aterrizaje)
+                    continue
+            self.orden.append(ruta)
+            for href in pagina.enlaces:
+                nueva = self.dentro(href, final)
+                if nueva and nueva not in vistas:
+                    cola.append(nueva)
 
     def recorrer(self, limite: float) -> None:
         self.enviados_claves, self.orden = set(), []
@@ -436,6 +490,146 @@ class _Recorrido:
                     if (nueva := self.dentro(href, final_f)) and nueva not in self.vistas:
                         self.cola.append(nueva)
         return quedan
+
+
+def _visible(texto: str) -> str:
+    sin = re.sub(r"(?is)<head\b.*?</head>|<!--.*?-->|<(?:script|style)\b.*?</(?:script|style)>", " ", texto)
+    return " ".join(re.sub(r"<[^>]+>", " ", sin).split())
+
+
+def _es_alta(form: dict, accion: str | None) -> bool:
+    """Un formulario POST que da de alta algo: ni id en la acción ni campo oculto de id (los de editar), ni archivos."""
+    if accion is None or form["metodo"] != "post" or re.search(r"/\d", accion) or LOGIN_RUTA.search(accion):
+        return False  # (no _es_entrar: un alta de usuario con usuario, clave y rol también tiene tres campos y una contraseña)
+    return not any(c["tipo"] == "file" or (c["tipo"] == "hidden" and c.get("value") and re.fullmatch(
+        r"(?i)id|\w*_id|uid|pk", c.get("name") or "") is not None) for c in form["campos"])
+
+
+def _rol_de_empleado(campo: dict) -> str | None:
+    for o in campo["opciones"]:
+        valor = o["texto"].strip() if o["valor"] is None else o["valor"]
+        etiqueta = f"{valor} {o['texto']}"
+        if not o["desactivada"] and valor.strip() and ROL_EMPLEADO.search(etiqueta) and not ROL_JEFE.search(etiqueta):
+            return valor
+    return None
+
+
+def _empleado(r: _Recorrido, limite: float) -> dict | None:
+    """Con la sesión del administrador: da de alta un producto con costo 7.77 y un usuario con rol de empleado desde los formularios
+    de la propia web, entra como ese empleado y lee (solo GET) lo que abrió el administrador. None si no se puede completar.
+    {"usuario", "entro", "producto", "costo": [rutas donde el empleado ve 7.77], "abre": [páginas de gestión que ve igual que el admin]}"""
+    paginas = []
+    for ruta in r.orden[:MAX_PAGINAS]:
+        if time.time() >= limite:
+            r.sin_empleado = "sin tiempo para releer las páginas"
+            return None
+        estado, final, texto = r.pedir(ruta)
+        if estado < 400:
+            paginas.append((ruta, final, r._leer(texto)))
+    usuario = producto = None
+    for _, final, pagina in paginas:
+        for form in pagina.formularios:
+            accion = r.dentro(form["accion"] or final, final)
+            if not _es_alta(form, accion):
+                continue
+            nombres = [c.get("name") or "" for c in form["campos"]]
+            con_clave = any(c["tipo"] == "password" for c in form["campos"])
+            if usuario is None and con_clave and any(CAMPO_ROL.search(n) for n in nombres):
+                usuario = (accion, form)
+            elif producto is None and not con_clave and any(CAMPO_COSTO.search(n) for n in nombres):
+                producto = (accion, form)
+    if usuario is None:
+        r.sin_empleado = "ninguna página tiene un formulario de alta de usuarios con contraseña y rol"
+        return None
+    accion, form = usuario
+    campos = {c["name"]: c for c in form["campos"] if c.get("name")}
+    datos = _rellenar(form, r.hoy)
+    if datos is None:
+        r.sin_empleado = "el formulario de alta de usuarios tiene un campo obligatorio que no se puede rellenar"
+        return None
+    nuevo, con_rol = [], False
+    for nombre, valor in datos:
+        c, n = campos.get(nombre, {}), nombre.lower()
+        if c.get("tipo") == "password":
+            valor = EMPLEADO_CLAVE
+        elif c.get("tipo") == "select" and CAMPO_ROL.search(n):
+            valor, con_rol = _rol_de_empleado(c), True
+            if valor is None:
+                r.sin_empleado = "el campo de rol no tiene una opción de empleado (solo admin o similares)"
+                return None
+        elif c.get("tipo") == "text" and CAMPO_ROL.search(n):
+            valor, con_rol = "empleado", True
+        elif c.get("tipo") == "radio" and CAMPO_ROL.search(n):
+            r.sin_empleado = "el rol es un grupo de botones de radio"
+            return None
+        elif c.get("tipo") == "email" or re.search(r"mail|correo", n):
+            valor = f"{EMPLEADO_USUARIO}@example.com"
+        elif c.get("tipo") == "text" and re.search(r"user|usuario|login|cuenta", n):
+            valor = EMPLEADO_USUARIO
+        elif c.get("tipo") == "text" and re.search(r"nombre|name", n):
+            valor = "Empleado Aura"
+        elif valor == "Prueba":
+            valor = "Aura"
+        nuevo.append((nombre, valor))
+    if not con_rol:
+        r.sin_empleado = "el formulario de usuarios no tiene un campo de rol que se pueda rellenar"
+        return None
+    producto_ok = False
+    if producto is not None:
+        paccion, pform = producto
+        pcampos = {c["name"]: c for c in pform["campos"] if c.get("name")}
+        pdatos = _rellenar(pform, r.hoy)
+        if pdatos is not None:
+            ajustados = []
+            for nombre, valor in pdatos:
+                if pcampos.get(nombre, {}).get("tipo") in ("number", "text"):
+                    valor = COSTO_PRUEBA if CAMPO_COSTO.search(nombre) else VENTA_PRUEBA if CAMPO_VENTA.search(nombre) else valor
+                if valor == "Prueba":  # el recorrido de después crea el suyo con «Prueba»: si choca (código único), da un 500 falso
+                    valor = "Producto Aura"
+                ajustados.append((nombre, valor))
+            estado, _, _ = r.pedir(paccion, ajustados, "post")
+            producto_ok = estado < 400
+    estado, _, _ = r.pedir(accion, nuevo, "post")
+    if estado >= 400:
+        r.sin_empleado = f"el alta del empleado respondió {estado} (CSRF, permiso o validación)"
+        return None
+    e = _Recorrido(r.base, r.log, [(EMPLEADO_USUARIO, EMPLEADO_CLAVE), (f"{EMPLEADO_USUARIO}@example.com", EMPLEADO_CLAVE)])
+    estado, final, texto = e.pedir(r.entrar_ruta)
+    entrar = next((f for f in e._leer(texto).formularios if _es_entrar(f)), None)
+    if entrar is None:
+        r.sin_empleado = "la pantalla de entrar no se vuelve a ver con una sesión nueva"
+        return None
+    e.entrar(e.dentro(final, final) or r.entrar_ruta, entrar)  # con una pantalla de entrar nueva: su CSRF es el de esta sesión
+    resultado = {"usuario": EMPLEADO_USUARIO, "entro": bool(e.usuario), "producto": producto_ok, "costo": [], "abre": []}
+    if not e.usuario:
+        return resultado
+    rutas = list(dict.fromkeys(["/", *[p[0] for p in paginas], *API_HABITUAL]))
+    for ruta in rutas[:MAX_PAGINAS + len(API_HABITUAL)]:
+        if time.time() >= limite:
+            break
+        estado, final, texto = e.pedir(ruta)
+        destino = (e.dentro(final, final) or "").split("?")[0]
+        if estado >= 400 or estado == 0 or destino == r.entrar_ruta.split("?")[0] or LOGIN_RUTA.search(destino):
+            continue  # lo mandó a entrar (no con _es_entrar: un alta de usuarios con clave y rol lo parece)
+        if MARCA_COSTO.search(texto):
+            resultado["costo"].append(ruta)
+        camino = ruta.split("?")[0]
+        if GESTION.search(camino) and destino == camino:
+            suyo = _visible(texto)
+            if SIN_PERMISO.search(suyo):
+                continue  # la página dice que no tiene permiso: cerrada con un 200
+            cuerpo = _visible(SIN_MENU.sub(" ", texto))  # sin menús: un enlace «Reportes» o «Ganancias» lo ve todo el mundo
+            con_clave = any(c["tipo"] == "password" for f in e._leer(texto).formularios for c in f["campos"])
+            if GANANCIAS.search(cuerpo):
+                resultado["abre"].append({"ruta": ruta, "motivo": "ganancias"})
+            elif con_clave and any(CAMPO_ROL.search(c.get("name") or "") for f in e._leer(texto).formularios for c in f["campos"]):
+                resultado["abre"].append({"ruta": ruta, "motivo": "alta de usuarios"})
+            else:
+                ajeno = _visible(r.pedir(ruta)[2])
+                parecido = difflib.SequenceMatcher(None, ajeno[:3000], suyo[:3000]).ratio() if len(suyo) >= 80 else 0.0
+                if parecido >= PARECIDO:
+                    resultado["abre"].append({"ruta": ruta, "motivo": "igual", "parecido": round(parecido, 2)})
+    return resultado
 
 
 # Webs que entran con JavaScript (fetch, campos sin name): se usan con un navegador oculto. Cada elemento visible que
@@ -792,7 +986,21 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                 time.sleep(0.3)
         else:
             return None
-        r = _Recorrido(f"http://127.0.0.1:{puerto}/", log, accesos)
+        base = f"http://127.0.0.1:{puerto}/"
+        # El empleado se prueba ANTES del recorrido de siempre y con una sesión propia: ese recorrido envía todos los formularios,
+        # también el de editar usuarios (rol y «activo» con la primera opción), y puede dejar al administrador sin permisos.
+        previo = _Recorrido(base, log, accesos)
+        empleado = None
+        try:
+            previo.explorar(time.time() + MAX_SEGUNDOS_EXPLORAR)
+            if previo.usuario and ES_ADMIN.match(previo.usuario) and not previo.entrar_js and previo.entrar_ruta:
+                empleado = _empleado(previo, time.time() + MAX_SEGUNDOS_EMPLEADO)
+            else:
+                previo.sin_empleado = ("el recorrido sin JavaScript no entró como administrador"
+                                       if not (previo.usuario and ES_ADMIN.match(previo.usuario)) else "la entrada usa JavaScript")
+        except Exception as exc:  # una web rara no debe estropear el recorrido
+            empleado, previo.sin_empleado = None, f"excepción {type(exc).__name__}: {exc}"
+        r = _Recorrido(base, log, accesos)
         r.recorrer(time.time() + MAX_SEGUNDOS)
         lineas = None
         if abrir_navegador is not None and r.filas_js and not r.entrar_js and (r.usuario or not r.intento_entrar):
@@ -828,7 +1036,8 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                 "enviados": r.enviados, "paginas": r.paginas, "formularios": r.formularios, "usuario": r.usuario,
                 "sin_entrar": r.intento_entrar and not r.usuario and not r.entrar_fallo, "entrar_js": r.entrar_js,
                 "navegador": navegador, "lineas": lineas, "sin_formulario": sin_formulario, "registro": r.registro,
-                "entrar_get": r.entrar_get, "sin_permiso": r.sin_permiso, "login_vacio": r.login_vacio}
+                "entrar_get": r.entrar_get, "sin_permiso": r.sin_permiso, "login_vacio": r.login_vacio, "empleado": empleado,
+                "empleado_motivo": previo.sin_empleado}
     finally:
         procesos.detener(proc, trabajo)
         try:
