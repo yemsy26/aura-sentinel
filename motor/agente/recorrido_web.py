@@ -1135,6 +1135,16 @@ OPCION_VACIA = re.compile(r"(?i)^\W*(?:selecc\w*|elig\w*|elij\w*|escog\w*|choose
 JS_LIBRERIA = re.compile(r"(?i)(?:^|\W)(?:\$|jQuery|bootstrap|axios|Chart|Vue|React|Swal|moment|Alpine|Toastify|flatpickr|"
                          r"Select2|DataTable)(?!\w).*(?:is not defined|is not a function|undefined)")
 MAX_SEGUNDOS_VENTA = 25
+# Lo que dice la web cuando no pudo guardar la venta («Error al registrar venta: (sqlite3.IntegrityError) NOT NULL constraint failed…»).
+# Los rechazos que una prueba sin datos del negocio puede provocar con razón (falta un cliente, no hay stock, un dato inválido) no cuentan.
+VENTA_RECHAZADA = re.compile(r"(?i)\berror\b|\bfall[oó]\b|no se pudo|\bfailed\b|excepci[oó]n|exception")
+VENTA_RECHAZO_LEGITIMO = re.compile(r"(?i)requerid|obligatori|selecci|required|stock|existencia|insuficien|disponible|cliente|duplicad|ya existe|"
+                                    r"inv[aá]lid|invalid|contrase|sesi[oó]n|permiso|csrf|token")
+# La lista de ventas (ruta exacta, sin «nueva» ni id) y el botón que abre ahí el panel o modal de «nueva venta» (m4148_neg4: la venta
+# se hace en la propia lista, y su ruta de alta solo acepta POST, así que el recorrido nunca la vio).
+VENTA_LISTA = re.compile(r"(?i)^/?(?:ventas?|sales?|pedidos?|orders?)/?$")
+NUEVA_VENTA = re.compile(r"(?i)nuev[oa]\s+(?:venta|pedido|orden)|new\s+(?:sale|order)|registrar\s+(?:una\s+)?venta|"
+                         r"(?:agregar|a[ñn]adir|crear)\s+(?:una\s+)?venta|^\W*\+\s*venta")
 
 
 def _opcion_producto(campo: dict) -> str | None:
@@ -1147,24 +1157,30 @@ def _opcion_producto(campo: dict) -> str | None:
 
 
 def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | None, abrir, limite: float,
-                       paginas: list[str], hay_productos: bool) -> dict | None:
-    """Vende desde la pantalla de «nueva venta» como lo haría una persona, con un navegador oculto. Dos fallos que el
+                       paginas: list[str], hay_productos: bool, listas: list[str] = (), paneles: list[str] = ()) -> dict | None:
+    """Vende desde la pantalla de «nueva venta» como lo haría una persona, con un navegador oculto. Tres fallos que el
     recorrido sin JavaScript no ve: el desplegable de productos queda vacío porque el script falla («vacio»; solo si hay
     productos creados), y se elige un producto y una cantidad, se guarda y la web contesta que falta al menos un producto
-    («mensaje»: las líneas no llegan al servidor), o el servidor da 500 / deja una traza al guardar («servidor»). None si no hay navegador."""
+    («mensaje»: las líneas no llegan al servidor), o el servidor da 500 / deja una traza al guardar («servidor»), o no
+    dice nada y no guarda («no_registrada»: la pantalla, la lista de ventas y las existencias quedan como estaban).
+    «listas»: las páginas que cambian si la venta se guarda. «paneles»: listas de ventas con un botón que abre el formulario
+    en la propia página (solo se prueban si ninguna ruta de alta dio una prueba). None si no hay navegador."""
     from playwright.sync_api import sync_playwright
 
     r = {"errores": [], "servidor": [], "probadas": 0, "guardadas": 0, "sin_desplegable": 0, "estados": []}
-    hoy, js, malas = date.today().isoformat(), [], []
+    hoy, js, malas, envios, dialogos = date.today().isoformat(), [], [], [], []
     with sync_playwright() as p:
         nav = abrir(p)
         if nav is None:
             return None
         try:
-            pag = nav.new_context(accept_downloads=False, viewport={"width": 1280, "height": 900}).new_page()
-            pag.on("dialog", lambda d: d.dismiss())
+            ctx = nav.new_context(accept_downloads=False, viewport={"width": 1280, "height": 900})
+            pag = ctx.new_page()
+            pag.on("dialog", lambda d: (dialogos.append(d.message), d.dismiss()))
             pag.on("pageerror", lambda e: js.append(" ".join(str(e).split())[:160]))
             pag.on("response", lambda resp: malas.append((resp.request.method, resp.url, resp.status)) if resp.status >= 500 else None)
+            pag.on("response", lambda resp: envios.append((resp.request.method, urllib.parse.urlsplit(resp.url).path, resp.status))
+                   if resp.request.method != "GET" and resp.request.resource_type in ("document", "fetch", "xhr") else None)
             _entrar_con_navegador(pag, base, usuario, clave)
 
             def texto() -> str:
@@ -1173,13 +1189,37 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 except Exception:
                     return ""
 
-            def probar(ruta: str, anadir_antes: bool) -> dict:
-                """«anadir_antes»: pulsar «agregar línea» antes de rellenar (filas que se añaden) o después (se elige y se añade al carrito)."""
+            def instantanea() -> dict[str, str]:
+                """El texto de las listas tal como las ve quien entró (con la sesión del navegador, sin moverlo de la pantalla)."""
+                vistas = {}
+                for lista in listas:
+                    try:
+                        resp = ctx.request.get(urllib.parse.urljoin(base, lista), timeout=5000)
+                        if resp.status == 200 and urllib.parse.urlsplit(resp.url).path.rstrip("/") == lista.split("?")[0].rstrip("/"):
+                            vistas[lista] = _visible(SIN_MENU.sub(" ", resp.text()))
+                    except Exception:
+                        continue
+                return vistas
+
+            def probar(ruta: str, anadir_antes: bool, panel: bool = False) -> dict:
+                """«anadir_antes»: pulsar «agregar línea» antes de rellenar (filas que se añaden) o después (se elige y se añade al carrito).
+                «panel»: la lista de ventas lleva el formulario oculto tras un botón de «nueva venta»: se abre primero."""
                 js.clear()
                 pag.goto(urllib.parse.urljoin(base, ruta), wait_until="domcontentloaded", timeout=15000)
                 _esperar(pag)
-                if urllib.parse.urlsplit(pag.url).path.rstrip("/") != ruta.split("?")[0].rstrip("/"):
+                en_ruta = lambda: urllib.parse.urlsplit(pag.url).path.rstrip("/") == ruta.split("?")[0].rstrip("/")
+                if not en_ruta():
                     return {"estado": "fuera"}  # la mandó a otra parte (sin permiso, a la entrada)
+                abierto = None
+                if panel:
+                    abre = next((b for b in pag.evaluate(LISTAR, "botones") if NUEVA_VENTA.search(b["texto"])
+                                 and not NO_TOCAR.search(b["texto"])), None)
+                    if not (abre and _clic(pag, abre["i"])):
+                        return {"estado": "sin_boton"}
+                    _esperar(pag)
+                    if not en_ruta():
+                        return {"estado": "sin_boton"}  # el botón era un enlace a otra pantalla: esa se prueba por su ruta
+                    abierto = abre["i"]
                 botones = pag.evaluate(LISTAR, "botones")
                 anadir = next((b for b in botones if AGREGAR_FILA.search(b["texto"])), None)
                 carrito = anadir or next((b for b in botones if not b["submit"] and ANADIR_AL_CARRITO.search(b["texto"])
@@ -1219,13 +1259,17 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 if not anadir_antes and carrito and _clic(pag, carrito["i"]):
                     _esperar(pag)
                 botones = pag.evaluate(LISTAR, "botones")
+                botones = [b for b in botones if b["i"] != abierto]  # el botón que abrió el panel no es el de guardar
                 guardar = (next((b for b in botones if b["submit"] and not NO_TOCAR.search(b["texto"])), None)
                            or next((b for b in reversed(botones) if GUARDAR.search(b["texto"]) and not NO_TOCAR.search(b["texto"])
                                     and not AGREGAR_FILA.search(b["texto"])), None))
                 if not (datos and guardar):
                     return {**res, "estado": "sin_guardar"}
                 antes = texto()
+                listas_antes = instantanea()
                 malas.clear()
+                envios.clear()
+                dialogos.clear()
                 desde = log.stat().st_size
                 if not _clic(pag, guardar["i"]):
                     return {**res, "estado": "sin_guardar"}
@@ -1241,20 +1285,45 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 dicho = VENTA_VACIA.search(despues)
                 if dicho and not VENTA_VACIA.search(antes):  # si ya estaba escrito antes de guardar, no es la respuesta del servidor
                     return {**res, "estado": "mensaje", "mensaje": " ".join(dicho.group(0).split())}
+                if dicho := next(filter(None, map(VENTA_VACIA.search, dialogos)), None):  # un alert que dice lo mismo
+                    return {**res, "estado": "mensaje", "mensaje": " ".join(dicho.group(0).split())}
+                # No salió ninguna petición: no se envió nada (un carrito sin lo elegido, un campo que el navegador no deja pasar).
+                if not envios:
+                    return {**res, "estado": "sin_envio", "js": next((e for e in js if not JS_LIBRERIA.search(e)), "")}
+                # Se envió y ni la lista de ventas ni las existencias cambiaron. Si la pantalla tampoco (ni mensaje, ni otra pantalla), la
+                # web no hizo nada que se vea («no_registrada»); si dijo algo, no se sabe si lo que dijo es un rechazo («sin_confirmar»).
+                if listas_antes:
+                    ahora = instantanea()
+                    comparadas = [k for k in listas_antes if k in ahora]
+                    if comparadas and all(listas_antes[k] == ahora[k] for k in comparadas):
+                        if despues == antes and en_ruta():
+                            return {**res, "estado": "no_registrada", "js": next((e for e in js if not JS_LIBRERIA.search(e)), ""),
+                                    "envio": " ".join(f"{m} {u} -> {s}" for m, u, s in envios[-1:])}
+                        ya = set(antes.splitlines())
+                        dicho = next((" ".join(x.split())[:200] for x in despues.splitlines() if x.strip() and x not in ya
+                                      and VENTA_RECHAZADA.search(x) and not VENTA_RECHAZO_LEGITIMO.search(x)), None)
+                        if dicho:
+                            return {**res, "estado": "rechazada", "mensaje": dicho,
+                                    "envio": " ".join(f"{m} {u} -> {s}" for m, u, s in envios[-1:])}
+                        return {**res, "estado": "sin_confirmar"}
                 return {**res, "estado": "guardada"}
 
-            for ruta in paginas:
+            for ruta, panel in [(x, False) for x in paginas] + [(x, True) for x in paneles]:
                 if time.time() > limite:
                     break
-                v = probar(ruta, True)
+                if panel and r["probadas"]:
+                    break  # las listas con panel solo si ninguna ruta de alta dio una prueba
+                v = probar(ruta, True, panel)
                 # Una pantalla de «elegir y añadir al carrito» (el desplegable ya está y el botón añade lo elegido): se prueba también así.
-                if v["estado"] == "mensaje" and v.get("inicial") and v.get("carrito"):
-                    v = probar(ruta, False)
+                if v["estado"] in ("mensaje", "no_registrada", "sin_envio") and v.get("inicial") and v.get("carrito"):
+                    v = probar(ruta, False, panel)
+                if v["estado"] == "sin_boton":
+                    continue  # la lista de ventas no abre nada: ni se anota
                 r["estados"].append((ruta, v["estado"]))
                 if v["estado"] == "sin_desplegable":
                     r["sin_desplegable"] += 1
                     continue
-                if v["estado"] in ("fuera", "sin_guardar"):
+                if v["estado"] in ("fuera", "sin_guardar", "sin_envio"):
                     continue
                 r["probadas"] += 1
                 r["guardadas"] += v["estado"] == "guardada"
@@ -1265,6 +1334,10 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     r["errores"].append({"pagina": ruta, "tipo": "vacio", "js": v["js"], "mensaje": ""})
                 elif v["estado"] == "mensaje":
                     r["errores"].append({"pagina": ruta, "tipo": "mensaje", "js": "", "mensaje": v["mensaje"]})
+                elif v["estado"] == "no_registrada":
+                    r["errores"].append({"pagina": ruta, "tipo": "no_registrada", "js": v["js"], "mensaje": v["envio"]})
+                elif v["estado"] == "rechazada":
+                    r["errores"].append({"pagina": ruta, "tipo": "rechazada", "js": "", "mensaje": v["mensaje"]})
         finally:
             nav.close()
     return r
@@ -1320,11 +1393,16 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
         # del administrador (el formulario de editar usuarios) y el navegador ya no entraría. Los productos que tiene son los del empleado.
         venta = None
         if abrir_navegador is not None and not previo.entrar_js and (previo.usuario or not previo.intento_entrar):
-            alta = [x for x in dict.fromkeys(previo.orden) if VENTA_ALTA.search(x.split("?")[0]) and not CON_ID.search(x.split("?")[0])][:3]
+            vistas = [x for x in dict.fromkeys(previo.orden) if not CON_ID.search(x.split("?")[0])]
+            alta = [x for x in vistas if VENTA_ALTA.search(x.split("?")[0])][:3]
+            ventas = [x for x in vistas if VENTA_LISTA.search(x.split("?")[0])][:1]
+            productos = [x for x in vistas if PRODUCTO_RUTA.search(x.split("?")[0]) and not FORMULARIO_RUTA.search(x.split("?")[0])][:1]
             try:
-                if alta:
+                # La lista de ventas solo si dice «nueva venta» en algún sitio (sin lanzar el navegador para nada).
+                paneles = [x for x in ventas if NUEVA_VENTA.search(_visible(previo.pedir(x)[2]))]
+                if alta or paneles:
                     venta = _venta_en_pantalla(base, log, previo.usuario, previo.clave, abrir_navegador,
-                                               time.time() + MAX_SEGUNDOS_VENTA, alta, _hay_productos(previo))
+                                               time.time() + MAX_SEGUNDOS_VENTA, alta, _hay_productos(previo), ventas + productos, paneles)
             except Exception:  # una web rara no debe estropear el recorrido
                 venta = None
         r = _Recorrido(base, log, accesos)

@@ -435,6 +435,16 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                                f"creados (error de JavaScript: «{e['js']}»): nadie puede vender desde esta pantalla. Mira la consola del "
                                "navegador: ¿la lista de productos que usa el script llega a la página (una variable que se define, "
                                "un fetch a la API)?")
+        elif e["tipo"] == "no_registrada":
+            fallo = f" (error de JavaScript: «{e['js']}»)" if e["js"] else ""
+            inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, tras elegir un producto y una cantidad y pulsar guardar, no se "
+                               f"registra la venta ({e['mensaje']}): la pantalla se queda igual sin decir nada y ni la lista de ventas ni "
+                               f"las existencias cambian{fallo}. ¿El formulario no valida por un campo obligatorio que la plantilla no pinta "
+                               "(el vendedor, un id), o el servidor no guarda? Una venta guardada redirige a otra pantalla o dice que se registró.")
+        elif e["tipo"] == "rechazada":
+            inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, tras elegir un producto y una cantidad y pulsar guardar, la web "
+                               f"responde «{e['mensaje']}» y la venta no se registra (ni la lista de ventas ni las existencias cambian). "
+                               "Quien vende no puede vender desde esta pantalla: busca ese error en el código que guarda la venta.")
         else:
             inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, tras elegir un producto y una cantidad y pulsar guardar, la "
                                f"web responde «{e['mensaje']}»: la venta no se guarda desde la pantalla. ¿El campo con las líneas va fuera "

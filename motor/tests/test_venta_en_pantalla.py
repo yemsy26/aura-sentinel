@@ -17,6 +17,7 @@ from agente.verificacion import canal_navegador
 
 MENU = '<nav><a href="/productos">Productos</a> <a href="/ventas">Ventas</a> <a href="/ventas/nueva">Nueva venta</a></nav>'
 CLIENTE = '<select name="cliente_id"><option value="1">Ana</option></select>'
+MENU_PANEL = '<nav><a href="/productos">Productos</a> <a href="/ventas">Ventas</a></nav>'  # sin enlace a la ruta de alta
 PRODUCTOS_OPC = '<option value="">Selecciona un producto</option><option value="5">Tornillo</option>'
 
 WEB = r'''import traceback
@@ -52,10 +53,26 @@ PAGINAS = {
                '<form method="post" action="/ventas/nueva"><input type="hidden" name="items" id="items"><button type="submit">Finalizar venta</button></form>'
                '<script>function meter(){var p=document.getElementById("p").value;if(!p){return;}'
                'document.getElementById("items").value=p;document.getElementById("lista").innerHTML="<li>"+p+"</li>";}</script>',
+    # elegir y añadir al carrito, y guardar con el carrito vacío no envía nada (el navegador no deja pasar el formulario): sin mensaje ni petición
+    "carrito_mudo": '<h1>Nueva venta</h1><select id="p" name="producto">' + OPC + '</select><input type="number" id="c" name="cantidad" value="1">'
+                    '<button type="button" onclick="meter()">Agregar al carrito</button><ul id="lista"></ul>'
+                    '<form method="post" action="/ventas/nueva" onsubmit="return document.getElementById(&#39;items&#39;).value !== &#39;&#39;;">'
+                    '<input type="hidden" name="items" id="items"><button type="submit">Finalizar venta</button></form>'
+                    '<script>function meter(){var p=document.getElementById("p").value;if(!p){return;}'
+                    'document.getElementById("items").value=p;document.getElementById("lista").innerHTML="<li>"+p+"</li>";}</script>',
+    # la venta se hace en la propia lista de ventas: un botón «+ Nueva venta» (sin type, fuera de todo form) abre el panel; la ruta de alta solo acepta POST (m4148_neg4)
+    "panel": '<div id="p" style="display:none"><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_id">' + OPC + '</select>'
+             '<input type="number" name="cantidad" value="1" min="1"><button type="submit">Registrar venta</button></form></div>'
+             '<button onclick="document.getElementById(&#39;p&#39;).style.display=&#39;block&#39;">+ Nueva venta</button>',
     # «Agrega al menos un producto» escrito en la propia pantalla antes de guardar: no es la respuesta del servidor
     "texto_fijo": '<h1>Nueva venta</h1><p>Agrega al menos un producto para continuar.</p><form method="post" action="/ventas/nueva">' + CLIENTE
                   + '<select name="producto_id">' + OPC + '</select><button type="submit">Guardar venta</button></form>',
 }
+
+
+# el panel que envía con fetch y no mira la respuesta: la pantalla no cambia, pase lo que pase
+PANEL_FETCH = PAGINAS["panel"].replace('<form method="post" action="/ventas/nueva">', '<form onsubmit="fetch(&#39;/ventas/nueva&#39;,{method:&#39;POST&#39;,'
+                                       'body:new URLSearchParams(new FormData(this))});return false;">')
 
 
 class Web(BaseHTTPRequestHandler):
@@ -73,8 +90,10 @@ class Web(BaseHTTPRequestHandler):
         if self.path == "/productos":
             return self.responder(200, "<h1>Productos</h1>" + MENU + ("<p>Tornillo, precio 21.31</p>" if PRECIO == "si" else "<p>No hay productos.</p>"))
         if self.path == "/ventas":
-            return self.responder(200, "<h1>Ventas</h1>" + MENU + f"<p>{len(VENTAS)} ventas</p>")
+            return self.responder(200, "<h1>Ventas</h1>" + MENU + f"<p>{len(VENTAS)} ventas</p>" + ((PANEL_FETCH if MODO.endswith("+silencio") else PAGINAS["panel"]) if MODO.startswith("panel") else ""))
         if self.path == "/ventas/nueva":
+            if MODO.startswith("panel"):
+                return self.responder(405, "Method Not Allowed")
             return self.responder(200, MENU + PAGINAS[MODO.split("+")[0]])
         self.responder(404, "no")
 
@@ -89,6 +108,14 @@ class Web(BaseHTTPRequestHandler):
             except Exception:
                 traceback.print_exc()
                 return self.responder(500, "Internal Server Error")
+        if MODO.endswith("+error"):  # el servidor captura la excepción, la enseña y no guarda
+            return self.responder(200, MENU + "<p>Error al registrar venta: IntegrityError NOT NULL constraint failed</p>" + PAGINAS[MODO.split("+")[0]])
+        if MODO.endswith("+sinstock"):  # un rechazo con razón: la prueba no sabe cuánto hay
+            return self.responder(200, MENU + "<p>Error: stock insuficiente</p>" + PAGINAS[MODO.split("+")[0]])
+        if MODO.endswith("+rechazo"):  # dice algo, pero no guarda: ¿es un rechazo con razón? No se sabe
+            return self.responder(200, MENU + "<p>Hubo un problema con la venta.</p>" + PAGINAS[MODO.split("+")[0]])
+        if MODO.endswith("+silencio"):  # lo que hizo m4148_neg3: 200 con la misma pantalla, sin guardar y sin decir nada
+            return self.responder(200, MENU + PAGINAS[MODO.split("+")[0]])
         VENTAS.append(datos)
         self.responder(302, "", [("Location", "/ventas")])
 
@@ -116,8 +143,8 @@ class VentaEnPantalla(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp(prefix="test_venta_pantalla_"))
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
 
-    def recorrer(self, modo: str, precio: str = "si") -> dict:
-        fuente = (WEB.replace("__MODO__", modo).replace("__PRECIO__", precio).replace("__MENU__", MENU)
+    def recorrer(self, modo: str, precio: str = "si", menu: str = MENU) -> dict:
+        fuente = (WEB.replace("__MODO__", modo).replace("__PRECIO__", precio).replace("__MENU__", menu)
                   .replace("__CLIENTE__", CLIENTE).replace("__OPC__", PRODUCTOS_OPC))
         (self.dir / "app.py").write_text(fuente, encoding="utf-8")
         return recorrer(self.dir / "app.py", sys.executable, [], abrir_navegador=canal_navegador)
@@ -158,6 +185,43 @@ class VentaEnPantalla(unittest.TestCase):
         self.assertIn("guardar la venta desde la pantalla /ventas/nueva", e["que"])
         self.assertIn("KeyError", e["traza"])
 
+    def test_la_venta_que_no_se_registra_y_no_dice_nada(self):
+        [e] = self.recorrer("ok+silencio")["venta"]["errores"]
+        self.assertEqual((e["pagina"], e["tipo"], e["mensaje"]), ("/ventas/nueva", "no_registrada", "POST /ventas/nueva -> 200"))
+
+    def test_guardar_sin_que_salga_nada_se_intenta_con_el_carrito(self):
+        v = self.recorrer("carrito_mudo")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 1, [("/ventas/nueva", "guardada")]))
+
+    def test_si_la_web_dice_algo_pero_no_guarda_no_se_acusa(self):
+        v = self.recorrer("ok+rechazo")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 0, [("/ventas/nueva", "sin_confirmar")]))
+
+    def test_el_error_que_la_web_enseña_y_no_guarda_se_dice(self):
+        [e] = self.recorrer("ok+error")["venta"]["errores"]
+        self.assertEqual((e["pagina"], e["tipo"]), ("/ventas/nueva", "rechazada"))
+        self.assertIn("Error al registrar venta", e["mensaje"])
+
+    def test_un_rechazo_con_razon_no_se_acusa(self):
+        v = self.recorrer("ok+sinstock")["venta"]
+        self.assertEqual((v["errores"], v["estados"]), ([], [("/ventas/nueva", "sin_confirmar")]))
+
+    def test_sin_lista_que_comparar_no_se_dice_nada(self):
+        menu = '<nav><a href="/ventas/nueva">Nueva venta</a></nav>'  # sin lista de ventas ni de productos: no hay con qué saber si se guardó
+        v = self.recorrer("ok+silencio", menu=menu)["venta"]
+        self.assertEqual((v["errores"], v["guardadas"]), ([], 1))
+
+    def test_el_panel_de_nueva_venta_en_la_lista_se_abre_y_vende(self):
+        v = self.recorrer("panel", menu=MENU_PANEL)["venta"]
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 1, [("/ventas", "guardada")]))
+
+    def test_el_panel_que_no_registra_la_venta_tambien_se_ve(self):
+        [e] = self.recorrer("panel+silencio", menu=MENU_PANEL)["venta"]["errores"]
+        self.assertEqual((e["pagina"], e["tipo"]), ("/ventas", "no_registrada"))
+
+    def test_una_lista_de_ventas_sin_boton_de_nueva_venta_no_lanza_nada(self):
+        self.assertIsNone(self.recorrer("js_roto", menu=MENU_PANEL)["venta"])  # sin ruta de alta ni botón en /ventas
+
 
 class MensajesDeVerificar(unittest.TestCase):
     def errores(self, venta: dict) -> list[str]:
@@ -184,6 +248,18 @@ class MensajesDeVerificar(unittest.TestCase):
         [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "mensaje", "js": "", "mensaje": "Agrega al menos un producto"}]})
         self.assertIn("tras elegir un producto y una cantidad y pulsar guardar, la web responde «Agrega al menos un producto»", m)
         self.assertIn("va fuera del <form>", m)
+
+    def test_la_venta_no_se_registra(self):
+        [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "no_registrada", "js": "updateTotal is not defined",
+                                         "mensaje": "POST /ventas/nueva -> 200"}]})
+        self.assertIn("no se registra la venta (POST /ventas/nueva -> 200)", m)
+        self.assertIn("ni la lista de ventas ni las existencias cambian (error de JavaScript: «updateTotal is not defined»)", m)
+        self.assertIn("campo obligatorio que la plantilla no pinta", m)
+
+    def test_la_venta_rechazada_con_un_error(self):
+        [m] = self.errores({"errores": [{"pagina": "/ventas", "tipo": "rechazada", "js": "", "mensaje": "Error de conexión"}]})
+        self.assertIn("la web responde «Error de conexión» y la venta no se registra", m)
+        self.assertIn("ni la lista de ventas ni las existencias cambian", m)
 
     def test_nada_si_no_hay_nada_que_decir(self):
         self.assertEqual(self.errores({"errores": [], "probadas": 1, "guardadas": 1}), [])
