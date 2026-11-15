@@ -429,6 +429,15 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                           "nada). Si cada empleado solo debe ver lo suyo, filtra por el vendedor en la lista y comprueba de quién es "
                           "en el detalle (403 o 404 si no es suyo); si en este negocio los empleados ven todas las ventas, ignora "
                           "este aviso.")
+    neg = r.get("negocio") or {}
+    for ruta in neg.get("informe_cero", [])[:2]:
+        inf.avisos.append(f"{rel}: el informe {ruta} enseña todos sus importes en 0 aunque hay ventas ({neg['ventas'][1]} en "
+                          f"{neg['ventas'][0]}). ¿El filtro por defecto deja fuera las ventas de hoy (una fecha de fin sin la hora, el "
+                          "mes mal calculado, UTC frente a la hora local)? Quien abre el informe quiere ver cuánto ha ganado, sin tocar "
+                          "ningún filtro.")
+    for ruta in neg.get("facturas_vacias", [])[:2]:
+        inf.avisos.append(f"{rel}: hay ventas ({neg['ventas'][1]} en {neg['ventas'][0]}), pero la lista de facturas {ruta} está vacía y "
+                          "no hay ningún botón para generarlas: ¿se crea la factura y no se guarda (falta el commit) o no se crea?")
     if nav and nav.get("login_invisible"):
         etiqueta, ident, clases, como = nav["login_invisible"]
         quien = etiqueta + (f"#{ident}" if ident else "") + "".join("." + c for c in clases.split())

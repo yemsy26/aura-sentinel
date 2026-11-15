@@ -90,6 +90,14 @@ PARECIDO = 0.85
 # empleado veía /factura/1 del administrador). Y un 500 solo del empleado es un fallo de programa (venta['vendedor_id'] sin esa columna).
 VENTAS_RUTA = re.compile(r"(?i)(?:^|/)(?:ventas?|facturas?|invoices?|sales?|pedidos?|orders?|ordenes|recibos?|tickets?)(?:/|$|\?)")
 CON_ID = re.compile(r"/\d+(?:/|$|\?)")
+# Lo que el dueño abre primero: el informe de ganancias y las facturas. m4141: el informe por defecto salía en 0.00 con una venta de hoy
+# (el mes o «hasta hoy» dejaban fuera las ventas con hora) y una web no guardaba las facturas (sin commit): las páginas daban 200.
+INFORME_RUTA = re.compile(r"(?i)report|ganancia|utilidad|informe|finanz|estad[ií]stic|resumen")
+FACTURA_RUTA = re.compile(r"(?i)(?:^|/)(?:facturas?|invoices?)(?:/|$|\?)")
+IMPORTE = re.compile(r"(?<![\w.,/-])(?:RD\$|US\$|[$€])?\s?(\d{1,3}(?:[.,]\d{3})+[.,]\d{2}|\d+[.,]\d{2})(?!\d)")
+FORMULARIO_RUTA = re.compile(r"(?i)/(?:nuev[ao]s?|new|crear|create|agregar|add|alta|editar|edit)(?:/|$|\?)")
+GENERAR_FACTURA = re.compile(r"(?i)generar|emitir|crear\s+factura|nueva\s+factura|new\s+invoice|facturar|generate")
+NUM_FACTURA = re.compile(r"(?i)\b(?:fac|fact|inv|f)[-_ ]?\d{2,}\b")
 
 
 class _Pagina(html.parser.HTMLParser):
@@ -713,6 +721,58 @@ def _empleado_despues(r: _Recorrido, previo: _Recorrido, emp: dict | None, limit
             emp["ajenas"].append({"ruta": ruta, "motivo": "filas"})
 
 
+def _informes_y_facturas(r: _Recorrido, limite: float) -> dict:
+    """Con la sesión del administrador y cuando ya hay ventas: ¿el informe por defecto enseña todo en 0 aunque hay ventas?, ¿la lista de
+    facturas está vacía aunque hay ventas (se creó y no se guardó)? Solo con una venta con importe visible en la lista de ventas."""
+    res: dict = {"ventas": None, "informe_cero": [], "facturas_vacias": [], "paginas_informe": 0, "paginas_facturas": 0}
+    if not r.usuario or not ES_ADMIN.match(r.usuario):
+        return res
+
+    def leer(ruta: str) -> str | None:
+        estado, final, texto = r.pedir(ruta)
+        if not 0 < estado < 400 or (r.dentro(final, final) or "").split("?")[0] != ruta.split("?")[0]:
+            return None
+        return texto
+
+    def importes(texto: str) -> list[str]:
+        return IMPORTE.findall(_visible(SIN_MENU.sub(" ", texto)))
+
+    sin_id = [x for x in dict.fromkeys(r.orden) if not CON_ID.search(x.split("?")[0])]
+    crudo = ""
+    for lista in [x for x in sin_id if VENTAS_RUTA.search(x.split("?")[0]) and not FACTURA_RUTA.search(x.split("?")[0])
+                  and not FORMULARIO_RUTA.search(x.split("?")[0])][:3]:
+        texto = leer(lista)
+        if texto is None:
+            continue
+        crudo += texto
+        positivos = [m for m in importes(texto) if re.search(r"[1-9]", m)]
+        # Una venta de verdad: la lista tiene filas con enlace a su detalle (no el formulario de «nueva venta», que enseña precios).
+        con_filas = any(CON_ID.search(h) and VENTAS_RUTA.search(h.split("?")[0]) for h in r._leer(texto).enlaces)
+        if positivos and con_filas and res["ventas"] is None:
+            res["ventas"] = (lista, positivos[0])
+    if res["ventas"] is None or time.time() >= limite:
+        return res
+    for ruta in [x for x in sin_id if INFORME_RUTA.search(x.split("?")[0]) and not VENTAS_RUTA.search(x.split("?")[0])][:3]:
+        texto = leer(ruta)
+        if texto is None:
+            continue
+        cifras = importes(texto)
+        res["paginas_informe"] += 1
+        if len(cifras) >= 2 and not any(re.search(r"[1-9]", m) for m in cifras):
+            res["informe_cero"].append(ruta)
+    for ruta in [x for x in sin_id if FACTURA_RUTA.search(x.split("?")[0])][:2]:
+        texto = leer(ruta)
+        if texto is None:
+            continue
+        res["paginas_facturas"] += 1
+        cuerpo = _visible(SIN_MENU.sub(" ", texto))
+        con_filas = (any(CON_ID.search(h) for h in r._leer(texto).enlaces) or NUM_FACTURA.search(cuerpo)
+                     or any(re.search(r"[1-9]", m) for m in importes(texto)))
+        if not con_filas and not GENERAR_FACTURA.search(crudo + texto):
+            res["facturas_vacias"].append(ruta)
+    return res
+
+
 # Webs que entran con JavaScript (fetch, campos sin name): se usan con un navegador oculto. Cada elemento visible que
 # interesa se marca con data-aura-i para poder pulsarlo o rellenarlo después.
 LISTAR = r"""(tipo) => {
@@ -1093,6 +1153,11 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
             _empleado_despues(r, previo, empleado, time.time() + MAX_SEGUNDOS_EMPLEADO)
         except Exception:  # una web rara no debe estropear el recorrido
             pass
+        negocio = {}
+        try:
+            negocio = _informes_y_facturas(r, time.time() + MAX_SEGUNDOS_EMPLEADO)
+        except Exception:
+            pass
         navegador = None
         # Lo de dentro solo se ve con un navegador si la entrada es JavaScript. También se prueba con él si no se pudo
         # entrar: un formulario con name que JavaScript enviaba como JSON no dejaba entrar al recorrido, y a una persona sí.
@@ -1122,7 +1187,7 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                 "sin_entrar": r.intento_entrar and not r.usuario and not r.entrar_fallo, "entrar_js": r.entrar_js,
                 "navegador": navegador, "lineas": lineas, "sin_formulario": sin_formulario, "registro": r.registro,
                 "entrar_get": r.entrar_get, "sin_permiso": r.sin_permiso, "login_vacio": r.login_vacio, "empleado": empleado,
-                "empleado_motivo": previo.sin_empleado}
+                "empleado_motivo": previo.sin_empleado, "negocio": negocio}
     finally:
         procesos.detener(proc, trabajo)
         try:
