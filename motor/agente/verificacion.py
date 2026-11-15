@@ -429,6 +429,16 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                           "nada). Si cada empleado solo debe ver lo suyo, filtra por el vendedor en la lista y comprueba de quién es "
                           "en el detalle (403 o 404 si no es suyo); si en este negocio los empleados ven todas las ventas, ignora "
                           "este aviso.")
+    for e in (r.get("venta") or {}).get("errores", [])[:2]:
+        if e["tipo"] == "vacio":
+            inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, el desplegable de productos queda vacío aunque hay productos "
+                               f"creados (error de JavaScript: «{e['js']}»): nadie puede vender desde esta pantalla. Mira la consola del "
+                               "navegador: ¿la lista de productos que usa el script llega a la página (una variable que se define, "
+                               "un fetch a la API)?")
+        else:
+            inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, tras elegir un producto y una cantidad y pulsar guardar, la "
+                               f"web responde «{e['mensaje']}»: la venta no se guarda desde la pantalla. ¿El campo con las líneas va fuera "
+                               "del <form> (un formulario solo envía sus propios campos), o el JavaScript no lo rellena antes de enviar?")
     neg = r.get("negocio") or {}
     for ruta in neg.get("informe_cero", [])[:2]:
         inf.avisos.append(f"{rel}: el informe {ruta} enseña todos sus importes en 0 aunque hay ventas ({neg['ventas'][1]} en "

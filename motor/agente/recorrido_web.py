@@ -791,7 +791,8 @@ LISTAR = r"""(tipo) => {
     r = [...document.querySelectorAll('input, select, textarea')].filter(vis)
           .filter(e => !['hidden', 'submit', 'button', 'image', 'reset', 'file', 'search'].includes(e.type))
           .map(e => ({i: marca(e), tipo: e.tagName === 'SELECT' ? 'select' : e.tagName === 'TEXTAREA' ? 'textarea' : (e.type || 'text'),
-                      name: e.name || e.id || e.placeholder || '', value: e.value || '', min: e.min || '', max: e.max || '',
+                      name: e.name || e.id || e.placeholder || '', clase: String(e.className || ''),
+                      value: e.value || '', min: e.min || '', max: e.max || '',
                       opciones: e.tagName === 'SELECT' ? [...e.options].map(o => ({valor: o.value, texto: o.text, desactivada: o.disabled})) : []}));
   }
   document.body.dataset.auraN = String(n);
@@ -1001,6 +1002,41 @@ def _con_navegador(base: str, log: Path, accesos: list[tuple[str, str]], abrir, 
     return r
 
 
+def _esperar(pag) -> None:
+    try:
+        pag.wait_for_load_state("networkidle", timeout=4000)
+    except Exception:
+        pass
+    pag.wait_for_timeout(200)
+
+
+def _clic(pag, i: str) -> bool:
+    try:
+        pag.locator(f"[data-aura-i='{i}']").first.click(timeout=3000)
+        return True
+    except Exception:
+        return False
+
+
+def _entrar_con_navegador(pag, base: str, usuario: str | None, clave: str | None) -> None:
+    """Abre la web y, si pide contraseña, entra con el usuario dado."""
+    pag.goto(base, wait_until="domcontentloaded", timeout=15000)
+    _esperar(pag)
+    if usuario is not None and pag.locator("input[type=password]:visible").count() > 0:
+        campos = pag.evaluate(LISTAR, "campos")
+        quien = next((c for c in campos if c["tipo"] in ("text", "email")), None)
+        secreto = next((c for c in campos if c["tipo"] == "password"), None)
+        if quien and secreto:
+            pag.locator(f"[data-aura-i='{quien['i']}']").fill(usuario)
+            pag.locator(f"[data-aura-i='{secreto['i']}']").fill(clave or "")
+            botones = pag.evaluate(LISTAR, "botones")
+            boton = (next((b for b in botones if BOTON_ENTRAR.search(b["texto"])), None)
+                     or next((b for b in botones if b["submit"]), None))
+            if not (boton and _clic(pag, boton["i"])):
+                pag.locator(f"[data-aura-i='{secreto['i']}']").press("Enter")
+            _esperar(pag)
+
+
 def _lineas_con_navegador(base: str, log: Path, usuario: str | None, clave: str | None, abrir, limite: float,
                           paginas: list[str]) -> dict | None:
     """Hace lo que el recorrido sin JavaScript no puede: en cada página cuyo formulario añade líneas con un botón, entra,
@@ -1021,34 +1057,12 @@ def _lineas_con_navegador(base: str, log: Path, usuario: str | None, clave: str 
                    if resp.status >= 500 else None)
 
             def esperar():
-                try:
-                    pag.wait_for_load_state("networkidle", timeout=4000)
-                except Exception:
-                    pass
-                pag.wait_for_timeout(200)
+                _esperar(pag)
 
             def clic(i: str) -> bool:
-                try:
-                    pag.locator(f"[data-aura-i='{i}']").first.click(timeout=3000)
-                    return True
-                except Exception:
-                    return False
+                return _clic(pag, i)
 
-            pag.goto(base, wait_until="domcontentloaded", timeout=15000)
-            esperar()
-            if usuario is not None and pag.locator("input[type=password]:visible").count() > 0:
-                campos = pag.evaluate(LISTAR, "campos")
-                quien = next((c for c in campos if c["tipo"] in ("text", "email")), None)
-                secreto = next((c for c in campos if c["tipo"] == "password"), None)
-                if quien and secreto:
-                    pag.locator(f"[data-aura-i='{quien['i']}']").fill(usuario)
-                    pag.locator(f"[data-aura-i='{secreto['i']}']").fill(clave or "")
-                    botones = pag.evaluate(LISTAR, "botones")
-                    boton = (next((b for b in botones if BOTON_ENTRAR.search(b["texto"])), None)
-                             or next((b for b in botones if b["submit"]), None))
-                    if not (boton and clic(boton["i"])):
-                        pag.locator(f"[data-aura-i='{secreto['i']}']").press("Enter")
-                    esperar()
+            _entrar_con_navegador(pag, base, usuario, clave)
             for ruta in paginas:
                 if time.time() > limite:
                     break
@@ -1106,6 +1120,167 @@ def _lineas_con_navegador(base: str, log: Path, usuario: str | None, clave: str 
     return r
 
 
+# La pantalla de «nueva venta» (m4141: dos entregas con una pantalla que no vendía y el servidor sin fallar: verificar daba la web por buena).
+VENTA_ALTA = re.compile(r"(?i)(?:^|/)(?:ventas?|sales?|pedidos?|orders?)/(?:nuev[ao]|new|crear|create|agregar|add|alta|registrar)(?:/|$|\?)"
+                        r"|(?:^|/)(?:nuev[ao][-_]venta|new[-_](?:sale|order)|registrar[-_]venta|pos|punto[-_]de[-_]venta)(?:/|$|\?)")
+PRODUCTO_CAMPO = re.compile(r"(?i)prod|art[ií]culo|item|servicio")
+PRODUCTO_RUTA = re.compile(r"(?i)(?:^|/)(?:productos?|products?|inventario|art[ií]culos?)(?:/|$|\?)")
+# Lo que dice un servidor cuando le llega una venta sin líneas.
+VENTA_VACIA = re.compile(r"(?i)(?:al\s+menos|at\s+least)\s+(?:un|una|1|one)\s+(?:producto|art[ií]culo|[ií]tem|item|product|l[ií]nea|line)"
+                         r"|(?:carrito|cesta|cart|basket)\s+(?:est[áa]\s+)?(?:vac[ií]o|empty)"
+                         r"|(?:agrega|a[ñn]ade)\s+(?:primero\s+)?(?:un\s+)?productos?(?:\s+(?:al|a\s+la)\s+(?:carrito|venta))?[.!]")
+ANADIR_AL_CARRITO = re.compile(r"(?i)agregar|a[ñn]adir|add|incluir|^\+")  # «Agregar», «Añadir al carrito»: lo elegido pasa a la lista de la venta
+OPCION_VACIA = re.compile(r"(?i)^\W*(?:selecc\w*|elig\w*|elij\w*|escog\w*|choose|select|ning[uú]n\w*)\b|^\W*$")
+# Una librería de un CDN que no cargó (la prueba no tiene internet) no dice nada de la pantalla.
+JS_LIBRERIA = re.compile(r"(?i)(?:^|\W)(?:\$|jQuery|bootstrap|axios|Chart|Vue|React|Swal|moment|Alpine|Toastify|flatpickr|"
+                         r"Select2|DataTable)(?!\w).*(?:is not defined|is not a function|undefined)")
+MAX_SEGUNDOS_VENTA = 25
+
+
+def _opcion_producto(campo: dict) -> str | None:
+    """El valor que elegiría quien vende: la primera opción que es un producto (ni el «Selecciona…», ni uno desactivado o agotado)."""
+    for o in campo["opciones"]:
+        if o["desactivada"] or not (o["valor"] or "").strip() or OPCION_VACIA.search(o["texto"] or "") or SIN_STOCK.search(o["texto"] or ""):
+            continue
+        return o["valor"]
+    return None
+
+
+def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | None, abrir, limite: float,
+                       paginas: list[str], hay_productos: bool) -> dict | None:
+    """Vende desde la pantalla de «nueva venta» como lo haría una persona, con un navegador oculto. Dos fallos que el
+    recorrido sin JavaScript no ve: el desplegable de productos queda vacío porque el script falla («vacio»; solo si hay
+    productos creados), y se elige un producto y una cantidad, se guarda y la web contesta que falta al menos un producto
+    («mensaje»: las líneas no llegan al servidor), o el servidor da 500 / deja una traza al guardar («servidor»). None si no hay navegador."""
+    from playwright.sync_api import sync_playwright
+
+    r = {"errores": [], "servidor": [], "probadas": 0, "guardadas": 0, "sin_desplegable": 0, "estados": []}
+    hoy, js, malas = date.today().isoformat(), [], []
+    with sync_playwright() as p:
+        nav = abrir(p)
+        if nav is None:
+            return None
+        try:
+            pag = nav.new_context(accept_downloads=False, viewport={"width": 1280, "height": 900}).new_page()
+            pag.on("dialog", lambda d: d.dismiss())
+            pag.on("pageerror", lambda e: js.append(" ".join(str(e).split())[:160]))
+            pag.on("response", lambda resp: malas.append((resp.request.method, resp.url, resp.status)) if resp.status >= 500 else None)
+            _entrar_con_navegador(pag, base, usuario, clave)
+
+            def texto() -> str:
+                try:
+                    return pag.inner_text("body", timeout=3000)
+                except Exception:
+                    return ""
+
+            def probar(ruta: str, anadir_antes: bool) -> dict:
+                """«anadir_antes»: pulsar «agregar línea» antes de rellenar (filas que se añaden) o después (se elige y se añade al carrito)."""
+                js.clear()
+                pag.goto(urllib.parse.urljoin(base, ruta), wait_until="domcontentloaded", timeout=15000)
+                _esperar(pag)
+                if urllib.parse.urlsplit(pag.url).path.rstrip("/") != ruta.split("?")[0].rstrip("/"):
+                    return {"estado": "fuera"}  # la mandó a otra parte (sin permiso, a la entrada)
+                botones = pag.evaluate(LISTAR, "botones")
+                anadir = next((b for b in botones if AGREGAR_FILA.search(b["texto"])), None)
+                carrito = anadir or next((b for b in botones if not b["submit"] and ANADIR_AL_CARRITO.search(b["texto"])
+                                          and not NO_TOCAR.search(b["texto"])), None)
+                es_producto = lambda c: c["tipo"] == "select" and PRODUCTO_CAMPO.search(f"{c['name']} {c.get('clase', '')}")
+                inicial = any(es_producto(c) for c in pag.evaluate(LISTAR, "campos"))
+                if anadir_antes and anadir and _clic(pag, anadir["i"]):
+                    _esperar(pag)
+                campos = pag.evaluate(LISTAR, "campos")
+                productos = [c for c in campos if es_producto(c)]
+                res = {"estado": "sin_desplegable", "inicial": inicial, "carrito": carrito is not None}
+                if not productos:
+                    return res
+                if not any(_opcion_producto(c) for c in productos):
+                    errores = [e for e in js if not JS_LIBRERIA.search(e)]
+                    return {**res, "estado": "vacio", "js": errores[0] if errores else ""}
+                datos = []
+                for c in campos:
+                    valor = _opcion_producto(c) if es_producto(c) else None
+                    if valor is None:
+                        if c["tipo"] == "select":
+                            c = {**c, "opciones": [o for o in c["opciones"] if not SIN_STOCK.search(o["texto"])]}
+                        valor = None if BUSCADOR.search(c["name"]) else _valor(c, hoy)
+                    if valor is None:
+                        continue
+                    campo = pag.locator(f"[data-aura-i='{c['i']}']")
+                    try:
+                        if c["tipo"] == "select":
+                            campo.select_option(value=valor, timeout=2000)
+                        elif c["tipo"] in ("checkbox", "radio"):
+                            campo.check(timeout=2000)
+                        else:
+                            campo.fill(valor, timeout=2000)
+                        datos.append(f"{c['name']}={valor}")
+                    except Exception:
+                        continue
+                if not anadir_antes and carrito and _clic(pag, carrito["i"]):
+                    _esperar(pag)
+                botones = pag.evaluate(LISTAR, "botones")
+                guardar = (next((b for b in botones if b["submit"] and not NO_TOCAR.search(b["texto"])), None)
+                           or next((b for b in reversed(botones) if GUARDAR.search(b["texto"]) and not NO_TOCAR.search(b["texto"])
+                                    and not AGREGAR_FILA.search(b["texto"])), None))
+                if not (datos and guardar):
+                    return {**res, "estado": "sin_guardar"}
+                antes = texto()
+                malas.clear()
+                desde = log.stat().st_size
+                if not _clic(pag, guardar["i"]):
+                    return {**res, "estado": "sin_guardar"}
+                _esperar(pag)
+                with open(log, "rb") as f:
+                    f.seek(desde)
+                    traza = _traza(f.read().decode("utf-8", "replace"))
+                despues = texto()
+                fallo_visible = ERROR_DE_PROGRAMA.search(despues)
+                if malas or traza or fallo_visible:
+                    return {**res, "estado": "servidor", "datos": ", ".join(datos[:8]), "traza": traza or (
+                        f"«{' '.join(fallo_visible[0].split())}»" if fallo_visible else ""), "http": malas[0][2] if malas else 200}
+                dicho = VENTA_VACIA.search(despues)
+                if dicho and not VENTA_VACIA.search(antes):  # si ya estaba escrito antes de guardar, no es la respuesta del servidor
+                    return {**res, "estado": "mensaje", "mensaje": " ".join(dicho.group(0).split())}
+                return {**res, "estado": "guardada"}
+
+            for ruta in paginas:
+                if time.time() > limite:
+                    break
+                v = probar(ruta, True)
+                # Una pantalla de «elegir y añadir al carrito» (el desplegable ya está y el botón añade lo elegido): se prueba también así.
+                if v["estado"] == "mensaje" and v.get("inicial") and v.get("carrito"):
+                    v = probar(ruta, False)
+                r["estados"].append((ruta, v["estado"]))
+                if v["estado"] == "sin_desplegable":
+                    r["sin_desplegable"] += 1
+                    continue
+                if v["estado"] in ("fuera", "sin_guardar"):
+                    continue
+                r["probadas"] += 1
+                r["guardadas"] += v["estado"] == "guardada"
+                if v["estado"] == "servidor":
+                    r["servidor"].append({"que": f"guardar la venta desde la pantalla {ruta} (con el navegador)", "estado": v["http"],
+                                          "datos": v["datos"], "traza": v["traza"]})
+                elif v["estado"] == "vacio" and v["js"] and hay_productos:
+                    r["errores"].append({"pagina": ruta, "tipo": "vacio", "js": v["js"], "mensaje": ""})
+                elif v["estado"] == "mensaje":
+                    r["errores"].append({"pagina": ruta, "tipo": "mensaje", "js": "", "mensaje": v["mensaje"]})
+        finally:
+            nav.close()
+    return r
+
+
+def _hay_productos(r: _Recorrido) -> bool:
+    """¿Hay productos con precio a la vista en la lista de productos (el recorrido da de alta los suyos)?"""
+    for ruta in [x for x in dict.fromkeys(r.orden) if PRODUCTO_RUTA.search(x.split("?")[0]) and not CON_ID.search(x.split("?")[0])
+                 and not FORMULARIO_RUTA.search(x.split("?")[0])][:3]:
+        estado, final, texto = r.pedir(ruta)
+        if (0 < estado < 400 and (r.dentro(final, final) or "").split("?")[0] == ruta.split("?")[0]
+                and any(re.search(r"[1-9]", m) for m in IMPORTE.findall(_visible(SIN_MENU.sub(" ", texto))))):
+            return True
+    return False
+
+
 def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: dict | None = None,
              abrir_navegador=None) -> dict | None:
     """Arranca entrada (en una copia del proyecto que el llamador borra después) y la recorre. None si no llegó a
@@ -1141,6 +1316,17 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                                        if not (previo.usuario and ES_ADMIN.match(previo.usuario)) else "la entrada usa JavaScript")
         except Exception as exc:  # una web rara no debe estropear el recorrido
             empleado, previo.sin_empleado = None, f"excepción {type(exc).__name__}: {exc}"
+        # La pantalla de venta también va antes del recorrido de siempre, por lo mismo: ese recorrido puede cambiar la contraseña
+        # del administrador (el formulario de editar usuarios) y el navegador ya no entraría. Los productos que tiene son los del empleado.
+        venta = None
+        if abrir_navegador is not None and not previo.entrar_js and (previo.usuario or not previo.intento_entrar):
+            alta = [x for x in dict.fromkeys(previo.orden) if VENTA_ALTA.search(x.split("?")[0]) and not CON_ID.search(x.split("?")[0])][:3]
+            try:
+                if alta:
+                    venta = _venta_en_pantalla(base, log, previo.usuario, previo.clave, abrir_navegador,
+                                               time.time() + MAX_SEGUNDOS_VENTA, alta, _hay_productos(previo))
+            except Exception:  # una web rara no debe estropear el recorrido
+                venta = None
         r = _Recorrido(base, log, accesos)
         r.recorrer(time.time() + MAX_SEGUNDOS)
         lineas = None
@@ -1149,6 +1335,9 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                                            time.time() + MAX_SEGUNDOS_LINEAS, list(r.filas_js)[:3])
             if lineas:
                 r.errores += [e for e in lineas["errores"] if e not in r.errores]
+        if venta:  # el mismo fallo que ya dio otro paso (con la misma traza) no se cuenta dos veces
+            r.errores += [e for e in venta.pop("servidor") if e not in r.errores
+                          and not any(e["traza"] and e["traza"] == x["traza"] and e["estado"] == x["estado"] for x in r.errores)]
         try:  # cuando ya hay ventas (las de los formularios y las que el navegador armó con JavaScript)
             _empleado_despues(r, previo, empleado, time.time() + MAX_SEGUNDOS_EMPLEADO)
         except Exception:  # una web rara no debe estropear el recorrido
@@ -1187,7 +1376,7 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                 "sin_entrar": r.intento_entrar and not r.usuario and not r.entrar_fallo, "entrar_js": r.entrar_js,
                 "navegador": navegador, "lineas": lineas, "sin_formulario": sin_formulario, "registro": r.registro,
                 "entrar_get": r.entrar_get, "sin_permiso": r.sin_permiso, "login_vacio": r.login_vacio, "empleado": empleado,
-                "empleado_motivo": previo.sin_empleado, "negocio": negocio}
+                "empleado_motivo": previo.sin_empleado, "negocio": negocio, "venta": venta}
     finally:
         procesos.detener(proc, trabajo)
         try:
