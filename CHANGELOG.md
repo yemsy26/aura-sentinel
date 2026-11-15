@@ -5,6 +5,40 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.7] — 2026-11-14 (verificar prueba ventas, informes y lo que ve el empleado)
+
+Salidas de las 4 misiones de negocio con la 4.13.6: las entregas daban pantallas que nadie podía usar (una venta que no
+se guardaba, una factura que reventaba con un 500, un informe en 0) y `verificar` las daba por buenas. Todo este paquete
+está en `verificar`, sin tocar la forma de trabajar del agente con Qwen3.6.
+
+- **`verificar` vende desde la pantalla de «nueva venta»:** con un navegador oculto entra, abre la pantalla de venta, elige un
+  producto y una cantidad como lo haría una persona, guarda y mira. Error si el desplegable de productos queda vacío porque
+  el script falla (con el error de JavaScript), si el servidor contesta «agrega al menos un producto» aunque se eligió uno
+  (las líneas no llegan, p. ej. un campo fuera del `<form>`), o si guardar da un 500. Antes la venta solo se probaba con un
+  envío directo del formulario, que saltaba el fallo de la pantalla. Corre antes del recorrido de siempre (ese recorrido
+  cambia la contraseña del administrador al editar usuarios).
+- **`verificar` avisa del informe en 0 y de las facturas vacías** cuando ya hay una venta: avisa si el informe por defecto
+  enseña todos sus importes en 0 aunque hay ventas (una fecha de fin sin la hora, el mes, UTC frente a la hora local) y si la
+  lista de facturas está vacía sin botón para generarlas (se crea y no se guarda). Son avisos, no errores.
+- **El empleado de la comprobación, más lejos:** da un error si recibe un 500 donde el administrador abre bien la página, y
+  avisa si, sin haber vendido nada, abre detalles o listas de ventas y facturas de otros (aviso: en algunos negocios los
+  empleados ven todas las ventas). Solo si las páginas cerradas siguen cerradas.
+- **Arreglo del falso «nadie puede entrar»:** un panel con el alta de empleados (usuario, contraseña, nombre) se tomaba por la
+  pantalla de entrar y `verificar` decía que nadie podía entrar en una web donde `admin` entraba bien.
+- **Argumentos inválidos con la firma:** si una llamada a una herramienta viene mal hecha, el mensaje nombra lo que falta y da
+  el uso (`escribir(ruta, contenido, anadir=…)`). Pensado para otros modelos: Qwen3.6 no lo recibió nunca en 46 misiones.
+- Medido sin GPU sobre 93 webs guardadas y 8 entregas nuevas, con condiciones fijadas antes y cada aviso confirmado a mano:
+  - Venta en pantalla: caza las dos entregas rotas de la medición anterior (una con el desplegable vacío por una variable sin
+    definir, otra con un 500 al guardar) y calla en las 15 webs donde la venta se guarda; corre en 24 de 93 webs. Al haber una
+    venta real aparecen fallos que antes no se veían (el detalle de una venta que da 500 siempre, un informe en 0 por la fecha
+    UTC). Añade 1,4 s de media por web (+126 s en las 93; el navegador son 3-6 s en las 24 con pantalla de venta).
+  - Empleado: 8 avisos de ventas ajenas, los 8 reales; ningún 500 del empleado en las 101 webs; 0 falsos.
+  - Informe en 0 y facturas vacías: 0 avisos nuevos en las 93 webs y 2 reales en las entregas nuevas; solo corre donde hay una
+    venta con importe visible (11 % de las webs antes de la venta en pantalla, 12 % después).
+  - Arreglo del falso «nadie puede entrar»: 0 cambios en las 93 webs; los 6 casos verdaderos siguen y desaparece el falso.
+- **No medido con el modelo:** el efecto de estos avisos en las misiones (si Aura arregla lo que `verificar` le señala) no se
+  ha medido todavía. 570 pruebas pasan, 2 omitidas.
+
 ## [4.13.6] — 2026-11-14 (guía de permisos por rol y comprobación del empleado en verificar)
 
 Salidas de las mediciones de negocio con la 4.13.4 y la 4.13.5: en las 3 entregas que funcionaban, el empleado veía las
