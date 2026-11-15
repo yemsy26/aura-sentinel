@@ -67,6 +67,15 @@ PAGINAS = {
     # «Agrega al menos un producto» escrito en la propia pantalla antes de guardar: no es la respuesta del servidor
     "texto_fijo": '<h1>Nueva venta</h1><p>Agrega al menos un producto para continuar.</p><form method="post" action="/ventas/nueva">' + CLIENTE
                   + '<select name="producto_id">' + OPC + '</select><button type="submit">Guardar venta</button></form>',
+    # el desplegable queda vacío y el script lo cuenta con console.error, sin lanzar nada (m4150_neg1: JSON roto en un atributo)
+    "consola_rota": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_0_id" class="prod-select"></select>'
+                    '<button type="submit">Finalizar Venta</button></form><script>console.error("Error parsing productos: SyntaxError");</script>',
+    # igual de vacío pero sin decir nada (puede cargarse por fetch o ser legítimo): sin error de JavaScript no se acusa
+    "consola_muda": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_0_id" class="prod-select"></select>'
+                    '<button type="submit">Finalizar Venta</button></form>',
+    # un script que no existe (404): la consola dice «Failed to load resource», que es de red y no del script de la pantalla
+    "red_404": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_0_id" class="prod-select"></select>'
+               '<button type="submit">Finalizar Venta</button></form><script src="/falta.js"></script>',
 }
 
 
@@ -158,6 +167,17 @@ class VentaEnPantalla(unittest.TestCase):
         [e] = self.recorrer("js_roto")["venta"]["errores"]
         self.assertEqual((e["pagina"], e["tipo"]), ("/ventas/nueva", "vacio"))
         self.assertIn("productosData is not defined", e["js"])
+
+    def test_el_desplegable_vacio_que_el_script_cuenta_con_console_error(self):
+        [e] = self.recorrer("consola_rota")["venta"]["errores"]
+        self.assertEqual((e["pagina"], e["tipo"]), ("/ventas/nueva", "vacio"))
+        self.assertIn("Error parsing productos", e["js"])
+
+    def test_el_desplegable_vacio_sin_ningun_error_no_se_acusa(self):
+        self.assertEqual(self.recorrer("consola_muda")["venta"]["errores"], [])
+
+    def test_un_404_de_un_script_no_es_el_fallo_de_la_pantalla(self):
+        self.assertEqual(self.recorrer("red_404")["venta"]["errores"], [])
 
     def test_sin_productos_creados_no_se_dice_nada(self):
         self.assertEqual(self.recorrer("js_roto", precio="no")["venta"]["errores"], [])

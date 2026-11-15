@@ -1135,6 +1135,16 @@ OPCION_VACIA = re.compile(r"(?i)^\W*(?:selecc\w*|elig\w*|elij\w*|escog\w*|choose
 JS_LIBRERIA = re.compile(r"(?i)(?:^|\W)(?:\$|jQuery|bootstrap|axios|Chart|Vue|React|Swal|moment|Alpine|Toastify|flatpickr|"
                          r"Select2|DataTable)(?!\w).*(?:is not defined|is not a function|undefined)")
 MAX_SEGUNDOS_VENTA = 25
+
+
+def _consola_propia(m, base: str) -> bool:
+    """Un console.error del script de la propia web («Error parsing productos»), no un 404/500 de red ni algo de otro origen."""
+    try:
+        return m.type == "error" and not m.text.startswith("Failed to load resource") and (m.location.get("url") or "").startswith(base)
+    except Exception:
+        return False
+
+
 # Lo que dice la web cuando no pudo guardar la venta («Error al registrar venta: (sqlite3.IntegrityError) NOT NULL constraint failed…»).
 # Los rechazos que una prueba sin datos del negocio puede provocar con razón (falta un cliente, no hay stock, un dato inválido) no cuentan.
 VENTA_RECHAZADA = re.compile(r"(?i)\berror\b|\bfall[oó]\b|no se pudo|\bfailed\b|excepci[oó]n|exception")
@@ -1178,6 +1188,7 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
             pag = ctx.new_page()
             pag.on("dialog", lambda d: (dialogos.append(d.message), d.dismiss()))
             pag.on("pageerror", lambda e: js.append(" ".join(str(e).split())[:160]))
+            pag.on("console", lambda m: js.append(" ".join(m.text.split())[:160]) if _consola_propia(m, base) else None)
             pag.on("response", lambda resp: malas.append((resp.request.method, resp.url, resp.status)) if resp.status >= 500 else None)
             pag.on("response", lambda resp: envios.append((resp.request.method, urllib.parse.urlsplit(resp.url).path, resp.status))
                    if resp.request.method != "GET" and resp.request.resource_type in ("document", "fetch", "xhr") else None)
