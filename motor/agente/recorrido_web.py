@@ -1365,6 +1365,38 @@ def _hay_productos(r: _Recorrido) -> bool:
     return False
 
 
+# Lo que NO es texto que lea la persona en una plantilla: lo que Jinja no emite, el código y las etiquetas.
+PLANTILLA_NO_TEXTO = re.compile(r"(?is)\{%-?\s*raw\s*-?%\}.*?\{%-?\s*endraw\s*-?%\}|\{#.*?#\}|<script\b.*?</script\s*>|<style\b.*?</style\s*>"
+                                r"|<template\b.*?</template\s*>|<!--.*?-->")
+PLANTILLA_JINJA = re.compile(r"(?s)\{\{.*?\}\}|\{%.*?%\}")
+PLANTILLA_ETIQUETA = re.compile(r"(?s)</?[A-Za-z][^<>]*>")
+# `${total:.2f}` (un literal de JavaScript o un f-string de Python metido en HTML con Jinja) y `{total:.2f}` (un format de Python): Jinja los deja tal cual.
+PLANTILLA_MARCADOR = re.compile(r"\$\{\s*[A-Za-z_][\w.]*\s*(?::[^}\s]{1,8})?\s*\}|(?<![{$\w])\{[A-Za-z_][\w.]*:[.,0-9]*[dfsxXeEg%]\}")
+
+
+def plantillas_sin_sustituir(*carpetas: Path) -> list[dict]:
+    """Marcadores de formato que quedan en el texto de las plantillas (`${venta_hoy_total:.2f}`) y que la persona verá escritos tal cual.
+    Solo mira el texto: no el JavaScript, los estilos, `<template>`, `{% raw %}`, los comentarios ni los atributos de las etiquetas."""
+    vistos, hallazgos = set(), []
+    for base in carpetas:
+        for sub in ("templates", "plantillas"):
+            for f in sorted((base / sub).rglob("*")) if (base / sub).is_dir() else []:
+                if f.suffix.lower() not in (".html", ".htm", ".jinja", ".j2") or f in vistos:
+                    continue
+                vistos.add(f)
+                try:
+                    texto = f.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for patron, hueco in ((PLANTILLA_NO_TEXTO, ""), (PLANTILLA_JINJA, " X"), (PLANTILLA_ETIQUETA, "")):
+                    texto = patron.sub(lambda m, h=hueco: h + "\n" * m.group(0).count("\n"), texto)
+                for n, linea in enumerate(texto.splitlines(), 1):
+                    m = PLANTILLA_MARCADOR.search(linea)
+                    if m:
+                        hallazgos.append({"plantilla": f.relative_to(base).as_posix(), "linea": n, "texto": m.group(0)})
+    return hallazgos
+
+
 def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: dict | None = None,
              abrir_navegador=None) -> dict | None:
     """Arranca entrada (en una copia del proyecto que el llamador borra después) y la recorre. None si no llegó a

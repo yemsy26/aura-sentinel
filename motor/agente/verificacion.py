@@ -28,7 +28,7 @@ from . import ecosistemas
 from .borrados import aviso, peligrosos
 from .idiomas import verificar_idiomas
 from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, normalizar, relativa
-from .recorrido_web import recorrer
+from .recorrido_web import plantillas_sin_sustituir, recorrer
 from .seguridad import pruebas_borran_la_base, seguridad_web
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
@@ -367,6 +367,10 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                  if "got ':'" in p["error"] else "")
         inf.errores.append(f"la plantilla {p['plantilla']} no compila (línea {p['linea']}: {p['error']}): toda página que "
                            f"la use da error 500.{pista}")
+    for p in plantillas_sin_sustituir(entrada.parent, raiz)[:2]:
+        inf.avisos.append(f"la plantilla {p['plantilla']} (línea {p['linea']}) enseña «{p['texto']}» tal cual: Jinja no lo sustituye (es sintaxis "
+                          "de Python o de JavaScript) y quien abre la página ve el marcador escrito, no el valor. En una plantilla Jinja se escribe "
+                          "{{ '%.2f'|format(x) }} (con el $ delante si es dinero).")
     for e in r["errores"][:4]:
         traza = e["traza"].replace(str(copia) + os.sep, "").replace("\n", "\n    ")
         inf.errores.append(f"{rel}: al {e['que']}" + (f" con {e['datos']}" if e["datos"] else "") +
