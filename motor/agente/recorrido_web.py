@@ -84,6 +84,13 @@ GESTION = re.compile(r"(?i)report|ganancia|utilidad|finanz|informe|margen|costos
 MARCA_COSTO = re.compile(r"(?<![\d.,])7[.,]77(?!\d)")
 GANANCIAS = re.compile(r"(?i)\bganancias?\b|\butilidad(?:es)?\b|\bmargen(?:es)?\b|\bbeneficios?\b|precio de compra|costo total")
 SIN_MENU = re.compile(r"(?is)<(nav|header|aside|footer)\b.*?</\1>")
+# Un menú que pinta JavaScript (`{ href: '/productos', label: 'Productos' }` en static/js/nav.js): en el HTML no hay ni un <a>, y el recorrido sin
+# navegador solo seguía enlaces. m4153c_neg1 visitó 4 de sus 17 rutas: nunca abrió /productos ni /usuarios, no dio de alta el producto de la
+# prueba y /ventas/nueva con un producto (500) no se probó. Solo literales de ruta absoluta completa: «'/productos/editar/' + id» no es una página.
+JS_HREF = re.compile(r"""(?<![\w-])["']?href["']?\s*[:=]\s*(["'])(/[^"'`\s{}$<>?#]*)\1""")
+SCRIPT_SRC = re.compile(r"""(?is)<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""")
+SCRIPT_CUERPO = re.compile(r"(?is)<script\b([^>]*)>(.*?)</script\s*>")
+MAX_ENLACES_JS = 25
 API_HABITUAL = ("/api/productos", "/api/products", "/api/ventas", "/api/sales", "/api/reportes", "/api/usuarios", "/api/inventario")
 PARECIDO = 0.85
 # Ventas y facturas: la comprobación del empleado no vende nada, así que cualquier fila o detalle que vea es de otro usuario (m4141: el
@@ -288,6 +295,8 @@ class _Recorrido:
         # «+ Nuevo producto» llevaba a una ruta que, sin formulario, volvía a la lista: nadie podía dar de alta nada.
         self.abre: dict[str, tuple[str, str]] = {}  # destino -> (texto del enlace, página donde está)
         self.sin_formulario: dict[str, list[bool]] = {}  # destino -> en cada vuelta, ¿volvió sin formulario?
+        self.js_leidos: dict[str, str] = {}  # script del mismo origen -> su texto (cada uno se pide una vez)
+        self.de_js: set[str] = set()  # rutas que solo conoce el JavaScript: si no existen (404, 405) no son un enlace roto, puede ser un trozo
 
     def pedir(self, ruta: str, datos: list | None = None, metodo: str = "get") -> tuple[int, str, str]:
         """(estado, url final, html). Cada petición deja su salida del servidor en self.salida."""
@@ -367,6 +376,35 @@ class _Recorrido:
             pass
         return p
 
+    def enlaces_js(self, texto: str, final: str, html: list[str]) -> list[str]:
+        """Las rutas a las que apunta el JavaScript de la página (un menú, un `location.href`): en sus scripts y en los del mismo origen. Las que
+        ya enlaza el HTML no se repiten (y dejan de ser «solo de JavaScript»)."""
+        for h in html:
+            self.de_js.discard(self.dentro(h, final) or "")
+        codigo = [c for atributos, c in SCRIPT_CUERPO.findall(texto)
+                  if not re.search(r"""(?i)type\s*=\s*["']?(?:application/(?:ld\+)?json|text/template)""", atributos)]
+        for src in SCRIPT_SRC.findall(texto):
+            url = urllib.parse.urljoin(final, src.strip()).split("#")[0]
+            if not url.startswith(self.base):
+                continue
+            if url not in self.js_leidos:
+                try:
+                    with self.abridor.open(urllib.request.Request(url), timeout=10) as r:
+                        self.js_leidos[url] = r.read(400_000).decode("utf-8", "replace")
+                except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+                    self.js_leidos[url] = ""
+            codigo.append(self.js_leidos[url])
+        nuevas = []
+        for c in codigo:
+            for _, ruta in JS_HREF.findall(c):
+                if ruta == "/" or (ruta.endswith("/") and len(ruta) > 1):
+                    continue  # la raíz ya se abre; una ruta que acaba en «/» es el principio de otra («'/productos/editar/' + id»)
+                dentro = self.dentro(ruta, final)
+                if dentro and dentro not in nuevas and ruta not in html and dentro not in {self.dentro(h, final) for h in html}:
+                    nuevas.append(dentro)
+        self.de_js.update(nuevas[:MAX_ENLACES_JS])
+        return nuevas[:MAX_ENLACES_JS]
+
     def dentro(self, href: str, desde: str) -> str | None:
         url = urllib.parse.urljoin(desde, href.strip()).split("#")[0]
         if not url.startswith(self.base) or ESTATICO.search(url) or NO_TOCAR.search(url):
@@ -387,6 +425,7 @@ class _Recorrido:
             if estado >= 400 or estado == 0:
                 continue
             pagina = self._leer(texto)
+            pagina.enlaces += self.enlaces_js(texto, final, pagina.enlaces)
             entrar = next((f for f in pagina.formularios if _es_entrar(f)), None)
             if entrar is not None and not (self.intento_entrar or self.entrar_js) and self.accesos:
                 self.entrar(self.dentro(final, final) or ruta, entrar)
@@ -434,9 +473,12 @@ class _Recorrido:
             self.paginas += 1
             paginas += 1
             self._sin_permiso(ruta, estado, final, texto)
+            if ruta in self.de_js and estado in (404, 405):
+                continue  # una ruta que solo conocía el JavaScript y no existe: no es un enlace roto
             if not self.mirar(f"abrir {ruta}", estado, texto):
                 continue
             pagina = self._leer(texto)
+            pagina.enlaces += self.enlaces_js(texto, final, pagina.enlaces)
             destino = self.dentro(final, final) or ""
             if ruta == "/" and destino.split("?")[0] != "/" and LOGIN_RUTA.search(destino) and _pagina_vacia(texto, pagina):
                 self.login_vacio = destino  # el login.html no rellena el bloque de la plantilla base: ni formulario ni nada
