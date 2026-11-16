@@ -5,6 +5,33 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.9] — 2026-11-16 (la tarjeta de resultado dice dónde está el .bat y verificar avisa de enlaces a rutas que no existen)
+
+Sale de una prueba real con la 4.13.8 (una veterinaria): el usuario no encontró el `.bat` que abre el sistema y el sistema tenía el botón
+de registrar vacunas roto sin que `verificar` dijera nada.
+
+- **La tarjeta «Resultado» enseña la ruta completa del lanzador** (la carpeta de trabajo más el `.bat`) en vez del nombre suelto:
+  la carpeta de trabajo por defecto está en `AppData\Local`, oculta en el Explorador. Con dos botones: **Copiar ruta** y **Mostrar en
+  la carpeta**. El segundo usa un comando nuevo del binario, `reveal_in_folder`, que solo acepta un archivo que existe dentro de la
+  carpeta de trabajo (se canonicalizan las dos rutas) y abre el Explorador con el archivo seleccionado; cualquier otra ruta devuelve un
+  error que la tarjeta enseña. Cambio de la interfaz y del binario de Tauri.
+- **`verificar` da error si una plantilla usa `url_for('nombre')` y ninguna ruta se llama así.** En la veterinaria, los botones
+  «Editar» y «Vacuna» llamaban a `url_for('editar_paciente')` y `url_for('nueva_vacuna')` cuando las rutas eran `paciente_editar` y
+  `vacuna_nueva`, y estaban detrás de un `{% if can_edit %}` que nadie definía: la página daba 200 y no había forma de registrar una
+  vacuna desde la web. La comprobación es estática: lee las rutas con `ast` (funciones decoradas, `endpoint=`, `add_url_rule`,
+  `as_view`, Blueprints) y busca esos nombres en las plantillas; sugiere la ruta parecida. Calla si no está seguro de cuáles son las
+  rutas (sin Flask ni FastAPI, rutas registradas de forma dinámica, extensiones que añaden rutas).
+- Medido sin GPU, con condiciones fijadas antes:
+  - `url_for`: 7 hallazgos en 3 de 122 webs guardadas, los 7 reales a mano (incluida la veterinaria); 0 falsos tras corregir dos
+    durante el desarrollo (rutas registradas en un bucle y un nombre armado con `~`); +0,1 s de media por web.
+  - Tarjeta: `tsc`, 22 pruebas de la interfaz y 21 de Rust (con una prueba nueva del comando); vista previa con un navegador (ruta
+    corta, larga y fuera del proyecto) y el Explorador real selecciona el archivo con una ruta con espacios.
+- **No medido:** el efecto de lo que `verificar` señala en las misiones con el modelo; y el comando `reveal_in_folder` no se ha
+  llamado todavía a través de la app instalada (sí con pruebas unitarias y con el Explorador con los mismos argumentos).
+  621 pruebas del motor pasan, 2 omitidas.
+
+---
+
 ## [4.13.8] — 2026-11-16 (verificar comprueba que la venta se guarda, sigue los menús de JavaScript y prueba al empleado en más webs)
 
 Salidas de las misiones de negocio con la 4.13.7: entregas con la venta que no se guardaba sin avisar, un desplegable de productos
