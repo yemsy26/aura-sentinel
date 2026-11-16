@@ -5,6 +5,8 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
@@ -132,9 +134,12 @@ pub async fn open_external(url: String) -> Result<(), String> {
     if !is_local_url(&url) {
         return Err("Solo se abren direcciones locales (http://localhost:PUERTO).".into());
     }
-    let mut command = Command::new("rundll32");
-    quiet(&mut command).args(["url.dll,FileProtocolHandler", &url]);
-    command.spawn().map(|_| ()).map_err(|e| e.to_string())
+    // Con `quiet()` (kill_on_drop) rundll32 moría al soltar el proceso, antes de abrir nada: se lanza con std y se suelta.
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Archivo que existe y está dentro de la carpeta de trabajo, con la ruta normal de Windows (sin el prefijo `\\?\`).
@@ -152,11 +157,12 @@ fn inside_workspace(workspace: &str, path: &str) -> Result<PathBuf, String> {
 #[tauri::command]
 pub async fn reveal_in_folder(workspace_path: String, path: String) -> Result<(), String> {
     let file = inside_workspace(&workspace_path, &path)?;
-    let mut command = Command::new("explorer");
+    // Con `quiet()` (kill_on_drop) el Explorador moría al soltar el proceso y no abría ninguna ventana (4.13.9): se lanza con std y se suelta.
+    let mut command = std::process::Command::new("explorer.exe");
     #[cfg(windows)]
-    quiet(&mut command).raw_arg(format!("/select,\"{}\"", file.display()));
+    command.raw_arg(format!("/select,\"{}\"", file.display()));
     #[cfg(not(windows))]
-    quiet(&mut command).arg(file.parent().unwrap_or(&file));
+    command.arg(file.parent().unwrap_or(&file));
     command.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
@@ -289,6 +295,17 @@ mod tests {
             inside_workspace(&base.join("no_hay").to_string_lossy(), &ws.join("run.bat").to_string_lossy()).is_err()
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Abre de verdad el Explorador (deja una ventana): `cargo test -- --ignored reveal_opens_explorer`, y mirar que se abre con run.bat elegido.
+    #[test]
+    #[ignore]
+    fn reveal_opens_explorer() {
+        let ws = std::env::temp_dir().join("aura_reveal_real").join("Mi Trabajo");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("run.bat"), "@echo off").unwrap();
+        let (w, p) = (ws.to_string_lossy().into_owned(), ws.join("run.bat").to_string_lossy().into_owned());
+        tokio::runtime::Runtime::new().unwrap().block_on(reveal_in_folder(w, p)).unwrap();
     }
 
     #[test]
