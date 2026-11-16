@@ -612,6 +612,10 @@ def _empleado(r: _Recorrido, limite: float) -> dict | None:
     if datos is None:
         r.sin_empleado = "el formulario de alta de usuarios tiene un campo obligatorio que no se puede rellenar"
         return None
+    # Sin otro campo de usuario ni de correo, `nombre` («Nombre de usuario») es con lo que se entra: el recorrido lo creaba como «Empleado Aura»
+    # y luego entraba como «empleado_aura» (m4153c_neg1, m4141_neg1, m4153_neg3, m4153b_neg1: la prueba del empleado no corría).
+    nombre_es_usuario = not any(c.get("tipo") == "email" or (c.get("tipo") == "text" and re.search(
+        r"user|usuario|login|cuenta|mail|correo", (c.get("name") or "").lower())) for c in form["campos"])
     nuevo, con_rol = [], False
     for nombre, valor in datos:
         c, n = campos.get(nombre, {}), nombre.lower()
@@ -632,7 +636,7 @@ def _empleado(r: _Recorrido, limite: float) -> dict | None:
         elif c.get("tipo") == "text" and re.search(r"user|usuario|login|cuenta", n):
             valor = EMPLEADO_USUARIO
         elif c.get("tipo") == "text" and re.search(r"nombre|name", n):
-            valor = "Empleado Aura"
+            valor = EMPLEADO_USUARIO if nombre_es_usuario else "Empleado Aura"
         elif valor == "Prueba":
             valor = "Aura"
         nuevo.append((nombre, valor))
