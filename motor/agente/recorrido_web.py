@@ -81,6 +81,7 @@ CAMPO_VENTA = re.compile(r"(?i)venta|pvp|sale|precio|price")
 CAMPO_ROL = re.compile(r"(?i)rol|role|perfil|permiso|nivel|cargo|tipo")
 ROL_EMPLEADO = re.compile(r"(?i)emplead|vendedor|cajer|operador|staff|seller|clerk|worker|\buser\b|usuario")
 ROL_JEFE = re.compile(r"(?i)admin|gerente|manager|due[ñn]o|owner|root|super")
+ROL_ELIGE = re.compile(r"(?i)selecc|elij|elige|choose|select|^\W*$|--")  # «-- Seleccione un rol --» no es un rol
 GESTION = re.compile(r"(?i)report|ganancia|utilidad|finanz|informe|margen|costos?\b|usuarios?\b|users?\b|empleados?\b|admin")
 MARCA_COSTO = re.compile(r"(?<![\d.,])7[.,]77(?!\d)")
 GANANCIAS = re.compile(r"(?i)\bganancias?\b|\butilidad(?:es)?\b|\bmargen(?:es)?\b|\bbeneficios?\b|precio de compra|costo total")
@@ -572,12 +573,15 @@ def _es_alta(form: dict, accion: str | None) -> bool:
 
 
 def _rol_de_empleado(campo: dict) -> str | None:
+    """El rol con el que se da de alta al empleado de la prueba: uno que se llame empleado, vendedor... y, si ninguno se llama así (recepcion,
+    veterinario: la veterinaria del usuario, 4.13.8, se saltaba la prueba), el primero que no sea de jefe. Nunca el «elige un rol» ni uno desactivado."""
+    candidatos = []
     for o in campo["opciones"]:
         valor = o["texto"].strip() if o["valor"] is None else o["valor"]
         etiqueta = f"{valor} {o['texto']}"
-        if not o["desactivada"] and valor.strip() and ROL_EMPLEADO.search(etiqueta) and not ROL_JEFE.search(etiqueta):
-            return valor
-    return None
+        if not o["desactivada"] and valor.strip() and not ROL_JEFE.search(etiqueta) and not ROL_ELIGE.search(etiqueta):
+            candidatos.append((valor, etiqueta))
+    return next((v for v, e in candidatos if ROL_EMPLEADO.search(e)), candidatos[0][0] if candidatos else None)
 
 
 def _empleado(r: _Recorrido, limite: float) -> dict | None:
