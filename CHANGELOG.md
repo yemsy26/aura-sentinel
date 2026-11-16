@@ -5,6 +5,23 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.10] — 2026-11-16 (arreglo: «Mostrar en la carpeta» no abría nada)
+
+Arreglo de la 4.13.9, que salió con un botón que no funcionaba. No cambia el motor ni lo que se le dice al modelo.
+
+- **«Mostrar en la carpeta» de la tarjeta «Resultado» abre el Explorador con el archivo seleccionado.** En la 4.13.9 no abría nada:
+  el programa activaba `kill_on_drop` al lanzar el Explorador y lo soltaba al instante, así que `explorer.exe` moría antes de abrir
+  ninguna ventana. Reproducido con un programa de prueba (0 ventanas con ese código; 1 ventana, con `run.bat` seleccionado, sin
+  `kill_on_drop`).
+- **Abrir una página local en el navegador del sistema (`open_external`) tenía el mismo fallo** y tampoco llegaba a abrir nada
+  (en la prueba, 0 procesos nuevos frente a 2). Los dos se lanzan ahora con `std::process::Command` y se sueltan.
+- Comprobado: la función real (`reveal_in_folder`) abre el Explorador con el archivo seleccionado (prueba manual `#[ignore]`
+  `reveal_opens_explorer`, mirando la ventana con `Shell.Application`); las 21 pruebas de Rust de siempre, 22 de la interfaz y 621
+  del motor pasan.
+- **No medido:** el botón no se ha probado todavía con la app instalada (sí la función de Rust que llama).
+
+---
+
 ## [4.13.9] — 2026-11-16 (la tarjeta de resultado dice dónde está el .bat y verificar avisa de enlaces a rutas que no existen)
 
 Sale de una prueba real con la 4.13.8 (una veterinaria): el usuario no encontró el `.bat` que abre el sistema y el sistema tenía el botón
