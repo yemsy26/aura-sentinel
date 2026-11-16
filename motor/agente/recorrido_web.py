@@ -4,6 +4,7 @@ usuarios que da el proyecto, abre sus páginas y envía cada formulario con dato
 Una misión de negocio entregó un sistema que daba error 500 al registrar una venta (db.get_or_404 con dos argumentos):
 sus 12 tests pasaban, la revisión lo aprobó y verificar solo comprobaba que el servidor arrancaba. Aquí no juzga el
 modelo: cuenta lo que responde el servidor (500, una traza, un formulario que va a una ruta que no existe)."""
+import ast
 import difflib
 import html.parser
 import http.cookiejar
@@ -1440,6 +1441,130 @@ def plantillas_sin_sustituir(*carpetas: Path) -> list[dict]:
                     m = PLANTILLA_MARCADOR.search(linea)
                     if m:
                         hallazgos.append({"plantilla": f.relative_to(base).as_posix(), "linea": n, "texto": m.group(0)})
+    return hallazgos
+
+
+# `url_for('nueva_vacuna')` en una plantilla cuando la ruta se llama `vacuna_nueva`: Flask da BuildError (500) en cuanto esa parte se pinta. En la veterinaria
+# del usuario (4.13.8) los botones «Editar» y «💉 Vacuna» iban dentro de un `{% if can_edit %}` que nunca se cumplía: la página daba 200, verificar daba 0/0
+# y no había forma de registrar una vacuna desde la web. Es estático: lee las rutas con `ast` y los `url_for` de las plantillas.
+URL_FOR = re.compile(r"""\burl_for\(\s*(["'])([A-Za-z_][\w.]*)\1\s*[,)]""")  # no «'x' ~ n»: eso es un nombre armado en la plantilla
+RUTA_METODOS = {"route", "get", "post", "put", "delete", "patch", "api_route"}
+EXTENSIONES_CON_RUTAS = ("flask_restful", "flask_restx", "flask_restplus", "flask_admin", "flask_security", "flask_appbuilder", "flask_user",
+                         "flask_dance", "flask_smorest", "apiflask", "connexion", "flask_openapi3", "flask_classful")
+WEB_FRAMEWORK = re.compile(r"(?m)^\s*(?:from|import)\s+(?:flask|fastapi|starlette)\b")
+FUERA_DE_AQUI = {".venv", "venv", "env", "node_modules", "__pycache__", "site-packages", "dist", "build", ".git", ".agente"}
+JINJA_SIN_CODIGO = re.compile(r"(?s)\{#.*?#\}|\{%-?\s*raw\s*-?%\}.*?\{%-?\s*endraw\s*-?%\}")
+
+
+def _literal(nodo) -> str | None:
+    return nodo.value if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str) else None
+
+
+def _argumento(llamada: ast.Call, nombre: str):
+    return next((k.value for k in llamada.keywords if k.arg == nombre), None)
+
+
+def _archivos(bases, sufijos, solo_carpetas=()):
+    """Archivos con esos sufijos bajo las carpetas dadas (sin entrar en entornos virtuales ni dependencias), cada uno una vez."""
+    vistos = set()
+    for base in bases:
+        if not base.is_dir():
+            continue
+        for raiz, carpetas_, ficheros in os.walk(base):
+            carpetas_[:] = sorted(c for c in carpetas_ if c not in FUERA_DE_AQUI)
+            dentro = Path(raiz).relative_to(base).parts
+            if solo_carpetas and not any(p in solo_carpetas for p in dentro):
+                continue
+            for nombre in sorted(ficheros):
+                f = Path(raiz) / nombre
+                if f.suffix.lower() in sufijos and f not in vistos:
+                    vistos.add(f)
+                    yield base, f
+
+
+def rutas_de_la_web(*carpetas: Path) -> set[str] | None:
+    """Los nombres con los que `url_for` puede llamar a una ruta (`vacuna_nueva`, `auth.login`, `static`). None si no es una web
+    de la que se pueda estar seguro (sin Flask/FastAPI, sin rutas, con rutas registradas de forma dinámica o por una extensión)."""
+    nombres, web, dinamico, rutas = {"static"}, False, False, 0
+    for _, f in _archivos(carpetas, {".py"}):
+        try:
+            if f.stat().st_size > 400_000:
+                continue
+            texto = f.read_text(encoding="utf-8", errors="replace")
+            arbol = ast.parse(texto)
+        except (OSError, SyntaxError, ValueError, RecursionError):
+            continue
+        web = web or bool(WEB_FRAMEWORK.search(texto))
+        if any(re.search(rf"(?m)^\s*(?:from|import)\s+{e}\b", texto) for e in EXTENSIONES_CON_RUTAS):
+            dinamico = True
+        planos = {}
+        definidas = {n.name for n in ast.walk(arbol) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call) and n.value.args:
+                llamada = n.value.func
+                if (llamada.attr if isinstance(llamada, ast.Attribute) else getattr(llamada, "id", "")) == "Blueprint" and _literal(n.value.args[0]):
+                    planos.update({t.id: _literal(n.value.args[0]) for t in n.targets if isinstance(t, ast.Name)})
+        for n in ast.walk(arbol):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for d in n.decorator_list:
+                    if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr in RUTA_METODOS:
+                        nombre = _literal(_argumento(d, "endpoint")) or _literal(_argumento(d, "name")) or n.name
+                        dueno = d.func.value.id if isinstance(d.func.value, ast.Name) else ""
+                        nombres.add(nombre)
+                        rutas += 1
+                        if dueno in planos:
+                            nombres.add(f"{planos[dueno]}.{nombre}")
+            elif isinstance(n, ast.Call):
+                llamada = n.func
+                metodo = llamada.attr if isinstance(llamada, ast.Attribute) else getattr(llamada, "id", "")
+                if metodo == "add_url_rule":
+                    rutas += 1
+                    vista = _argumento(n, "view_func") or (n.args[2] if len(n.args) > 2 else None)
+                    nombre = _literal(_argumento(n, "endpoint")) or (_literal(n.args[1]) if len(n.args) > 1 else None)
+                    if nombre is None and isinstance(vista, ast.Call) and getattr(vista.func, "attr", "") == "as_view" and vista.args:
+                        nombre = _literal(vista.args[0])
+                    if nombre is None and isinstance(vista, ast.Name) and vista.id in definidas:
+                        nombre = vista.id  # una variable de un bucle no dice cómo se llama la ruta
+                    if nombre:
+                        nombres.add(nombre)
+                    else:
+                        dinamico = True
+                elif metodo == "as_view" and n.args and _literal(n.args[0]):
+                    nombres.add(_literal(n.args[0]))
+                elif metodo == "Rule" and _argumento(n, "endpoint") is not None and not _literal(_argumento(n, "endpoint")):
+                    dinamico = True
+                elif metodo in ("mount", "Mount", "Route") and _literal(_argumento(n, "name")):
+                    nombres.add(_literal(_argumento(n, "name")))
+        if "view_functions" in texto or "url_map" in texto:
+            dinamico = True
+    return nombres if (web and rutas and not dinamico) else None
+
+
+def url_for_sin_ruta(*carpetas: Path) -> list[dict]:
+    """`url_for('nombre')` de las plantillas que no corresponde a ninguna ruta de la web: [{"plantilla", "linea", "endpoint", "sugerencia"}].
+    Con nombre de Blueprint (`auth.login`) solo se mira el último trozo. Solo habla si está seguro de cuáles son las rutas (rutas_de_la_web)."""
+    nombres = rutas_de_la_web(*carpetas)
+    if nombres is None:
+        return []
+    sueltos = {n.rsplit(".", 1)[-1] for n in nombres}
+    hallazgos, vistos = [], set()
+    for base, f in _archivos(carpetas, {".html", ".htm", ".jinja", ".j2"}, ("templates", "plantillas")):
+        try:
+            texto = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        texto = JINJA_SIN_CODIGO.sub(lambda m: "\n" * m.group(0).count("\n"), texto)
+        for m in URL_FOR.finditer(texto):
+            endpoint = m.group(2)
+            ultimo = endpoint.rsplit(".", 1)[-1]
+            if endpoint in nombres or ultimo in sueltos or ultimo == "static" or (f.relative_to(base).as_posix(), endpoint) in vistos:
+                continue
+            vistos.add((f.relative_to(base).as_posix(), endpoint))
+            palabras = frozenset(endpoint.split("_"))
+            parecidas = [s for s in sorted(sueltos) if frozenset(s.split("_")) == palabras and s != endpoint]
+            parecidas = parecidas or difflib.get_close_matches(endpoint, sorted(sueltos - {"static"}), n=1, cutoff=0.6)
+            hallazgos.append({"plantilla": f.relative_to(base).as_posix(), "linea": texto.count("\n", 0, m.start()) + 1,
+                              "endpoint": endpoint, "sugerencia": parecidas[0] if parecidas else ""})
     return hallazgos
 
 
