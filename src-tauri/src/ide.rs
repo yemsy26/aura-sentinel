@@ -137,6 +137,29 @@ pub async fn open_external(url: String) -> Result<(), String> {
     command.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Archivo que existe y está dentro de la carpeta de trabajo, con la ruta normal de Windows (sin el prefijo `\\?\`).
+fn inside_workspace(workspace: &str, path: &str) -> Result<PathBuf, String> {
+    let root = std::fs::canonicalize(workspace).map_err(|_| "No encuentro la carpeta de trabajo.".to_string())?;
+    let file = std::fs::canonicalize(path).map_err(|_| "El archivo ya no existe.".to_string())?;
+    if file == root || !file.starts_with(&root) {
+        return Err("Solo se muestran archivos de la carpeta de trabajo.".into());
+    }
+    Ok(PathBuf::from(file.to_string_lossy().trim_start_matches(r"\\?\")))
+}
+
+/// Muestra en el Explorador de Windows, seleccionado, un archivo del proyecto (el .bat que abre lo que hizo el agente).
+/// Solo rutas que existen dentro de la carpeta de trabajo: cualquier otra devuelve un error y no ejecuta nada.
+#[tauri::command]
+pub async fn reveal_in_folder(workspace_path: String, path: String) -> Result<(), String> {
+    let file = inside_workspace(&workspace_path, &path)?;
+    let mut command = Command::new("explorer");
+    #[cfg(windows)]
+    quiet(&mut command).raw_arg(format!("/select,\"{}\"", file.display()));
+    #[cfg(not(windows))]
+    quiet(&mut command).arg(file.parent().unwrap_or(&file));
+    command.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 // ── Búsqueda y comandos ─────────────────────────────────────────────────────
 
 /// Líneas que contienen `query` (sin distinguir mayúsculas) en los archivos de texto del proyecto.
@@ -235,6 +258,37 @@ mod tests {
         assert!(!is_local_url("https://example.com"));
         assert!(!is_local_url("http://localhost.evil.com/"));
         assert!(!is_local_url("file:///C:/Windows"));
+    }
+
+    #[test]
+    fn only_files_inside_the_workspace_are_revealed() {
+        let base = std::env::temp_dir().join(format!("aura_reveal_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ws = base.join("Mi Trabajo");
+        std::fs::create_dir_all(ws.join("sub")).unwrap();
+        std::fs::write(ws.join("run.bat"), "@echo off").unwrap();
+        std::fs::write(ws.join("sub").join("a.bat"), "x").unwrap();
+        std::fs::write(base.join("fuera.bat"), "x").unwrap();
+        let hermana = base.join("Mi Trabajo2");
+        std::fs::create_dir_all(&hermana).unwrap();
+        std::fs::write(hermana.join("run.bat"), "x").unwrap();
+        let w = ws.to_string_lossy().into_owned();
+        let dentro = inside_workspace(&w, &ws.join("run.bat").to_string_lossy()).unwrap();
+        assert!(dentro.ends_with("run.bat") && !dentro.to_string_lossy().starts_with(r"\\?\"));
+        assert!(inside_workspace(&w, &ws.join("sub").join("a.bat").to_string_lossy().replace('\\', "/")).is_ok());
+        #[cfg(windows)]
+        assert!(inside_workspace(&w, &ws.join("sub").join("a.bat").to_string_lossy().to_uppercase()).is_ok());
+        assert!(inside_workspace(&w, &base.join("fuera.bat").to_string_lossy()).is_err());
+        assert!(
+            inside_workspace(&w, &ws.join("sub").join("..").join("..").join("fuera.bat").to_string_lossy()).is_err()
+        );
+        assert!(inside_workspace(&w, &hermana.join("run.bat").to_string_lossy()).is_err());
+        assert!(inside_workspace(&w, &ws.join("no_existe.bat").to_string_lossy()).is_err());
+        assert!(inside_workspace(&w, &w).is_err());
+        assert!(
+            inside_workspace(&base.join("no_hay").to_string_lossy(), &ws.join("run.bat").to_string_lossy()).is_err()
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -104,6 +104,8 @@ describe('utilidades de texto', () => {
   it('rutas del proyecto', () => {
     expect(joinPath('C:\\ws\\', 'src/a.js')).toBe('C:\\ws\\src\\a.js');
     expect(joinPath('C:\\ws', 'D:\\otro\\b.js')).toBe('D:\\otro\\b.js');
+    // la ruta que enseña «Para abrirlo»: la carpeta de trabajo suele estar oculta (AppData\Local)
+    expect(joinPath('C:\\Users\\yo\\AppData\\Local\\AuraSentinel\\workspace', 'run.bat')).toBe('C:\\Users\\yo\\AppData\\Local\\AuraSentinel\\workspace\\run.bat');
     expect(relativePath('C:\\WS', 'C:\\ws\\src\\a.js')).toBe('src\\a.js');
     expect(relativePath('C:\\ws', 'npm test')).toBe('npm test'); // los comandos no son rutas
   });

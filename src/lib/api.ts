@@ -93,6 +93,7 @@ export const api = {
   checkpoints: (workspacePath: string) => invoke<Checkpoint[]>('list_checkpoints', { workspacePath }),
   image: (path: string) => invoke<string>('read_image_data_url', { path }),
   openExternal: (url: string) => invoke<void>('open_external', { url }),
+  revealInFolder: (workspacePath: string, path: string) => invoke<void>('reveal_in_folder', { workspacePath, path }),
   search: (workspacePath: string, query: string) => invoke<SearchHit[]>('search_workspace', { workspacePath, query }),
   run: (workspacePath: string, command: string) => invoke<CommandOutput>('run_command', { workspacePath, command }),
   baseline: (path: string) => invoke<string | null>('get_mission_baseline', { path }),

@@ -218,7 +218,7 @@ function ResultCard({ summary, workspace, onImage, onOpenFile }: {
         <Icon name="check" size={13} /> {summary.verify}</div>}
       {summary.review && <div className="dim">{summary.review}</div>}
       {image && <img className="capture" src={image} alt="Última captura de la pantalla" onClick={() => onImage(image)} />}
-      {summary.launcher && <div>Para abrirlo: <code>{summary.launcher}</code></div>}
+      {summary.launcher && <Launcher launcher={summary.launcher} workspace={workspace} />}
       {shown.length > 0 && <div className="result-files">
         <span className="dim">{summary.files.length === 1 ? '1 archivo cambiado' : `${summary.files.length} archivos cambiados`}</span>
         {shown.map((f) => <button key={f} className="btn small" title="Abrir (con Ver cambios)" onClick={() => onOpenFile(f)}>
@@ -226,6 +226,30 @@ function ResultCard({ summary, workspace, onImage, onOpenFile }: {
         {summary.files.length > shown.length && <span className="dim">y {summary.files.length - shown.length} más</span>}
       </div>}
     </section>
+  );
+}
+
+/** Cómo abrir lo que hizo el agente: la ruta completa del .bat (el nombre suelto no dice dónde está), copiarla y mostrarla en el Explorador. */
+function Launcher({ launcher, workspace }: { launcher: string; workspace: string | null }) {
+  const full = workspace ? joinPath(workspace, launcher) : launcher;
+  const [note, setNote] = useState<string | null>(null);
+  const copy = () => {
+    const done = navigator.clipboard?.writeText(full);
+    if (!done) return setNote('No pude copiar la ruta');
+    done.then(() => setNote('Ruta copiada'), () => setNote('No pude copiar la ruta'));
+  };
+  const reveal = () => {
+    if (workspace) api.revealInFolder(workspace, full).then(() => setNote(null), (e) => setNote(String(e)));
+  };
+  return (
+    <div className="launcher">
+      <div>Para abrirlo: <code className="launcher-path" title={full}>{full}</code></div>
+      <div className="launcher-actions">
+        <button className="btn small" onClick={copy}>Copiar ruta</button>
+        {workspace && <button className="btn small" onClick={reveal}>Mostrar en la carpeta</button>}
+        {note && <span className="dim" role="status">{note}</span>}
+      </div>
+    </div>
   );
 }
 

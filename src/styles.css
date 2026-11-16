@@ -257,6 +257,9 @@ code, pre, .mono { font-family: var(--mono); }
 .card.result .capture { max-height: 200px; object-fit: contain; align-self: flex-start; }
 .result-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .result-files .btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.launcher { display: flex; flex-direction: column; gap: 6px; }
+.launcher-path { overflow-wrap: anywhere; word-break: break-all; }
+.launcher-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mentions { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px); max-height: 220px; overflow: auto;
   background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 4px; z-index: 5; }
 .mentions button { display: block; width: 100%; padding: 5px 8px; background: transparent; border: 0; border-radius: 4px;

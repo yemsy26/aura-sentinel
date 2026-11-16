@@ -158,6 +158,7 @@ pub fn run() {
             ide::list_checkpoints,
             ide::read_image_data_url,
             ide::open_external,
+            ide::reveal_in_folder,
             ide::search_workspace,
             ide::run_command,
             ide::get_mission_baseline,
