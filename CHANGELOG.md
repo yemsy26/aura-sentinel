@@ -5,6 +5,42 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.8] — 2026-11-16 (verificar comprueba que la venta se guarda, sigue los menús de JavaScript y prueba al empleado en más webs)
+
+Salidas de las misiones de negocio con la 4.13.7: entregas con la venta que no se guardaba sin avisar, un desplegable de productos
+vacío sin error visible, texto con marcadores sin sustituir y webs con el menú pintado por JavaScript que `verificar` casi no
+recorría. Todo este paquete está en `verificar`, sin tocar la forma de trabajar del agente con Qwen3.6.
+
+- **`verificar` comprueba que la venta hecha desde la pantalla se guardó:** compara la lista de ventas antes y después. Error si
+  la petición salió y nada cambió con una pantalla idéntica, o si la pantalla dice «error / falló / no se pudo» sin motivo de
+  rechazo legítimo. También abre el panel «Nueva venta» de la lista de ventas (un botón que no es un enlace). 3 de las 15 webs
+  que la 4.13.7 daba por «guardada» no guardaban: «guardada» era solo la ausencia de queja.
+- **Desplegable de productos vacío:** además de los errores de la página, avisa cuando la propia web lo cuenta con
+  `console.error` (p. ej. `value="{{ productos | tojson }}"` entre comillas dobles, que el JavaScript no puede leer).
+- **Marcadores de formato sin sustituir en las plantillas:** avisa de `${total:.2f}` o `{x:.2f}` escritos en el texto de una
+  plantilla Jinja (Jinja no los sustituye y la persona ve el marcador). No mira el JavaScript, los estilos, `<template>`,
+  `{% raw %}`, comentarios ni atributos.
+- **El recorrido sigue las rutas de los menús que pinta JavaScript** (`{ href: '/productos' }` en un script del mismo origen).
+  Antes, una web con el menú así quedaba con 4 de 17 páginas recorridas: no se daba de alta el producto de la prueba, no se abría
+  «nueva venta» con productos y su 500 (`Object of type Row is not JSON serializable`) no salía. Una ruta que solo conoce el
+  JavaScript y no existe (404, 405) no cuenta como enlace roto.
+- **El empleado de la comprobación entra cuando el formulario de usuarios solo tiene `nombre`:** el alta lo creaba como
+  «Empleado Aura» y luego se intentaba entrar como `empleado_aura`; la prueba de lo que ve el empleado no corría en 4 de las 28
+  entregas recientes. Ahora corre en 41 de 121 webs (antes 37).
+- Medido sin GPU, con condiciones fijadas antes y cada mensaje nuevo confirmado a mano:
+  - Venta guardada y panel: 3 mensajes nuevos en 101 entregas, los 3 reales; +0,8 s de media por web.
+  - Consola del desplegable: 1 hallazgo real, 0 cambios en el resto; +0,2 s por web. Marcadores sin sustituir: 4 de 75 webs con
+    plantillas, los 4 reales.
+  - Menús de JavaScript: 1 mensaje nuevo en 121 webs, real; +0,1 s por web. Solo 6 de unas 121 webs escriben rutas en JavaScript
+    y una sola tiene el menú entero así.
+  - Empleado con `nombre`: 0 mensajes nuevos; +0,2 s por web.
+- **No medido con el modelo:** en 4 misiones de negocio hechas con el primero de estos cambios (m4150) no saltó ningún aviso
+  nuevo y terminaron 0 de 4; el efecto en las misiones de lo que `verificar` señala sigue sin medirse. Se probó además lanzar
+  `verificar` automáticamente durante la misión (12 misiones en tres pasadas) y no se incluye: no mejoró de forma demostrable.
+  607 pruebas pasan, 2 omitidas.
+
+---
+
 ## [4.13.7] — 2026-11-14 (verificar prueba ventas, informes y lo que ve el empleado)
 
 Salidas de las 4 misiones de negocio con la 4.13.6: las entregas daban pantallas que nadie podía usar (una venta que no
