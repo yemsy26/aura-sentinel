@@ -5,6 +5,29 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.11] — 2026-11-16 (verificar avisa de un campo que el formulario no trae y prueba al empleado con roles que no se llaman «empleado»)
+
+Sale de la misma prueba real con la 4.13.8 (una veterinaria): crear usuarios y registrar vacunas daba error 400 desde la pantalla y
+`verificar` no decía nada. Cambia solo `verificar` del motor; el programa de escritorio es el de la 4.13.10.
+
+- **Error si una ruta exige un campo que su formulario no trae.** Cuando una ruta Flask lee `request.form["campo"]` siempre y un
+  formulario POST que envía a ella no tiene ese campo, Flask responde 400 en cada envío y esa acción no se puede hacer desde la
+  pantalla. En la veterinaria eran el alta y la edición de usuarios (`nombre_completo`) y el registro de vacunas (`nombre` y
+  `fecha_aplicacion`, y el formulario enviaba `vacuna_id` y `fecha`). Ahora sale un error por formulario con la ruta y los campos que
+  faltan. Es estático y calla si la web usa `flask_wtf`/`wtforms`, nombres de campo dinámicos, JavaScript que arma campos
+  (`FormData`, `createElement('input')`…) o si no puede seguir un `include`.
+- **La prueba del empleado también corre cuando ningún rol se llama «empleado».** Con roles como `recepcion` y `veterinario` se
+  saltaba la prueba (no se comprobaba qué ve ese rol); ahora usa el primer rol que no sea de jefe.
+- Medido sin el modelo, en 122 webs guardadas: el aviso nuevo solo salta en la veterinaria (4 campos en 3 formularios; enviando de
+  verdad cada formulario con el cliente de pruebas de Flask da 400 con los campos del formulario y 302 con los de la ruta), 0 falsos,
+  +0,04 s por web. Quitando uno a uno los campos exigidos de las webs que los traían, se detectan 55 de 57. La prueba del empleado con
+  otros roles no cambia nada en esas 122 webs (casi todas llaman «empleado» a su rol).
+- **No medido:** el efecto de estos avisos en las misiones con el modelo, ni su alcance fuera de la veterinaria (el resto de webs
+  guardadas tienen formularios completos).
+- 646 pruebas del motor pasan (2 omitidas); ruff limpio. Rust y la interfaz no cambian respecto a la 4.13.10.
+
+---
+
 ## [4.13.10] — 2026-11-16 (arreglo: «Mostrar en la carpeta» no abría nada)
 
 Arreglo de la 4.13.9, que salió con un botón que no funcionaba. No cambia el motor ni lo que se le dice al modelo.
