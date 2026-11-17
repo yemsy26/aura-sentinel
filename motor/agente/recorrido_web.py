@@ -1572,6 +1572,235 @@ def url_for_sin_ruta(*carpetas: Path) -> list[dict]:
     return hallazgos
 
 
+# Una ruta que lee `request.form["nombre_completo"]` y un formulario que no trae ese campo: Flask da 400 Bad Request (KeyError) en cada envío. En la veterinaria
+# del usuario (4.13.8) el administrador no podía crear usuarios: el formulario de /usuarios/nuevo solo tenía username, password, rol y activo. Es estático y solo
+# habla si está seguro: la ruta exige el campo siempre (no dentro de un if, un bucle ni un try), el formulario va seguro a esa ruta, y no hay JavaScript ni
+# nombres dinámicos que puedan añadir campos.
+CAMPOS_FORM_ABRE = re.compile(r"(?i)<form\b([^>]*)>")
+CAMPOS_FORM_METODO = re.compile(r"""(?i)\bmethod\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
+CAMPOS_FORM_ACCION = re.compile(r"""(?i)\baction\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
+CAMPOS_URL_FOR = re.compile(r"""\burl_for\(\s*(["'])([A-Za-z_][\w.]*)\1""")
+CAMPOS_ETIQUETA_REF = re.compile(r"(?s)\{%-?\s*(extends|include|import|from)\b(.*?)-?%\}")
+CAMPOS_NOMBRE_DINAMICO = re.compile(r"""(?i)\bname\s*=\s*["']?[^"'>\s]*\{[{%]""")
+CAMPOS_JS_ARMA = re.compile(r"""FormData|\.append\(|preventDefault|createElement\(\s*["'](?:input|select|textarea)|insertAdjacentHTML|"""
+                            r"""\.setAttribute\(\s*["']name|\.name\s*=""")
+CAMPOS_COMENTARIO_JINJA = re.compile(r"(?s)\{#.*?#\}")
+CAMPOS_WTF = re.compile(r"(?m)^\s*(?:from|import)\s+(?:flask_wtf|wtforms)\b")
+CAMPOS_SI_POST = re.compile(r"""^(?:request\.method\s*==\s*["']POST["']|["']POST["']\s*==\s*request\.method)$""")
+
+
+def _es_request_form(nodo) -> bool:
+    return isinstance(nodo, ast.Attribute) and nodo.attr == "form" and isinstance(nodo.value, ast.Name) and nodo.value.id == "request"
+
+
+def _form_exigidos(funcion) -> set[str]:
+    """Campos `request.form["k"]` que la función lee siempre que se hace el POST (sin if, bucle, try ni expresión condicional de por medio)
+    y que no se comprueban en ningún sitio de la función (`"k" in request.form`, `request.form.get("k")`)."""
+    protegidos = set()
+    for n in ast.walk(funcion):
+        if isinstance(n, ast.Compare) and any(_es_request_form(c) for c in n.comparators) and _literal(n.left):
+            protegidos.add(_literal(n.left))
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and _es_request_form(n.func.value) and n.args and _literal(n.args[0]):
+            protegidos.add(_literal(n.args[0]))
+    exigidos: set[str] = set()
+    condicionales = (ast.IfExp, ast.BoolOp, ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.NamedExpr)
+    saltar = (ast.For, ast.AsyncFor, ast.While, ast.Try, getattr(ast, "TryStar", ast.Try), ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Match)
+
+    def expresion(nodo) -> None:
+        if isinstance(nodo, condicionales):
+            return
+        if isinstance(nodo, ast.Subscript) and _es_request_form(nodo.value) and _literal(nodo.slice):
+            exigidos.add(_literal(nodo.slice))
+        for hijo in ast.iter_child_nodes(nodo):
+            expresion(hijo)
+
+    def cuerpo(sentencias) -> None:
+        for s in sentencias:
+            if isinstance(s, ast.If):
+                if CAMPOS_SI_POST.match(ast.unparse(s.test).strip()):
+                    cuerpo(s.body)
+            elif isinstance(s, ast.With):
+                cuerpo(s.body)
+            elif not isinstance(s, saltar):
+                expresion(s)
+
+    cuerpo(funcion.body)
+    return exigidos - protegidos
+
+
+def _rutas_con_exigidos(carpetas) -> tuple[list[dict], dict[str, int]] | None:
+    """Las rutas Flask que aceptan POST y leen campos con request.form["k"], y cuántas rutas hay por nombre de endpoint (para saber si url_for es ambiguo).
+    None si la web usa flask_wtf/wtforms (sus campos no se ven en la plantilla)."""
+    rutas, por_endpoint = [], {}
+    for _, f in _archivos(carpetas, {".py"}):
+        try:
+            if f.stat().st_size > 400_000:
+                continue
+            texto = f.read_text(encoding="utf-8", errors="replace")
+            arbol = ast.parse(texto)
+        except (OSError, SyntaxError, ValueError, RecursionError):
+            continue
+        if CAMPOS_WTF.search(texto):
+            return None
+        apps = set()
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call):
+                llamada = n.value.func
+                if (llamada.attr if isinstance(llamada, ast.Attribute) else getattr(llamada, "id", "")) == "Flask":
+                    apps.update(t.id for t in n.targets if isinstance(t, ast.Name))
+        for n in ast.walk(arbol):
+            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            reglas_post, endpoint, es_ruta, desconocida = [], n.name, False, False
+            for d in n.decorator_list:
+                if not (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr in RUTA_METODOS):
+                    continue
+                es_ruta = True
+                endpoint = _literal(_argumento(d, "endpoint")) or _literal(_argumento(d, "name")) or endpoint
+                regla = _literal(d.args[0]) if d.args else None
+                if d.func.attr == "route":
+                    metodos = _argumento(d, "methods")
+                    if metodos is None:
+                        continue
+                    if not isinstance(metodos, (ast.List, ast.Tuple, ast.Set)) or not all(_literal(e) for e in metodos.elts):
+                        desconocida = True
+                        continue
+                    lleva_post = any(_literal(e).upper() == "POST" for e in metodos.elts)
+                else:
+                    lleva_post = d.func.attr == "post"
+                if lleva_post and regla is not None:
+                    reglas_post.append((regla, isinstance(d.func.value, ast.Name) and d.func.value.id in apps))
+            if not es_ruta:
+                continue
+            por_endpoint[endpoint] = por_endpoint.get(endpoint, 0) + 1
+            exigidos = _form_exigidos(n) if reglas_post and not desconocida else set()
+            if exigidos:
+                dibuja = {_literal(c.args[0]) for c in ast.walk(n) if isinstance(c, ast.Call) and c.args and _literal(c.args[0])
+                          and getattr(c.func, "id", getattr(c.func, "attr", "")) == "render_template"}
+                rutas.append({"funcion": n.name, "endpoint": endpoint, "reglas": reglas_post, "exigidos": exigidos, "dibuja": dibuja})
+    return rutas, por_endpoint
+
+
+def _regla_a_regex(regla: str) -> re.Pattern:
+    return re.compile(re.sub(r"<[^>]+>", "[^/]+", re.escape(regla)).rstrip("/") + "/?")
+
+
+def campos_sin_formulario(*carpetas: Path, motivos: dict | None = None) -> list[dict]:
+    """Campos que una ruta exige con `request.form["k"]` y que el formulario que envía a esa ruta no tiene:
+    [{"plantilla", "linea", "ruta", "funcion", "campo"}]. Solo habla si está seguro (ver el comentario de arriba).
+    `motivos`, si se da, cuenta por qué se calló cada formulario (para medir el alcance)."""
+    def nota(clave: str, n: int = 1) -> None:
+        if motivos is not None:
+            motivos[clave] = motivos.get(clave, 0) + n
+
+    if rutas_de_la_web(*carpetas) is None:
+        nota("web_no_segura")
+        return []
+    leidas = _rutas_con_exigidos(carpetas)
+    if leidas is None:
+        nota("wtforms")
+        return []
+    if not leidas[0]:
+        nota("sin_rutas_con_exigidos")
+        return []
+    rutas, por_endpoint = leidas
+    nota("rutas_con_exigidos", len(rutas))
+    plantillas: dict[str, Path | None] = {}
+    bases: dict[Path, Path] = {}
+    for base, f in _archivos(carpetas, {".html", ".htm", ".jinja", ".j2"}, ("templates", "plantillas")):
+        partes = f.relative_to(base).parts
+        i = max(k for k, p in enumerate(partes[:-1]) if p in ("templates", "plantillas"))
+        clave = "/".join(partes[i + 1:])
+        plantillas[clave] = None if clave in plantillas else f
+        bases[f] = base
+    textos: dict[Path, str] = {}
+
+    def texto(f: Path) -> str:
+        if f not in textos:
+            try:
+                textos[f] = CAMPOS_COMENTARIO_JINJA.sub(lambda m: "\n" * m.group(0).count("\n"), f.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                textos[f] = ""
+        return textos[f]
+
+    def cierre(f: Path, padres: bool, visto: set | None = None) -> list[Path] | None:
+        """La plantilla y lo que lleva dentro (include, import, from y, si padres, extends). None si alguna referencia no se puede seguir."""
+        visto = set() if visto is None else visto
+        if f in visto:
+            return []
+        visto.add(f)
+        salida = [f]
+        for m in CAMPOS_ETIQUETA_REF.finditer(texto(f)):
+            if m.group(1) == "extends" and not padres:
+                continue
+            ref = re.match(r"""\s*(["'])([^"']+)\1(.*)$""", m.group(2), re.DOTALL)
+            if not ref or re.search(r"\b(?:if|else)\b|[~+\[]", ref.group(3)):
+                return None
+            destino = plantillas.get(ref.group(2))
+            resto = cierre(destino, padres, visto) if destino is not None else None
+            if resto is None:
+                return None
+            salida += resto
+        return salida
+
+    def tiene(archivos_: list[Path], campo: str) -> bool:
+        c = re.escape(campo)
+        return any(re.search(rf"""(?i)\bname\s*=\s*["']?{c}(?![\w.-])""", texto(a)) or re.search(rf"""["']{c}["']""", texto(a)) for a in archivos_)
+
+    dibujadas: dict[int, set[Path]] = {}  # por ruta: los archivos que pinta su plantilla (ella y lo que incluye)
+    for r in rutas:
+        pintados = set()
+        for nombre in r["dibuja"]:
+            destino = plantillas.get(nombre)
+            propios = cierre(destino, False) if destino is not None else None
+            pintados |= set(propios or [])
+        dibujadas[id(r)] = pintados
+
+    hallazgos, vistos = [], set()
+    for f in sorted(bases):
+        if "<form" not in texto(f).lower():
+            continue
+        propios, todos = cierre(f, False), cierre(f, True)
+        if propios is None or todos is None:
+            nota("plantilla_no_seguible")
+            continue
+        if any(CAMPOS_JS_ARMA.search(texto(a)) for a in propios) or any(CAMPOS_NOMBRE_DINAMICO.search(texto(a)) for a in todos):
+            nota("js_o_nombre_dinamico")
+            continue
+        rel = f.relative_to(bases[f]).as_posix()
+        t = texto(f)
+        for m in CAMPOS_FORM_ABRE.finditer(t):
+            metodo = CAMPOS_FORM_METODO.search(m.group(1))
+            if not metodo or next((g for g in metodo.groups() if g), "").strip().lower() != "post":
+                nota("form_no_post")
+                continue
+            accion = CAMPOS_FORM_ACCION.search(m.group(1))
+            accion = next((g for g in accion.groups() if g is not None), "").strip() if accion else ""
+            uf = CAMPOS_URL_FOR.search(accion)
+            if accion in ("", "#"):  # envía a la ruta que pinta esta plantilla
+                destinos = [r for r in rutas if f in dibujadas[id(r)]]
+            elif uf:
+                ultimo = uf.group(2).rsplit(".", 1)[-1]
+                hay = sum(v for e, v in por_endpoint.items() if e.rsplit(".", 1)[-1] == ultimo)
+                destinos = [r for r in rutas if r["endpoint"].rsplit(".", 1)[-1] == ultimo] if hay == 1 else []
+            elif accion.startswith("/"):
+                literal = re.sub(r"\{\{.*?\}\}", "0", accion.split("?")[0].split("#")[0])
+                destinos = [r for r in rutas if any(es_app and _regla_a_regex(regla).fullmatch(literal) for regla, es_app in r["reglas"])]
+                destinos = destinos if len(destinos) == 1 else []
+            else:
+                destinos = []
+            nota("form_post_con_ruta_exigente" if destinos else "form_post_sin_ruta_exigente")
+            for r in destinos:
+                aqui = todos + [a for a in dibujadas[id(r)] if a not in todos] if accion in ("", "#") else todos
+                for campo in sorted(r["exigidos"]):
+                    if tiene(aqui, campo) or (rel, r["funcion"], campo) in vistos:
+                        continue
+                    vistos.add((rel, r["funcion"], campo))
+                    hallazgos.append({"plantilla": rel, "linea": t.count("\n", 0, m.start()) + 1, "ruta": r["reglas"][0][0],
+                                      "funcion": r["funcion"], "campo": campo})
+    return hallazgos
+
+
 def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: dict | None = None,
              abrir_navegador=None) -> dict | None:
     """Arranca entrada (en una copia del proyecto que el llamador borra después) y la recorre. None si no llegó a

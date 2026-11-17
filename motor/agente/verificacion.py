@@ -28,7 +28,7 @@ from . import ecosistemas
 from .borrados import aviso, peligrosos
 from .idiomas import verificar_idiomas
 from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, normalizar, relativa
-from .recorrido_web import plantillas_sin_sustituir, recorrer, url_for_sin_ruta
+from .recorrido_web import campos_sin_formulario, plantillas_sin_sustituir, recorrer, url_for_sin_ruta
 from .seguridad import pruebas_borran_la_base, seguridad_web
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
@@ -376,6 +376,15 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
         inf.errores.append(f"la plantilla {p['plantilla']} (línea {p['linea']}) usa url_for('{p['endpoint']}'), pero ninguna ruta de la web se llama así"
                            f"{sugerencia}: cuando esa parte de la página se muestre, Flask da un error 500 (BuildError); si está dentro de un «if» que no se "
                            "cumple, el botón o el enlace no se verá nunca.")
+    faltan: dict[tuple, list[str]] = {}
+    for p in campos_sin_formulario(entrada.parent, raiz):
+        faltan.setdefault((p["plantilla"], p["linea"], p["ruta"], p["funcion"]), []).append(p["campo"])
+    for (plantilla, linea, ruta, funcion), campos in list(faltan.items())[:3]:
+        leidos = " y ".join('request.form["' + c + '"]' for c in campos)
+        inf.errores.append(f"el formulario de {plantilla} (línea {linea}) envía a {ruta}, pero la ruta «{funcion}» lee {leidos} y el formulario no tiene "
+                           f"{'ese campo' if len(campos) == 1 else 'esos campos'}: Flask responde 400 Bad Request en cada envío y esa acción no se puede "
+                           f"hacer desde la pantalla. Añade el campo al formulario (<input name=\"{campos[0]}\">) o lee el valor con "
+                           f"request.form.get(\"{campos[0]}\").")
     for e in r["errores"][:4]:
         traza = e["traza"].replace(str(copia) + os.sep, "").replace("\n", "\n    ")
         inf.errores.append(f"{rel}: al {e['que']}" + (f" con {e['datos']}" if e["datos"] else "") +
