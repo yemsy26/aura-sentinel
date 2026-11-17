@@ -1705,14 +1705,7 @@ def campos_sin_formulario(*carpetas: Path, motivos: dict | None = None) -> list[
         return []
     rutas, por_endpoint = leidas
     nota("rutas_con_exigidos", len(rutas))
-    plantillas: dict[str, Path | None] = {}
-    bases: dict[Path, Path] = {}
-    for base, f in _archivos(carpetas, {".html", ".htm", ".jinja", ".j2"}, ("templates", "plantillas")):
-        partes = f.relative_to(base).parts
-        i = max(k for k, p in enumerate(partes[:-1]) if p in ("templates", "plantillas"))
-        clave = "/".join(partes[i + 1:])
-        plantillas[clave] = None if clave in plantillas else f
-        bases[f] = base
+    plantillas, bases = _plantillas_por_clave(carpetas)
     textos: dict[Path, str] = {}
 
     def texto(f: Path) -> str:
@@ -1798,6 +1791,110 @@ def campos_sin_formulario(*carpetas: Path, motivos: dict | None = None) -> list[
                     vistos.add((rel, r["funcion"], campo))
                     hallazgos.append({"plantilla": rel, "linea": t.count("\n", 0, m.start()) + 1, "ruta": r["reglas"][0][0],
                                       "funcion": r["funcion"], "campo": campo})
+    return hallazgos
+
+
+# Una variable que la plantilla lee y que ninguna ruta le pasa: Jinja no da error, la lista sale vacía, el «if» es falso y el texto sale en blanco. En la
+# veterinaria del usuario (4.13.8) los botones «Editar» y «💉 Vacuna» iban dentro de un `{% if can_edit %}` que nadie definía y el desplegable de vacunas
+# iteraba `vacunas`, que la ruta no pasaba. La sonda (sondas/web_arranque.py, con el Python del proyecto) dice qué nombres de cada plantilla no define el
+# entorno ni un procesador de contexto; aquí se mira, leyendo las render_template, si alguna ruta se los pasa.
+RENDER_DINAMICO = re.compile(r"render_template_string|get_template\(|stream_template|select_template|\bTemplate\(|render_template\s+as\s")
+IDENTIFICADOR = re.compile(r"[A-Za-z_]\w*")
+JS_CARGA = re.compile(r"\bfetch\s*\(|XMLHttpRequest|\$\.(?:get|post|ajax|getJSON)\b|\baxios\b")  # una tabla que rellena JavaScript
+
+
+def _plantillas_por_clave(carpetas) -> tuple[dict[str, Path | None], dict[Path, Path]]:
+    """Las plantillas del proyecto por su nombre para render_template (la ruta después de la última carpeta templates; None si el nombre
+    está repetido) y la carpeta base de cada archivo."""
+    plantillas: dict[str, Path | None] = {}
+    bases: dict[Path, Path] = {}
+    for base, f in _archivos(carpetas, {".html", ".htm", ".jinja", ".j2"}, ("templates", "plantillas")):
+        partes = f.relative_to(base).parts
+        i = max(k for k, p in enumerate(partes[:-1]) if p in ("templates", "plantillas"))
+        clave = "/".join(partes[i + 1:])
+        plantillas[clave] = None if clave in plantillas else f
+        bases[f] = base
+    return plantillas, bases
+
+
+def _lo_que_pasan_las_rutas(carpetas) -> tuple[dict[str, set[str]], set[str]] | None:
+    """Por plantilla (literal de render_template): los nombres que alguna ruta le pasa, y las plantillas con `**` o argumentos de más
+    (no se sabe qué reciben). None si alguna plantilla se pinta de forma que no se puede leer (nombre no literal, render_template_string...)."""
+    pasan: dict[str, set[str]] = {}
+    con_extra: set[str] = set()
+    for _, f in _archivos(carpetas, {".py"}):
+        try:
+            if f.stat().st_size > 400_000:
+                continue
+            texto = f.read_text(encoding="utf-8", errors="replace")
+            arbol = ast.parse(texto)
+        except (OSError, SyntaxError, ValueError, RecursionError):
+            continue
+        if RENDER_DINAMICO.search(texto):
+            return None
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", "")) == "render_template":
+                nombre = _literal(n.args[0]) if n.args else None
+                if nombre is None:
+                    return None
+                pasan.setdefault(nombre, set())
+                con_extra.update([nombre] if len(n.args) > 1 else [])
+                for k in n.keywords:
+                    if k.arg is None:
+                        con_extra.add(nombre)
+                    else:
+                        pasan[nombre].add(k.arg)
+    return pasan, con_extra
+
+
+def _definidos_en_plantillas(carpetas) -> set[str]:
+    """Nombres que alguna plantilla define con set, for, with, macro, import o from (lo que un padre o un include puede dar a la hija)."""
+    nombres: set[str] = set()
+    for _, f in _archivos(carpetas, {".html", ".htm", ".jinja", ".j2"}, ("templates", "plantillas")):
+        try:
+            texto = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"(?s)\{%-?\s*(set|for|with|macro|import|from|call)\b(.*?)-?%\}", texto):
+            tipo, resto = m.groups()
+            if tipo == "set":
+                nombres.update(IDENTIFICADOR.findall(resto.split("=", 1)[0]))
+            elif tipo == "for":
+                nombres.update(IDENTIFICADOR.findall(re.split(r"\bin\b", resto, maxsplit=1)[0]))
+            elif tipo == "with":
+                nombres.update(re.findall(r"(\w+)\s*=(?!=)", resto))
+            else:
+                nombres.update(IDENTIFICADOR.findall(resto))
+    return nombres
+
+
+def variables_sin_pasar(sonda: list[dict], *carpetas: Path) -> list[dict]:
+    """Nombres de plantilla que ninguna ruta pasa (`sonda`: lo que dijo web_arranque, [{"plantilla", "nombres": {nombre: {"linea", "uso"}}}]):
+    [{"plantilla", "nombre", "linea", "uso", "pasan", "sugerencia", "con_js"}]. Solo habla de plantillas que alguna render_template pinta con su nombre
+    literal y sin `**`, y solo si la web no pinta plantillas de otra forma."""
+    if not sonda:
+        return []
+    leidas = _lo_que_pasan_las_rutas(carpetas)
+    if leidas is None:
+        return []
+    pasan, con_extra = leidas
+    definidos = _definidos_en_plantillas(carpetas)
+    archivos, _ = _plantillas_por_clave(carpetas)
+    hallazgos = []
+    for entrada in sonda:
+        plantilla = entrada["plantilla"]
+        if plantilla not in pasan or plantilla in con_extra:
+            continue
+        try:
+            con_js = bool(archivos.get(plantilla) and JS_CARGA.search(archivos[plantilla].read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            con_js = False
+        for nombre, info in entrada["nombres"].items():
+            if nombre in pasan[plantilla] or nombre in definidos:
+                continue
+            parecidas = difflib.get_close_matches(nombre, sorted(pasan[plantilla]), n=1, cutoff=0.6)
+            hallazgos.append({"plantilla": plantilla, "nombre": nombre, "linea": info["linea"], "uso": info["uso"],
+                              "pasan": sorted(pasan[plantilla]), "sugerencia": parecidas[0] if parecidas else "", "con_js": con_js})
     return hallazgos
 
 
@@ -1889,6 +1986,7 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                 r.usuario = navegador["usuario"] or r.usuario
         texto = log.read_text(encoding="utf-8", errors="replace")
         plantillas = [json.loads(m) for m in re.findall(r"^WEB_PLANTILLA (\{.*\})\s*$", texto, re.MULTILINE)]
+        variables = [json.loads(m) for m in re.findall(r"^WEB_VARIABLE (\{.*\})\s*$", texto, re.MULTILINE)]
         if plantillas:  # el 500 de una página por esa plantilla ya va en su error de plantilla
             r.errores = [e for e in r.errores if "TemplateSyntaxError" not in e["traza"]
                          and "TemplateAssertionError" not in e["traza"]]
@@ -1901,7 +1999,7 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                 "sin_entrar": r.intento_entrar and not r.usuario and not r.entrar_fallo, "entrar_js": r.entrar_js,
                 "navegador": navegador, "lineas": lineas, "sin_formulario": sin_formulario, "registro": r.registro,
                 "entrar_get": r.entrar_get, "sin_permiso": r.sin_permiso, "login_vacio": r.login_vacio, "empleado": empleado,
-                "empleado_motivo": previo.sin_empleado, "negocio": negocio, "venta": venta}
+                "empleado_motivo": previo.sin_empleado, "negocio": negocio, "venta": venta, "variables": variables}
     finally:
         procesos.detener(proc, trabajo)
         try:

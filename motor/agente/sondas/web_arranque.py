@@ -70,6 +70,78 @@ def _plantillas(app) -> None:
                                                 ensure_ascii=False), flush=True)
 
 
+def _variables(app) -> None:
+    """Nombres que una plantilla lee del contexto y que ni el entorno ni un procesador de contexto definen: Jinja no da error por
+    una variable sin definir (la lista sale vacía, el «if» es falso, el texto sale en blanco). Imprime 'WEB_VARIABLE {json}' por plantilla,
+    con {nombre: {linea, uso}}; si no se puede saber qué da el contexto (un procesador falla), no imprime nada. Los nombres que la plantilla
+    comprueba a propósito (`is defined`, `|default`) no salen. Qué rutas pasan esos nombres lo ve el motor leyendo las render_template."""
+    from jinja2 import meta, nodes
+    env = app.jinja_env
+    try:
+        nombres = env.list_templates()
+    except Exception:
+        return
+    proveen = set(env.globals)
+    try:
+        with app.test_request_context():
+            for lista in app.template_context_processors.values():
+                for funcion in lista:
+                    datos = funcion()
+                    if not isinstance(datos, dict):
+                        return
+                    proveen.update(datos)
+    except Exception:
+        return
+    subir = (nodes.Not, nodes.And, nodes.Or, nodes.Compare, nodes.Operand, nodes.Filter, nodes.Test, nodes.Concat, nodes.Neg)
+    for nombre in nombres:
+        try:
+            fuente, archivo, _ = env.loader.get_source(env, nombre)
+            if not archivo or re.search(r"[\\/](?:site-packages|Lib)[\\/]", archivo):
+                continue
+            arbol = env.parse(fuente, nombre, archivo)
+            sin = meta.find_undeclared_variables(arbol) - proveen
+        except Exception:  # una plantilla que no compila ya sale por su cuenta
+            continue
+        if not sin:
+            continue
+        padres = {}
+        pila = [arbol]
+        while pila:
+            n = pila.pop()
+            for hijo in n.iter_child_nodes():
+                padres[id(hijo)] = n
+                pila.append(hijo)
+        a_proposito, usos, en_if = set(), {}, set()
+        for n in arbol.find_all(nodes.Name):
+            if n.name not in sin or n.ctx != "load":
+                continue
+            p = padres.get(id(n))
+            if isinstance(p, nodes.Test) and p.name in ("defined", "undefined") or isinstance(p, nodes.Filter) and p.name in ("default", "d"):
+                a_proposito.add(n.name)
+                continue
+            uso, hijo, p = "salida", n, padres.get(id(n))
+            if isinstance(p, (nodes.Getattr, nodes.Getitem, nodes.Call)) and p.node is n:
+                uso = "atributo"
+            else:
+                while p is not None and isinstance(p, subir):
+                    hijo, p = p, padres.get(id(p))
+                if isinstance(p, nodes.For) and p.iter is hijo:
+                    uso = "for"
+                elif isinstance(p, (nodes.If, nodes.CondExpr)) and p.test is hijo:
+                    uso = "if"
+                    en_if.add(n.name)
+            orden = ("salida", "if", "for", "atributo")
+            previo = usos.get(n.name)
+            if previo is None or orden.index(uso) > orden.index(previo["uso"]):
+                usos[n.name] = {"linea": previo["linea"] if previo else n.lineno, "uso": uso}
+        for k in en_if:  # `x.algo if x else ''`: el atributo solo se lee si x existe
+            if usos.get(k, {}).get("uso") == "atributo":
+                usos[k]["uso"] = "if"
+        usos = {k: v for k, v in usos.items() if k not in a_proposito}
+        if usos:
+            print("WEB_VARIABLE " + json.dumps({"plantilla": nombre, "nombres": usos}, ensure_ascii=False), flush=True)
+
+
 try:
     import flask
 
@@ -79,6 +151,10 @@ try:
         try:
             _plantillas(self)
         except Exception:  # comprobar no debe impedir que arranque
+            pass
+        try:
+            _variables(self)
+        except Exception:
             pass
         return _run(self, "127.0.0.1", PUERTO, False, load_dotenv, use_reloader=False, use_debugger=False, **opciones)
 

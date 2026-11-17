@@ -28,7 +28,13 @@ from . import ecosistemas
 from .borrados import aviso, peligrosos
 from .idiomas import verificar_idiomas
 from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, normalizar, relativa
-from .recorrido_web import campos_sin_formulario, plantillas_sin_sustituir, recorrer, url_for_sin_ruta
+from .recorrido_web import (
+    campos_sin_formulario,
+    plantillas_sin_sustituir,
+    recorrer,
+    url_for_sin_ruta,
+    variables_sin_pasar,
+)
 from .seguridad import pruebas_borran_la_base, seguridad_web
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
@@ -385,6 +391,20 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                            f"{'ese campo' if len(campos) == 1 else 'esos campos'}: Flask responde 400 Bad Request en cada envío y esa acción no se puede "
                            f"hacer desde la pantalla. Añade el campo al formulario (<input name=\"{campos[0]}\">) o lee el valor con "
                            f"request.form.get(\"{campos[0]}\").")
+    efecto = {"for": "el bucle sale siempre vacío", "if": "esa parte nunca se muestra", "salida": "sale en blanco",
+              "atributo": "da error 500 al pintar esa parte"}
+    sin_pasar: dict[str, list[dict]] = {}
+    for v in variables_sin_pasar(r.get("variables") or [], entrada.parent, raiz):
+        sin_pasar.setdefault(v["plantilla"], []).append(v)
+    for plantilla, vs in list(sin_pasar.items())[:3]:
+        detalle = ", ".join(f"«{v['nombre']}» (línea {v['linea']}: {efecto[v['uso']]})" for v in vs[:4])
+        quisiste = "; ".join(f"en vez de «{v['nombre']}» ¿«{v['sugerencia']}»?" for v in vs[:4] if v["sugerencia"])
+        pasan = ", ".join(vs[0]["pasan"]) or "nada"
+        texto = (f"la plantilla {plantilla} lee {detalle}, pero ninguna ruta se lo pasa: render_template solo le pasa {pasan}"
+                 f"{' (' + quisiste + ')' if quisiste else ''}. Jinja no da error por una variable sin definir: la lista sale vacía, el «if» es falso "
+                 "y el texto sale en blanco.")
+        # un bucle sobre algo sin definir en una página que rellena JavaScript puede ser código sobrante: solo aviso
+        (inf.errores if any(v["uso"] == "atributo" or v["uso"] == "for" and not v["con_js"] for v in vs) else inf.avisos).append(texto)
     for e in r["errores"][:4]:
         traza = e["traza"].replace(str(copia) + os.sep, "").replace("\n", "\n    ")
         inf.errores.append(f"{rel}: al {e['que']}" + (f" con {e['datos']}" if e["datos"] else "") +
