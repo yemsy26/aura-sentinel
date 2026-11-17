@@ -133,7 +133,7 @@ class _Pagina(html.parser.HTMLParser):
             return
         elif tag in ("input", "textarea", "button"):
             tipo = a.get("type", "text" if tag == "input" else "submit" if tag == "button" else tag).lower()
-            self._form["campos"].append({**a, "tipo": tipo})
+            self._form["campos"].append({**a, "tipo": tipo, "elemento": tag})
             if tag == "button":
                 self._boton = self._form["campos"][-1]
         elif tag == "select":
@@ -228,6 +228,8 @@ def _rellenar(form: dict, hoy: str, usuario: str | None = None, clave: str | Non
 
 
 LOGIN_RUTA = re.compile(r"(?i)login|signin|sign-in|entrar|acceso|ingres|auth|iniciar")
+# Un botón o enlace cuyo texto es el valor de una variable de Python (`{{ form.submit.data }}` pinta False): quien lo ve no sabe qué hace (m4153_neg4).
+ETIQUETA_PYTHON = re.compile(r"^\W*(?:False|True|None)\W*$")
 
 
 def _pagina_vacia(texto: str, pagina: "_Pagina") -> bool:
@@ -290,6 +292,7 @@ class _Recorrido:
         self.altas_js = False  # un botón «Nuevo» suelto, fuera de todo formulario: el alta es un modal que guarda con fetch
         self.posts = 0  # formularios POST enviados (los de buscar y filtrar son GET)
         self.login_vacio: str | None = None  # la página de entrar a la que manda la web sale sin nada que rellenar
+        self.etiquetas: list[dict] = []  # botones y enlaces cuyo texto es False, True o None
         self.intento_entrar = self.entrar_js = self.entrar_fallo = self.registro = self.entrar_get = False
         self.entrar_ruta: str | None = None  # la página con el formulario de entrar que usó el recorrido
         self.sin_empleado = ""  # por qué no se pudo probar con un empleado (para diagnosticar; no se enseña al modelo)
@@ -481,6 +484,7 @@ class _Recorrido:
                 continue
             pagina = self._leer(texto)
             pagina.enlaces += self.enlaces_js(texto, final, pagina.enlaces)
+            self._etiquetas_de_python(final, pagina)
             destino = self.dentro(final, final) or ""
             if ruta == "/" and destino.split("?")[0] != "/" and LOGIN_RUTA.search(destino) and _pagina_vacia(texto, pagina):
                 self.login_vacio = destino  # el login.html no rellena el bloque de la plantilla base: ni formulario ni nada
@@ -511,6 +515,19 @@ class _Recorrido:
             if self.enviar_formularios(ruta, final, pagina, limite):
                 pendientes.append(ruta)
         return pendientes
+
+    def _etiquetas_de_python(self, final: str, pagina: _Pagina) -> None:
+        """Botones (<button> y <input> de enviar) y enlaces de la página cuyo texto es solo False, True o None."""
+        donde = (self.dentro(final, final) or "").split("?")[0]
+        vistos = [("botón", c.get("texto", "") if c.get("elemento") == "button" else c.get("value", ""))
+                  for f in pagina.formularios for c in f["campos"] if c["tipo"] in ("submit", "button", "reset")]
+        vistos += [("botón", b) for b in pagina.botones_sueltos] + [("enlace", t) for t in pagina.textos.values()]
+        for que, etiqueta in vistos:
+            etiqueta = " ".join(etiqueta.split())
+            if ETIQUETA_PYTHON.match(etiqueta) and len(self.etiquetas) < 8:
+                nueva = {"pagina": donde, "texto": re.sub(r"\W", "", etiqueta), "que": que}
+                if nueva not in self.etiquetas:
+                    self.etiquetas.append(nueva)
 
     def _sin_permiso(self, ruta: str, estado: int, final: str, texto: str) -> None:
         """Al administrador que acaba de entrar la web le cierra una página: un 403, o lo manda a otra con «No tienes permiso»."""
@@ -1189,6 +1206,10 @@ OPCION_VACIA = re.compile(r"(?i)^\W*(?:selecc\w*|elig\w*|elij\w*|escog\w*|choose
 JS_LIBRERIA = re.compile(r"(?i)(?:^|\W)(?:\$|jQuery|bootstrap|axios|Chart|Vue|React|Swal|moment|Alpine|Toastify|flatpickr|"
                          r"Select2|DataTable)(?!\w).*(?:is not defined|is not a function|undefined)")
 MAX_SEGUNDOS_VENTA = 25
+# Errores de JavaScript que no dependen de los datos: una función o variable que no existe, un script que no se puede leer. Un «Cannot read properties
+# of undefined» sin productos puede ser solo la lista vacía, y no se acusa.
+JS_SIEMPRE = re.compile(r"(?i)\bis not defined\b|^(?:Unexpected (?:token|identifier|end of input|string|number)|Invalid or unexpected token|"
+                        r"missing \) after|Unterminated|Identifier '[^']+' has already been declared)")
 
 
 def _consola_propia(m, base: str) -> bool:
@@ -1296,7 +1317,8 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 campos = pag.evaluate(LISTAR, "campos")
                 productos = [c for c in campos if es_producto(c)]
                 errores_js = [e for e in js if not JS_LIBRERIA.search(e)]
-                res = {"estado": "sin_desplegable", "inicial": inicial, "carrito": carrito is not None, "js": errores_js[0] if errores_js else ""}
+                res = {"estado": "sin_desplegable", "inicial": inicial, "carrito": carrito is not None, "js": errores_js[0] if errores_js else "",
+                       "modulo": pag.query_selector("script[type=module]") is not None}
                 cantidades = []
                 if not productos and hay_productos and not any(c["tipo"] in ("checkbox", "radio") for c in campos):
                     cantidades = [c for c in campos if c["tipo"] == "number" and CANTIDAD_CAMPO.search(c["name"])
@@ -1414,7 +1436,9 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 if v["estado"] == "sin_desplegable":
                     r["sin_desplegable"] += 1
                     if hay_productos and v.get("js"):  # hay productos y el script de la pantalla falla al cargar: no se puede vender
-                        r["errores"].append({"pagina": ruta, "tipo": "sin_desplegable", "js": v["js"], "mensaje": ""})
+                        r["errores"].append({"pagina": ruta, "tipo": "sin_desplegable", "js": v["js"], "mensaje": "", "modulo": v["modulo"]})
+                    elif v.get("js") and JS_SIEMPRE.search(v["js"]):  # sin productos que mostrar, pero el script no depende de ellos para fallar
+                        r["errores"].append({"pagina": ruta, "tipo": "js_roto", "js": v["js"], "mensaje": "", "modulo": v["modulo"]})
                     continue
                 if v["estado"] in ("fuera", "sin_guardar", "sin_envio"):
                     continue
@@ -2032,7 +2056,8 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                 "sin_entrar": r.intento_entrar and not r.usuario and not r.entrar_fallo, "entrar_js": r.entrar_js,
                 "navegador": navegador, "lineas": lineas, "sin_formulario": sin_formulario, "registro": r.registro,
                 "entrar_get": r.entrar_get, "sin_permiso": r.sin_permiso, "login_vacio": r.login_vacio, "empleado": empleado,
-                "empleado_motivo": previo.sin_empleado, "negocio": negocio, "venta": venta, "variables": variables}
+                "empleado_motivo": previo.sin_empleado, "negocio": negocio, "venta": venta, "variables": variables,
+                "etiquetas": r.etiquetas}
     finally:
         procesos.detener(proc, trabajo)
         try:

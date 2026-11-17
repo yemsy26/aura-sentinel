@@ -405,6 +405,14 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                  "y el texto sale en blanco.")
         # un bucle sobre algo sin definir en una página que rellena JavaScript puede ser código sobrante: solo aviso
         (inf.errores if any(v["uso"] == "atributo" or v["uso"] == "for" and not v["con_js"] for v in vs) else inf.avisos).append(texto)
+    por_texto: dict[str, list[str]] = {}
+    for x in r.get("etiquetas") or []:
+        por_texto.setdefault(x["texto"], []).append(f"{x['que']} de {x['pagina']}")
+    for texto, donde in list(por_texto.items())[:2]:
+        otros = f" (y {len(donde) - 1} más: {', '.join(donde[1:3])})" if len(donde) > 1 else ""
+        inf.avisos.append(f"{rel}: un {donde[0]} dice «{texto}»{otros}: la plantilla pinta el valor de una variable de Python en vez de un texto, "
+                          "y quien lo ve no sabe qué hace. Suele ser {{ form.submit.data }} (el valor del campo, False hasta que se envía): "
+                          "usa {{ form.submit.label.text }} o escribe el texto del botón.")
     for e in r["errores"][:4]:
         traza = e["traza"].replace(str(copia) + os.sep, "").replace("\n", "\n    ")
         inf.errores.append(f"{rel}: al {e['que']}" + (f" con {e['datos']}" if e["datos"] else "") +
@@ -467,6 +475,8 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                           "nada). Si cada empleado solo debe ver lo suyo, filtra por el vendedor en la lista y comprueba de quién es "
                           "en el detalle (403 o 404 si no es suyo); si en este negocio los empleados ven todas las ventas, ignora "
                           "este aviso.")
+    modulo = (' Esta pantalla carga un <script type="module">: las funciones de un módulo no son globales y un onclick="función()" no las ve; '
+              "engancha los botones con addEventListener dentro del módulo o asigna window.función = función.")
     for e in (r.get("venta") or {}).get("errores", [])[:2]:
         if e["tipo"] == "vacio":
             inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, el desplegable de productos queda vacío aunque hay productos "
@@ -488,7 +498,12 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
             inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']} no aparece ningún desplegable de productos aunque hay productos "
                                f"creados (error de JavaScript al cargar: «{e['js']}»): nadie puede vender desde esta pantalla. Mira la consola "
                                "del navegador: ¿la lista de productos que usa el script llega bien a la página (datos mal envueltos, una "
-                               "variable sin definir)?")
+                               "variable sin definir)?" + (modulo if e.get("modulo") else ""))
+        elif e["tipo"] == "js_roto":
+            inf.errores.append(f"{rel}: la pantalla de venta {e['pagina']} tiene un error de JavaScript («{e['js']}») y ningún desplegable de "
+                               "productos: lo que el script debía pintar no aparece y es probable que no se pueda armar la venta desde ahí "
+                               "(la prueba no pudo crear productos para verlo con datos). Mira la consola del navegador: ¿esa función o "
+                               "variable existe y está donde la usa el script?" + (modulo if e.get("modulo") else ""))
         elif e["tipo"] == "rechazada":
             inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, tras elegir un producto y una cantidad y pulsar guardar, la web "
                                f"responde «{e['mensaje']}» y la venta no se registra (ni la lista de ventas ni las existencias cambian). "

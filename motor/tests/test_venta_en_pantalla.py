@@ -86,6 +86,13 @@ PAGINAS = {
     # no se crea ningún desplegable porque el script falla al cargar con una variable que nadie define (m4161_neg2)
     "sin_desplegable_js": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<div id="filas"></div>'
                           '<button type="submit">Guardar venta</button></form><script>productosData.forEach(function(p){});</script>',
+    # el error depende de los datos (una lista que no está): sin productos creados puede ser solo la lista vacía
+    "sin_desplegable_tipo": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<div id="filas"></div>'
+                            '<button type="submit">Guardar venta</button></form><script>var d;d.forEach(function(p){});</script>',
+    # el script es un módulo: sus funciones no son globales y el onclick no las ve (tramos_neg1)
+    "modulo": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<div id="filas"></div>'
+              '<button type="button" onclick="agregar()">+ Agregar producto</button><button type="submit">Guardar venta</button></form>'
+              '<script type="module">function agregar(){document.getElementById("filas").innerHTML="<p>x</p>";}</script>',
     # sin desplegable y sin ningún error: puede ser otra forma de vender, no se acusa
     "sin_desplegable_mudo": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<div id="filas"></div>'
                             '<button type="submit">Guardar venta</button></form>',
@@ -241,7 +248,24 @@ class VentaEnPantalla(unittest.TestCase):
 
     def test_sin_desplegable_ni_error_ni_productos_no_se_acusa(self):
         self.assertEqual(self.recorrer("sin_desplegable_mudo")["venta"]["errores"], [])
-        self.assertEqual(self.recorrer("sin_desplegable_js", precio="no")["venta"]["errores"], [])  # sin productos creados no hay de qué
+        self.assertEqual(self.recorrer("sin_desplegable_tipo", precio="no")["venta"]["errores"], [])  # sin productos creados no hay de qué
+
+    def test_sin_productos_creados_un_script_con_una_variable_que_no_existe_se_acusa(self):
+        v = self.recorrer("sin_desplegable_js", precio="no")["venta"]
+        [e] = v["errores"]
+        self.assertEqual((e["pagina"], e["tipo"], e["modulo"]), ("/ventas/nueva", "js_roto", False))
+        self.assertIn("productosData is not defined", e["js"])
+
+    def test_con_productos_creados_el_error_de_la_variable_que_no_existe_sigue_siendo_el_de_antes(self):
+        [e] = self.recorrer("sin_desplegable_js")["venta"]["errores"]
+        self.assertEqual((e["tipo"], e["modulo"]), ("sin_desplegable", False))
+
+    def test_el_script_de_modulo_con_onclick_se_acusa_con_la_marca_del_modulo(self):
+        [e] = self.recorrer("modulo", precio="no")["venta"]["errores"]
+        self.assertEqual((e["pagina"], e["tipo"], e["modulo"]), ("/ventas/nueva", "js_roto", True))
+        self.assertIn("agregar is not defined", e["js"])
+        [e] = self.recorrer("modulo")["venta"]["errores"]
+        self.assertEqual((e["tipo"], e["modulo"]), ("sin_desplegable", True))
 
     def test_la_tabla_de_cantidades_que_funciona_se_vende(self):
         v = self.recorrer("tabla_ok")["venta"]
@@ -343,6 +367,26 @@ class MensajesDeVerificar(unittest.TestCase):
         self.assertIn("en la pantalla de venta /ventas/nueva no aparece ningún desplegable de productos aunque hay productos creados", m)
         self.assertIn("«Cannot read properties of undefined (reading 'toFixed')»", m)
         self.assertIn("nadie puede vender desde esta pantalla", m)
+
+    def test_script_roto_sin_productos_con_modulo(self):
+        [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "js_roto", "js": "agregarItem is not defined", "mensaje": "",
+                                         "modulo": True}]})
+        self.assertIn("la pantalla de venta /ventas/nueva tiene un error de JavaScript («agregarItem is not defined»)", m)
+        self.assertIn("ningún desplegable de productos", m)
+        self.assertIn('<script type="module">', m)
+        self.assertIn("addEventListener", m)
+
+    def test_script_roto_sin_modulo_no_habla_de_modulos(self):
+        [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "js_roto", "js": "createSelect is not defined", "mensaje": "",
+                                         "modulo": False}]})
+        self.assertIn("«createSelect is not defined»", m)
+        self.assertNotIn("módulo", m)
+
+    def test_sin_desplegable_con_productos_y_modulo_tambien_lo_dice(self):
+        [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "sin_desplegable", "js": "agregar is not defined", "mensaje": "",
+                                         "modulo": True}]})
+        self.assertIn("aunque hay productos creados", m)
+        self.assertIn('<script type="module">', m)
 
     def test_la_venta_no_se_guarda(self):
         [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "mensaje", "js": "", "mensaje": "Agrega al menos un producto"}]})
