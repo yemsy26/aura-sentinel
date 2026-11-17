@@ -1212,6 +1212,71 @@ JS_SIEMPRE = re.compile(r"(?i)\bis not defined\b|^(?:Unexpected (?:token|identif
                         r"missing \) after|Unterminated|Identifier '[^']+' has already been declared)")
 
 
+# Una pantalla de venta sin desplegable de productos pero con un buscador (m4133_neg4, m4134_neg2, m4135_neg1, m4136_neg2): se escribe unas letras del
+# producto en un campo de texto y o sale una lista de sugerencias en la que se pulsa o la fila se rellena sola. Los productos que hay cuando se prueba la
+# venta son los que dejó la prueba del empleado («Producto Aura») o los que trae la web («Producto Prueba»): se prueba con el principio de esos nombres,
+# del más seguro al más general. El buscador de clientes no cuenta.
+BUSCA_PRODUCTO = ("Aur", "Pro", "Pru")
+CALCULADO = re.compile(r"(?i)precio|price|total|importe|monto|subtotal")  # lo calcula la pantalla (a menudo de solo lectura): la prueba no lo toca
+BUSCADOR_CLIENTE = re.compile(r"(?i)client|customer")
+# Lo que ya contiene el texto buscado antes de escribirlo (no puede ser una sugerencia).
+PREVIOS = r"""(q) => {
+  const vis = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
+  for (const e of document.querySelectorAll('body *')) if (vis(e) && (e.innerText || '').toLowerCase().includes(q)) e.dataset.auraPrevio = '1';
+}"""
+# La sugerencia: el elemento más pequeño que se ve, es nuevo y contiene lo buscado (si hace de botón, el clic sube hasta su onclick).
+SUGERENCIA = r"""(q) => {
+  const vis = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
+  const no = ['INPUT', 'SELECT', 'OPTION', 'TEXTAREA', 'SCRIPT', 'STYLE'];
+  const nuevos = [...document.querySelectorAll('body *')].filter(e => vis(e) && !e.dataset.auraPrevio && !no.includes(e.tagName)
+                                                                   && (e.innerText || '').toLowerCase().includes(q));
+  const menor = nuevos.find(e => !nuevos.some(h => h !== e && e.contains(h)));
+  if (!menor) return null;
+  let n = Number(document.body.dataset.auraN || 0);
+  menor.dataset.auraI = menor.dataset.auraI || String(++n);
+  document.body.dataset.auraN = String(n);
+  return menor.dataset.auraI;
+}"""
+# Los campos (también los ocultos, menos el buscador) y las filas de tabla: si cambian es que algo se armó.
+FOTO_CAMPOS = r"""(i) => JSON.stringify([...document.querySelectorAll('input, select, textarea')].filter(e => e.dataset.auraI !== i)
+                                          .map(e => (e.name || e.id || '') + '=' + e.value))"""
+FOTO_FILAS = r"""() => document.querySelectorAll('tbody tr').length"""
+
+
+def _es_buscador(c: dict) -> bool:
+    """Un campo de texto en el que se busca un producto (su nombre, id, placeholder o clase dicen producto y buscar), no un cliente."""
+    nombre = f"{c['name']} {c.get('clase', '')}"
+    return c["tipo"] == "text" and bool(PRODUCTO_CAMPO.search(nombre) and BUSCADOR.search(nombre)) and not BUSCADOR_CLIENTE.search(nombre)
+
+
+def _buscar_y_elegir(pag, buscador: dict) -> str | None:
+    """Escribe unas letras del producto en el buscador y elige el resultado: pulsa la sugerencia que sale o deja que la fila se rellene sola.
+    El texto con el que se armó algo (un campo, un oculto o una fila cambiaron aparte del propio buscador); None si ninguno sirvió."""
+    campo = pag.locator(f"[data-aura-i='{buscador['i']}']").first
+    for texto in BUSCA_PRODUCTO:
+        q = texto.lower()
+        try:
+            campo.fill("", timeout=2000)
+            _esperar(pag)
+            pag.evaluate("() => document.querySelectorAll('[data-aura-previo]').forEach(e => delete e.dataset.auraPrevio)")
+            pag.evaluate(PREVIOS, q)
+            campos_antes, filas_antes = pag.evaluate(FOTO_CAMPOS, buscador["i"]), pag.evaluate(FOTO_FILAS)
+            campo.click(timeout=2000)
+            campo.press_sequentially(texto, delay=60, timeout=3000)
+            pag.wait_for_timeout(300)
+            _esperar(pag)
+            marca = pag.evaluate(SUGERENCIA, q)
+            pulsada = bool(marca) and _clic(pag, marca)
+            if pulsada:
+                _esperar(pag)
+            # una fila de más sin que cambie ningún campo solo cuenta si se pulsó una sugerencia (un filtro en vivo de una tabla no arma nada)
+            if pag.evaluate(FOTO_CAMPOS, buscador["i"]) != campos_antes or (pulsada and pag.evaluate(FOTO_FILAS) != filas_antes):
+                return texto
+        except Exception:
+            return None
+    return None
+
+
 def _consola_propia(m, base: str) -> bool:
     """Un console.error del script de la propia web («Error parsing productos»), no un 404/500 de red ni algo de otro origen."""
     try:
@@ -1323,8 +1388,13 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 if not productos and hay_productos and not any(c["tipo"] in ("checkbox", "radio") for c in campos):
                     cantidades = [c for c in campos if c["tipo"] == "number" and CANTIDAD_CAMPO.search(c["name"])
                                   and (c["value"] or "0") in ("0", "") and c["max"] != "0"]
+                buscador = None
                 if not productos and not cantidades:
-                    return res
+                    buscador = next((c for c in campos if _es_buscador(c)), None) if hay_productos else None
+                    escrito = _buscar_y_elegir(pag, buscador) if buscador else None
+                    if not escrito:
+                        return res  # sin buscador, o no sale nada que elegir: puede ser otra forma de vender, no se acusa
+                    campos = pag.evaluate(LISTAR, "campos")  # lo que elegir cambió: una fila con su cantidad, un campo relleno
                 if productos and not any(_opcion_producto(c) for c in productos):
                     errores = [e for e in js if not JS_LIBRERIA.search(e)]
                     return {**res, "estado": "vacio", "js": errores[0] if errores else ""}
@@ -1338,7 +1408,7 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     if valor is None:
                         if c["tipo"] == "select":
                             c = {**c, "opciones": [o for o in c["opciones"] if not SIN_STOCK.search(o["texto"])]}
-                        valor = None if BUSCADOR.search(c["name"]) else _valor(c, hoy)
+                        valor = None if BUSCADOR.search(c["name"]) or (buscador and CALCULADO.search(c["name"])) else _valor(c, hoy)
                     if valor is None:
                         continue
                     campo = pag.locator(f"[data-aura-i='{c['i']}']")
@@ -1354,6 +1424,8 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                         datos.append(f"{c['name']}={valor}")
                     except Exception:
                         continue
+                if buscador:
+                    datos.append(f"{buscador['name']}={escrito}")
                 if not anadir_antes and carrito and _clic(pag, carrito["i"]):
                     _esperar(pag)
                 botones = pag.evaluate(LISTAR, "botones")

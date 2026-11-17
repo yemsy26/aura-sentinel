@@ -110,12 +110,57 @@ PAGINAS = {
     "tabla_casillas": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<table><tr><td><input type="checkbox" name="marcado" value="5"></td>'
                       '<td>Tornillo</td><td><input type="number" id="cant_0" value="0" min="0" max="10"></td></tr></table>'
                       '<button type="submit">Registrar venta</button></form>',
+    # el buscador de productos: escribir llama a una API y la lista de sugerencias son divs que arman la venta al pulsarlos (m4134_neg2, m4133_neg4)
+    "buscador": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<input type="text" id="buscarProducto" placeholder="Buscar producto...">'
+                '<div id="sug" style="display:none"></div><table><tbody id="filas"></tbody></table><input type="hidden" name="items" id="items">'
+                '<button type="submit">Confirmar venta</button></form>'
+                '<script>var items=[];document.getElementById("buscarProducto").addEventListener("input",function(){if(this.value.length<2){return;}'
+                'fetch("/api/buscar?q="+encodeURIComponent(this.value)).then(function(r){return r.json();}).then(function(d){var s=document.getElementById("sug");s.innerHTML="";'
+                'd.forEach(function(p){var e=document.createElement("div");e.textContent=p.nombre;e.onclick=function(){elegir(p.id);};s.appendChild(e);});'
+                's.style.display=d.length?"block":"none";});});'
+                'function elegir(id){items.push({producto_id:id,cantidad:1});document.getElementById("items").value=JSON.stringify(items);'
+                'document.getElementById("filas").innerHTML="<tr><td><input type=number name=cantidad value=1 min=1></td></tr>";'
+                'document.getElementById("sug").style.display="none";}</script>',
+    # la fila se rellena sola con el primer resultado al escribir, sin lista que pulsar (m4135_neg1)
+    "buscador_rellena": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<input type="hidden" name="producto_id" id="pid">'
+                        '<input type="text" class="producto-input" placeholder="Buscar producto..."><input type="number" name="cantidad" value="1" min="1">'
+                        '<button type="submit">Confirmar venta</button></form>'
+                        '<script>var q=document.querySelector(".producto-input");q.addEventListener("input",function(){var el=this;if(el.value.length<2){return;}'
+                        'fetch("/api/buscar?q="+encodeURIComponent(el.value)).then(function(r){return r.json();}).then(function(d){'
+                        'if(d.length){document.getElementById("pid").value=d[0].id;el.value=d[0].nombre;}});});</script>',
+    # la lista está en la propia página y solo casa con el principio del nombre: «Aur» no sale, «Pro» sí (m4136_neg2)
+    "buscador_local": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<input type="text" id="buscar_prod" placeholder="Escribe el nombre...">'
+                      '<div id="sug"></div><input type="hidden" name="items" id="items"><button type="submit">Registrar venta</button></form>'
+                      '<script>var lista=[{id:5,nombre:"Producto Prueba"}];document.getElementById("buscar_prod").addEventListener("input",function(){'
+                      'var q=this.value.toLowerCase();var s=document.getElementById("sug");s.innerHTML="";'
+                      'lista.filter(function(p){return p.nombre.toLowerCase().indexOf(q)===0;}).forEach(function(p){var e=document.createElement("div");'
+                      'e.className="suggestion-item";e.textContent=p.nombre+" (Código: P1)";e.onclick=function(){document.getElementById("items").value=String(p.id);};'
+                      's.appendChild(e);});});</script>',
+    # buscar clientes no es buscar productos: no se escribe ahí
+    "buscador_cliente": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva"><input type="text" id="cliente_buscar" placeholder="Buscar cliente...">'
+                        '<input type="hidden" name="cliente_id" id="cid"><div id="sug"></div><button type="submit">Guardar venta</button></form>'
+                        '<script>document.getElementById("cliente_buscar").addEventListener("input",function(){var s=document.getElementById("sug");s.innerHTML="";'
+                        'var e=document.createElement("div");e.textContent="Producto Aura (cliente)";e.onclick=function(){document.getElementById("cid").value="1";};'
+                        's.appendChild(e);});</script>',
+    # un filtro en vivo de una tabla que ya está en la pantalla: quita filas, no arma ninguna venta
+    "buscador_filtro": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<input type="text" id="buscar_producto" placeholder="Buscar producto...">'
+                       '<table><tbody id="cat"><tr><td>Producto Aura</td></tr><tr><td>Otro</td></tr></tbody></table><button type="submit">Registrar venta</button></form>'
+                       '<script>document.getElementById("buscar_producto").addEventListener("input",function(){var q=this.value.toLowerCase();'
+                       'document.querySelectorAll("#cat tr").forEach(function(r){if(r.textContent.toLowerCase().indexOf(q)<0){r.remove();}});});</script>',
     # un script que no existe (404): la consola dice «Failed to load resource», que es de red y no del script de la pantalla
     "red_404": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_0_id" class="prod-select"></select>'
                '<button type="submit">Finalizar Venta</button></form><script src="/falta.js"></script>',
 }
 
 
+# el buscador con el campo de las líneas FUERA del <form>: nunca llega
+PAGINAS["buscador_fuera"] = PAGINAS["buscador"].replace('<input type="hidden" name="items" id="items"><button type="submit">Confirmar venta</button></form>',
+                                                        '<button type="submit">Confirmar venta</button></form><input type="hidden" name="items" id="items">')
+# el buscador al que la API no devuelve nada
+PAGINAS["buscador_vacio"] = PAGINAS["buscador"].replace('"/api/buscar?q="+encodeURIComponent(this.value)', '"/api/buscar?q=zzz"')
+# el buscador con un texto que ya estaba en la pantalla y que parece una sugerencia: pulsarlo borra lo armado
+PAGINAS["buscador_previo"] = PAGINAS["buscador"].replace("<h1>Nueva venta</h1>", "<h1>Nueva venta</h1><p onclick=\"document.getElementById('items').value=''\">"
+                                                         "Producto Aura en oferta</p>", 1)
 # el panel que envía con fetch y no mira la respuesta: la pantalla no cambia, pase lo que pase
 PANEL_FETCH = PAGINAS["panel"].replace('<form method="post" action="/ventas/nueva">', '<form onsubmit="fetch(&#39;/ventas/nueva&#39;,{method:&#39;POST&#39;,'
                                        'body:new URLSearchParams(new FormData(this))});return false;">')
@@ -131,7 +176,10 @@ class Web(BaseHTTPRequestHandler):
         self.wfile.write(cuerpo.encode())
 
     def do_GET(self):
-        self.path = self.path.split("?")[0]  # un formulario que envía por GET llega con la consulta: la ruta es la misma
+        self.path, _, consulta = self.path.partition("?")  # un formulario que envía por GET llega con la consulta: la ruta es la misma
+        if self.path == "/api/buscar":  # el buscador de productos: «Producto Aura» si lo escrito está en su nombre
+            q = urllib.parse.parse_qs(consulta).get("q", [""])[0].lower()
+            return self.responder(200, '[{"id": 5, "nombre": "Producto Aura"}]' if q and q in "producto aura" else "[]")
         if self.path == "/":
             return self.responder(200, "<h1>Inicio</h1>" + MENU)
         if self.path == "/productos":
@@ -279,6 +327,40 @@ class VentaEnPantalla(unittest.TestCase):
     def test_la_tabla_sin_productos_creados_o_con_casillas_no_se_toca(self):
         self.assertEqual(self.recorrer("tabla_fuera", precio="no")["venta"]["errores"], [])
         self.assertEqual(self.recorrer("tabla_casillas")["venta"]["errores"], [])
+
+    def test_el_buscador_con_sugerencias_vende(self):
+        v = self.recorrer("buscador")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 1, [("/ventas/nueva", "guardada")]))
+
+    def test_el_buscador_cuyo_campo_de_lineas_esta_fuera_del_form_se_acusa(self):
+        [e] = self.recorrer("buscador_fuera")["venta"]["errores"]
+        self.assertEqual((e["pagina"], e["tipo"]), ("/ventas/nueva", "mensaje"))
+        self.assertIn("al menos un producto", e["mensaje"].lower())
+
+    def test_la_fila_que_se_rellena_sola_vende(self):
+        v = self.recorrer("buscador_rellena")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"]), ([], 1))
+
+    def test_la_lista_local_se_prueba_con_otro_texto_si_el_primero_no_sale(self):
+        v = self.recorrer("buscador_local")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"]), ([], 1))
+
+    def test_lo_que_ya_estaba_en_la_pantalla_no_se_pulsa(self):
+        v = self.recorrer("buscador_previo")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"]), ([], 1))
+
+    def test_sin_resultados_el_buscador_no_se_acusa(self):
+        v = self.recorrer("buscador_vacio")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 0, [("/ventas/nueva", "sin_desplegable")]))
+
+    def test_el_buscador_de_clientes_o_un_filtro_de_tabla_no_arman_nada(self):
+        for modo in ("buscador_cliente", "buscador_filtro"):
+            v = self.recorrer(modo)["venta"]
+            self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 0, [("/ventas/nueva", "sin_desplegable")]), modo)
+
+    def test_sin_productos_creados_no_se_busca(self):
+        v = self.recorrer("buscador", precio="no")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 0, [("/ventas/nueva", "sin_desplegable")]))
 
     def test_la_pantalla_de_carrito_que_funciona_no_dice_nada(self):
         v = self.recorrer("carrito")["venta"]
