@@ -1175,6 +1175,9 @@ def _lineas_con_navegador(base: str, log: Path, usuario: str | None, clave: str 
 VENTA_ALTA = re.compile(r"(?i)(?:^|/)(?:ventas?|sales?|pedidos?|orders?)/(?:nuev[ao]|new|crear|create|agregar|add|alta|registrar)(?:/|$|\?)"
                         r"|(?:^|/)(?:nuev[ao][-_]venta|new[-_](?:sale|order)|registrar[-_]venta|pos|punto[-_]de[-_]venta)(?:/|$|\?)")
 PRODUCTO_CAMPO = re.compile(r"(?i)prod|art[ií]culo|item|servicio")
+# Una pantalla de venta sin desplegable: una tabla con un campo de cantidad por producto (id cant_0, valor 0), y los campos que llevan las líneas.
+CANTIDAD_CAMPO = re.compile(r"(?i)cant|qty|quant|unid")
+LINEAS_CAMPO = re.compile(r"(?i)detall|l[ií]nea|carrito|cart")
 PRODUCTO_RUTA = re.compile(r"(?i)(?:^|/)(?:productos?|products?|inventario|art[ií]culos?)(?:/|$|\?)")
 # Lo que dice un servidor cuando le llega una venta sin líneas.
 VENTA_VACIA = re.compile(r"(?i)(?:al\s+menos|at\s+least)\s+(?:un|una|1|one)\s+(?:producto|art[ií]culo|[ií]tem|item|product|l[ií]nea|line)"
@@ -1292,15 +1295,24 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     _esperar(pag)
                 campos = pag.evaluate(LISTAR, "campos")
                 productos = [c for c in campos if es_producto(c)]
-                res = {"estado": "sin_desplegable", "inicial": inicial, "carrito": carrito is not None}
-                if not productos:
+                errores_js = [e for e in js if not JS_LIBRERIA.search(e)]
+                res = {"estado": "sin_desplegable", "inicial": inicial, "carrito": carrito is not None, "js": errores_js[0] if errores_js else ""}
+                cantidades = []
+                if not productos and hay_productos and not any(c["tipo"] in ("checkbox", "radio") for c in campos):
+                    cantidades = [c for c in campos if c["tipo"] == "number" and CANTIDAD_CAMPO.search(c["name"])
+                                  and (c["value"] or "0") in ("0", "") and c["max"] != "0"]
+                if not productos and not cantidades:
                     return res
-                if not any(_opcion_producto(c) for c in productos):
+                if productos and not any(_opcion_producto(c) for c in productos):
                     errores = [e for e in js if not JS_LIBRERIA.search(e)]
                     return {**res, "estado": "vacio", "js": errores[0] if errores else ""}
                 datos = []
                 for c in campos:
                     valor = _opcion_producto(c) if es_producto(c) else None
+                    if c in cantidades:  # tabla de cantidades: se pide una unidad del primero y se deja el resto a cero
+                        if c is not cantidades[0]:
+                            continue
+                        valor = "1"
                     if valor is None:
                         if c["tipo"] == "select":
                             c = {**c, "opciones": [o for o in c["opciones"] if not SIN_STOCK.search(o["texto"])]}
@@ -1315,6 +1327,8 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                             campo.check(timeout=2000)
                         else:
                             campo.fill(valor, timeout=2000)
+                            if cantidades and c is cantidades[0]:
+                                campo.dispatch_event("change")
                         datos.append(f"{c['name']}={valor}")
                     except Exception:
                         continue
@@ -1327,6 +1341,14 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                                     and not AGREGAR_FILA.search(b["texto"])), None))
                 if not (datos and guardar):
                     return {**res, "estado": "sin_guardar"}
+                forma = None  # el formulario del botón: ¿envía por POST?, ¿qué campos lleva?
+                try:
+                    forma = pag.locator(f"[data-aura-i='{guardar['i']}']").evaluate(
+                        "e => e.form ? {metodo: (e.form.getAttribute('method') || 'get').toLowerCase(), "
+                        "nombres: [...e.form.elements].map(x => x.name).filter(Boolean)} : null", timeout=2000)
+                except Exception:
+                    pass
+                consulta_antes = urllib.parse.urlsplit(pag.url).query
                 antes = texto()
                 listas_antes = instantanea()
                 malas.clear()
@@ -1344,6 +1366,13 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 if malas or traza or fallo_visible:
                     return {**res, "estado": "servidor", "datos": ", ".join(datos[:8]), "traza": traza or (
                         f"«{' '.join(fallo_visible[0].split())}»" if fallo_visible else ""), "http": malas[0][2] if malas else 200}
+                # Sin ninguna petición que no sea GET y con la dirección llena de los campos del formulario (m4161_neg1: <form> sin method que un script
+                # envía con this.submit()): el navegador lo mandó por GET y la ruta solo guarda con POST.
+                consulta = urllib.parse.urlsplit(pag.url).query
+                if (forma and forma["metodo"] != "post" and not envios and consulta and consulta != consulta_antes
+                        and any(n in urllib.parse.parse_qs(consulta) for n in forma["nombres"])
+                        and any(PRODUCTO_CAMPO.search(n) or LINEAS_CAMPO.search(n) for n in forma["nombres"])):
+                    return {**res, "estado": "por_get", "url": urllib.parse.urlsplit(pag.url).path + "?" + consulta[:100]}
                 dicho = VENTA_VACIA.search(despues)
                 if dicho and not VENTA_VACIA.search(antes):  # si ya estaba escrito antes de guardar, no es la respuesta del servidor
                     return {**res, "estado": "mensaje", "mensaje": " ".join(dicho.group(0).split())}
@@ -1384,6 +1413,8 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 r["estados"].append((ruta, v["estado"]))
                 if v["estado"] == "sin_desplegable":
                     r["sin_desplegable"] += 1
+                    if hay_productos and v.get("js"):  # hay productos y el script de la pantalla falla al cargar: no se puede vender
+                        r["errores"].append({"pagina": ruta, "tipo": "sin_desplegable", "js": v["js"], "mensaje": ""})
                     continue
                 if v["estado"] in ("fuera", "sin_guardar", "sin_envio"):
                     continue
@@ -1400,6 +1431,8 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     r["errores"].append({"pagina": ruta, "tipo": "no_registrada", "js": v["js"], "mensaje": v["envio"]})
                 elif v["estado"] == "rechazada":
                     r["errores"].append({"pagina": ruta, "tipo": "rechazada", "js": "", "mensaje": v["mensaje"]})
+                elif v["estado"] == "por_get":
+                    r["errores"].append({"pagina": ruta, "tipo": "por_get", "js": "", "mensaje": v["url"]})
         finally:
             nav.close()
     return r

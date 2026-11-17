@@ -73,6 +73,36 @@ PAGINAS = {
     # igual de vacío pero sin decir nada (puede cargarse por fetch o ser legítimo): sin error de JavaScript no se acusa
     "consola_muda": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_0_id" class="prod-select"></select>'
                     '<button type="submit">Finalizar Venta</button></form>',
+    # <form> sin method que un script intercepta, rellena el campo de las líneas y envía con this.submit(): el navegador lo manda por GET (m4161_neg1)
+    "por_get": '<h1>Nueva venta</h1><form id="f">' + CLIENTE + '<select name="producto_id">' + OPC + '</select><input type="number" name="cantidad" value="1" min="1">'
+               '<input type="hidden" name="items" id="items"><button type="submit">Guardar venta</button></form>'
+               '<script>document.getElementById("f").addEventListener("submit",function(e){e.preventDefault();'
+               'document.getElementById("items").value="5";this.submit();});</script>',
+    # lo mismo, pero el script pone method=POST antes de enviar: la venta llega bien (m4141_neg2)
+    "por_get_post_js": '<h1>Nueva venta</h1><form id="f" action="/ventas/nueva">' + CLIENTE + '<select name="producto_id">' + OPC + '</select>'
+                       '<input type="number" name="cantidad" value="1" min="1"><input type="hidden" name="items" id="items"><button type="submit">Guardar venta</button></form>'
+                       '<script>document.getElementById("f").addEventListener("submit",function(e){e.preventDefault();'
+                       'document.getElementById("items").value="5";this.method="POST";this.submit();});</script>',
+    # no se crea ningún desplegable porque el script falla al cargar con una variable que nadie define (m4161_neg2)
+    "sin_desplegable_js": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<div id="filas"></div>'
+                          '<button type="submit">Guardar venta</button></form><script>productosData.forEach(function(p){});</script>',
+    # sin desplegable y sin ningún error: puede ser otra forma de vender, no se acusa
+    "sin_desplegable_mudo": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<div id="filas"></div>'
+                            '<button type="submit">Guardar venta</button></form>',
+    # una tabla con una cantidad por producto; al cambiar, el script copia la línea a un campo oculto dentro del form
+    "tabla_ok": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<table><tr><td>Tornillo</td><td>'
+                '<input type="number" id="cant_0" value="0" min="0" max="10" onchange="actualizar()"></td></tr></table><div id="ocultos"></div>'
+                '<button type="submit">Registrar venta</button></form><script>function actualizar(){var c=document.getElementById("cant_0").value;'
+                'document.getElementById("ocultos").innerHTML=c>0?\'<input type="hidden" name="items" value="5|\'+c+\'">\':"";}</script>',
+    # la misma tabla con el contenedor de los campos ocultos FUERA del <form>: nunca llegan (m4161_neg4)
+    "tabla_fuera": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<table><tr><td>Tornillo</td><td>'
+                   '<input type="number" id="cant_0" value="0" min="0" max="10" onchange="actualizar()"></td></tr></table>'
+                   '<button type="submit">Registrar venta</button></form><div id="ocultos"></div><script>function actualizar(){'
+                   'var c=document.getElementById("cant_0").value;document.getElementById("ocultos").innerHTML=c>0?\'<input type="hidden" name="items" value="5|\'+c+\'">\':"";}</script>',
+    # una tabla donde se marca el producto con una casilla: la prueba no sabe operarla y no acusa
+    "tabla_casillas": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<table><tr><td><input type="checkbox" name="marcado" value="5"></td>'
+                      '<td>Tornillo</td><td><input type="number" id="cant_0" value="0" min="0" max="10"></td></tr></table>'
+                      '<button type="submit">Registrar venta</button></form>',
     # un script que no existe (404): la consola dice «Failed to load resource», que es de red y no del script de la pantalla
     "red_404": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_0_id" class="prod-select"></select>'
                '<button type="submit">Finalizar Venta</button></form><script src="/falta.js"></script>',
@@ -94,6 +124,7 @@ class Web(BaseHTTPRequestHandler):
         self.wfile.write(cuerpo.encode())
 
     def do_GET(self):
+        self.path = self.path.split("?")[0]  # un formulario que envía por GET llega con la consulta: la ruta es la misma
         if self.path == "/":
             return self.responder(200, "<h1>Inicio</h1>" + MENU)
         if self.path == "/productos":
@@ -190,6 +221,41 @@ class VentaEnPantalla(unittest.TestCase):
         self.assertEqual((e["pagina"], e["tipo"]), ("/ventas/nueva", "mensaje"))
         self.assertIn("al menos un producto", e["mensaje"].lower())
 
+    def test_el_formulario_que_el_script_envia_por_get_se_ve(self):
+        v = self.recorrer("por_get")["venta"]
+        [e] = v["errores"]
+        self.assertEqual((e["pagina"], e["tipo"]), ("/ventas/nueva", "por_get"))
+        self.assertIn("/ventas/nueva?", e["mensaje"])
+        self.assertIn("items=5", e["mensaje"])
+        self.assertEqual(v["guardadas"], 0)
+
+    def test_el_formulario_cuyo_script_lo_pasa_a_post_no_dice_nada(self):
+        v = self.recorrer("por_get_post_js")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"]), ([], 1))
+
+    def test_sin_desplegable_por_un_error_de_javascript_al_cargar(self):
+        v = self.recorrer("sin_desplegable_js")["venta"]
+        [e] = v["errores"]
+        self.assertEqual((e["pagina"], e["tipo"]), ("/ventas/nueva", "sin_desplegable"))
+        self.assertIn("productosData", e["js"])
+
+    def test_sin_desplegable_ni_error_ni_productos_no_se_acusa(self):
+        self.assertEqual(self.recorrer("sin_desplegable_mudo")["venta"]["errores"], [])
+        self.assertEqual(self.recorrer("sin_desplegable_js", precio="no")["venta"]["errores"], [])  # sin productos creados no hay de qué
+
+    def test_la_tabla_de_cantidades_que_funciona_se_vende(self):
+        v = self.recorrer("tabla_ok")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"]), ([], 1))
+
+    def test_la_tabla_de_cantidades_con_los_campos_ocultos_fuera_del_form(self):
+        [e] = self.recorrer("tabla_fuera")["venta"]["errores"]
+        self.assertEqual((e["pagina"], e["tipo"]), ("/ventas/nueva", "mensaje"))
+        self.assertIn("al menos un producto", e["mensaje"].lower())
+
+    def test_la_tabla_sin_productos_creados_o_con_casillas_no_se_toca(self):
+        self.assertEqual(self.recorrer("tabla_fuera", precio="no")["venta"]["errores"], [])
+        self.assertEqual(self.recorrer("tabla_casillas")["venta"]["errores"], [])
+
     def test_la_pantalla_de_carrito_que_funciona_no_dice_nada(self):
         v = self.recorrer("carrito")["venta"]
         self.assertEqual((v["errores"], v["guardadas"]), ([], 1))  # la primera vez sin añadir falla; elegir y añadir, no
@@ -262,6 +328,20 @@ class MensajesDeVerificar(unittest.TestCase):
         [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "vacio", "js": "productosData is not defined", "mensaje": ""}]})
         self.assertIn("en la pantalla de venta /ventas/nueva, el desplegable de productos queda vacío", m)
         self.assertIn("«productosData is not defined»", m)
+        self.assertIn("nadie puede vender desde esta pantalla", m)
+
+    def test_la_venta_se_envia_por_get(self):
+        [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "por_get", "js": "",
+                                         "mensaje": "/ventas/nueva?cliente_id=&items=%5B1%5D"}]})
+        self.assertIn("al pulsar guardar el navegador envía los datos por GET (la dirección acaba en «/ventas/nueva?cliente_id=&items=%5B1%5D»)", m)
+        self.assertIn('method="post"', m)
+        self.assertIn("la venta no se guarda nunca", m)
+
+    def test_sin_desplegable_por_un_error_de_javascript(self):
+        [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "sin_desplegable",
+                                         "js": "Cannot read properties of undefined (reading 'toFixed')", "mensaje": ""}]})
+        self.assertIn("en la pantalla de venta /ventas/nueva no aparece ningún desplegable de productos aunque hay productos creados", m)
+        self.assertIn("«Cannot read properties of undefined (reading 'toFixed')»", m)
         self.assertIn("nadie puede vender desde esta pantalla", m)
 
     def test_la_venta_no_se_guarda(self):

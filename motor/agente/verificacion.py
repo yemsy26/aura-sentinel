@@ -479,6 +479,16 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                                f"registra la venta ({e['mensaje']}): la pantalla se queda igual sin decir nada y ni la lista de ventas ni "
                                f"las existencias cambian{fallo}. ¿El formulario no valida por un campo obligatorio que la plantilla no pinta "
                                "(el vendedor, un id), o el servidor no guarda? Una venta guardada redirige a otra pantalla o dice que se registró.")
+        elif e["tipo"] == "por_get":
+            inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, al pulsar guardar el navegador envía los datos por GET (la dirección "
+                               f"acaba en «{e['mensaje']}») en vez de por POST: el <form> no lleva method=\"post\" (o el script lo envía con "
+                               "this.submit() sin cambiarlo) y la ruta solo guarda con POST, así que la venta no se guarda nunca. Añade "
+                               "method=\"post\" al <form>.")
+        elif e["tipo"] == "sin_desplegable":
+            inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']} no aparece ningún desplegable de productos aunque hay productos "
+                               f"creados (error de JavaScript al cargar: «{e['js']}»): nadie puede vender desde esta pantalla. Mira la consola "
+                               "del navegador: ¿la lista de productos que usa el script llega bien a la página (datos mal envueltos, una "
+                               "variable sin definir)?")
         elif e["tipo"] == "rechazada":
             inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, tras elegir un producto y una cantidad y pulsar guardar, la web "
                                f"responde «{e['mensaje']}» y la venta no se registra (ni la lista de ventas ni las existencias cambian). "
