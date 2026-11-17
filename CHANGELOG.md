@@ -5,6 +5,31 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.12] — 2026-11-17 (verificar avisa de variables que ninguna ruta pasa y de pantallas de venta que no dejan vender)
+
+Sale de dos pruebas: la veterinaria del usuario con la 4.13.8 (botones y listas que nunca aparecían sin que `verificar` dijera nada) y
+cuatro misiones de negocio con la 4.13.11 (ninguna de las cuatro entregas dejaba vender y `verificar` daba 0 errores). Cambia solo
+`verificar` del motor; el programa de escritorio es el de la 4.13.10.
+
+- **Variables de plantilla que ninguna ruta pasa.** Jinja no da error por una variable sin definir: la lista sale vacía, el `if` es falso y
+  el texto sale en blanco. Ahora `verificar` calcula con el Python del proyecto qué nombres lee cada plantilla y no define ni el entorno ni un
+  procesador de contexto, y mira si alguna `render_template` se los pasa. Dice la línea, el efecto (bucle siempre vacío, parte que nunca se
+  muestra, texto en blanco, error 500), qué sí pasa la ruta y un nombre parecido. Es error si hay un bucle (en una página sin JavaScript que cargue
+  datos) o un atributo o llamada que da 500; aviso en el resto. En la veterinaria: `can_edit`, `vacunas`, `pacientes`, `cita`.
+- **La pantalla de venta que no deja vender.** La prueba de venta con navegador callaba tres casos que dejaban el negocio sin poder vender:
+  el formulario sin `method="post"` que el script envía con `this.submit()` (el navegador manda los datos por GET y la venta no se guarda),
+  el desplegable de productos que no aparece porque el script falla al cargar (datos mal envueltos, `toFixed`), y la tabla de cantidades cuyos
+  campos ocultos quedan fuera del `<form>` («agrega al menos un producto»). Ahora salen como error con el motivo. Además la prueba sabe poner una
+  cantidad en las tablas de cantidades (tres webs que antes no se podían probar ahora venden en la prueba).
+- Medido sin el modelo: variables sin pasar en 27 de 122 webs guardadas, 45 nombres revisados uno a uno, 0 falsos; pantalla de venta en 62 webs
+  con prueba de venta más las 4 entregas de las misiones, con las 3 que no vendían y una del corpus (confirmada a mano), 0 falsos, +0,2 s por web.
+- Medido con el modelo (4 misiones de negocio con Qwen3.6-35B-A3B y el motor de la variable sin pasar): el aviso saltó en una misión y el agente lo
+  dejó a cero; en las otras no llegó a verlo (una verificó una sola vez en 150 pasos). Terminan 1 de 4 y ninguna entrega deja vender, por fallos de
+  la pantalla de venta que son los que ahora detecta el segundo cambio. **No medido:** el segundo cambio con el modelo.
+- 672 pruebas del motor pasan (4 omitidas: dos necesitan un Python con Flask); ruff limpio. Rust y la interfaz no cambian respecto a la 4.13.10.
+
+---
+
 ## [4.13.11] — 2026-11-16 (verificar avisa de un campo que el formulario no trae y prueba al empleado con roles que no se llaman «empleado»)
 
 Sale de la misma prueba real con la 4.13.8 (una veterinaria): crear usuarios y registrar vacunas daba error 400 desde la pantalla y
