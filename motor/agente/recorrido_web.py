@@ -1206,6 +1206,7 @@ OPCION_VACIA = re.compile(r"(?i)^\W*(?:selecc\w*|elig\w*|elij\w*|escog\w*|choose
 JS_LIBRERIA = re.compile(r"(?i)(?:^|\W)(?:\$|jQuery|bootstrap|axios|Chart|Vue|React|Swal|moment|Alpine|Toastify|flatpickr|"
                          r"Select2|DataTable)(?!\w).*(?:is not defined|is not a function|undefined)")
 MAX_SEGUNDOS_VENTA = 25
+MAX_SEGUNDOS_PRODUCTO = 5
 # Errores de JavaScript que no dependen de los datos: una función o variable que no existe, un script que no se puede leer. Un «Cannot read properties
 # of undefined» sin productos puede ser solo la lista vacía, y no se acusa.
 JS_SIEMPRE = re.compile(r"(?i)\bis not defined\b|^(?:Unexpected (?:token|identifier|end of input|string|number)|Invalid or unexpected token|"
@@ -1532,6 +1533,38 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
         finally:
             nav.close()
     return r
+
+
+def _producto_de_prueba(r: _Recorrido, limite: float) -> bool:
+    """Da de alta un producto desde el formulario HTML de la propia web, con la sesión del recorrido (m4165: la prueba de venta solo corre con productos y
+    los únicos que había eran los de la prueba del empleado, que se salta si no hay formulario de usuarios con rol o si no entró como administrador).
+    «Producto Aura», costo 7.77 y precio 21.31 como en esa prueba. True si la web contestó sin error."""
+    for ruta in dict.fromkeys(x for x in r.orden if PRODUCTO_RUTA.search(x.split("?")[0]) and not CON_ID.search(x.split("?")[0])):
+        if time.time() >= limite:
+            return False
+        estado, final, texto = r.pedir(ruta)
+        if not 0 < estado < 400:
+            continue
+        for form in r._leer(texto).formularios:
+            accion = r.dentro(form["accion"] or final, final)
+            nombres = [c.get("name") or "" for c in form["campos"]]
+            if (not _es_alta(form, accion) or any(c["tipo"] == "password" for c in form["campos"])
+                    or not any(CAMPO_COSTO.search(n) for n in nombres)):
+                continue
+            datos = _rellenar(form, r.hoy)
+            if datos is None:
+                continue
+            campos = {c["name"]: c for c in form["campos"] if c.get("name")}
+            ajustados = []
+            for nombre, valor in datos:
+                if campos.get(nombre, {}).get("tipo") in ("number", "text"):
+                    valor = COSTO_PRUEBA if CAMPO_COSTO.search(nombre) else VENTA_PRUEBA if CAMPO_VENTA.search(nombre) else valor
+                if valor == "Prueba":  # el recorrido de después crea el suyo con «Prueba»: si choca (código único), da un 500 falso
+                    valor = "Producto Aura"
+                ajustados.append((nombre, valor))
+            estado, _, _ = r.pedir(accion, ajustados, "post")
+            return estado < 400
+    return False
 
 
 def _hay_productos(r: _Recorrido) -> bool:
@@ -2074,6 +2107,8 @@ def recorrer(entrada: Path, python: str, accesos: list[tuple[str, str]], env: di
                 # La lista de ventas solo si dice «nueva venta» en algún sitio (sin lanzar el navegador para nada).
                 paneles = [x for x in ventas if NUEVA_VENTA.search(_visible(previo.pedir(x)[2]))]
                 if alta or paneles:
+                    if not _hay_productos(previo):  # sin productos no se prueba la venta: se da de alta uno desde el formulario de la web
+                        _producto_de_prueba(previo, time.time() + MAX_SEGUNDOS_PRODUCTO)
                     venta = _venta_en_pantalla(base, log, previo.usuario, previo.clave, abrir_navegador,
                                                time.time() + MAX_SEGUNDOS_VENTA, alta, _hay_productos(previo), ventas + productos, paneles)
             except Exception:  # una web rara no debe estropear el recorrido

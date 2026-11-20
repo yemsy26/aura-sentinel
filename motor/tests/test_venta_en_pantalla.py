@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 MODO = "__MODO__"
 PRECIO = "__PRECIO__"   # "si" (la lista de productos enseña su precio) o "no"
 VENTAS = []
+CREADOS = []   # los productos que da de alta el formulario (PRECIO empieza por «alta»)
 MENU = '__MENU__'
 CLIENTE = '__CLIENTE__'
 OPC = '__OPC__'
@@ -183,7 +184,13 @@ class Web(BaseHTTPRequestHandler):
         if self.path == "/":
             return self.responder(200, "<h1>Inicio</h1>" + MENU)
         if self.path == "/productos":
-            return self.responder(200, "<h1>Productos</h1>" + MENU + ("<p>Tornillo, precio 21.31</p>" if PRECIO == "si" else "<p>No hay productos.</p>"))
+            lista = "<p>Tornillo, precio 21.31</p>" if PRECIO == "si" else "<p>Producto Aura, precio 21.31</p>" if CREADOS else "<p>No hay productos.</p>"
+            nuevo = '<a href="/productos/nuevo">Nuevo producto</a>' if PRECIO.startswith("alta") else ""
+            return self.responder(200, "<h1>Productos</h1>" + MENU + nuevo + lista)
+        if self.path == "/productos/nuevo" and PRECIO.startswith("alta"):
+            compra = '<input type="number" name="precio_compra" value="0">' if PRECIO == "alta" else ""
+            return self.responder(200, "<h1>Nuevo producto</h1>" + MENU + '<form method="post" action="/productos/nuevo"><input type="text" name="nombre">' + compra
+                                  + '<input type="number" name="precio_venta" value="0"><input type="number" name="stock" value="0"><button type="submit">Guardar</button></form>')
         if self.path == "/ventas":
             return self.responder(200, "<h1>Ventas</h1>" + MENU + f"<p>{len(VENTAS)} ventas</p>" + ((PANEL_FETCH if MODO.endswith("+silencio") else PAGINAS["panel"]) if MODO.startswith("panel") else ""))
         if self.path == "/ventas/nueva":
@@ -194,6 +201,9 @@ class Web(BaseHTTPRequestHandler):
 
     def do_POST(self):
         datos = urllib.parse.parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
+        if self.path == "/productos/nuevo":
+            CREADOS.append(datos)
+            return self.responder(302, "", [("Location", "/productos")])
         producto = (datos.get("producto_id") or datos.get("items") or datos.get("producto_0_id") or [""])[0]
         if not producto:
             return self.responder(200, MENU + "<p>Agrega al menos un producto.</p>" + PAGINAS[MODO.split("+")[0]])
@@ -360,6 +370,14 @@ class VentaEnPantalla(unittest.TestCase):
 
     def test_sin_productos_creados_no_se_busca(self):
         v = self.recorrer("buscador", precio="no")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 0, [("/ventas/nueva", "sin_desplegable")]))
+
+    def test_sin_productos_se_da_de_alta_uno_desde_el_formulario_y_la_venta_se_prueba(self):
+        v = self.recorrer("buscador", precio="alta")["venta"]
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 1, [("/ventas/nueva", "guardada")]))
+
+    def test_sin_campo_de_costo_el_formulario_no_se_usa(self):
+        v = self.recorrer("buscador", precio="alta_sin_costo")["venta"]
         self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 0, [("/ventas/nueva", "sin_desplegable")]))
 
     def test_la_pantalla_de_carrito_que_funciona_no_dice_nada(self):
