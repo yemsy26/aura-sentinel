@@ -5,6 +5,32 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.13] — 2026-11-20 (verificar prueba más pantallas de venta: buscadores de productos, botones «False» y webs sin productos)
+
+Sale de las ocho webs guardadas con pantalla de venta que `verificar` dejaba pasar en silencio con la 4.13.12 (no se sabía si en ellas se podía
+vender). Cambia solo `verificar` del motor; el programa de escritorio es el de la 4.13.10.
+
+- **Botón o enlace que dice «False», «True» o «None».** Si el texto visible de un `<button>`, de un `<input>` de enviar o de un enlace es solo
+  uno de esos valores, sale un aviso: la plantilla pinta el valor de una variable de Python en vez de un texto (con WTForms,
+  `{{ form.submit.data }}` es False hasta que se envía; hay que usar `{{ form.submit.label.text }}`).
+- **El script de la pantalla de venta falla y no hay productos.** Si no hay desplegable de productos, no hay productos creados y el script de la
+  pantalla da un error que no depende de los datos («X is not defined» o de sintaxis), sale como error. Si la página carga un
+  `<script type="module">`, el mensaje (también el de «no aparece el desplegable» con productos) explica que las funciones de un módulo no son
+  globales y un `onclick="función()"` no las ve.
+- **Buscadores de productos con autocompletado.** La prueba de venta con navegador escribe «Aur», «Pro» o «Pru» en el buscador de productos,
+  pulsa la sugerencia que sale (o deja que la fila se rellene sola) y sigue como siempre: cantidad, guardar y comprobar que la venta quedó en
+  la lista. Antes callaba. De los cuatro buscadores guardados, tres venden y uno acusa un error real («Error al crear venta: list indices must be
+  integers»).
+- **Producto de prueba propio.** Si no hay productos al probar la venta, el recorrido da de alta uno desde el formulario HTML de la propia web
+  (costo 7.77, venta 21.31, «Producto Aura»). Antes solo los creaba la prueba del empleado, que se salta si la web no tiene alta de usuarios
+  con rol o si no se entra como administrador. La prueba de venta corre ahora en tres webs guardadas más.
+- Medido sin el modelo: 122 webs guardadas, cada mensaje o estado nuevo comprobado a mano con un navegador real (los dos mensajes nuevos de los
+  botones y del script, las tres ventas que ahora se prueban); 0 falsos, y el tiempo medio por web pasa de 12,3 s a 12,6 s. **No medido:**
+  estos cambios con el modelo.
+- 699 pruebas del motor pasan (4 omitidas: dos necesitan un Python con Flask); ruff limpio. Rust y la interfaz no cambian respecto a la 4.13.10.
+
+---
+
 ## [4.13.12] — 2026-11-17 (verificar avisa de variables que ninguna ruta pasa y de pantallas de venta que no dejan vender)
 
 Sale de dos pruebas: la veterinaria del usuario con la 4.13.8 (botones y listas que nunca aparecían sin que `verificar` dijera nada) y
