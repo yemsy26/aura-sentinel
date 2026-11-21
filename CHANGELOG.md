@@ -22,8 +22,9 @@ Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
   comprueba la prueba contra el propio `.opb`; el CNF no cambia. Con 67 instancias `.opb` (mochilas, coberturas, asignaciones, vértices, cajas,
   turnos e infactibles) y 30 s por instancia, demuestra 49 óptimos frente a 25 y VeriPB certifica 48 frente a 27; ningún resultado erróneo
   (tampoco en 600 `.opb` aleatorios). **Límite:** en mochilas de 100 a 200 objetos, si se agota el tiempo, la mejor solución puede ser peor que
-  con la v0.2.1. Al arrancar, Aura baja la v0.2.3 (2 MB) a quien tenga el complemento activado; quien lo desactivó sigue sin él, y con una suma
-  que no coincide o sin red se conserva el motor anterior.
+  con la v0.2.1. Para recibir la v0.2.3 (2 MB) hay que pulsar **Instalar motor** (Configuración → Motor) después de actualizar; hasta entonces
+  Aura sigue con el motor SAT anterior. Quien desactivó el complemento sigue sin él, y con una suma que no coincide o sin red se conserva el
+  motor anterior.
 - Medido sin el modelo, con las webs guardadas; cada mensaje o estado nuevo comprobado a mano con un navegador real. **No medido:** estos cambios
   con el modelo.
 - 714 pruebas del motor pasan (4 omitidas); ruff limpio. Rust y la interfaz no cambian respecto a la 4.13.10.

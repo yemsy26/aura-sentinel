@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, compat, config, ecosistemas
+from . import __version__, compat, complementos, config, ecosistemas
 from . import modelo as cargador
 from .bucle import Agente, color
 from .entorno import aislar_temporales, soltar_temporales
@@ -163,6 +163,7 @@ def main() -> int:
         cfg["modelo"] = a.modelo
     if a.probar_modelo:
         return probar_modelo(cfg, a.probar_modelo)
+    complementos.actualizar_en_segundo_plano()  # el motor SAT nuevo no espera a que alguien pulse «Instalar motor»
     if a.json:
         return modo_json(cfg, a.carpeta)
     try:

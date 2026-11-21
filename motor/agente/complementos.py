@@ -4,7 +4,9 @@ Cada motor se desarrolla y versiona en su propio repositorio; aquí solo está c
 funciona y qué herramienta añade al agente. Sin activarlo, el agente funciona igual, sin esa herramienta.
 
 Los marcados como predeterminados se activan al instalar el motor (`asegurar`), salvo que el usuario los haya
-desactivado: esa decisión se respeta en las reinstalaciones.
+desactivado: esa decisión se respeta en las reinstalaciones. Además, al arrancar el agente se ACTUALIZAN en segundo plano
+los ya activados cuya versión no sea la fijada aquí (`actualizar_instalados`): así una versión nueva de Aura no deja el
+motor viejo hasta que alguien pulse «Instalar motor».
 
 Uso: python -m agente.complementos [listar | asegurar | activar ID | desactivar ID] [--json] [--pausa]
 """
@@ -15,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +39,7 @@ CATALOGO = {
         "predeterminado": True,  # CPU, sin VRAM, 2 MB: vale la pena tenerlo siempre
         "version": "v0.2.3",  # fija: sus órdenes cambian entre versiones, y subirla es un cambio probado de Aura
         "ejecutable": "motor.exe",
+        "variable": "AGENTE_SAT",  # si el usuario la define, usa su propio motor y no se toca el instalado
         "binario_release": "motor-x86_64-pc-windows-msvc.exe",  # con su .sha256 al lado en la release
         "usa": [{"nombre": "Chronos-VFS", "repo": "https://github.com/yemsy26/Chronos-VFS",
                  "papel": "anillo en memoria y compresión zstd para las trazas de prueba del resolvedor"}],
@@ -145,6 +149,54 @@ def asegurar(aviso=print) -> list[str]:
             mensajes.append(f"{c['nombre']} no se pudo activar ahora ({e}). Actívalo después en Aura: Configuración "
                             "→ Motor → Motores complementarios.")
     return mensajes
+
+
+CANDADO = "actualizando.lock"
+CANDADO_VIEJO_S = 600  # un candado de más de 10 minutos es de un proceso que murió
+
+
+def _tomar_candado(candado: Path) -> bool:
+    """Un solo agente a la vez descarga e instala (dos proyectos abiertos arrancan casi juntos)."""
+    try:
+        if candado.exists() and time.time() - candado.stat().st_mtime > CANDADO_VIEJO_S:
+            candado.unlink(missing_ok=True)
+        os.close(os.open(candado, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        return True
+    except OSError:
+        return False
+
+
+def actualizar_instalados() -> list[str]:
+    """Al arrancar el agente: actualiza los complementos YA activados cuya versión no es la fijada en el catálogo.
+
+    No activa los que nunca se configuraron ni los que el usuario desactivó, respeta la variable de entorno que sustituye
+    al ejecutable (AGENTE_SAT) y nunca lanza ni escribe en stdout (en `--json` son eventos). Sin red, con una suma distinta,
+    con un 404 o con el ejecutable en uso se queda con el anterior, que sigue activo, y reintenta en el próximo arranque.
+    Devuelve lo actualizado."""
+    hechos = []
+    for id_, c in CATALOGO.items():
+        e = _estado().get(id_)
+        if not e or not e.get("activo") or ruta(id_) is None or e.get("version") == c["version"]:
+            continue
+        if c.get("variable") and os.environ.get(c["variable"]):
+            continue
+        candado = DIR / id_ / CANDADO
+        if not _tomar_candado(candado):
+            continue
+        try:
+            hechos.append(activar(id_, aviso=lambda _: None))
+        except Exception:  # red, 404, suma, motor que no pasa la prueba, ejecutable en uso: se queda con el anterior
+            (DIR / id_ / (c["ejecutable"] + ".nuevo")).unlink(missing_ok=True)
+        finally:
+            candado.unlink(missing_ok=True)
+    return hechos
+
+
+def actualizar_en_segundo_plano() -> threading.Thread:
+    """Lanza `actualizar_instalados` sin retrasar el arranque; el hilo no impide salir."""
+    hilo = threading.Thread(target=actualizar_instalados, name="actualizar-complementos", daemon=True)
+    hilo.start()
+    return hilo
 
 
 def desactivar(id_: str) -> str:

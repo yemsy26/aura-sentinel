@@ -1,7 +1,10 @@
 """Pruebas de los motores complementarios, la verificación de Solidity/Anchor/Android/Flutter, las bases de datos,
 experimentar y lo aprendido por tema. Sin red: las descargas y los compiladores se simulan salvo que estén instalados."""
+import contextlib
 import hashlib
+import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -110,6 +113,105 @@ class Complementos(Temporal):
             complementos._guardar({"sat-hibrido": {"activo": False}})
             self.assertIn("desactivado por el usuario", complementos.asegurar()[0])  # reinstalar no lo reactiva
         self.assertEqual(activados, ["sat-hibrido"])
+
+    def instalado(self, version="v0.2.1", activo=True):
+        carpeta = complementos.DIR / "sat-hibrido"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        (carpeta / "motor.exe").write_bytes(b"VIEJO")
+        complementos._guardar({"sat-hibrido": {"activo": activo, "version": version, "origen": "x"}})
+        return carpeta
+
+    @staticmethod
+    def sin_descargas():
+        return mock.patch.object(complementos, "_descargar", side_effect=AssertionError("no debe descargar"))
+
+    def test_al_arrancar_actualiza_el_motor_instalado_con_otra_version(self):
+        carpeta = self.instalado()
+        nuevo = b"MZ nuevo"
+        salida = io.StringIO()
+        with self.release(nuevo, hashlib.sha256(nuevo).hexdigest()), mock.patch.object(complementos, "_probar"), \
+                contextlib.redirect_stdout(salida):
+            self.assertEqual(len(complementos.actualizar_instalados()), 1)
+        self.assertEqual((carpeta / "motor.exe").read_bytes(), nuevo)
+        self.assertEqual(complementos._estado()["sat-hibrido"]["version"], "v0.2.3")
+        self.assertEqual(sorted(p.name for p in carpeta.iterdir()), ["motor.exe"])  # sin .nuevo ni candado sueltos
+        self.assertEqual(salida.getvalue(), "")  # en --json la salida son eventos: no se escribe nada
+        with self.sin_descargas():
+            self.assertEqual(complementos.actualizar_instalados(), [])  # ya está en la versión fijada
+
+    def test_al_arrancar_no_toca_lo_desactivado_ni_lo_nunca_configurado(self):
+        carpeta = self.instalado(activo=False)
+        with self.sin_descargas():
+            self.assertEqual(complementos.actualizar_instalados(), [])
+        complementos._guardar({})
+        with self.sin_descargas():
+            self.assertEqual(complementos.actualizar_instalados(), [])
+        self.assertEqual((carpeta / "motor.exe").read_bytes(), b"VIEJO")
+
+    def test_al_arrancar_respeta_agente_sat(self):
+        carpeta = self.instalado()
+        with mock.patch.dict("os.environ", {"AGENTE_SAT": r"C:\mio\motor.exe"}), self.sin_descargas():
+            self.assertEqual(complementos.actualizar_instalados(), [])
+        self.assertEqual((carpeta / "motor.exe").read_bytes(), b"VIEJO")
+
+    def test_al_arrancar_si_falla_se_queda_con_el_anterior_sin_ruido(self):
+        carpeta = self.instalado()
+        nuevo = b"MZ nuevo"
+        sha = hashlib.sha256(nuevo).hexdigest()
+        casos = {
+            "sin red": lambda: mock.patch.object(complementos, "_descargar", side_effect=urllib.error.URLError("sin red")),
+            "404": lambda: mock.patch.object(complementos, "_descargar",
+                                             side_effect=urllib.error.HTTPError("u", 404, "Not Found", None, None)),
+            "suma distinta": lambda: self.release(nuevo, "0" * 64),
+            "no pasa la prueba": lambda: self.release(nuevo, sha),
+            "ejecutable en uso": lambda: self.release(nuevo, sha),
+        }
+        for nombre, parche in casos.items():
+            with self.subTest(nombre), parche(), \
+                    mock.patch.object(complementos, "_probar", side_effect=RuntimeError("no funciona")
+                                      if nombre == "no pasa la prueba" else None), \
+                    mock.patch.object(complementos.os, "replace", side_effect=PermissionError("en uso")
+                                      if nombre == "ejecutable en uso" else os.replace):
+                self.assertEqual(complementos.actualizar_instalados(), [])
+            self.assertEqual((carpeta / "motor.exe").read_bytes(), b"VIEJO", nombre)
+            self.assertEqual(complementos._estado()["sat-hibrido"]["version"], "v0.2.1", nombre)
+            self.assertIsNotNone(complementos.ruta("sat-hibrido"), nombre)
+            self.assertEqual(sorted(p.name for p in carpeta.iterdir()), ["motor.exe"], nombre)
+
+    def test_al_arrancar_dos_agentes_no_descargan_a_la_vez(self):
+        carpeta = self.instalado()
+        candado = carpeta / complementos.CANDADO
+        candado.write_bytes(b"")
+        with self.sin_descargas():
+            self.assertEqual(complementos.actualizar_instalados(), [])
+        self.assertTrue(candado.exists())  # no es suyo: no lo borra
+        viejo = time.time() - complementos.CANDADO_VIEJO_S - 5
+        os.utime(candado, (viejo, viejo))  # de un proceso que murió
+        nuevo = b"MZ nuevo"
+        with self.release(nuevo, hashlib.sha256(nuevo).hexdigest()), mock.patch.object(complementos, "_probar"):
+            self.assertEqual(len(complementos.actualizar_instalados()), 1)
+        self.assertFalse(candado.exists())
+
+    def test_en_segundo_plano_no_retrasa_el_arranque(self):
+        with mock.patch.object(complementos, "actualizar_instalados", lambda: time.sleep(1.5)):
+            t0 = time.time()
+            hilo = complementos.actualizar_en_segundo_plano()
+            self.assertLess(time.time() - t0, 0.5)
+            self.assertTrue(hilo.daemon and hilo.is_alive())  # un hilo daemon no impide salir
+            hilo.join(5)
+
+    def test_main_lanza_la_actualizacion_salvo_al_probar_un_modelo(self):
+        from agente import __main__ as cli
+        with mock.patch.object(complementos, "actualizar_en_segundo_plano") as hilo, \
+                mock.patch.object(cli, "modo_json", return_value=0), mock.patch.object(cli.config, "cargar", return_value={}), \
+                mock.patch.object(sys, "argv", ["agente", str(self.dir), "--json"]):
+            self.assertEqual(cli.main(), 0)
+        hilo.assert_called_once()
+        with mock.patch.object(complementos, "actualizar_en_segundo_plano") as hilo, \
+                mock.patch.object(cli, "probar_modelo", return_value=0), mock.patch.object(cli.config, "cargar", return_value={}), \
+                mock.patch.object(sys, "argv", ["agente", "--probar-modelo", "x"]):
+            self.assertEqual(cli.main(), 0)
+        hilo.assert_not_called()
 
     def test_sin_red_la_instalacion_sigue(self):
         with mock.patch.object(complementos, "_descargar", side_effect=urllib.error.URLError("sin red")):
