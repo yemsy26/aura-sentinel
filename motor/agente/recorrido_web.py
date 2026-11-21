@@ -1294,6 +1294,10 @@ VENTA_RECHAZO_LEGITIMO = re.compile(r"(?i)requerid|obligatori|selecci|required|s
 # La lista de ventas (ruta exacta, sin «nueva» ni id) y el botón que abre ahí el panel o modal de «nueva venta» (m4148_neg4: la venta
 # se hace en la propia lista, y su ruta de alta solo acepta POST, así que el recorrido nunca la vio).
 VENTA_LISTA = re.compile(r"(?i)^/?(?:ventas?|sales?|pedidos?|orders?)/?$")
+# El botón que vende en una pantalla de venta que es la propia lista (m4167_*: «Finalizar Venta», «Procesar Venta», «Completar Venta»). No vale uno
+# que busque, filtre o exporte la lista: ese no vende.
+VENDER_BOTON = re.compile(r"(?i)venta|vender|cobrar|cobro|finaliz|procesar|completar|confirmar|pagar|pedido|orden|\bsale\b|\border\b|checkout")
+NO_VENDER = re.compile(r"(?i)buscar|search|filtr|export|imprimir|print|descargar|download|report")
 NUEVA_VENTA = re.compile(r"(?i)nuev[oa]\s+(?:venta|pedido|orden)|new\s+(?:sale|order)|registrar\s+(?:una\s+)?venta|"
                          r"(?:agregar|a[ñn]adir|crear)\s+(?:una\s+)?venta|^\W*\+\s*venta")
 
@@ -1363,19 +1367,27 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 if not en_ruta():
                     return {"estado": "fuera"}  # la mandó a otra parte (sin permiso, a la entrada)
                 abierto = None
+                directa = False  # la lista de ventas es ella misma la pantalla de venta (punto de venta): sin botón que abrir
                 if panel:
                     abre = next((b for b in pag.evaluate(LISTAR, "botones") if NUEVA_VENTA.search(b["texto"])
                                  and not NO_TOCAR.search(b["texto"])), None)
-                    if not (abre and _clic(pag, abre["i"])):
-                        return {"estado": "sin_boton"}
-                    _esperar(pag)
-                    if not en_ruta():
-                        return {"estado": "sin_boton"}  # el botón era un enlace a otra pantalla: esa se prueba por su ruta
-                    abierto = abre["i"]
+                    if abre:
+                        if not _clic(pag, abre["i"]):
+                            return {"estado": "sin_boton"}
+                        _esperar(pag)
+                        if not en_ruta():
+                            return {"estado": "sin_boton"}  # el botón era un enlace a otra pantalla: esa se prueba por su ruta
+                        abierto = abre["i"]
+                    else:
+                        directa = True
                 botones = pag.evaluate(LISTAR, "botones")
+                vender = next((b for b in botones if VENDER_BOTON.search(b["texto"]) and not NO_TOCAR.search(b["texto"])
+                               and not NO_VENDER.search(b["texto"]) and not AGREGAR_FILA.search(b["texto"])), None)
+                if directa and not vender:
+                    return {"estado": "sin_boton"}  # una lista sin botón de vender no es una pantalla de venta
                 anadir = next((b for b in botones if AGREGAR_FILA.search(b["texto"])), None)
-                carrito = anadir or next((b for b in botones if not b["submit"] and ANADIR_AL_CARRITO.search(b["texto"])
-                                          and not NO_TOCAR.search(b["texto"])), None)
+                carrito = anadir or next((b for b in botones if (directa or not b["submit"]) and ANADIR_AL_CARRITO.search(b["texto"])
+                                          and not NO_TOCAR.search(b["texto"]) and not (directa and b is vender)), None)
                 es_producto = lambda c: c["tipo"] == "select" and PRODUCTO_CAMPO.search(f"{c['name']} {c.get('clase', '')}")
                 inicial = any(es_producto(c) for c in pag.evaluate(LISTAR, "campos"))
                 if anadir_antes and anadir and _clic(pag, anadir["i"]):
@@ -1394,7 +1406,7 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     buscador = next((c for c in campos if _es_buscador(c)), None) if hay_productos else None
                     escrito = _buscar_y_elegir(pag, buscador) if buscador else None
                     if not escrito:
-                        return res  # sin buscador, o no sale nada que elegir: puede ser otra forma de vender, no se acusa
+                        return {"estado": "sin_boton"} if directa else res  # sin buscador, o no sale nada que elegir: puede ser otra forma de vender, no se acusa
                     campos = pag.evaluate(LISTAR, "campos")  # lo que elegir cambió: una fila con su cantidad, un campo relleno
                 if productos and not any(_opcion_producto(c) for c in productos):
                     errores = [e for e in js if not JS_LIBRERIA.search(e)]
@@ -1434,6 +1446,8 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 guardar = (next((b for b in botones if b["submit"] and not NO_TOCAR.search(b["texto"])), None)
                            or next((b for b in reversed(botones) if GUARDAR.search(b["texto"]) and not NO_TOCAR.search(b["texto"])
                                     and not AGREGAR_FILA.search(b["texto"])), None))
+                if directa:  # el que vende, no el primer «submit» (el «✕» de quitar una fila, el «+ Agregar» del carrito)
+                    guardar = next((b for b in botones if b["i"] == vender["i"]), None)
                 if not (datos and guardar):
                     return {**res, "estado": "sin_guardar"}
                 forma = None  # el formulario del botón: ¿envía por POST?, ¿qué campos lleva?

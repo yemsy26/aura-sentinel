@@ -31,6 +31,7 @@ CREADOS = []   # los productos que da de alta el formulario (PRECIO empieza por 
 MENU = '__MENU__'
 CLIENTE = '__CLIENTE__'
 OPC = '__OPC__'
+DIRECTA = "__DIRECTA__"   # «si»: la propia lista /ventas es la pantalla de venta (punto de venta), sin botón de nueva venta
 
 PAGINAS = {
     "ok": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_id">' + OPC + '</select>'
@@ -65,6 +66,24 @@ PAGINAS = {
     "panel": '<div id="p" style="display:none"><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_id">' + OPC + '</select>'
              '<input type="number" name="cantidad" value="1" min="1"><button type="submit">Registrar venta</button></form></div>'
              '<button onclick="document.getElementById(&#39;p&#39;).style.display=&#39;block&#39;">+ Nueva venta</button>',
+    # la venta se hace en la propia lista (punto de venta): elegir, «+ Agregar» (un <button> sin type fuera de todo form) y «Finalizar Venta», que envía con fetch
+    # y avisa con un alert si el carrito está vacío (avanzado_3)
+    "carrito_sin_form": '<h1>Nueva venta</h1>' + CLIENTE + '<select id="p" name="producto">' + OPC + '</select><input type="number" id="c" value="1">'
+                        '<button onclick="meter()">+ Agregar</button><ul id="lista"></ul><button onclick="vender()">Finalizar Venta</button>'
+                        '<script>var items=[];function meter(){var p=document.getElementById("p").value;if(!p){return;}items.push(p);'
+                        'document.getElementById("lista").innerHTML="<li>"+p+"</li>";}'
+                        'function vender(){if(!items.length){alert("Agrega al menos un producto");return;}'
+                        'fetch("/ventas/nueva",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"items="+items.join(",")});}</script>',
+    # el primer botón es el de quitar una fila (sin type, es «submit» pero no envía) y el que vende va después (neg150_B3)
+    "equis_antes": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_id">' + OPC + '</select>'
+                   '<input type="number" name="cantidad" value="1" min="1"><button type="button" onclick="this.parentNode.remove()">✕</button>'
+                   '<button type="submit">✓ Finalizar Venta</button></form>',
+    # un formulario con producto pero cuyo botón no habla de vender: no se sabe que sea una pantalla de venta
+    "enviar": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_id">' + OPC + '</select>'
+              '<input type="number" name="cantidad" value="1" min="1"><button type="submit">Enviar</button></form>',
+    # la lista con un filtro por producto: no es una pantalla de venta, pulsar «Filtrar ventas» no vende nada
+    "filtro": '<h1>Ventas</h1><p>Para hacer una nueva venta usa la caja.</p><form method="get" action="/ventas"><select name="producto_id">' + OPC + '</select>'
+              '<button type="submit">Filtrar ventas</button></form>',
     # «Agrega al menos un producto» escrito en la propia pantalla antes de guardar: no es la respuesta del servidor
     "texto_fijo": '<h1>Nueva venta</h1><p>Agrega al menos un producto para continuar.</p><form method="post" action="/ventas/nueva">' + CLIENTE
                   + '<select name="producto_id">' + OPC + '</select><button type="submit">Guardar venta</button></form>',
@@ -163,6 +182,9 @@ PAGINAS["buscador_vacio"] = PAGINAS["buscador"].replace('"/api/buscar?q="+encode
 PAGINAS["buscador_previo"] = PAGINAS["buscador"].replace("<h1>Nueva venta</h1>", "<h1>Nueva venta</h1><p onclick=\"document.getElementById('items').value=''\">"
                                                          "Producto Aura en oferta</p>", 1)
 # el panel que envía con fetch y no mira la respuesta: la pantalla no cambia, pase lo que pase
+# la pantalla de venta que envía con fetch y no mira la respuesta (la ruta no cambia): lo que hizo m4148_neg3
+PAGINAS["ok_fetch"] = PAGINAS["ok"].replace('<form method="post" action="/ventas/nueva">', '<form onsubmit="fetch(&#39;/ventas/nueva&#39;,{method:&#39;POST&#39;,'
+                                            'body:new URLSearchParams(new FormData(this))});return false;">')
 PANEL_FETCH = PAGINAS["panel"].replace('<form method="post" action="/ventas/nueva">', '<form onsubmit="fetch(&#39;/ventas/nueva&#39;,{method:&#39;POST&#39;,'
                                        'body:new URLSearchParams(new FormData(this))});return false;">')
 
@@ -192,9 +214,11 @@ class Web(BaseHTTPRequestHandler):
             return self.responder(200, "<h1>Nuevo producto</h1>" + MENU + '<form method="post" action="/productos/nuevo"><input type="text" name="nombre">' + compra
                                   + '<input type="number" name="precio_venta" value="0"><input type="number" name="stock" value="0"><button type="submit">Guardar</button></form>')
         if self.path == "/ventas":
+            if DIRECTA:  # la propia lista es la pantalla de venta
+                return self.responder(200, "<h1>Ventas</h1>" + MENU + f"<p>{len(VENTAS)} ventas</p>" + PAGINAS[MODO.split("+")[0]])
             return self.responder(200, "<h1>Ventas</h1>" + MENU + f"<p>{len(VENTAS)} ventas</p>" + ((PANEL_FETCH if MODO.endswith("+silencio") else PAGINAS["panel"]) if MODO.startswith("panel") else ""))
         if self.path == "/ventas/nueva":
-            if MODO.startswith("panel"):
+            if MODO.startswith("panel") or DIRECTA:
                 return self.responder(405, "Method Not Allowed")
             return self.responder(200, MENU + PAGINAS[MODO.split("+")[0]])
         self.responder(404, "no")
@@ -248,9 +272,9 @@ class VentaEnPantalla(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp(prefix="test_venta_pantalla_"))
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
 
-    def recorrer(self, modo: str, precio: str = "si", menu: str = MENU) -> dict:
+    def recorrer(self, modo: str, precio: str = "si", menu: str = MENU, directa: bool = False) -> dict:
         fuente = (WEB.replace("__MODO__", modo).replace("__PRECIO__", precio).replace("__MENU__", menu)
-                  .replace("__CLIENTE__", CLIENTE).replace("__OPC__", PRODUCTOS_OPC))
+                  .replace("__CLIENTE__", CLIENTE).replace("__OPC__", PRODUCTOS_OPC).replace("__DIRECTA__", "si" if directa else ""))
         (self.dir / "app.py").write_text(fuente, encoding="utf-8")
         return recorrer(self.dir / "app.py", sys.executable, [], abrir_navegador=canal_navegador)
 
@@ -431,6 +455,40 @@ class VentaEnPantalla(unittest.TestCase):
 
     def test_una_lista_de_ventas_sin_boton_de_nueva_venta_no_lanza_nada(self):
         self.assertIsNone(self.recorrer("js_roto", menu=MENU_PANEL)["venta"])  # sin ruta de alta ni botón en /ventas
+
+
+    def directa(self, modo: str) -> dict:
+        return self.recorrer(modo, menu=MENU_PANEL, directa=True)["venta"]
+
+    def test_la_venta_que_esta_en_la_propia_lista_se_prueba(self):
+        v = self.directa("ok")
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 1, [("/ventas", "guardada")]))
+
+    def test_la_venta_directa_que_no_registra_y_no_dice_nada_se_ve(self):
+        [e] = self.directa("ok_fetch+silencio")["errores"]
+        self.assertEqual((e["pagina"], e["tipo"]), ("/ventas", "no_registrada"))
+
+    def test_la_venta_directa_con_el_500_al_guardar_se_ve(self):
+        r = self.recorrer("carrito+500", menu=MENU_PANEL, directa=True)  # con «ok» el recorrido sin JavaScript ya da el mismo 500 y no se cuenta dos veces
+        [e] = [x for x in r["errores"] if "pantalla" in x["que"]]
+        self.assertEqual(e["estado"], 500)
+        self.assertIn("guardar la venta desde la pantalla /ventas", e["que"])
+
+    def test_la_venta_directa_con_carrito_de_botones_sin_type_se_vende_tras_agregar(self):
+        v = self.directa("carrito_sin_form")  # la primera vez sin añadir: alert «Agrega al menos un producto» y no cuenta
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 1, [("/ventas", "guardada")]))
+
+    def test_la_venta_directa_pulsa_el_boton_que_vende_y_no_el_primero_que_envia(self):
+        v = self.directa("equis_antes")
+        self.assertEqual((v["errores"], v["guardadas"], v["estados"]), ([], 1, [("/ventas", "guardada")]))
+
+    def test_la_lista_cuyo_boton_no_habla_de_vender_no_se_toma_por_pantalla_de_venta(self):
+        v = self.directa("enviar")
+        self.assertEqual((v["errores"], v["probadas"], v["estados"]), ([], 0, []))
+
+    def test_la_lista_con_un_filtro_por_producto_no_se_toma_por_pantalla_de_venta(self):
+        v = self.directa("filtro")
+        self.assertEqual((v["errores"], v["probadas"], v["estados"]), ([], 0, []))
 
 
 class MensajesDeVerificar(unittest.TestCase):
