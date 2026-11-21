@@ -1322,7 +1322,7 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
     en la propia página (solo se prueban si ninguna ruta de alta dio una prueba). None si no hay navegador."""
     from playwright.sync_api import sync_playwright
 
-    r = {"errores": [], "servidor": [], "probadas": 0, "guardadas": 0, "sin_desplegable": 0, "estados": []}
+    r = {"errores": [], "servidor": [], "probadas": 0, "guardadas": 0, "sin_desplegable": 0, "estados": [], "defecto": []}
     hoy, js, malas, envios, dialogos = date.today().isoformat(), [], [], [], []
     with sync_playwright() as p:
         nav = abrir(p)
@@ -1357,9 +1357,10 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                         continue
                 return vistas
 
-            def probar(ruta: str, anadir_antes: bool, panel: bool = False) -> dict:
+            def probar(ruta: str, anadir_antes: bool, panel: bool = False, por_defecto: bool = False) -> dict:
                 """«anadir_antes»: pulsar «agregar línea» antes de rellenar (filas que se añaden) o después (se elige y se añade al carrito).
-                «panel»: la lista de ventas lleva el formulario oculto tras un botón de «nueva venta»: se abre primero."""
+                «panel»: la lista de ventas lleva el formulario oculto tras un botón de «nueva venta»: se abre primero.
+                «por_defecto» (m4168): los desplegables que no son de productos se dejan como vienen («Sin cliente»), que es lo que hace quien no los toca."""
                 js.clear()
                 pag.goto(urllib.parse.urljoin(base, ruta), wait_until="domcontentloaded", timeout=15000)
                 _esperar(pag)
@@ -1411,7 +1412,7 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                 if productos and not any(_opcion_producto(c) for c in productos):
                     errores = [e for e in js if not JS_LIBRERIA.search(e)]
                     return {**res, "estado": "vacio", "js": errores[0] if errores else ""}
-                datos = []
+                datos, distintos = [], []
                 for c in campos:
                     valor = _opcion_producto(c) if es_producto(c) else None
                     if c in cantidades:  # tabla de cantidades: se pide una unidad del primero y se deja el resto a cero
@@ -1422,6 +1423,12 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                         if c["tipo"] == "select":
                             c = {**c, "opciones": [o for o in c["opciones"] if not SIN_STOCK.search(o["texto"])]}
                         valor = None if BUSCADOR.search(c["name"]) or (buscador and CALCULADO.search(c["name"])) else _valor(c, hoy)
+                        if c["tipo"] == "select" and not es_producto(c) and valor is not None and valor != c["value"]:
+                            defecto = next((o for o in c["opciones"] if o["valor"] == c["value"] and not o["desactivada"]), None)
+                            if defecto is not None and not OPCION_VACIA.search(defecto["texto"] or ""):  # una opción de verdad («Sin cliente»), no «Selecciona…»
+                                if por_defecto:
+                                    continue  # se deja como viene
+                                distintos.append(f"«{c['name']}» ({' '.join((defecto['texto'] or '').split())[:40]})")
                     if valor is None:
                         continue
                     campo = pag.locator(f"[data-aura-i='{c['i']}']")
@@ -1437,6 +1444,7 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                         datos.append(f"{c['name']}={valor}")
                     except Exception:
                         continue
+                res["defecto"] = distintos  # los desplegables cuyo valor por defecto es una opción de verdad y distinta de la elegida
                 if buscador:
                     datos.append(f"{buscador['name']}={escrito}")
                 if not anadir_antes and carrito and _clic(pag, carrito["i"]):
@@ -1487,6 +1495,9 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     return {**res, "estado": "mensaje", "mensaje": " ".join(dicho.group(0).split())}
                 if dicho := next(filter(None, map(VENTA_VACIA.search, dialogos)), None):  # un alert que dice lo mismo
                     return {**res, "estado": "mensaje", "mensaje": " ".join(dicho.group(0).split())}
+                if por_defecto and (rechazo := next((" ".join(x.split())[:200] for x in dialogos if VENTA_RECHAZADA.search(x)
+                                                     and not VENTA_RECHAZO_LEGITIMO.search(x)), None)):  # un alert con un error que no es un rechazo con razón
+                    return {**res, "estado": "rechazada", "mensaje": rechazo, "envio": " ".join(f"{m} {u} -> {s}" for m, u, s in envios[-1:])}
                 # No salió ninguna petición: no se envió nada (un carrito sin lo elegido, un campo que el navegador no deja pasar).
                 if not envios:
                     return {**res, "estado": "sin_envio", "js": next((e for e in js if not JS_LIBRERIA.search(e)), "")}
@@ -1496,7 +1507,7 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     ahora = instantanea()
                     comparadas = [k for k in listas_antes if k in ahora]
                     if comparadas and all(listas_antes[k] == ahora[k] for k in comparadas):
-                        if despues == antes and en_ruta():
+                        if despues == antes and en_ruta() and not (por_defecto and dialogos):  # un alert sin error no se acusa
                             return {**res, "estado": "no_registrada", "js": next((e for e in js if not JS_LIBRERIA.search(e)), ""),
                                     "envio": " ".join(f"{m} {u} -> {s}" for m, u, s in envios[-1:])}
                         ya = set(antes.splitlines())
@@ -1513,10 +1524,12 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     break
                 if panel and r["probadas"]:
                     break  # las listas con panel solo si ninguna ruta de alta dio una prueba
+                antes_usado = True
                 v = probar(ruta, True, panel)
                 # Una pantalla de «elegir y añadir al carrito» (el desplegable ya está y el botón añade lo elegido): se prueba también así.
                 if v["estado"] in ("mensaje", "no_registrada", "sin_envio") and v.get("inicial") and v.get("carrito"):
                     v = probar(ruta, False, panel)
+                    antes_usado = False
                 if v["estado"] == "sin_boton":
                     continue  # la lista de ventas no abre nada: ni se anota
                 r["estados"].append((ruta, v["estado"]))
@@ -1544,6 +1557,18 @@ def _venta_en_pantalla(base: str, log: Path, usuario: str | None, clave: str | N
                     r["errores"].append({"pagina": ruta, "tipo": "rechazada", "js": "", "mensaje": v["mensaje"]})
                 elif v["estado"] == "por_get":
                     r["errores"].append({"pagina": ruta, "tipo": "por_get", "js": "", "mensaje": v["url"]})
+                # Vendió bien con otra opción: ¿y dejando «Sin cliente» como viene, que es lo que hace quien no toca el desplegable?
+                if v["estado"] == "guardada" and v.get("defecto") and time.time() < limite:
+                    w = probar(ruta, antes_usado, panel, por_defecto=True)
+                    r["defecto"].append((ruta, w["estado"]))
+                    donde = ", ".join(v["defecto"])
+                    if w["estado"] == "servidor":
+                        r["servidor"].append({"que": f"guardar la venta desde la pantalla {ruta} (con el navegador) dejando {donde} como viene",
+                                              "estado": w["http"], "datos": w["datos"], "traza": w["traza"]})
+                    elif w["estado"] == "rechazada":
+                        r["errores"].append({"pagina": ruta, "tipo": "defecto", "js": "", "mensaje": w["mensaje"], "defecto": donde})
+                    elif w["estado"] == "no_registrada":
+                        r["errores"].append({"pagina": ruta, "tipo": "defecto", "js": "", "mensaje": w["envio"], "defecto": donde})
         finally:
             nav.close()
     return r

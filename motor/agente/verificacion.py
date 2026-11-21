@@ -508,6 +508,11 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
             inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, tras elegir un producto y una cantidad y pulsar guardar, la web "
                                f"responde «{e['mensaje']}» y la venta no se registra (ni la lista de ventas ni las existencias cambian). "
                                "Quien vende no puede vender desde esta pantalla: busca ese error en el código que guarda la venta.")
+        elif e["tipo"] == "defecto":
+            inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, la venta se registra eligiendo otra opción, pero con {e['defecto']} tal como "
+                               f"viene (lo que hace quien no toca el desplegable) la web responde «{e['mensaje']}» y no se registra. ¿Un id vacío llega a "
+                               "la base como texto ('') en vez de NULL (usa `valor or None`), o la ruta exige el campo y no avisa? Vende una vez sin tocar "
+                               "ese desplegable.")
         else:
             inf.errores.append(f"{rel}: en la pantalla de venta {e['pagina']}, tras elegir un producto y una cantidad y pulsar guardar, la "
                                f"web responde «{e['mensaje']}»: la venta no se guarda desde la pantalla. ¿El campo con las líneas va fuera "

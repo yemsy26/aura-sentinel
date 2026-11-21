@@ -167,6 +167,23 @@ PAGINAS = {
                        '<table><tbody id="cat"><tr><td>Producto Aura</td></tr><tr><td>Otro</td></tr></tbody></table><button type="submit">Registrar venta</button></form>'
                        '<script>document.getElementById("buscar_producto").addEventListener("input",function(){var q=this.value.toLowerCase();'
                        'document.querySelectorAll("#cat tr").forEach(function(r){if(r.textContent.toLowerCase().indexOf(q)<0){r.remove();}});});</script>',
+    # el desplegable de cliente trae «Sin cliente» por defecto y la pantalla envía con fetch: lo que pase con el cliente vacío lo decide el servidor (m4138_neg4)
+    "defecto_fetch": '<h1>Nueva venta</h1><form id="f"><select name="cliente_id"><option value="">Sin cliente</option><option value="1">Ana</option></select>'
+                     '<select name="producto_id">' + OPC + '</select><input type="number" name="cantidad" value="1" min="1">'
+                     '<button type="button" onclick="enviar()">Guardar venta</button></form>'
+                     '<script>function enviar(){fetch("/ventas/nueva",{method:"POST",body:new URLSearchParams(new FormData(document.getElementById("f")))})'
+                     '.then(function(r){return r.text().then(function(t){if(!r.ok){alert(t);}else{location.reload();}});});}</script>',
+    # lo mismo pero no mira la respuesta: la pantalla no cambia, pase lo que pase
+    "defecto_mudo": '<h1>Nueva venta</h1><form id="f"><select name="cliente_id"><option value="">Sin cliente</option><option value="1">Ana</option></select>'
+                    '<select name="producto_id">' + OPC + '</select><input type="number" name="cantidad" value="1" min="1">'
+                    '<button type="button" onclick="enviar()">Guardar venta</button></form>'
+                    '<script>function enviar(){fetch("/ventas/nueva",{method:"POST",body:new URLSearchParams(new FormData(document.getElementById("f")))});}</script>',
+    # el valor por defecto es un «Selecciona…»: dejarlo así fallaría con razón, no se prueba
+    "defecto_placeholder": '<h1>Nueva venta</h1><form id="f"><select name="cliente_id"><option value="">Selecciona un cliente</option><option value="1">Ana</option></select>'
+                           '<select name="producto_id">' + OPC + '</select><input type="number" name="cantidad" value="1" min="1">'
+                           '<button type="button" onclick="enviar()">Guardar venta</button></form>'
+                           '<script>function enviar(){fetch("/ventas/nueva",{method:"POST",body:new URLSearchParams(new FormData(document.getElementById("f")))})'
+                           '.then(function(r){return r.text().then(function(t){if(!r.ok){alert(t);}else{location.reload();}});});}</script>',
     # un script que no existe (404): la consola dice «Failed to load resource», que es de red y no del script de la pantalla
     "red_404": '<h1>Nueva venta</h1><form method="post" action="/ventas/nueva">' + CLIENTE + '<select name="producto_0_id" class="prod-select"></select>'
                '<button type="submit">Finalizar Venta</button></form><script src="/falta.js"></script>',
@@ -228,6 +245,19 @@ class Web(BaseHTTPRequestHandler):
         if self.path == "/productos/nuevo":
             CREADOS.append(datos)
             return self.responder(302, "", [("Location", "/productos")])
+        if "+vacio" in MODO and not (datos.get("cliente_id") or [""])[0]:  # lo que hace la web cuando el cliente llega vacío
+            como = MODO.split("+vacio")[1]
+            if como == "500":
+                try:
+                    {}["cliente"]
+                except Exception:
+                    traceback.print_exc()
+                    return self.responder(500, "Internal Server Error")
+            if como == "error":
+                return self.responder(400, "ERROR: FOREIGN KEY constraint failed")
+            if como == "selecciona":
+                return self.responder(400, "Selecciona un cliente")
+            return self.responder(200, "")
         producto = (datos.get("producto_id") or datos.get("items") or datos.get("producto_0_id") or [""])[0]
         if not producto:
             return self.responder(200, MENU + "<p>Agrega al menos un producto.</p>" + PAGINAS[MODO.split("+")[0]])
@@ -491,6 +521,43 @@ class VentaEnPantalla(unittest.TestCase):
         self.assertEqual((v["errores"], v["probadas"], v["estados"]), ([], 0, []))
 
 
+    def test_dejar_el_cliente_como_viene_da_500_se_acusa(self):
+        r = self.recorrer("defecto_fetch+vacio500", menu=MENU_PANEL, directa=True)
+        [e] = [x for x in r["errores"] if "como viene" in x["que"]]
+        self.assertEqual(e["estado"], 500)
+        self.assertIn("«cliente_id» (Sin cliente)", e["que"])
+        self.assertIn("KeyError", e["traza"])
+
+    def test_dejar_el_cliente_como_viene_y_que_la_web_diga_un_error_se_acusa(self):
+        v = self.directa("defecto_fetch+vacioerror")
+        [e] = v["errores"]
+        self.assertEqual((e["pagina"], e["tipo"], v["defecto"]), ("/ventas", "defecto", [("/ventas", "rechazada")]))
+        self.assertIn("FOREIGN KEY constraint failed", e["mensaje"])
+        self.assertEqual(e["defecto"], "«cliente_id» (Sin cliente)")
+        self.assertEqual((v["estados"], v["guardadas"]), ([("/ventas", "guardada")], 1))  # la primera vuelta, con un cliente elegido, sí vende
+
+    def test_dejar_el_cliente_como_viene_y_que_no_registre_nada_ni_diga_nada_se_acusa(self):
+        v = self.directa("defecto_mudo+vaciosilencio")
+        [e] = v["errores"]
+        self.assertEqual((e["tipo"], e["mensaje"]), ("defecto", "POST /ventas/nueva -> 200"))
+
+    def test_el_valor_por_defecto_que_funciona_no_dice_nada(self):
+        v = self.directa("defecto_fetch")
+        self.assertEqual((v["errores"], v["defecto"], v["guardadas"]), ([], [("/ventas", "guardada")], 1))
+
+    def test_un_alert_que_pide_cliente_no_se_acusa(self):
+        v = self.directa("defecto_fetch+vacioselecciona")
+        self.assertEqual((v["errores"], v["defecto"]), ([], [("/ventas", "sin_confirmar")]))
+
+    def test_si_el_valor_por_defecto_es_un_selecciona_no_hay_segunda_vuelta(self):
+        v = self.directa("defecto_placeholder+vacioerror")
+        self.assertEqual((v["errores"], v["defecto"], v["guardadas"]), ([], [], 1))
+
+    def test_con_una_sola_opcion_en_el_desplegable_no_hay_segunda_vuelta(self):
+        v = self.recorrer("ok")["venta"]
+        self.assertEqual((v["errores"], v["defecto"]), ([], []))
+
+
 class MensajesDeVerificar(unittest.TestCase):
     def errores(self, venta: dict) -> list[str]:
         raiz = Path(tempfile.mkdtemp(prefix="test_venta_msg_"))
@@ -545,6 +612,14 @@ class MensajesDeVerificar(unittest.TestCase):
                                          "modulo": True}]})
         self.assertIn("aunque hay productos creados", m)
         self.assertIn('<script type="module">', m)
+
+    def test_la_venta_con_el_valor_por_defecto_falla(self):
+        [m] = self.errores({"errores": [{"pagina": "/ventas", "tipo": "defecto", "js": "", "mensaje": "FOREIGN KEY constraint failed",
+                                         "defecto": "«cliente_id» (Sin cliente (público general))"}]})
+        self.assertIn("en la pantalla de venta /ventas, la venta se registra eligiendo otra opción, pero con «cliente_id» (Sin cliente (público general)) "
+                      "tal como viene", m)
+        self.assertIn("«FOREIGN KEY constraint failed» y no se registra", m)
+        self.assertIn("valor or None", m)
 
     def test_la_venta_no_se_guarda(self):
         [m] = self.errores({"errores": [{"pagina": "/ventas/nueva", "tipo": "mensaje", "js": "", "mensaje": "Agrega al menos un producto"}]})
