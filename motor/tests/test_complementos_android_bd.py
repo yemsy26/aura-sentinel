@@ -39,8 +39,8 @@ class Complementos(Temporal):
         self.addCleanup(parche.stop)
 
     def release(self, binario: bytes, sha: str):
-        archivos = {"https://api.github.com/repos/yemsy26/Sat-hibrido-rust/releases/tags/v0.2.1": json.dumps({
-            "tag_name": "v0.2.1", "assets": [
+        archivos = {"https://api.github.com/repos/yemsy26/Sat-hibrido-rust/releases/tags/v0.2.3": json.dumps({
+            "tag_name": "v0.2.3", "assets": [
                 {"name": "motor-x86_64-pc-windows-msvc.exe", "browser_download_url": "https://x/motor.exe"},
                 {"name": "motor-x86_64-pc-windows-msvc.exe.sha256", "browser_download_url": "https://x/motor.sha"}]}).encode(),
             "https://x/motor.exe": binario, "https://x/motor.sha": f"{sha}  motor.exe\n".encode()}
@@ -66,7 +66,7 @@ class Complementos(Temporal):
         datos = HUNT.read_bytes()
         with self.release(datos, hashlib.sha256(datos).hexdigest()):
             texto = complementos.activar("sat-hibrido", aviso=lambda _: None)
-        self.assertIn("versión v0.2.1", texto)
+        self.assertIn("versión v0.2.3", texto)
         self.assertEqual(complementos.ruta("sat-hibrido"), self.dir / "complementos" / "sat-hibrido" / "motor.exe")
         self.assertIn("desactivado", complementos.desactivar("sat-hibrido"))
         self.assertIsNone(complementos.ruta("sat-hibrido"))
@@ -79,7 +79,7 @@ class Complementos(Temporal):
     def test_sin_la_version_fijada_publicada_lo_explica(self):
         no_hay = urllib.error.HTTPError("u", 404, "Not Found", None, None)
         with mock.patch.object(complementos, "_descargar", side_effect=no_hay), \
-                self.assertRaisesRegex(RuntimeError, "v0.2.1.*no está publicada"):
+                self.assertRaisesRegex(RuntimeError, "v0.2.3.*no está publicada"):
             complementos.activar("sat-hibrido", aviso=lambda _: None)
 
     def test_una_instalacion_con_otra_version_se_actualiza(self):
