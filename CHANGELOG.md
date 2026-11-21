@@ -5,6 +5,26 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.15] — 2026-11-21 (el motor SAT se actualiza solo al arrancar el agente)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
+
+- **El motor SAT se actualiza solo.** La 4.13.14 fijó el motor SAT en la v0.2.3 (los `.opb` por planos de corte), pero el complemento solo se
+  actualizaba al pulsar **Instalar motor**, así que una instalación con la versión anterior seguía con el motor viejo. Medido en un horario de 126
+  variables (9 empleados, 7 días, 2 turnos): el motor anterior da coste 739 tras 600 s sin demostrar el óptimo; la v0.2.3 da 737, demostrado, en
+  0,1 s. Ahora, al arrancar el agente, si el complemento está activado y su versión no es la fijada, baja la fijada (2 MB) en segundo plano, sin
+  retrasar el arranque ni escribir en la salida del agente. No activa los que nunca se configuraron ni los que el usuario desactivó, respeta
+  `AGENTE_SAT`, usa un candado para que dos proyectos abiertos no descarguen a la vez y, sin red, con una suma distinta, con un 404 o con el motor
+  en uso, conserva el anterior y reintenta en el próximo arranque.
+- Corrige la entrada de la 4.13.14 de este registro, que decía que el motor nuevo se descargaba al arrancar.
+- Probado con diez condiciones fijadas antes de implementar (actualiza; no toca lo desactivado ni lo nunca configurado; no descarga si ya está al
+  día; respeta `AGENTE_SAT`; cinco fallos sin ruido; candado; no retrasa el arranque; no ensucia el protocolo `--json`) y con el arranque real
+  de `python -m agente --json` con el motor v0.2.2 activado y descarga real de la release: en menos de 25 s queda la v0.2.3 con su suma y
+  resuelve un `.opb`. 721 pruebas del motor pasan (4 omitidas); ruff limpio en el motor y en el test tocado. Rust y la interfaz no cambian
+  respecto a la 4.13.10.
+
+---
+
 ## [4.13.14] — 2026-11-21 (verificar prueba la venta en la propia lista y con «Sin cliente»; el motor SAT pasa a la v0.2.3, que resuelve los .opb por planos de corte)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
