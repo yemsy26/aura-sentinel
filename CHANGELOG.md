@@ -5,6 +5,31 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.14] — 2026-11-21 (verificar prueba la venta en la propia lista y con «Sin cliente»; el motor SAT pasa a la v0.2.3, que resuelve los .opb por planos de corte)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
+
+- **Venta hecha en la propia lista de ventas.** Seis de las webs guardadas venden desde `/ventas`, sin botón de «nueva venta», y `verificar` las
+  descartaba. Ahora, si esa página trae algo que elegir (desplegable de producto, cantidades o un buscador) y un botón de vender (venta, vender,
+  cobrar, finalizar, procesar, completar, confirmar, pagar, pedido, orden), la prueba vende en ella y comprueba que la venta quedó en la lista.
+  Tres de esas webs pasan a venderse y una queda sin confirmar; a mano con un navegador real las cuatro venden. 0 mensajes nuevos.
+- **Venta dejando «Sin cliente» como viene.** Quien vende sin tocar el desplegable de cliente es el caso más común y la prueba elegía siempre el
+  primer cliente. Si la venta sale bien y el desplegable trae una opción por defecto de verdad (no «Selecciona…» ni vacía), la prueba repite la
+  venta dejándolo como viene. Se acusa un 500, un aviso o un texto con error que no es un rechazo con razón (cliente, requerido, stock…), o enviar y
+  no registrar sin decir nada. En una web guardada acusa un caso real: «FOREIGN KEY constraint failed» al vender sin cliente. La segunda venta
+  corre en siete de las 58 webs con pantalla de venta y suma unos 0,9 s de media por web.
+- **Motor SAT v0.2.3.** El complemento Sat-hibrido-rust pasa de la v0.2.1 a la v0.2.3. Un `.opb` se resuelve con planos de corte y VeriPB
+  comprueba la prueba contra el propio `.opb`; el CNF no cambia. Con 67 instancias `.opb` (mochilas, coberturas, asignaciones, vértices, cajas,
+  turnos e infactibles) y 30 s por instancia, demuestra 49 óptimos frente a 25 y VeriPB certifica 48 frente a 27; ningún resultado erróneo
+  (tampoco en 600 `.opb` aleatorios). **Límite:** en mochilas de 100 a 200 objetos, si se agota el tiempo, la mejor solución puede ser peor que
+  con la v0.2.1. Al arrancar, Aura baja la v0.2.3 (2 MB) a quien tenga el complemento activado; quien lo desactivó sigue sin él, y con una suma
+  que no coincide o sin red se conserva el motor anterior.
+- Medido sin el modelo, con las webs guardadas; cada mensaje o estado nuevo comprobado a mano con un navegador real. **No medido:** estos cambios
+  con el modelo.
+- 714 pruebas del motor pasan (4 omitidas); ruff limpio. Rust y la interfaz no cambian respecto a la 4.13.10.
+
+---
+
 ## [4.13.13] — 2026-11-20 (verificar prueba más pantallas de venta: buscadores de productos, botones «False» y webs sin productos)
 
 Sale de las ocho webs guardadas con pantalla de venta que `verificar` dejaba pasar en silencio con la 4.13.12 (no se sabía si en ellas se podía
