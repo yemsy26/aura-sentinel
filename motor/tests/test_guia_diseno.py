@@ -12,7 +12,7 @@ class TestGuiaDiseno(unittest.TestCase):
         g = conocimiento.guia("diseno")
         for frase in ("manda sobre esta guía", "IDENTIDAD", "no del azul por defecto", "ferretería", "veterinaria",
                       "`:root`", "--marca", "--error", "var(--...)", "UN SOLO CSS", "estilo.css", "base.html",
-                      "SIN EMOJIS COMO ICONOS", "SVG en línea", "`:focus-visible`", "outline: none", "vacío",
+                      "SIN EMOJIS COMO ICONOS", "ni de CDN", "sin internet la web pierde el estilo", "se copia a `static/`", "SVG en línea", "`:focus-visible`", "outline: none", "vacío",
                       "375 px", "overflow-x: auto", "tabla-scroll", "4,5:1", "ver_pantalla"):
             self.assertIn(frase, g)
 
@@ -25,7 +25,9 @@ class TestGuiaDiseno(unittest.TestCase):
         self.assertNotIn("onclick", g)
         self.assertNotIn("style=", g)
         self.assertNotIn("jQuery", g)
-        self.assertNotIn("bootstrap", g.lower())
+        for linea in g.splitlines():  # Bootstrap solo sale como lo que NO se carga de un CDN
+            if "bootstrap" in linea.lower():
+                self.assertIn("ni de CDN", linea)
 
     def test_no_ofrece_vista_movil_que_ver_pantalla_no_tiene(self):
         g = conocimiento.guia("diseno")

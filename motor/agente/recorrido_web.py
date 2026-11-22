@@ -1782,6 +1782,54 @@ def plantillas_sin_sustituir(*carpetas: Path) -> list[dict]:
     return hallazgos
 
 
+# Bootstrap, Tailwind, jQuery o una tipografía cargados de internet (<link> o <script src> con https://): la ferretería (22) del usuario (4.13.17) cargaba
+# Bootstrap de cdn.jsdelivr.net y su mandato era «que funcione en mi computadora con un doble clic»: sin conexión la web pierde el estilo y los menús, y
+# verificar la abre con red y no lo nota. Solo se mira en webs con servidor (probar_web); un juego o una página 3D estática sí puede llevar su CDN.
+EXTERNO_ETIQUETA = re.compile(r"(?is)<(link|script)\b([^<>]*)>")
+EXTERNO_URL = re.compile(r"""(?is)\b(?:href|src)\s*=\s*["']?((?:https?:)?//[^"'\s>/][^"'\s>]*)""")
+EXTERNO_NO_CODIGO = re.compile(r"""(?is)\brel\s*=\s*["']?(?:icon|shortcut|canonical|alternate|preconnect|dns-prefetch|author|license)""")
+EXTERNO_CSS = re.compile(r"""(?i)@import\s+(?:url\(\s*)?["']?((?:https?:)?//[^"')\s;]+)""")
+EXTERNO_LOCAL = re.compile(r"(?i)^(?:https?:)?//(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?:[:/]|$)")
+EXTERNO_SIN_CODIGO = re.compile(r"(?s)<!--.*?-->|\{#.*?#\}")
+NECESITA_INTERNET = re.compile(r"(?i)\b(?:necesita|requiere)n?\s+(?:de\s+)?(?:una\s+)?(?:conexi[oó]n(?:\s+a\s+internet)?|internet)\b")
+
+
+def recursos_externos(*carpetas: Path) -> list[dict]:
+    """Lo que las plantillas y los CSS cargan de internet con <link> o <script src> (o @import en un CSS): [{"archivo", "host", "recurso"}].
+    Vacío si el README de la raíz dice que la web necesita internet. No cuenta iconos, enlaces <a>, imágenes, comentarios, localhost, tests ni dependencias."""
+    for base in carpetas:
+        for _, f in _archivos([base], (".md", ".txt")):
+            if f.parent == base and f.name.lower().startswith("readme"):
+                try:
+                    if NECESITA_INTERNET.search(f.read_text(encoding="utf-8", errors="replace")):
+                        return []
+                except OSError:
+                    pass
+    hallados, vistos = [], set()
+    for base, f in _archivos(carpetas, (".html", ".htm", ".jinja", ".j2", ".css")):
+        if {"tests", "test"} & set(f.relative_to(base).parts):
+            continue
+        try:
+            texto = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if f.suffix.lower() == ".css":
+            urls = EXTERNO_CSS.findall(texto)
+        else:
+            urls = []
+            for m in EXTERNO_ETIQUETA.finditer(EXTERNO_SIN_CODIGO.sub(" ", texto)):
+                u = EXTERNO_URL.search(m.group(2))
+                if u and not EXTERNO_NO_CODIGO.search(m.group(2)):
+                    urls.append(u.group(1))
+        for url in urls:
+            if EXTERNO_LOCAL.search(url) or (f, url) in vistos:
+                continue
+            vistos.add((f, url))
+            host = re.sub(r"^(?:https?:)?//([^/:?#]+).*$", r"\1", url)
+            hallados.append({"archivo": f.relative_to(base).as_posix(), "host": host, "recurso": url.split("?")[0].rstrip("/").rsplit("/", 1)[-1] or host})
+    return hallados
+
+
 # `url_for('nueva_vacuna')` en una plantilla cuando la ruta se llama `vacuna_nueva`: Flask da BuildError (500) en cuanto esa parte se pinta. En la veterinaria
 # del usuario (4.13.8) los botones «Editar» y «💉 Vacuna» iban dentro de un `{% if can_edit %}` que nunca se cumplía: la página daba 200, verificar daba 0/0
 # y no había forma de registrar una vacuna desde la web. Es estático: lee las rutas con `ast` y los `url_for` de las plantillas.

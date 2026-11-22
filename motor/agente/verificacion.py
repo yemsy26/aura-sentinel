@@ -33,6 +33,7 @@ from .recorrido_web import (
     campos_sin_formulario,
     plantillas_sin_sustituir,
     recorrer,
+    recursos_externos,
     url_for_sin_ruta,
     variables_sin_pasar,
 )
@@ -378,6 +379,14 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
         inf.avisos.append(f"la plantilla {p['plantilla']} (línea {p['linea']}) enseña «{p['texto']}» tal cual: Jinja no lo sustituye (es sintaxis "
                           "de Python o de JavaScript) y quien abre la página ve el marcador escrito, no el valor. En una plantilla Jinja se escribe "
                           "{{ '%.2f'|format(x) }} (con el $ delante si es dinero).")
+    externos = recursos_externos(entrada.parent, raiz)
+    if externos:  # Bootstrap o jQuery de un CDN en un sistema de doble clic (ferretería 22): sin red la web pierde el estilo
+        hosts = ", ".join(sorted({e["host"] for e in externos}))
+        donde = ", ".join(f"{e['recurso']} ({e['archivo']})" for e in externos[:4]) + (" y más" if len(externos) > 4 else "")
+        cuantos = "1 archivo se carga" if len(externos) == 1 else f"{len(externos)} archivos se cargan"
+        inf.avisos.append(f"{cuantos} de internet ({hosts}): {donde}. Un sistema que se abre con doble clic en una computadora de negocio no debería depender de la "
+                          "red: sin conexión la web pierde el estilo, o los menús y los scripts dejan de funcionar. Copia esos archivos a static/ (bájalos una vez con curl) "
+                          "y enlázalos con url_for('static', filename=...), o escribe tu propio CSS; si la web necesita internet por otra razón, ignora este aviso.")
     for p in url_for_sin_ruta(entrada.parent, raiz)[:3]:
         sugerencia = f" (¿quisiste decir «{p['sugerencia']}»?)" if p["sugerencia"] else ""
         inf.errores.append(f"la plantilla {p['plantilla']} (línea {p['linea']}) usa url_for('{p['endpoint']}'), pero ninguna ruta de la web se llama así"
