@@ -5,6 +5,35 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.17] — 2026-11-22 (`verificar` ve tres fallos más de una web: contraseña que solo existe en los tests, panel del empleado con ventas ajenas y campo de formulario que no cuadra)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de dos pruebas reales (la ferretería y la veterinaria) en las que `verificar` dio «todo bien» y no era cierto.
+
+- **Contraseña del resumen que solo existe en los tests.** El mensaje final daba `empleado/empleado123`, pero `empleado123` solo aparecía en `test_app.py`
+  y el programa solo creaba `admin`. Ahora `verificar` rechaza una contraseña del resumen que solo está en archivos de tests y explica las dos
+  salidas (que el programa la cree, o quitarla del resumen). Cuenta como existente si está en el código, en un `seed`, en el README, en un `.env`
+  o en un `config.json`.
+- **Panel de inicio del empleado con ventas de otro vendedor.** El empleado entraba en `/` y veía «Últimas ventas» hechas por el administrador. Ahora,
+  tras el recorrido, `verificar` mira cada página que abre el empleado y, si una tabla de ventas trae una columna de vendedor con otra persona
+  (vendedor, vendió, atendido por, cajero, seller, sold by; o usuario/empleado/user solo si la tabla también tiene importe y venta), da un aviso (nunca un
+  error) con la salida «ignora este aviso» si es lo que quieres. No cuenta vacíos, «N/A», guiones, «Sin …», filas de total ni al propio empleado de prueba.
+- **Campo de formulario que la ruta exige y el formulario no trae.** En la ferretería la pantalla de usuarios enviaba `contrasena` y la ruta
+  `/usuarios/nuevo` leía `request.form.get("password")` y rechazaba el envío si venía vacío: no se podía crear empleados desde la web y `verificar` no
+  lo veía (solo miraba `request.form["k"]`, y daba el campo por presente con cualquier literal, como `type="password"` o `id="password"`). Ahora
+  da un error propio, con los campos que sí trae el formulario, cuando la ruta lee `request.form.get("k")` y rechaza el envío si viene vacío
+  (`if not v: return|raise|abort`, también con `.strip()`, `.lower()`, `.upper()` y `.title()`). Un campo solo cuenta como presente si está en el
+  código (script, `{{ }}`, `on…=`) y no en `id=`, `for=`, `placeholder=` o `type=`; los `.js` locales que carga la plantilla cuentan, y si crean campos
+  (`FormData`, `createElement`) callan el aviso.
+- Medido sin el modelo, en 122-123 carpetas guardadas: la ferretería real da el error de `contrasena`/`password` y la corregida ninguno; 1
+  acierto nuevo de campos (editar usuario enviaba solo `rol` y la ruta exigía `nombre`, comprobado con el cliente de Flask), 3 avisos nuevos de panel
+  (vistos a mano: todos enseñaban ventas del administrador), 1 veredicto nuevo de contraseña, y 0 falsos en los tres; el análisis no tarda más
+  (el análisis de campos: 4,2 s antes y 4,15 s ahora en 123 webs; la prueba con web: 12,8 s antes y 12,9 s ahora de media por web). Cambiando el `name=` de un campo en 39 webs con rutas
+  validadas, 79 de 109 cambios se ven (con el criterio de antes, 32); de los 30 restantes, 17 son webs que `verificar` no lee con seguridad y 12 usan
+  JavaScript o un nombre dinámico. **No medido:** nada de esto con el modelo. 762 pruebas del motor pasan (26 nuevas; 4 omitidas); ruff limpio en el
+  motor y en los tests tocados. Rust y la interfaz no cambian respecto a la 4.13.10.
+
+---
+
 ## [4.13.16] — 2026-11-21 (un `.bat` que llama a una herramienta de Aura o que promete resolver sin calcular ya no pasa)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de una prueba real del horario de menor coste.
