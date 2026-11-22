@@ -161,6 +161,7 @@ class Agente:
     def _compactar(self, forzar: bool = False) -> None:
         inicio = time.time()
         texto = self.ctx.compactar(self.llm, self._estado(), forzar=forzar)
+        self.h.leidos.clear()  # el modelo ya no ve lo leído: que pueda volver a leerlo sin que se le diga «ya lo leíste»
         metricas.anotar(self.h.dir_agente, tipo="compactar", paso=self.pasos_totales, s=round(time.time() - inicio, 2),
                         texto=texto)
         self._salida("aviso", f"({texto})")

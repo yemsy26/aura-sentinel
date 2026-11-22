@@ -311,23 +311,29 @@ class Herramientas:
             return f"No existe el archivo: {ruta}. Usa listar para ver los nombres reales."
         todas = p.read_text(encoding="utf-8", errors="replace").splitlines()
         firma = (p.stat().st_mtime_ns, p.stat().st_size)
-        # Una misión pedía lineas=86 para ver la línea 86: recibía otra vez las líneas 1-86, repetía y se detenía sin
-        # contestar. Sin desde y con el principio ya leído, pedir 'lineas' no da nada nuevo: se le explica.
-        if desde is None and lineas is not None and (previo := self.leidos.get(p)) and previo[:2] == firma:
-            n, visto = int(lineas), previo[2]
-            seguir = (f"Para seguir donde lo dejaste usa desde={visto + 1}; " if visto < len(todas) else
-                      "Ya lo tienes entero; ")
-            return (f"{self.rel(p)}: ya leíste este archivo desde la línea 1 (hasta la {visto} de {len(todas)}) y no ha "
-                    f"cambiado. 'lineas' es CUÁNTAS líneas leer, no el número de línea. {seguir}para empezar en la "
-                    f"línea {n}, desde={n}. Si de verdad quieres otra vez el principio, pide desde=1.")
+        previo = self.leidos.get(p)
+        visto = previo[2] if previo and previo[:2] == firma else 0  # hasta dónde se leyó desde la línea 1 (el archivo sin cambios)
+        nota = ""
+        # El modelo pide 'lineas=86' para ver la línea 86, o repite 'lineas=340' tras leer 1-340: quiere seguir leyendo. Explicarle que
+        # 'lineas' es una cantidad no sirvió (Qwen repetía la llamada hasta que el bucle cortaba a la quinta; ferretería 23, 4.13.18): con el
+        # principio ya leído y sin 'desde', se le sirven las líneas siguientes.
+        if desde is None and lineas is not None and visto:
+            if visto >= len(todas):
+                return (f"{self.rel(p)}: ya lo tienes entero ({len(todas)} líneas) y no ha cambiado; está más arriba en la conversación. "
+                        "Para ver una parte concreta usa desde=N (la línea con la que empezar); para releer el principio, desde=1.")
+            desde = visto + 1
+            nota = (f"[Ya habías leído hasta la línea {visto}: aquí van las siguientes. 'lineas' es CUÁNTAS líneas leer; para empezar en una "
+                    "línea concreta usa desde=N, y desde=1 para el principio.]\n")
         desde = max(1, int(desde or 1))
         sel = todas[desde - 1: desde - 1 + max(1, min(int(lineas or 200), 400))]
         cuerpo = "\n".join(f"{i}| {l}" for i, l in enumerate(sel, desde))
         fin = desde + len(sel) - 1
         if desde == 1:
             self.leidos[p] = (*firma, fin)
+        elif visto and desde <= visto + 1:  # sigue justo donde lo dejó: lo leído desde el principio crece
+            self.leidos[p] = (*firma, max(visto, fin))
         resto = f"\n[líneas {desde}-{fin} de {len(todas)}; usa desde={fin + 1} para seguir]" if fin < len(todas) else ""
-        return recortar(f"{self.rel(p)} ({len(todas)} líneas)\n{cuerpo}{resto}", self.max_chars)
+        return recortar(f"{self.rel(p)} ({len(todas)} líneas)\n{nota}{cuerpo}{resto}", self.max_chars)
 
     def buscar(self, patron: str, ruta: str = ".", extension: str = "") -> str:
         try:

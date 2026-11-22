@@ -95,11 +95,13 @@ class Peluqueria(unittest.TestCase):
         self.addCleanup(h.detener_todos)
         h.escribir("gui.py", "\n".join(f"linea {i}" for i in range(1, 701)))
         self.assertIn("50| linea 50", h.leer("gui.py", desde=1, lineas=50))
-        aviso = h.leer("gui.py", lineas=86)
-        self.assertNotIn("| linea", aviso)
-        self.assertIn("'lineas' es CUÁNTAS líneas", aviso)
-        self.assertIn("desde=51", aviso)
-        self.assertIn("desde=86", aviso)
+        # Antes se explicaba sin servir nada y el modelo repetía la llamada (ferretería 23): ahora sigue donde se quedó (tests/test_leer_continuar.py).
+        sigue = h.leer("gui.py", lineas=86)
+        self.assertNotIn("\n1| linea 1\n", sigue)
+        self.assertIn("51| linea 51", sigue)
+        self.assertIn("86| linea 86", sigue)
+        self.assertIn("'lineas' es CUÁNTAS líneas", sigue)
+        self.assertIn("Ya habías leído hasta la línea 50", sigue)
         self.assertIn("86| linea 86", h.leer("gui.py", desde=86, lineas=20))
         self.assertIn("1| linea 1", h.leer("gui.py", desde=1, lineas=5))  # pedir el principio a propósito sí vale
         h.escribir("gui.py", "\n".join(f"otra {i}" for i in range(1, 701)))
