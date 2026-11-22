@@ -5,6 +5,33 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.18] — 2026-11-22 (`verificar` ve dos fallos más de una web —ventas de otros en una tabla sin vendedor y librerías cargadas de internet— y el agente tiene una guía de diseño visual)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de la ferretería (22), la repetición del mandato con la 4.13.17: la entrega salió bien en lo que `verificar` comprueba y aun así tenía dos fallos que no veía.
+
+- **Ventas de otros en una tabla sin columna de vendedor.** `/ventas/nueva` enseñaba al empleado las 10 ventas más recientes de todos (total y cliente),
+  sin filtrar por vendedor, y `verificar` dio 0 avisos: la tabla no tiene columna de vendedor (la regla del panel de la 4.13.17 no la cogía) ni enlaces de detalle
+  (la de «filas» tampoco). Ahora, en la segunda lectura del empleado, una tabla con importe y folio/factura/venta (o cliente junto a fecha, hora o producto), sin
+  columna de vendedor y con alguna fila de importe distinto de cero da un aviso (nunca un error) con la salida «ignora este aviso»: el empleado de la prueba no ha
+  vendido nada, así que una lista filtrada por vendedor sale vacía. No cuenta listas de productos o de clientes con un «Total comprado», tablas vacías, «No hay
+  ventas», filas de totales ni una ruta ya avisada por otra regla. Sin peticiones nuevas.
+- **Librerías cargadas de internet.** La (22) cargaba Bootstrap 5.3.3 de `cdn.jsdelivr.net` y el mandato era «que funcione en mi computadora con un doble clic»: sin red
+  la web pierde el estilo y los menús, y `verificar` la abre con red y no lo nota. Ahora, en las webs con servidor, un aviso nombra los `<link>` o `<script src>`
+  con `https://` (o `//`) y los `@import` de un CSS (Bootstrap, jQuery, Tailwind, Chart.js, tipografías), con su plantilla, y da las dos salidas: copiarlos a `static/`
+  y enlazarlos con `url_for('static', ...)`, o ignorar el aviso si la web necesita internet (también se calla si el README de la raíz lo dice). No cuenta iconos,
+  enlaces `<a>`, imágenes, comentarios, `localhost`, tests ni dependencias, ni páginas o juegos estáticos (los de Three.js por importmap).
+- **Guía de diseño visual (`guia("diseno")`).** El agente no tenía nada sobre aspecto: la guía `web` traía una línea de CSS. En las 104 webs guardadas con HTML lo básico
+  ya estaba (viewport 100 %, `@media` 77 %, variables CSS 75 %), pero casi todas repetían la misma paleta (`#2563eb` en 74, `#dc2626` en 73) y 67 usaban emojis como iconos.
+  La guía (3,2 KB) pide el color de marca según el negocio, la paleta en `:root`, un solo CSS sin CDN, sin emojis como iconos, componentes iguales, estados (foco,
+  vacío, error), móvil de 375 px sin scroll horizontal y accesibilidad; lo que pida el usuario manda. Se encuentra por «diseño», «ux», «ui», «estilo», «responsive»…,
+  el método la nombra en la lista de guías con una regla de una línea y `web.md` remite a ella.
+- Medido sin el modelo: la (22) da los dos avisos nuevos y las copias corregidas (Bootstrap en `static/`, lista filtrada por vendedor) ninguno; en 123 carpetas
+  guardadas, 6 avisos de tablas de ventas (5 webs) y 13 de librerías de internet (las 13 que las cargan), todos vistos a mano y verdaderos, 0 falsos; el tiempo por web no cambia
+  (13,2 s). **No medido:** la guía de diseño con el modelo (no se sabe si el agente la lee ni si cuesta más pasos). 799 pruebas del motor pasan (37 nuevas; 4 omitidas);
+  ruff limpio en el motor y en los tests tocados. Rust y la interfaz no cambian respecto a la 4.13.10.
+
+---
+
 ## [4.13.17] — 2026-11-22 (`verificar` ve tres fallos más de una web: contraseña que solo existe en los tests, panel del empleado con ventas ajenas y campo de formulario que no cuadra)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de dos pruebas reales (la ferretería y la veterinaria) en las que `verificar` dio «todo bien» y no era cierto.
