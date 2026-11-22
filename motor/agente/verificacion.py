@@ -470,12 +470,20 @@ def probar_web(raiz: Path, entrada: Path, python: str, inf: Informe) -> bool:
                            f"(500) al abrir {', '.join(emp['error'][:4])}, donde el administrador la abre bien. Revisa lo que esa ruta "
                            "hace con un usuario que no es administrador: ¿lee una columna o una clave que no se carga para ese rol, o "
                            "una variable que solo existe para el administrador? Mira la traza en la consola de la web.")
-    if emp.get("ajenas"):
+    abiertas = [a for a in emp.get("ajenas") or [] if a["motivo"] != "vendedor"]
+    if abiertas:
         inf.avisos.append(f"{rel}: un empleado (creado con rol de empleado desde la pantalla de usuarios) abre "
-                          f"{', '.join(a['ruta'] for a in emp['ajenas'][:4])}: ventas o facturas de otros usuarios (él no ha vendido "
+                          f"{', '.join(a['ruta'] for a in abiertas[:4])}: ventas o facturas de otros usuarios (él no ha vendido "
                           "nada). Si cada empleado solo debe ver lo suyo, filtra por el vendedor en la lista y comprueba de quién es "
                           "en el detalle (403 o 404 si no es suyo); si en este negocio los empleados ven todas las ventas, ignora "
                           "este aviso.")
+    en_tabla = [a for a in emp.get("ajenas") or [] if a["motivo"] == "vendedor" and all(a["ruta"] != x["ruta"] for x in abiertas)]
+    if en_tabla:  # el panel de inicio con «Últimas ventas» de todos aunque /ventas ya filtre por vendedor
+        donde = ", ".join(f"{a['ruta']} (vendedor {', '.join(f'«{v}»' for v in a['vendedores'])})" for a in en_tabla[:4])
+        inf.avisos.append(f"{rel}: un empleado (creado con rol de empleado desde la pantalla de usuarios) ve en {donde} una lista de "
+                          "ventas de otros vendedores (él no ha vendido nada). Si cada empleado solo debe ver lo suyo, filtra también "
+                          "esa lista por el vendedor (el panel de inicio suele enseñar «Últimas ventas» de todos aunque /ventas ya "
+                          "filtre); si en este negocio los empleados ven todas las ventas, ignora este aviso.")
     modulo = (' Esta pantalla carga un <script type="module">: las funciones de un módulo no son globales y un onclick="función()" no las ve; '
               "engancha los botones con addEventListener dentro del módulo o asigna window.función = función.")
     for e in (r.get("venta") or {}).get("errores", [])[:2]:

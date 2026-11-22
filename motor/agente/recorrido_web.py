@@ -107,6 +107,14 @@ IMPORTE = re.compile(r"(?<![\w.,/-])(?:RD\$|US\$|[$€])?\s?(\d{1,3}(?:[.,]\d{3}
 FORMULARIO_RUTA = re.compile(r"(?i)/(?:nuev[ao]s?|new|crear|create|agregar|add|alta|editar|edit)(?:/|$|\?)")
 GENERAR_FACTURA = re.compile(r"(?i)generar|emitir|crear\s+factura|nueva\s+factura|new\s+invoice|facturar|generate")
 NUM_FACTURA = re.compile(r"(?i)\b(?:fac|fact|inv|f)[-_ ]?\d{2,}\b")
+# Una tabla de ventas con columna de vendedor (el panel de inicio «Últimas ventas» de la ferretería: vendedor admin para el empleado, mientras
+# /ventas e /historial ya filtraban). La cabecera fuerte basta con una de importe; la débil (usuario, empleado) pide además una de venta.
+CAB_VENDEDOR = re.compile(r"(?i)\b(?:vendedor\w*|vendi[óo]|vendido\s+por|atendi[óo]|atendido\s+por|cajer[oa]s?|seller|sold\s+by|cashier|salesperson)\b")
+CAB_VENDEDOR_DEBIL = re.compile(r"(?i)\b(?:usuario|empleado|user|employee|registrado\s+por|creado\s+por|responsable)\b")
+CAB_IMPORTE = re.compile(r"(?i)\b(?:total|importe|monto|subtotal|amount)\b")
+CAB_VENTA = re.compile(r"(?i)\b(?:cliente|customer|fecha|date|folio|factura|invoice|venta|sale)\b")
+PROPIO = re.compile(r"(?i)\bempleado[ _]?aura\b")  # el empleado de la prueba (EMPLEADO_USUARIO, «Empleado Aura»)
+SIN_VENDEDOR = re.compile(r"(?i)^\W*(?:n/?a|ning[uú]n[oa]?|none|null|sin\s+\w+)?\W*$|^\W*(?:sub)?total(?:es)?\b")
 
 
 class _Pagina(html.parser.HTMLParser):
@@ -165,6 +173,78 @@ class _Pagina(html.parser.HTMLParser):
             self._select = None
         elif tag == "option":
             self._opcion = None
+
+
+class _Tablas(html.parser.HTMLParser):
+    """Las tablas de una página como texto: [{"cabeceras": [...], "filas": [[celda, ...], ...]}]. La cabecera es la primera fila de <th>; las
+    tablas anidadas se ignoran (cuenta la de fuera)."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tablas: list[dict] = []
+        self._tabla = self._fila = self._celda = None
+        self._nivel = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._nivel += 1
+            if self._nivel == 1:
+                self._tabla = {"cabeceras": [], "filas": []}
+                self.tablas.append(self._tabla)
+        elif self._tabla is None or self._nivel != 1:
+            return
+        elif tag == "tr":
+            self._fila = []
+        elif tag in ("th", "td") and self._fila is not None:
+            self._celda = [tag, ""]
+
+    def handle_data(self, data):
+        if self._celda is not None:
+            self._celda[1] += data
+
+    def handle_endtag(self, tag):
+        if tag == "table":
+            self._nivel = max(0, self._nivel - 1)
+            if self._nivel == 0:
+                self._tabla = self._fila = self._celda = None
+        elif self._tabla is None or self._nivel != 1:
+            return
+        elif tag in ("th", "td") and self._celda is not None and self._fila is not None:
+            self._fila.append((self._celda[0], " ".join(self._celda[1].split())))
+            self._celda = None
+        elif tag == "tr" and self._fila is not None:
+            if self._fila and all(k == "th" for k, _ in self._fila):
+                if not self._tabla["cabeceras"]:
+                    self._tabla["cabeceras"] = [t for _, t in self._fila]
+            elif self._fila:
+                self._tabla["filas"].append([t for _, t in self._fila])
+            self._fila = None
+
+
+def _vendedores_ajenos(texto: str) -> list[str]:
+    """Los vendedores que enseña una tabla de ventas de esta página, sin contar a ningún empleado de la prueba (que no ha vendido nada): si el
+    empleado las abre, son ventas de otro. Vacío si no hay tabla con columna de vendedor y de importe."""
+    tablas = _Tablas()
+    try:
+        tablas.feed(texto)
+        tablas.close()
+    except Exception:  # un HTML roto no debe estropear nada
+        return []
+    otros: list[str] = []
+    for t in tablas.tablas:
+        cab = t["cabeceras"]
+        if not any(CAB_IMPORTE.search(c) for c in cab):
+            continue
+        fuerte = next((i for i, c in enumerate(cab) if CAB_VENDEDOR.search(c)), None)
+        debil = next((i for i, c in enumerate(cab) if CAB_VENDEDOR_DEBIL.search(c)), None) if any(CAB_VENTA.search(c) for c in cab) else None
+        columna = fuerte if fuerte is not None else debil
+        if columna is None:
+            continue
+        for fila in t["filas"]:
+            valor = fila[columna] if len(fila) == len(cab) else ""
+            if re.search(r"[^\W\d_]", valor) and not SIN_VENDEDOR.search(valor) and not PROPIO.search(valor) and valor not in otros:
+                otros.append(valor)
+    return otros
 
 
 def _valor(campo: dict, hoy: str) -> str | None:
@@ -733,6 +813,13 @@ def _empleado(r: _Recorrido, limite: float) -> dict | None:
     return resultado
 
 
+def _anotar_vendedores(emp: dict, ruta: str, texto: str) -> None:
+    """Si la página del empleado tiene una tabla de ventas con vendedores que no son él (no ha vendido nada), la apunta en emp["ajenas"]."""
+    otros = _vendedores_ajenos(texto)
+    if otros and not any(a["ruta"] == ruta and a["motivo"] == "vendedor" for a in emp["ajenas"]):
+        emp["ajenas"].append({"ruta": ruta, "motivo": "vendedor", "vendedores": otros[:3]})
+
+
 def _empleado_despues(r: _Recorrido, previo: _Recorrido, emp: dict | None, limite: float) -> None:
     """Segunda lectura, DESPUÉS del recorrido de siempre (que ya vendió con los formularios de la web): el empleado vuelve a entrar y
     abre lo que el administrador abrió. Un 500 solo suyo, o las ventas y facturas de otros (él no ha vendido nada), se anotan en emp.
@@ -775,6 +862,8 @@ def _empleado_despues(r: _Recorrido, previo: _Recorrido, emp: dict | None, limit
                 emp["error"].append(ruta)
             continue
         destino = (e.dentro(final, final) or "").split("?")[0]
+        if estado < 400 and destino == camino:
+            _anotar_vendedores(emp, ruta, texto)
         if estado >= 400 or destino != camino or not VENTAS_RUTA.search(camino):
             continue
         estado_a, _, ajeno = r.pedir(ruta)
@@ -787,6 +876,10 @@ def _empleado_despues(r: _Recorrido, previo: _Recorrido, emp: dict | None, limit
                 emp["ajenas"].append({"ruta": ruta, "motivo": "detalle", "parecido": round(parecido, 2)})
         elif any(CON_ID.search(h) and VENTAS_RUTA.search(h.split("?")[0]) for h in e._leer(texto).enlaces):
             emp["ajenas"].append({"ruta": ruta, "motivo": "filas"})
+    if "/" not in rutas and time.time() < limite:  # el panel de inicio: «Últimas ventas» de todos aunque /ventas ya filtre (ferretería 18)
+        estado, final, texto = e.pedir("/")
+        if estado < 400 and (e.dentro(final, final) or "").split("?")[0] == "/":
+            _anotar_vendedores(emp, "/", texto)
 
 
 def _informes_y_facturas(r: _Recorrido, limite: float) -> dict:
