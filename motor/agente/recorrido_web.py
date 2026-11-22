@@ -1880,6 +1880,10 @@ CAMPOS_JS_ARMA = re.compile(r"""FormData|\.append\(|preventDefault|createElement
                             r"""\.setAttribute\(\s*["']name|\.name\s*=""")
 CAMPOS_COMENTARIO_JINJA = re.compile(r"(?s)\{#.*?#\}")
 CAMPOS_WTF = re.compile(r"(?m)^\s*(?:from|import)\s+(?:flask_wtf|wtforms)\b")
+CAMPOS_SCRIPT_LOCAL = re.compile(r"""(?is)<script\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+# Lo que en una plantilla es código y puede nombrar un campo: scripts, expresiones y etiquetas de Jinja y atributos on...= (el resto es HTML plano)
+CAMPOS_CODIGO = re.compile(r"""(?is)<script\b[^>]*>.*?</script\s*>|\{\{.*?\}\}|\{%.*?%\}|\bon\w+\s*=\s*(?:"[^"]*"|'[^']*')""")
+CAMPOS_NOMBRE_ATRIBUTO = re.compile(r"""(?i)\bname\s*=\s*["']?([\w.-]+)""")
 CAMPOS_SI_POST = re.compile(r"""^(?:request\.method\s*==\s*["']POST["']|["']POST["']\s*==\s*request\.method)$""")
 
 
@@ -1920,6 +1924,59 @@ def _form_exigidos(funcion) -> set[str]:
 
     cuerpo(funcion.body)
     return exigidos - protegidos
+
+
+def _clave_del_get(nodo) -> str | None:
+    """`request.form.get("k")` (o con un valor por defecto vacío, y con .strip()/.lower()/.upper()/.title() encadenados): "k". Con un valor
+    por defecto que no sea vacío el campo es opcional (`get("rol", "empleado")`): None."""
+    while (isinstance(nodo, ast.Call) and isinstance(nodo.func, ast.Attribute) and nodo.func.attr in ("strip", "lower", "upper", "title")
+           and not nodo.args):
+        nodo = nodo.func.value
+    if not (isinstance(nodo, ast.Call) and isinstance(nodo.func, ast.Attribute) and nodo.func.attr == "get"
+            and _es_request_form(nodo.func.value) and nodo.args and not nodo.keywords and len(nodo.args) <= 2):
+        return None
+    if len(nodo.args) == 2 and not (isinstance(nodo.args[1], ast.Constant) and not nodo.args[1].value):
+        return None
+    return _literal(nodo.args[0])
+
+
+def _form_validados(funcion) -> set[str]:
+    """Campos que la función lee con `request.form.get("k")` en una variable y rechaza si vienen vacíos, siempre que se hace el POST:
+    `if not v: ... return|raise|abort` o `if not v or not w: ...` (con `or` cada uno es obligatorio; con `and`, ninguno). La ferretería (18)
+    leía `password` y el formulario enviaba `contrasena`: cada envío acababa en «usuario y contraseña son obligatorios»."""
+    variables: dict[str, str] = {}
+    validados: set[str] = set()
+
+    def rechaza(sentencias) -> bool:
+        return any(isinstance(s, (ast.Return, ast.Raise)) or (isinstance(s, ast.Expr) and isinstance(s.value, ast.Call)
+                                                              and getattr(s.value.func, "id", getattr(s.value.func, "attr", "")) == "abort")
+                   for s in sentencias)
+
+    def vacias(test) -> list[str]:
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not) and isinstance(test.operand, ast.Name):
+            return [test.operand.id]
+        if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
+            return [v for x in test.values for v in vacias(x)]
+        return []
+
+    def cuerpo(sentencias) -> None:
+        for s in sentencias:
+            if isinstance(s, ast.If):
+                if CAMPOS_SI_POST.match(ast.unparse(s.test).strip()):
+                    cuerpo(s.body)
+                elif rechaza(s.body):
+                    validados.update(variables[v] for v in vacias(s.test) if v in variables)
+            elif isinstance(s, ast.With):
+                cuerpo(s.body)
+            elif isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
+                clave = _clave_del_get(s.value)
+                if clave:
+                    variables[s.targets[0].id] = clave
+                else:
+                    variables.pop(s.targets[0].id, None)  # ya no es el campo del formulario
+
+    cuerpo(funcion.body)
+    return validados
 
 
 def _rutas_con_exigidos(carpetas) -> tuple[list[dict], dict[str, int]] | None:
@@ -1968,10 +2025,12 @@ def _rutas_con_exigidos(carpetas) -> tuple[list[dict], dict[str, int]] | None:
                 continue
             por_endpoint[endpoint] = por_endpoint.get(endpoint, 0) + 1
             exigidos = _form_exigidos(n) if reglas_post and not desconocida else set()
-            if exigidos:
+            validados = _form_validados(n) - exigidos if reglas_post and not desconocida else set()
+            if exigidos or validados:
                 dibuja = {_literal(c.args[0]) for c in ast.walk(n) if isinstance(c, ast.Call) and c.args and _literal(c.args[0])
                           and getattr(c.func, "id", getattr(c.func, "attr", "")) == "render_template"}
-                rutas.append({"funcion": n.name, "endpoint": endpoint, "reglas": reglas_post, "exigidos": exigidos, "dibuja": dibuja})
+                rutas.append({"funcion": n.name, "endpoint": endpoint, "reglas": reglas_post, "exigidos": exigidos, "validados": validados,
+                              "dibuja": dibuja})
     return rutas, por_endpoint
 
 
@@ -2030,9 +2089,33 @@ def campos_sin_formulario(*carpetas: Path, motivos: dict | None = None) -> list[
             salida += resto
         return salida
 
+    js_por_nombre: dict[str, list[Path]] = {}
+
+    def js_de(archivos_: list[Path]) -> list[str]:
+        """Los textos de los .js del proyecto que esas plantillas cargan con <script src=...> (m4148_neg4: static/js/ventas.js crea el campo
+        oculto `items` al enviar y la plantilla no lo tiene)."""
+        if not js_por_nombre:
+            js_por_nombre["."] = []
+            for _, j in _archivos(carpetas, {".js"}):
+                js_por_nombre.setdefault(j.name, []).append(j)
+        salida: list[str] = []
+        for a in archivos_:
+            for m in CAMPOS_SCRIPT_LOCAL.finditer(texto(a)):
+                nombres = re.findall(r"([\w.-]+\.js)\b", m.group(1) if m.group(1) is not None else m.group(2))
+                for j in js_por_nombre.get(nombres[-1], []) if nombres else []:
+                    try:
+                        if j.stat().st_size <= 400_000:
+                            salida.append(j.read_text(encoding="utf-8", errors="replace"))
+                    except OSError:
+                        continue
+        return salida
+
     def tiene(archivos_: list[Path], campo: str) -> bool:
-        c = re.escape(campo)
-        return any(re.search(rf"""(?i)\bname\s*=\s*["']?{c}(?![\w.-])""", texto(a)) or re.search(rf"""["']{c}["']""", texto(a)) for a in archivos_)
+        c = re.escape(campo)  # el literal entre comillas solo cuenta en código: id="password", for=, placeholder= o type="password" no son el campo
+        nombre, literal = rf"""(?i)\bname\s*=\s*["']?{c}(?![\w.-])""", rf"""["']{c}["']"""
+        return (any(re.search(nombre, texto(a)) or re.search(literal, " ".join(m.group(0) for m in CAMPOS_CODIGO.finditer(texto(a))))
+                    for a in archivos_)
+                or any(re.search(nombre, t) or re.search(literal, t) for t in js_de(archivos_)))
 
     dibujadas: dict[int, set[Path]] = {}  # por ruta: los archivos que pinta su plantilla (ella y lo que incluye)
     for r in rutas:
@@ -2051,7 +2134,8 @@ def campos_sin_formulario(*carpetas: Path, motivos: dict | None = None) -> list[
         if propios is None or todos is None:
             nota("plantilla_no_seguible")
             continue
-        if any(CAMPOS_JS_ARMA.search(texto(a)) for a in propios) or any(CAMPOS_NOMBRE_DINAMICO.search(texto(a)) for a in todos):
+        if (any(CAMPOS_JS_ARMA.search(texto(a)) for a in propios) or any(CAMPOS_JS_ARMA.search(t) for t in js_de(propios))
+                or any(CAMPOS_NOMBRE_DINAMICO.search(texto(a)) for a in todos)):
             nota("js_o_nombre_dinamico")
             continue
         rel = f.relative_to(bases[f]).as_posix()
@@ -2079,12 +2163,15 @@ def campos_sin_formulario(*carpetas: Path, motivos: dict | None = None) -> list[
             nota("form_post_con_ruta_exigente" if destinos else "form_post_sin_ruta_exigente")
             for r in destinos:
                 aqui = todos + [a for a in dibujadas[id(r)] if a not in todos] if accion in ("", "#") else todos
-                for campo in sorted(r["exigidos"]):
+                fin = t.lower().find("</form", m.end())
+                suyos = list(dict.fromkeys(n for n in CAMPOS_NOMBRE_ATRIBUTO.findall(t[m.end(): fin if fin >= 0 else len(t)])
+                                           if not re.search(r"(?i)csrf", n)))[:8]
+                for campo, tipo in sorted([(c, "indexa") for c in r["exigidos"]] + [(c, "valida") for c in r["validados"]]):
                     if tiene(aqui, campo) or (rel, r["funcion"], campo) in vistos:
                         continue
                     vistos.add((rel, r["funcion"], campo))
                     hallazgos.append({"plantilla": rel, "linea": t.count("\n", 0, m.start()) + 1, "ruta": r["reglas"][0][0],
-                                      "funcion": r["funcion"], "campo": campo})
+                                      "funcion": r["funcion"], "campo": campo, "tipo": tipo, "formulario": suyos})
     return hallazgos
 
 

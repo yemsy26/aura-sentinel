@@ -158,13 +158,99 @@ class Hallazgos(unittest.TestCase):
         self.assertEqual(h1["campo"], "nombre_completo")
 
 
+APP_VALIDA = '''from flask import Flask, render_template, request, redirect, flash
+app = Flask(__name__)
+
+@app.route("/usuarios/nuevo", methods=["POST"])
+def usuario_nuevo():
+%s
+    return redirect("/usuarios")
+
+@app.route("/usuarios")
+def usuarios():
+    return render_template("usuarios.html")
+'''
+VALIDA = ('    username = request.form.get("username", "").strip()\n    password = request.form.get("password", "").strip()\n'
+          '    rol = request.form.get("rol", "empleado")\n    if not username or not password:\n        flash("Usuario y contraseña son obligatorios.")\n'
+          '        return redirect("/usuarios")')
+ALTA = '<form method="post" action="{{ url_for(\'usuario_nuevo\') }}">%s</form>'
+
+
+class CamposValidados(unittest.TestCase):
+    """Ferretería (18): tras «mejora el diseño» el formulario enviaba `contrasena` y la ruta leía `password` con .get y rechazaba el envío si venía
+    vacío: no se podía crear ningún empleado desde la pantalla y verificar no decía nada (solo miraba request.form["k"])."""
+
+    setUp = Hallazgos.setUp
+    web = Hallazgos.web
+
+    def alta(self, campos: str, cuerpo: str = VALIDA, extra: dict | None = None, plantillas: dict | None = None) -> list[dict]:
+        return self.web(APP_VALIDA % cuerpo, {"usuarios.html": ALTA % campos, **(plantillas or {})}, extra)
+
+    def test_el_campo_que_la_ruta_valida_con_get_y_el_formulario_llama_distinto(self):
+        [h] = self.alta('<input type="text" name="username"><input type="password" name="contrasena"><select name="rol"></select>')
+        self.assertEqual((h["plantilla"], h["ruta"], h["funcion"], h["campo"], h["tipo"]),
+                         ("templates/usuarios.html", "/usuarios/nuevo", "usuario_nuevo", "password", "valida"))
+        self.assertEqual(h["formulario"], ["username", "contrasena", "rol"])
+
+    def test_con_el_mismo_nombre_no_avisa(self):
+        self.assertEqual(self.alta('<input name="username"><input type="password" name="password"><select name="rol"></select>'), [])
+
+    def test_un_id_o_un_type_con_ese_nombre_no_es_el_campo(self):
+        [h] = self.alta('<label for="password">Clave</label><input name="username"><input type="password" id="password" name="contrasena" placeholder="password">')
+        self.assertEqual(h["campo"], "password")
+
+    def test_dentro_del_if_del_post(self):
+        cuerpo = '    if request.method == "POST":\n' + "\n".join("    " + x for x in VALIDA.splitlines())
+        [h] = self.web(APP_VALIDA.replace('methods=["POST"]', 'methods=["GET", "POST"]') % cuerpo,
+                       {"usuarios.html": ALTA % '<input name="username"><input name="contrasena">'})
+        self.assertEqual((h["campo"], h["tipo"]), ("password", "valida"))
+
+    def test_lo_que_no_se_rechaza_si_viene_vacio_no_cuenta(self):
+        campos = '<input name="username"><input name="contrasena">'
+        casos = {
+            "solo un valor por defecto": VALIDA.replace('flash("Usuario y contraseña son obligatorios.")\n        return redirect("/usuarios")',
+                                                        'password = "1234"'),
+            "con and no es obligatoria ninguna": VALIDA.replace("not username or not password", "not username and not password"),
+            "valor por defecto": VALIDA.replace('request.form.get("password", "")', 'request.form.get("password", "1234")'),
+            "sin validar": '    password = request.form.get("password", "")\n    return redirect("/usuarios")',
+            "validado dentro de otro if": VALIDA.replace("    if not username", "    if hay:\n      if not username").replace(
+                '        flash("Usuario y contraseña son obligatorios.")\n        return redirect("/usuarios")',
+                '        flash("x")\n        return redirect("/usuarios")'),
+            "otra variable": VALIDA.replace("not username or not password", "not username or not rol"),
+            "reasignada": VALIDA.replace("    if not username", '    password = "x"\n    if not username'),
+        }
+        for nombre, cuerpo in casos.items():
+            with self.subTest(nombre):
+                self.assertEqual(self.alta(campos, cuerpo), [])
+
+    def test_con_or_cada_campo_es_obligatorio_y_se_avisa_de_los_dos(self):
+        hs = self.alta('<input name="usuario"><input name="contrasena">')
+        self.assertEqual(sorted(h["campo"] for h in hs), ["password", "username"])
+
+    def test_el_codigo_que_nombra_el_campo_cuenta(self):
+        campos = '<input name="username"><input name="contrasena">'
+        self.assertEqual(self.alta(campos + "{{ campo('password') }}"), [])
+        self.assertEqual(self.alta(campos + '<script>x.password = "password"</script>'), [])
+
+    def test_un_script_local_que_crea_el_campo_calla(self):
+        """m4148_neg4: static/js/ventas.js crea el campo oculto `items` al enviar; la plantilla no lo tiene."""
+        js = "f.addEventListener('submit', () => { const h = document.createElement('input'); h.name = 'password'; f.appendChild(h) })"
+        carga = '<script defer src="{{ url_for(\'static\', filename=\'js/u.js\') }}"></script>'
+        self.assertEqual(self.alta('<input name="username">' + carga, extra={"static/js/u.js": js}), [])
+        self.assertEqual(len(self.alta('<input name="username">', extra={"static/js/u.js": js})), 1)  # un .js que ninguna plantilla carga no cuenta
+        (self.raiz / "static" / "js" / "u.js").unlink()
+        self.assertEqual(len(self.alta('<input name="username">' + carga, extra={"static/js/otro.js": js})), 1)  # la plantilla carga u.js, que no existe
+
+
 class MensajeDeVerificar(unittest.TestCase):
-    def informe(self, app: str = APP) -> "verificacion.Informe":
+    def informe(self, app: str = APP, plantillas: dict | None = None) -> "verificacion.Informe":
         raiz = Path(tempfile.mkdtemp(prefix="test_campos_msg_"))
         self.addCleanup(shutil.rmtree, raiz, ignore_errors=True)
         (raiz / "app.py").write_text(app, encoding="utf-8")
         (raiz / "templates").mkdir()
         (raiz / "templates" / "form_usuario.html").write_text(FORM, encoding="utf-8")
+        for nombre, texto in (plantillas or {}).items():
+            (raiz / "templates" / nombre).write_text(texto, encoding="utf-8")
         falso = {"errores": [], "plantillas": [], "rotos": [], "raros": [], "enviados": [], "paginas": 3, "formularios": 2,
                  "usuario": "admin", "sin_entrar": False, "entrar_js": False, "navegador": None, "lineas": None,
                  "sin_formulario": [], "registro": False, "entrar_get": False, "sin_permiso": [], "login_vacio": None,
@@ -186,6 +272,14 @@ class MensajeDeVerificar(unittest.TestCase):
         dos = APP.replace('nombre = request.form["nombre_completo"]', 'nombre = request.form["nombre_completo"]\n        edad = request.form["edad"]')
         [m] = self.informe(dos).errores
         self.assertIn('lee request.form["edad"] y request.form["nombre_completo"] y el formulario no tiene esos campos', m)
+
+    def test_el_campo_validado_con_get_tiene_su_propio_mensaje(self):
+        [m] = self.informe(APP_VALIDA % VALIDA, {"usuarios.html": ALTA % '<input name="username"><input name="contrasena"><select name="rol"></select>'}).errores
+        self.assertIn("el formulario de templates/usuarios.html (línea 1) envía a /usuarios/nuevo", m)
+        self.assertIn('lee request.form.get("password") y rechaza el envío si viene vacío', m)
+        self.assertIn("(sus campos son: username, contrasena, rol)", m)
+        self.assertIn("aviso de campo obligatorio", m)
+        self.assertNotIn("400 Bad Request", m)
 
 
 if __name__ == "__main__":
