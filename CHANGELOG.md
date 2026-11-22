@@ -5,6 +5,29 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.16] — 2026-11-21 (un `.bat` que llama a una herramienta de Aura o que promete resolver sin calcular ya no pasa)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de una prueba real del horario de menor coste.
+
+- **`.bat` que llama a una herramienta de Aura.** El `run.bat` de una misión lanzaba `resolver_sat problema.opb`, que es una herramienta de Aura (como
+  `escribir` o `ejecutar`) y no un comando de Windows: con doble clic salía «"resolver_sat" no se reconoce», y ni `crear_bat` ni `verificar` lo
+  veían. Ahora `crear_bat` no crea el archivo y devuelve un error que explica por qué fallaría y qué hacer, y `verificar` acusa la línea de un
+  `.bat` que ya existe (también tras escribirlo o editarlo). No cuenta `git`, ni lo que el proyecto tenga como `.bat`, `.cmd` o `.exe` con ese
+  nombre, ni las líneas de `echo`, `rem`, etiquetas o `python resolver_sat.py`.
+- **`.bat` que promete resolver y solo muestra una solución guardada.** `resolver.bat` y el resumen de la misión decían «regenera el `.opb`, lo
+  resuelve y muestra el resultado», pero solo se regeneraba el `.opb` y `decodificar.py` enseñaba el `horario.modelo` que Aura había calculado:
+  con otros datos seguía mostrando la solución vieja (con el coste de un empleado cambiado, siguió dando $737). Ahora `verificar` da un error si el
+  proyecto trae un `*.modelo` (la solución guardada por `resolver_sat`), un `.bat` que dice resolver, calcular u optimizar, y ningún código del
+  proyecto, fuera de los tests, que calcule (con scipy, python-sat, z3, ortools, pulp, mip, cvxpy, highspy, pyomo, gurobipy o cplex, o que escriba
+  el `.modelo`). El mensaje da las dos salidas: que el proyecto calcule con una librería y su `requirements.txt`, o que el `.bat` y el resumen digan
+  «muestra la solución calculada».
+- **Guía de matemáticas:** una frase nueva dice que lo entregado tiene que poder recalcular sin Aura y que `resolver_sat` nunca va en un `.bat`.
+- Medido sin el modelo: la carpeta real del horario da 1 aviso y la corregida ninguno; 0 mensajes nuevos en 122 carpetas guardadas (195 `.bat`).
+  **No medido:** la frase de la guía con el modelo. 736 pruebas del motor pasan (15 nuevas; 4 omitidas); ruff limpio en el motor y en los tests
+  tocados. Rust y la interfaz no cambian respecto a la 4.13.10.
+
+---
+
 ## [4.13.15] — 2026-11-21 (el motor SAT se actualiza solo al arrancar el agente)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
