@@ -113,6 +113,10 @@ CAB_VENDEDOR = re.compile(r"(?i)\b(?:vendedor\w*|vendi[óo]|vendido\s+por|atendi
 CAB_VENDEDOR_DEBIL = re.compile(r"(?i)\b(?:usuario|empleado|user|employee|registrado\s+por|creado\s+por|responsable)\b")
 CAB_IMPORTE = re.compile(r"(?i)\b(?:total|importe|monto|subtotal|amount)\b")
 CAB_VENTA = re.compile(r"(?i)\b(?:cliente|customer|fecha|date|folio|factura|invoice|venta|sale)\b")
+CAB_CLIENTE = re.compile(r"(?i)\b(?:cliente|customer)\b")
+CAB_FOLIO = re.compile(r"(?i)\b(?:folio|factura|invoice|venta|sale|ticket|recibo)\b")
+CAB_MOMENTO = re.compile(r"(?i)\b(?:fecha|date|hora|time)\b")
+CAB_PRODUCTO = re.compile(r"(?i)\b(?:producto|art[ií]culo|item|cant\w*|qty|quantity)\b")
 PROPIO = re.compile(r"(?i)\bempleado[ _]?aura\b")  # el empleado de la prueba (EMPLEADO_USUARIO, «Empleado Aura»)
 SIN_VENDEDOR = re.compile(r"(?i)^\W*(?:n/?a|ning[uú]n[oa]?|none|null|sin\s+\w+)?\W*$|^\W*(?:sub)?total(?:es)?\b")
 
@@ -245,6 +249,37 @@ def _vendedores_ajenos(texto: str) -> list[str]:
             if re.search(r"[^\W\d_]", valor) and not SIN_VENDEDOR.search(valor) and not PROPIO.search(valor) and valor not in otros:
                 otros.append(valor)
     return otros
+
+
+def _ventas_en_tabla(texto: str) -> tuple[int, str] | None:
+    """Una tabla de ventas con filas y SIN columna de vendedor (esa la mira _vendedores_ajenos): (filas con importe, un importe de ejemplo).
+    Es de ventas si tiene importe y un folio/factura/venta, o un cliente junto a una fecha, hora o producto; las listas de productos o de
+    clientes con un «Total comprado» no lo son. Como el empleado de la prueba no ha vendido nada, una lista filtrada por vendedor sale vacía."""
+    tablas = _Tablas()
+    try:
+        tablas.feed(texto)
+        tablas.close()
+    except Exception:
+        return None
+    for t in tablas.tablas:
+        cab = t["cabeceras"]
+        i = next((n for n, c in enumerate(cab) if CAB_IMPORTE.search(c)), None)
+        if i is None or any(CAB_VENDEDOR.search(c) for c in cab):
+            continue
+        junta = " | ".join(cab)
+        if not (CAB_FOLIO.search(junta) or (CAB_CLIENTE.search(junta) and (CAB_MOMENTO.search(junta) or CAB_PRODUCTO.search(junta)))):
+            continue
+        if CAB_VENDEDOR_DEBIL.search(junta) and CAB_VENTA.search(junta):
+            continue  # con «usuario» o «empleado» como vendedor flojo: _vendedores_ajenos la juzga
+        importes = []
+        for fila in t["filas"]:
+            if len(fila) != len(cab) or PROPIO.search(" ".join(fila)) or SIN_VENDEDOR.search(fila[0]) and fila[0].strip():
+                continue  # fila de otra forma, del propio empleado o de totales
+            if any(float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", fila[i])):
+                importes.append(fila[i])
+        if importes:
+            return len(importes), importes[0]
+    return None
 
 
 def _valor(campo: dict, hoy: str) -> str | None:
@@ -818,6 +853,9 @@ def _anotar_vendedores(emp: dict, ruta: str, texto: str) -> None:
     otros = _vendedores_ajenos(texto)
     if otros and not any(a["ruta"] == ruta and a["motivo"] == "vendedor" for a in emp["ajenas"]):
         emp["ajenas"].append({"ruta": ruta, "motivo": "vendedor", "vendedores": otros[:3]})
+    tabla = _ventas_en_tabla(texto)
+    if tabla and not any(a["ruta"] == ruta and a["motivo"] == "tabla" for a in emp["ajenas"]):
+        emp["ajenas"].append({"ruta": ruta, "motivo": "tabla", "filas": tabla[0], "importe": tabla[1]})
 
 
 def _empleado_despues(r: _Recorrido, previo: _Recorrido, emp: dict | None, limite: float) -> None:
@@ -880,6 +918,8 @@ def _empleado_despues(r: _Recorrido, previo: _Recorrido, emp: dict | None, limit
         estado, final, texto = e.pedir("/")
         if estado < 400 and (e.dentro(final, final) or "").split("?")[0] == "/":
             _anotar_vendedores(emp, "/", texto)
+    otras = {a["ruta"] for a in emp["ajenas"] if a["motivo"] != "tabla"}  # una ruta ya avisada por «filas», «detalle» o «vendedor» no se repite
+    emp["ajenas"] = [a for a in emp["ajenas"] if a["motivo"] != "tabla" or a["ruta"] not in otras]
 
 
 def _informes_y_facturas(r: _Recorrido, limite: float) -> dict:

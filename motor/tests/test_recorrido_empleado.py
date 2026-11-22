@@ -10,7 +10,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agente import verificacion
-from agente.recorrido_web import _vendedores_ajenos, recorrer
+from agente.recorrido_web import _vendedores_ajenos, _ventas_en_tabla, recorrer
 
 WEB = r'''import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -19,7 +19,8 @@ COSTO = "__COSTO__"        # "muestra" u "oculta" el precio de compra al emplead
 ABRE = "__ABRE__"          # reportes y usuarios para el empleado: "si", "no" (redirige), "403" o "propio" (otra página)
 USUARIOS = "__USUARIOS__"  # "con" o "sin" formulario de alta de usuarios
 EMPLEADO_ENTRA = "__ENTRA__"
-PANEL = "__PANEL__"        # "no", "ajeno" (el panel de inicio lista las ventas de todos con su vendedor) o "filtrado" (solo las del que mira)
+PANEL = "__PANEL__"        # "no", "ajeno" (el panel de inicio lista las ventas de todos con su vendedor), "filtrado" (solo las del que mira),
+                           # "sin_col" (la tabla de ventas de todos, sin columna de vendedor, en «/» y en /ventas) o "sin_col_filtrado" (la misma, solo las suyas)
 VENTAS = "__VENTAS__"      # "no" (sin ventas), "ajenas" (el empleado ve todas), "filtra" (solo las suyas) o "500" (el detalle falla al empleado)
 USERS = {"admin": ("pan123", "admin")}
 PRODUCTOS = []
@@ -61,7 +62,11 @@ class Web(BaseHTTPRequestHandler):
                 filas = "".join(f'<li><a href="/ventas/{i}">Venta {i}</a></li>' for i, _ in enumerate(propias, 1))
                 alta = ('<form method="post" action="/ventas/nueva"><input name="producto"><input type="number" name="cantidad">'
                         '<button>Vender</button></form>')
-                return self.responder(200, "<h1>Ventas</h1>" + menu + (f"<ul>{filas}</ul>" if filas else "<p>No hay ventas.</p>") + alta)
+                extra = ""
+                if PANEL == "sin_col" and propias:
+                    extra = ("<table><tr><th>Hora</th><th>Total</th><th>Cliente</th></tr>"
+                             + "".join("<tr><td>10:00</td><td>$450.00</td><td>Pedro</td></tr>" for _ in propias) + "</table>")
+                return self.responder(200, "<h1>Ventas</h1>" + menu + (f"<ul>{filas}</ul>" if filas else "<p>No hay ventas.</p>") + extra + alta)
             n = self.path.rsplit("/", 1)[-1]
             return self.responder(200, f"<h1>Venta {n}</h1>" + menu + f"<p>Venta {n} de la tienda: dos tornillos, vendedor administrador, "
                                                                 f"total 40.00, cliente de mostrador, factura F-{n} emitida y pagada.</p>")
@@ -75,11 +80,17 @@ class Web(BaseHTTPRequestHandler):
         if self.path == "/":
             tabla = ""
             if PANEL != "no" and VENTAS_HECHAS:
-                propias = VENTAS_HECHAS if (admin or PANEL == "ajeno") else []
-                filas = "".join(f"<tr><td>#{i}</td><td>2026-11-21</td><td>40.00</td><td>admin</td><td>Mostrador</td></tr>"
-                                for i, _ in enumerate(propias, 1))
-                tabla = ("<h2>Ultimas ventas</h2><table><tr><th>ID</th><th>Fecha</th><th>Total</th><th>Vendedor</th><th>Cliente</th></tr>"
-                         + filas + "</table>")
+                propias = VENTAS_HECHAS if (admin or PANEL in ("ajeno", "sin_col")) else []
+                if PANEL.startswith("sin_col"):  # como la pantalla de venta de la ferretería (22): ventas recientes de todos, sin vendedor
+                    filas = "".join(f"<tr><td>{i}</td><td>10:00</td><td>Martillo</td><td>3</td><td>$450.00</td><td>Pedro</td></tr>"
+                                    for i, _ in enumerate(propias, 1))
+                    tabla = ("<h2>Ventas recientes</h2><table><tr><th>#</th><th>Hora</th><th>Producto</th><th>Cant.</th><th>Total</th>"
+                             "<th>Cliente</th></tr>" + filas + "</table>")
+                else:
+                    filas = "".join(f"<tr><td>#{i}</td><td>2026-11-21</td><td>40.00</td><td>admin</td><td>Mostrador</td></tr>"
+                                    for i, _ in enumerate(propias, 1))
+                    tabla = ("<h2>Ultimas ventas</h2><table><tr><th>ID</th><th>Fecha</th><th>Total</th><th>Vendedor</th><th>Cliente</th></tr>"
+                             + filas + "</table>")
             return self.responder(200, f"<p>Hola {u}</p>" + menu + tabla)
         if self.path == "/productos":
             filas = "".join(f"<li>{n}" + (f" costo {c}" if admin or COSTO == "muestra" else "") + f" venta {v}</li>"
@@ -240,6 +251,27 @@ class EmpleadoYLasVentas(Base):
     def test_sin_ventas_el_panel_no_dice_nada(self):
         self.assertEqual(self.recorrido(panel="ajeno")["empleado"]["ajenas"], [])
 
+    def test_la_tabla_de_ventas_de_todos_sin_columna_de_vendedor(self):
+        """Ferretería (22): /ventas/nueva enseñaba «ventas recientes» de todos, sin vendedor y sin enlaces: ni «vendedor» ni «filas» la cogían."""
+        e = self.recorrido(ventas="filtra", panel="sin_col")["empleado"]
+        self.assertTrue(e["fase2"])
+        self.assertEqual(e["ajenas"], [{"ruta": "/", "motivo": "tabla", "filas": 1, "importe": "$450.00"}])
+
+    def test_la_misma_tabla_filtrada_por_vendedor_no_dice_nada(self):
+        e = self.recorrido(ventas="filtra", panel="sin_col_filtrado")["empleado"]
+        self.assertTrue(e["fase2"])
+        self.assertEqual(e["ajenas"], [])
+
+    def test_una_ruta_ya_avisada_por_sus_filas_no_se_repite_por_la_tabla(self):
+        e = self.recorrido(ventas="ajenas", panel="sin_col")["empleado"]
+        motivos = sorted((a["ruta"], a["motivo"]) for a in e["ajenas"])
+        self.assertIn(("/ventas", "filas"), motivos)
+        self.assertNotIn(("/ventas", "tabla"), motivos)
+        self.assertIn(("/", "tabla"), motivos)
+
+    def test_sin_ventas_la_tabla_no_dice_nada(self):
+        self.assertEqual(self.recorrido(panel="sin_col")["empleado"]["ajenas"], [])
+
 
 def tabla(cabeceras: list[str], *filas: list[str], th: bool = True) -> str:
     c = "".join(f"<{'th' if th else 'td'}>{x}</{'th' if th else 'td'}>" for x in cabeceras)
@@ -277,6 +309,51 @@ class VendedoresDeUnaTabla(unittest.TestCase):
         self.assertEqual(_vendedores_ajenos(""), [])
         self.assertIsInstance(_vendedores_ajenos("<table><tr><th>Total</th><th>Vendedor</th></tr><tr><td>5</td><td><table><tr><td>x</td></tr>"
                                                  "</table>ana</td></tr></table>"), list)  # una tabla dentro de otra no rompe nada
+
+
+CABECERA_VENTA = ["#", "Hora", "Producto", "Cant.", "Total", "Cliente"]  # la tabla de «ventas recientes» de la ferretería (22)
+
+
+class VentasEnUnaTabla(unittest.TestCase):
+
+    def test_la_tabla_de_la_pantalla_de_venta(self):
+        self.assertEqual(_ventas_en_tabla(tabla(CABECERA_VENTA, ["1", "10:00", "Martillo", "3", "$450.00", "Pedro"],
+                                                ["2", "10:05", "Clavos", "1", "$2.00", "—"])), (2, "$450.00"))
+
+    def test_otras_cabeceras_de_ventas(self):
+        self.assertEqual(_ventas_en_tabla(tabla(["Factura", "Total"], ["F-1", "5.00"])), (1, "5.00"))
+        self.assertEqual(_ventas_en_tabla(tabla(["Cliente", "Fecha", "Importe"], ["Pedro", "hoy", "7,50"])), (1, "7,50"))
+        self.assertEqual(_ventas_en_tabla(tabla(["Customer", "Item", "Amount"], ["Ann", "bolt", "3.00"])), (1, "3.00"))
+
+    def test_las_listas_de_productos_o_clientes_no_son_de_ventas(self):
+        self.assertIsNone(_ventas_en_tabla(tabla(["Producto", "Precio", "Existencia"], ["Martillo", "150", "10"])))
+        self.assertIsNone(_ventas_en_tabla(tabla(["Producto", "Total en inventario"], ["Martillo", "1500.00"])))
+        self.assertIsNone(_ventas_en_tabla(tabla(["Producto", "Fecha de ingreso", "Total"], ["Martillo", "hoy", "1500.00"])))
+        self.assertIsNone(_ventas_en_tabla(tabla(["Cliente", "Teléfono", "Total comprado"], ["Pedro", "809", "450.00"])))
+
+    def test_filas_que_no_son_una_venta_con_importe(self):
+        self.assertIsNone(_ventas_en_tabla(tabla(CABECERA_VENTA)))  # sin filas: una lista filtrada que sale vacía
+        self.assertIsNone(_ventas_en_tabla("<table><tr><th>Hora</th><th>Total</th><th>Cliente</th></tr><tr><td>No hay ventas.</td></tr></table>"))
+        self.assertIsNone(_ventas_en_tabla(tabla(["Hora", "Total", "Cliente"], ["10:00", "0.00", "Pedro"], ["10:01", "—", "Ana"])))
+        self.assertIsNone(_ventas_en_tabla(tabla(CABECERA_VENTA, ["Total", "", "", "", "450.00", ""])))  # fila de totales
+        self.assertEqual(_ventas_en_tabla(tabla(CABECERA_VENTA, ["Total", "", "", "", "450.00", ""],
+                                                ["1", "10:00", "Martillo", "3", "$150.00", "Pedro"])), (1, "$150.00"))
+
+    def test_el_propio_empleado_no_cuenta(self):
+        self.assertIsNone(_ventas_en_tabla(tabla(["Fecha", "Total", "Cliente"], ["hoy", "5.00", "empleado_aura"])))
+
+    def test_con_columna_de_vendedor_la_juzga_la_otra_regla(self):
+        self.assertIsNone(_ventas_en_tabla(tabla(["ID", "Total", "Vendedor", "Cliente"], ["1", "5.00", "admin", "Pedro"])))
+        self.assertIsNone(_ventas_en_tabla(tabla(["Cliente", "Total", "Usuario"], ["Pedro", "5.00", "ana"])))
+        self.assertEqual(_vendedores_ajenos(tabla(["Cliente", "Total", "Usuario"], ["Pedro", "5.00", "ana"])), ["ana"])
+
+    def test_tablas_raras_no_dicen_nada_ni_fallan(self):
+        self.assertIsNone(_ventas_en_tabla(tabla(CABECERA_VENTA, ["1", "10:00", "Martillo", "3", "$450.00", "Pedro"], th=False)))
+        self.assertIsNone(_ventas_en_tabla(tabla(CABECERA_VENTA, ["1", "$450.00"])))  # fila con otro número de celdas
+        self.assertIsNone(_ventas_en_tabla("<table><tr><th>Total</th><th>Cliente"))
+        self.assertIsNone(_ventas_en_tabla("<p>sin tablas</p>"))
+        self.assertIsNone(_ventas_en_tabla(""))
+        _ventas_en_tabla("<table><tr><th>Total</th><th>Cliente</th></tr><tr><td>5</td><td><table><tr><td>x</td></tr></table>Pedro</td></tr></table>")
 
 
 class MensajesDeVerificar(unittest.TestCase):
@@ -338,6 +415,26 @@ class MensajesDeVerificar(unittest.TestCase):
                        "ajenas": [{"ruta": "/ventas", "motivo": "filas"}, {"ruta": "/ventas", "motivo": "vendedor", "vendedores": ["admin"]}]})
         [m] = self.inf.avisos
         self.assertIn("abre /ventas: ventas o facturas de otros usuarios", m)
+
+    def test_la_tabla_de_ventas_de_otros_sin_vendedor_es_un_aviso(self):
+        self.assertEqual(self.mensajes({"usuario": "empleado_aura", "entro": True, "producto": True, "costo": [], "abre": [], "error": [],
+                                        "ajenas": [{"ruta": "/ventas/nueva", "motivo": "tabla", "filas": 2, "importe": "$450.00"}]}), [])
+        [m] = self.inf.avisos
+        self.assertIn("ve en /ventas/nueva (2 filas, por ejemplo con importe $450.00) una tabla con ventas de otros usuarios", m)
+        self.assertIn("(él no ha vendido nada)", m)
+        self.assertIn("filtra esa lista por el vendedor en la consulta", m)
+        self.assertIn("ignora este aviso", m)
+        self.mensajes({"usuario": "empleado_aura", "entro": True, "producto": True, "costo": [], "abre": [], "error": [],
+                       "ajenas": [{"ruta": "/", "motivo": "tabla", "filas": 1, "importe": "5.00"}]})
+        self.assertIn("ve en / (1 fila, por ejemplo con importe 5.00)", self.inf.avisos[0])
+
+    def test_una_ruta_ya_avisada_no_se_repite_por_la_tabla(self):
+        self.mensajes({"usuario": "empleado_aura", "entro": True, "producto": True, "costo": [], "abre": [], "error": [],
+                       "ajenas": [{"ruta": "/ventas", "motivo": "filas"}, {"ruta": "/ventas", "motivo": "tabla", "filas": 1, "importe": "5.00"},
+                                  {"ruta": "/", "motivo": "vendedor", "vendedores": ["admin"]},
+                                  {"ruta": "/", "motivo": "tabla", "filas": 1, "importe": "5.00"}]})
+        self.assertEqual(len(self.inf.avisos), 2)
+        self.assertNotIn("una tabla con ventas de otros usuarios", " ".join(self.inf.avisos))
 
     def test_nada_si_no_hay_empleado_o_todo_cerrado(self):
         self.assertEqual(self.mensajes(None), [])
