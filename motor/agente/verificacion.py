@@ -28,7 +28,7 @@ from . import ecosistemas
 from .borrados import aviso, peligrosos
 from .esquemas import ESQUEMAS
 from .idiomas import verificar_idiomas
-from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, normalizar, relativa
+from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, ignorado, normalizar, relativa
 from .recorrido_web import (
     campos_sin_formulario,
     plantillas_sin_sustituir,
@@ -1630,21 +1630,39 @@ def parejas_con_etiqueta_fija(texto: str) -> list[tuple[str, str]]:
             and _valor_etiquetado(u) and _valor_etiquetado(c)]
 
 
-def _textos_proyecto(raiz: Path):
-    for p in archivos(raiz, ".py", ".js", ".ts", ".mjs", ".cjs", ".php", ".rb", ".go", ".java", ".cs", ".rs", ".sql", ".json",
-                      ".toml", ".ini", ".cfg", ".yml", ".yaml", ".env", ".md", ".txt", ".html", ".bat"):
+def _archivos_texto(raiz: Path, con_env: bool = False):
+    """(archivo, texto) de los archivos de texto del proyecto. Un `.env` no tiene extensión y `archivos` no lo lista: con_env
+    los añade (el recorrido sigue leyendo lo de siempre; solo claves_inventadas los mira)."""
+    lista = archivos(raiz, ".py", ".js", ".ts", ".mjs", ".cjs", ".php", ".rb", ".go", ".java", ".cs", ".rs", ".sql", ".json",
+                     ".toml", ".ini", ".cfg", ".yml", ".yaml", ".env", ".md", ".txt", ".html", ".bat")
+    if con_env:
+        lista += [p for p in sorted(raiz.rglob(".env*")) if p.is_file() and not ignorado(p, raiz) and p not in lista]
+    for p in lista:
         if p.name.startswith(".") and not p.name.startswith(".env"):  # .fenix_chat.json guarda el propio resumen
             continue
         try:
-            yield p.read_text(encoding="utf-8", errors="replace")
+            yield p, p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
 
 
-def claves_del_proyecto(raiz: Path) -> list[str]:
-    """Contraseñas que da el proyecto (código, README...), en el orden en que aparecen."""
+def _textos_proyecto(raiz: Path):
+    for _, texto in _archivos_texto(raiz):
+        yield texto
+
+
+# La ferretería de una misión daba «empleado / empleado123» en el resumen: solo estaba en test_app.py, donde el test crea ese
+# usuario; el programa solo creaba admin. Una contraseña que solo existe en los tests no sirve para entrar.
+ES_DE_TEST = re.compile(r"(?i)(?:^|[\\/])(?:tests?|__tests__)[\\/]|(?:^|[\\/])(?:test_[^\\/]*|[^\\/]*_test\.[^\\/]+|"
+                        r"[^\\/]*\.(?:test|spec)\.[^\\/]+|conftest\.py|tests?\.py)$")
+
+
+def claves_del_proyecto(raiz: Path, sin_tests: bool = False, con_env: bool = False) -> list[str]:
+    """Contraseñas que da el proyecto (código, README...), en el orden en que aparecen; sin_tests las deja fuera de los tests."""
     conocidas: dict[str, None] = {}
-    for texto in _textos_proyecto(raiz):
+    for p, texto in _archivos_texto(raiz, con_env):
+        if sin_tests and ES_DE_TEST.search(relativa(p, raiz)):
+            continue
         conocidas.update(dict.fromkeys(c for _, c in parejas_con_etiqueta_fija(texto)))
         conocidas.update(dict.fromkeys(CLAVE_CODIGO.findall(texto)))
         conocidas.update(dict.fromkeys(next(g for g in m.groups() if g) for m in CLAVE_RESUMEN.finditer(texto)))
@@ -1734,13 +1752,22 @@ def claves_inventadas(raiz: Path, resumen: str) -> str:
     dichas = {d for d in dichas if not NO_ES_CLAVE.search(d)}
     if not dichas:
         return ""
-    conocidas = set(claves_del_proyecto(raiz))
-    malas = sorted(dichas - conocidas)
-    if not conocidas or not malas:
+    conocidas = set(claves_del_proyecto(raiz, con_env=True))
+    if not conocidas:
         return ""
-    return (f"el resumen da la contraseña {', '.join(f'«{c}»' for c in malas)}, pero no aparece en el proyecto (allí "
-            f"están: {', '.join(f'«{c}»' for c in sorted(conocidas)[:6])}). Con la del resumen el usuario no podrá entrar. "
-            "Busca en el código cuál crea el programa y corrige el resumen.")
+    mensajes = []
+    if (malas := sorted(dichas - conocidas)):
+        mensajes.append(f"el resumen da la contraseña {', '.join(f'«{c}»' for c in malas)}, pero no aparece en el proyecto (allí "
+                        f"están: {', '.join(f'«{c}»' for c in sorted(conocidas)[:6])}). Con la del resumen el usuario no podrá entrar. "
+                        "Busca en el código cuál crea el programa y corrige el resumen.")
+    if (solo_tests := sorted((dichas & conocidas) - set(claves_del_proyecto(raiz, sin_tests=True, con_env=True)))):
+        donde = sorted({relativa(p, raiz) for p, texto in _archivos_texto(raiz) if ES_DE_TEST.search(relativa(p, raiz))
+                        and any(c in texto for c in solo_tests)})
+        mensajes.append(f"el resumen da la contraseña {', '.join(f'«{c}»' for c in solo_tests)}, pero solo aparece en los tests "
+                        f"({', '.join(donde[:3])}): el programa no la crea, así que con ella el usuario no podrá entrar. Haz que "
+                        "el programa cree ese usuario con esa contraseña, o quita la credencial del resumen y explica cómo crearlo "
+                        "(por ejemplo, desde la pantalla de usuarios).")
+    return " Además, ".join(mensajes) if len(mensajes) > 1 else "".join(mensajes)
 
 
 # ---------------------------------------------------------------- entrada
