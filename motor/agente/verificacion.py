@@ -26,6 +26,7 @@ from pathlib import Path
 
 from . import ecosistemas
 from .borrados import aviso, peligrosos
+from .esquemas import ESQUEMAS
 from .idiomas import verificar_idiomas
 from .proyecto import IGNORAR, Informe, archivos, cola, correr_texto, normalizar, relativa
 from .recorrido_web import (
@@ -1462,6 +1463,51 @@ def bat_citado_que_no_existe(raiz: Path, inf: Informe) -> None:
             return
 
 
+# El run.bat de una misión llamaba «resolver_sat problema.opb»: es una herramienta de Aura (como escribir o ejecutar), no
+# un comando de Windows, y con doble clic salía «"resolver_sat" no se reconoce». `git` sí es un programa.
+HERRAMIENTAS_AURA = frozenset(e["function"]["name"] for e in ESQUEMAS) - {"git"}
+
+
+def herramienta_de_aura_como_orden(linea: str, carpeta: Path) -> str | None:
+    """El nombre de la herramienta de Aura que una línea de .bat lanza como si fuera un comando; None si no hay."""
+    for orden in ordenes_bat(linea)[::2]:
+        orden = re.sub(f"(?i)^(?:call\\s+)?{LANZADOR}", "", orden.strip().lstrip("@(").strip())
+        palabra = (orden.split() or [""])[0].strip('"').lower()
+        if palabra in HERRAMIENTAS_AURA and not any((carpeta / f"{palabra}{ext}").is_file() for ext in (".bat", ".cmd", ".exe")):
+            return palabra
+    return None
+
+
+# El resolver.bat de una misión decía «regenera el .opb, lo resuelve y muestra el resultado», pero solo mostraba el .modelo
+# que Aura había calculado con resolver_sat: con otros datos seguía enseñando la solución vieja.
+PROMETE_RESOLVER = re.compile(r"(?i)\b(?:resuelve|resolver|resolviendo|resuelto|calcula|calculando|optimiza|optimizando)\b")
+SOLVER_LIBRERIA = re.compile(r"(?i)\b(?:scipy|pysat|python-sat|z3|ortools|pulp|mip|cvxpy|highspy|pyomo|gurobipy|cplex|docplex)\b"
+                             r"|sat-hibrido|motor\.exe")
+ESCRIBE_ARCHIVO = re.compile(r"""open\([^)]*['"]w|write_text\(""")
+
+
+def bat_sin_calculo(raiz: Path, lista: list[Path], inf: Informe) -> None:
+    """Error si un .bat promete resolver, hay una solución guardada por resolver_sat (*.modelo) y nada la calcula."""
+    modelos = sorted(raiz.glob("*.modelo"))
+    if not modelos or not lista:
+        return
+    for p in archivos(raiz, ".py"):
+        if re.match(r"(?i)(test_|tests?\.py|conftest)", p.name):
+            continue
+        texto = p.read_text(encoding="utf-8", errors="replace")
+        if SOLVER_LIBRERIA.search(texto) or (".modelo" in texto and ESCRIBE_ARCHIVO.search(texto)):
+            return
+    for b in lista:
+        promesa = PROMETE_RESOLVER.search(b.stem) or PROMETE_RESOLVER.search(b.read_text(encoding="utf-8", errors="replace"))
+        if promesa:
+            inf.errores.append(
+                f"{relativa(b, raiz)} dice que {promesa[0].lower()}, pero nada del proyecto calcula la solución: solo muestra "
+                f"{modelos[0].name}, que calculó Aura con resolver_sat. Si el usuario cambia los datos, el .bat le seguirá "
+                "enseñando la solución vieja. O haces que el proyecto calcule (python-sat, z3 o scipy.optimize.milp, con su "
+                "requirements.txt), o cambias el .bat y tu resumen a «muestra la solución calculada».")
+            return
+
+
 def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
     escucha = puertos_escucha(raiz) if lista else set()
     for b in lista:
@@ -1510,6 +1556,14 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
                                        f"tener Python en el PATH y el usuario verá «\"{m[1]}\" no se reconoce», aunque en "
                                        "tus pruebas funcione. Rehaz el .bat con crear_bat, que busca Python y recupera el PATH.")
                     break
+        for i, l in enumerate(lineas):
+            if re.match(r"(?i)(rem\b|::|@?echo\b)", l):
+                continue
+            if (t := herramienta_de_aura_como_orden(l, b.parent)):
+                inf.errores.append(f"{rel}:{i + 1} lanza '{t}', que es una herramienta de Aura (como escribir o ejecutar) y no un "
+                                   f"comando de Windows: con doble clic el usuario verá «\"{t}\" no se reconoce». Llámala tú con "
+                                   "la herramienta y haz que el .bat lance un script del proyecto (por ejemplo python solver.py).")
+                break
         patron = r'(?:\b(?:python|py(?: -3\.\d+)?|node|java -jar)|%PY%)\s+(?:"([^"]+\.(?:py|js|mjs|jar))"|(?!-)([^\s"&|<>]+\.(?:py|js|mjs|jar))\b)'
         for m in re.finditer(patron, texto, re.IGNORECASE):
             destino = (m.group(1) or m.group(2)).strip()
@@ -1755,6 +1809,7 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         java(raiz, javas, inf, segundos)
     if bat:
         bats(raiz, bat, inf)
+        bat_sin_calculo(raiz, bat, inf)
     if base == raiz:
         bat_citado_que_no_existe(raiz, inf)
     ecosistemas.verificar_todos(base, raiz, inf)

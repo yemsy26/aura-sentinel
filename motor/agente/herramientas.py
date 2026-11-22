@@ -45,6 +45,7 @@ from .verificacion import (
     borrados_fuera,
     chequeo_rapido,
     con_call,
+    herramienta_de_aura_como_orden,
     muertos_ahora,
     ordenes_bat,
     verificar,
@@ -774,6 +775,11 @@ class Herramientas:
         nombre = nombre if nombre.lower().endswith((".bat", ".cmd")) else nombre + ".bat"
         if isinstance(comandos, str):
             comandos = [c for c in comandos.splitlines() if c.strip()]
+        for c in comandos:
+            if (t := herramienta_de_aura_como_orden(str(c).strip(), self.raiz)):
+                return (f"ERROR: '{t}' es una herramienta de Aura (como escribir o ejecutar): no existe como comando de Windows ni "
+                        f"está en el PATH, así que el .bat fallaría con doble clic («\"{t}\" no se reconoce»). Llámala tú ahora con "
+                        f"la herramienta y haz que el .bat lance un script del proyecto (por ejemplo python solver.py). No he creado {nombre}.")
         lineas = ["@echo off", "setlocal EnableExtensions", "chcp 65001 >nul", 'cd /d "%~dp0"',
                   'set "PYTHONUTF8=1"',  # tildes y símbolos sin error aunque la salida vaya a un archivo o una tubería
                   f"title {Path(nombre).stem}", 'set "RC=0"']
