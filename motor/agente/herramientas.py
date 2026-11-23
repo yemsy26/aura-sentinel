@@ -48,6 +48,7 @@ from .verificacion import (
     herramienta_de_aura_como_orden,
     muertos_ahora,
     ordenes_bat,
+    pip_sin_comillas,
     verificar,
 )
 
@@ -610,6 +611,10 @@ class Herramientas:
             return ("RECHAZADO: el comando tiene varias líneas y cmd solo ejecuta la primera; el resto se ignora sin "
                     "error (saldría exit=0 y nada más). Para código de Python de varias líneas usa experimentar(codigo=...)"
                     " o escríbelo en un .py y ejecútalo; para varias órdenes, únelas con && en una sola línea.")
+        if (espec := pip_sin_comillas(comando)):  # cmd lo tomaría por una redirección: no se ejecuta nada
+            return (f"RECHAZADO: en cmd `{espec}` sin comillas es una redirección: el `>` manda la salida de pip a un archivo (saldría exit=0 "
+                    "y nada más, y el archivo se quedaría en la carpeta) y el paquete se instalaría sin la versión pedida. No he ejecutado "
+                    f"nada. Pon el requisito entre comillas dobles: {comando.replace(espec, chr(34) + espec + chr(34), 1)}")
         if (cerrado := self._cerrar_propios(comando)) is not None:
             return cerrado
         if (bloqueo := self._permitido(comando) or self._npm_fuera(comando) or self._sin_borrados()):
@@ -786,6 +791,11 @@ class Herramientas:
                 return (f"ERROR: '{t}' es una herramienta de Aura (como escribir o ejecutar): no existe como comando de Windows ni "
                         f"está en el PATH, así que el .bat fallaría con doble clic («\"{t}\" no se reconoce»). Llámala tú ahora con "
                         f"la herramienta y haz que el .bat lance un script del proyecto (por ejemplo python solver.py). No he creado {nombre}.")
+        for c in comandos:
+            if (espec := pip_sin_comillas(str(c).strip())):
+                return (f"ERROR: la orden «{str(c).strip()}» lleva `{espec}` sin comillas: en un .bat cmd toma el `>` (o el `<`) por una redirección y "
+                        "cada ejecución dejaría un archivo con la salida de pip e instalaría el paquete sin esa versión. Ponlo entre comillas dobles "
+                        f"(pip install \"{espec}\") o déjalo en requirements.txt. No he creado {nombre}.")
         lineas = ["@echo off", "setlocal EnableExtensions", "chcp 65001 >nul", 'cd /d "%~dp0"',
                   'set "PYTHONUTF8=1"',  # tildes y símbolos sin error aunque la salida vaya a un archivo o una tubería
                   f"title {Path(nombre).stem}", 'set "RC=0"']

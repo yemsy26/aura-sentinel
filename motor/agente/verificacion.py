@@ -1515,6 +1515,48 @@ def herramienta_de_aura_como_orden(linea: str, carpeta: Path) -> str | None:
     return None
 
 
+# `pip install Flask-SQLAlchemy>=3.1` en cmd: el `>` sin comillas dobles es una redirección. La salida de pip va a un archivo llamado «3.1» (el modelo ve exit=0 y
+# nada más) y el paquete se instala sin la versión pedida. Las comillas simples no protegen en cmd. Ferretería (23): 11 archivos sueltos en 9 de 145 carpetas.
+PIP_INSTALA = re.compile(r"(?i)\bpip3?(?:\.exe)?\s+install\b|\buv\s+(?:pip\s+install|add)\b")
+PIP_ESPEC = re.compile(r"^[A-Za-z0-9][\w.\-]*(?:\[[\w,.\-]+\])?[<>]=?\s*\d")
+PIP_SALIDA = re.compile(r"(?m)^(?:Collecting |Requirement already satisfied|Using cached |Successfully installed |Installing collected packages"
+                        r"|Defaulting to user installation)")
+NOMBRE_DE_VERSION = re.compile(r"^\d+(?:\.\d+)+$")
+
+
+def pip_sin_comillas(linea: str) -> str | None:
+    """El requisito con < o > sin comillas dobles de una orden pip install (cmd lo toma por una redirección); None si no hay."""
+    for orden in ordenes_bat(linea)[::2]:
+        if PIP_INSTALA.search(orden):
+            for token in re.findall(r'"[^"]*"|\S+', orden):
+                if not token.startswith('"') and PIP_ESPEC.match(token.lstrip("'")):  # con comillas simples cmd tampoco protege el > ni el <
+                    return token
+    return None
+
+
+def archivos_de_pip(raiz: Path) -> list[Path]:
+    """Archivos sueltos de la raíz con nombre de versión (3.1) y contenido de salida de pip: los dejó un pip install paquete>=3.1 sin comillas."""
+    hallados = []
+    for f in sorted(raiz.iterdir()) if raiz.is_dir() else []:
+        if f.is_file() and NOMBRE_DE_VERSION.match(f.name) and f.stat().st_size < 200_000:
+            try:
+                texto = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if PIP_SALIDA.search(texto):
+                hallados.append(f)
+    return hallados
+
+
+def pip_suelto(raiz: Path, inf: Informe) -> None:
+    """Aviso por cada archivo suelto de la raíz que es la salida de un pip install paquete>=3.1 sin comillas (máximo 3)."""
+    for f in archivos_de_pip(raiz)[:3]:
+        inf.avisos.append(f"{f.name}: archivo suelto en la raíz del proyecto con la salida de un pip install: lo creó un comando como "
+                          f"`pip install paquete>={f.name}` sin comillas (en cmd el `>` es una redirección: la salida va a un archivo y el paquete "
+                          f"se instala sin esa versión). Quítalo y escribe la versión entre comillas dobles (pip install \"paquete>={f.name}\") "
+                          "o en requirements.txt.")
+
+
 # El resolver.bat de una misión decía «regenera el .opb, lo resuelve y muestra el resultado», pero solo mostraba el .modelo
 # que Aura había calculado con resolver_sat: con otros datos seguía enseñando la solución vieja.
 PROMETE_RESOLVER = re.compile(r"(?i)\b(?:resuelve|resolver|resolviendo|resuelto|calcula|calculando|optimiza|optimizando)\b")
@@ -1606,6 +1648,12 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
             destino = (m.group(1) or m.group(2)).strip()
             if "%" not in destino and not (b.parent / destino).exists():
                 inf.errores.append(f"{rel} ejecuta '{destino}' y ese archivo NO existe junto al .bat.")
+        for i, l in enumerate(lineas):
+            if not re.match(r"(?i)\s*(?:rem\b|::|@?echo\b)", l) and (t := pip_sin_comillas(l)):
+                inf.avisos.append(f"{rel}:{i + 1} tiene `{t}` sin comillas: en un .bat el `>` (o el `<`) es una redirección, así que cada ejecución "
+                                  "deja un archivo con la salida de pip y el paquete se instala sin esa versión. Ponlo entre comillas dobles "
+                                  f"(pip install \"{t}\") o déjalo en requirements.txt.")
+                break
         borra_datos_bat(b, lineas, raiz, inf)
 
 
@@ -1876,6 +1924,7 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         bat_sin_calculo(raiz, bat, inf)
     if base == raiz:
         bat_citado_que_no_existe(raiz, inf)
+        pip_suelto(raiz, inf)
     ecosistemas.verificar_todos(base, raiz, inf)
     if (vite := [h for h in htmls if fuente_vite(h)]):  # después de node(): su npm run build deja dist/
         paginas_vite(raiz, vite, inf)
