@@ -5,6 +5,28 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.19] — 2026-11-22 (el agente ya no se atasca repitiendo `leer` y `pip install paquete>=3.1` sin comillas deja de perder la salida y la versión)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de la ferretería (23), la repetición del mandato con la 4.13.18: se detuvo a los 106 pasos (plan 7/10, sin ningún `verificar`) y dejó un archivo suelto «3.1».
+
+- **`leer` sigue donde se quedó.** La misión repitió `leer(lineas=340)` sobre `app.py` (501 líneas) y el bucle la cortó con «el modelo repitió 'leer' 5 veces sin avanzar»:
+  tras leer las líneas 1-340, la misma llamada recibía un mensaje («ya leíste este archivo… usa desde=341») sin contenido y el modelo (Qwen3.6) no lo leía. 36 de las 106
+  llamadas fueron `leer`, con rachas parecidas tras cada compactación del contexto (pasos 44, 69 y 90). Entre las 24 carpetas de pruebas con chat hubo 7 paradas por repetición
+  en 5 carpetas, 3 de ellas de `leer`. Ahora, con el principio ya leído y sin `desde`, `leer(lineas=N)` devuelve las líneas siguientes con una nota de una línea (y alarga lo leído;
+  un `desde` que sigue justo donde se quedó también); si el archivo ya está entero lo dice sin contenido. Y al compactar el contexto se olvida lo leído: el modelo ya no ve
+  ese contenido y antes se le negaba volver a pedirlo. Repetidas sobre una copia las llamadas reales de la (23) y de otra carpeta de pruebas: `app.py` pasa de 336 a 501 líneas
+  servidas de 501 y `gui.py` de 75 a 700 de 700.
+- **`pip install paquete>=3.1` sin comillas.** En cmd el `>` sin comillas dobles es una redirección: en la (23) la salida de pip fue a un archivo «3.1» (el modelo vio `exit=0` sin
+  nada más) y el paquete se instaló sin la versión pedida; las comillas simples no protegen. En las 145 carpetas guardadas había 11 archivos así en 9 carpetas, y `verificar` nunca los vio.
+  Ahora `ejecutar` rechaza ese comando sin ejecutarlo y da el comando corregido; `crear_bat` no crea un `.bat` con esa línea; y `verificar` avisa (nunca error) de la línea de un `.bat`
+  que ya lo tenga y del archivo suelto con nombre de versión y salida de pip. No se rechaza `2>&1`, `> log.txt`, `-r requirements.txt`, `pip freeze > req.txt` ni un requisito entre
+  comillas dobles; vale para `pip install`, `uv pip install` y `uv add`.
+- Medido sin el modelo: las llamadas reales de las dos carpetas (arriba), los 11 archivos y los 11 comandos reales (9 carpetas) detectados sin ningún falso en 145 carpetas ni en sus
+  222 `.bat`, y el tiempo no cambia. **No medido:** con el modelo, si deja de repetir la llamada o corrige el comando tras el rechazo (el corte a la quinta repetición sigue ahí).
+  821 pruebas del motor pasan (22 nuevas; 4 omitidas); ruff limpio en el motor y en los tests tocados. Rust y la interfaz no cambian respecto a la 4.13.10.
+
+---
+
 ## [4.13.18] — 2026-11-22 (`verificar` ve dos fallos más de una web —ventas de otros en una tabla sin vendedor y librerías cargadas de internet— y el agente tiene una guía de diseño visual)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de la ferretería (22), la repetición del mandato con la 4.13.17: la entrega salió bien en lo que `verificar` comprueba y aun así tenía dos fallos que no veía.
