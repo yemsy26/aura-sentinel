@@ -1,5 +1,6 @@
 """Herramientas del agente. Devuelven texto compacto (barato en tokens y fácil de leer para modelos pequeños)."""
 import base64
+import difflib
 import html.parser
 import inspect
 import json
@@ -120,6 +121,33 @@ def recortar(texto: str, maximo: int) -> str:
         return texto
     cab = maximo * 2 // 5
     return f"{texto[:cab]}\n[... {len(texto) - maximo} caracteres omitidos ...]\n{texto[-(maximo - cab):]}"
+
+
+def _siguen_parecidas(firmas: list[str], j: int, siguientes: list[str]) -> int:
+    """Cuántas de las líneas buscadas que siguen también se parecen a las que siguen a la línea j: es la zona buscada y no otra igual."""
+    return sum(1 for d, sig in enumerate(siguientes, 1)
+               if j + d < len(firmas) and difflib.SequenceMatcher(None, sig, firmas[j + d]).ratio() >= 0.8)
+
+
+def zona_parecida(texto: str, buscar: str, maximo: int = 1400) -> str:
+    """Las líneas del archivo más parecidas a 'buscar', con su número, para corregirlo sin un leer más (m4170: 17 editar sin
+    encontrar el texto en 8 misiones, casi todos seguidos de un leer del mismo archivo). Vacío si nada se le parece."""
+    todas = texto.splitlines()[:4000]
+    firmas = [l.strip() for l in todas]
+    objetivo = [l.strip() for l in buscar.splitlines() if len(l.strip()) >= 4][:6]
+    for k, linea in enumerate(objetivo):
+        parecidas = difflib.get_close_matches(linea, firmas, n=3, cutoff=0.8)
+        candidatas = [j for j, f in enumerate(firmas) if f in parecidas][:30]
+        if not candidatas:
+            continue
+
+        siguientes = objetivo[k + 1:k + 4]
+        j = max(candidatas, key=lambda c: (round(difflib.SequenceMatcher(None, linea, firmas[c]).ratio(), 2),
+                                           _siguen_parecidas(firmas, c, siguientes), -c))
+        ini = max(0, j - k - 1)
+        fin = min(len(todas), ini + max(len(buscar.splitlines()), 3) + 2, ini + 14)
+        return recortar("\n".join(f"{n}| {todas[n - 1]}" for n in range(ini + 1, fin + 1)), maximo)
+    return ""
 
 
 def decodificar(datos: bytes) -> str:
@@ -406,7 +434,9 @@ class Herramientas:
         texto = p.read_text(encoding="utf-8", errors="replace")
         veces = texto.count(buscar) if buscar else 0
         if veces > 1:
-            return f"'buscar' aparece {veces} veces en {ruta}. Incluye más líneas de contexto para que sea único."
+            donde = [texto.count("\n", 0, m.start()) + 1 for m in re.finditer(re.escape(buscar), texto)][:8]
+            return (f"'buscar' aparece {veces} veces en {ruta} (empieza en las líneas {', '.join(map(str, donde))}). "
+                    "Incluye más líneas de contexto para que sea único.")
         if veces == 1:
             nuevo = texto.replace(buscar, reemplazar, 1)
         else:
@@ -416,6 +446,10 @@ class Herramientas:
             ini = next((i for i in range(len(lineas) - len(objetivo) + 1)
                         if objetivo and [l.strip() for l in lineas[i:i + len(objetivo)]] == objetivo), None)
             if ini is None:
+                zona = zona_parecida(texto, buscar)
+                if zona:
+                    return (f"No encontré el texto a reemplazar en {ruta}. Lo más parecido que hay en el archivo (copia de aquí el "
+                            f"texto exacto, sin releerlo):\n{zona}")
                 return (f"No encontré el texto a reemplazar en {ruta}. Usa leer para copiar el texto exacto "
                         f"(o escribir para reemplazar el archivo completo).")
             fin_linea = "\n" if lineas[ini + len(objetivo) - 1].endswith("\n") else ""

@@ -16,7 +16,8 @@ DEFECTO = {
     # auto: razona al planificar y tras errores; off: nunca; on: siempre
     "razonamiento": "auto",
     # medido con un sistema de negocio completo: terminaba 1 de 2 con 100 y 3 de 6 con 150; lo corto no llega al límite
-    "max_pasos": 150,
+    # m4170/m4171: con 150 dos de cuatro negocios no terminaron por unos 20-25 pasos; las que terminan: p90 151, máx. 200 (123 carpetas)
+    "max_pasos": 200,
     # 0 = automático (proporcional al contexto cargado)
     "max_chars_resultado": 0,
     "timeout_comando": 120,
