@@ -15,7 +15,7 @@ from .herramientas import Herramientas, archivos_pedidos, despachar
 from .llamadas import coaccionar, llamadas_en_texto, sin_llamadas
 from .prompts import REGLAS_USUARIO, entorno, sistema
 from .proyecto import es_codigo, ignorado
-from .revision import mtime_fuentes, revisar
+from .revision import criticos, mtime_fuentes, revisar
 from .verificacion import borrados_fuera, claves_inventadas
 
 ICONOS = {"plan": "PLAN", "paso_hecho": "HECHO", "listar": "ls", "leer": "leer", "buscar": "grep", "escribir": "+",
@@ -60,6 +60,7 @@ class _Marcha:
     cambios: int = 0  # acciones NUEVAS que pueden cambiar el proyecto (un comando distinto: copiar, instalar...)
     fallos: dict[str, int] = field(default_factory=dict)
     rechazos_fin: int = 0
+    desde_aprobado: int = -1  # pasos desde que revisar() aprobó sin pasar por terminar; -1 = nada que recordar
     empujones: int = 0
     encargo: bool = False  # mandato largo (no una pregunta ni «continúa»): se hace con herramientas
     actuo: bool = False  # el modelo llamó a alguna herramienta en esta tarea
@@ -430,6 +431,15 @@ class Agente:
                           "y corrige solo eso con editar. Si no la encuentras, usa web_buscar con el error.]")
         if nombre == "plan" and (olvidados := [f for f in self.requeridos if f.lower() not in resultado.lower()]):
             aviso += f"\n[AVISO: el usuario pidió {', '.join(sorted(olvidados))} y el plan no lo incluye. Corrige el plan.]"
+        # m4172: revisar() aprobaba y la tarea seguía sin llamar a terminar hasta el tope de pasos.
+        if nombre == "revisar":
+            m.desde_aprobado = (0 if re.search(r"VEREDICTO:\s*APROBADO", resultado, re.IGNORECASE)
+                                 and not criticos(resultado) else -1)
+        elif m.desde_aprobado >= 0:
+            m.desde_aprobado += 1
+            if m.desde_aprobado >= 8:
+                aviso += ("\n[AVISO: la revisión independiente ya aprobó el código. Si no falta nada del plan, "
+                          "llama a terminar; si falta algo, complétalo y luego termina.]")
         return aviso
 
     def _revisar(self, requisitos: str = "", enfoque: str = "") -> tuple[str, bool]:
