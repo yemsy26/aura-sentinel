@@ -150,6 +150,20 @@ def zona_parecida(texto: str, buscar: str, maximo: int = 1400) -> str:
     return ""
 
 
+def _sangria(linea: str) -> str:
+    return linea[:len(linea) - len(linea.lstrip(" \t"))]
+
+
+def reindentar(reemplazar: str, extra: str = "", quitar: str = "", saltar_primera: bool = False) -> str:
+    """El modelo acertó con el texto pero no con la indentación: la diferencia con el archivo se aplica a todo el reemplazo
+    (con una sola línea corregida quedaba un bloque descolocado y un error de sintaxis; visto con Gemma)."""
+    lineas = reemplazar.split("\n")
+    for i, l in enumerate(lineas):
+        if l.strip() and not (saltar_primera and i == 0):
+            lineas[i] = extra + l if extra else l.removeprefix(quitar)
+    return "\n".join(lineas)
+
+
 def decodificar(datos: bytes) -> str:
     try:
         return datos.decode("utf-8")
@@ -427,6 +441,21 @@ class Herramientas:
                         "concretos: reescribir todo reintroduce errores ya corregidos.]")
         return txt
 
+    def _donde_rompe(self, p: Path, texto: str) -> str:
+        """Tras un editar fallido: si el .py no compila, dónde rompe y las líneas de alrededor (el modelo suele seguir pidiendo
+        el mismo cambio sin ver que el archivo quedó roto en otra parte)."""
+        if p.suffix.lower() != ".py":
+            return ""
+        try:
+            compile(texto, str(p), "exec")
+        except SyntaxError as e:
+            n, lineas = e.lineno or 1, texto.splitlines()
+            ini, fin = max(1, n - 6), min(len(lineas), n + 6)
+            trozo = "\n".join(f"{k}| {lineas[k - 1]}" for k in range(ini, fin + 1))
+            return (f"\n[OJO: {self.rel(p)} tiene ahora un ERROR DE SINTAXIS en la línea {n}: {e.msg}. "
+                    f"Líneas {ini}-{fin}:\n{trozo}]")
+        return ""
+
     def editar(self, ruta: str, buscar: str, reemplazar: str) -> str:
         p = self.ruta(ruta)
         if not p.is_file():
@@ -438,6 +467,10 @@ class Herramientas:
             return (f"'buscar' aparece {veces} veces en {ruta} (empieza en las líneas {', '.join(map(str, donde))}). "
                     "Incluye más líneas de contexto para que sea único.")
         if veces == 1:
+            i = texto.index(buscar)
+            previo = texto[texto.rfind("\n", 0, i) + 1:i]
+            if buscar[:1] in (" ", "\t") and previo and not previo.strip():  # buscar con menos sangría que el archivo
+                reemplazar = reindentar(reemplazar, extra=previo, saltar_primera=True)
             nuevo = texto.replace(buscar, reemplazar, 1)
         else:
             # Tolerancia: comparar línea a línea ignorando espacios al inicio/fin.
@@ -446,12 +479,17 @@ class Herramientas:
             ini = next((i for i in range(len(lineas) - len(objetivo) + 1)
                         if objetivo and [l.strip() for l in lineas[i:i + len(objetivo)]] == objetivo), None)
             if ini is None:
+                rota = self._donde_rompe(p, texto)
                 zona = zona_parecida(texto, buscar)
                 if zona:
                     return (f"No encontré el texto a reemplazar en {ruta}. Lo más parecido que hay en el archivo (copia de aquí el "
-                            f"texto exacto, sin releerlo):\n{zona}")
+                            f"texto exacto, sin releerlo):\n{zona}{rota}")
                 return (f"No encontré el texto a reemplazar en {ruta}. Usa leer para copiar el texto exacto "
-                        f"(o escribir para reemplazar el archivo completo).")
+                        f"(o escribir para reemplazar el archivo completo).{rota}")
+            fi, bi = _sangria(lineas[ini]), _sangria(buscar.strip("\n").splitlines()[0])
+            if bi and fi != bi and (fi.startswith(bi) or bi.startswith(fi)):
+                reemplazar = (reindentar(reemplazar, extra=fi[len(bi):]) if fi.startswith(bi)
+                              else reindentar(reemplazar, quitar=bi[len(fi):]))
             fin_linea = "\n" if lineas[ini + len(objetivo) - 1].endswith("\n") else ""
             nuevo = "".join(lineas[:ini]) + reemplazar.rstrip("\n") + fin_linea + "".join(lineas[ini + len(objetivo):])
         self._guardar(p, nuevo)
