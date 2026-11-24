@@ -421,7 +421,9 @@ class _Recorrido:
     def pedir(self, ruta: str, datos: list | None = None, metodo: str = "get") -> tuple[int, str, str]:
         """(estado, url final, html). Cada petición deja su salida del servidor en self.salida."""
         antes = self.log.stat().st_size if self.log.exists() else 0
-        url = urllib.parse.urljoin(self.base, ruta)
+        # Un enlace con un espacio o una ñ sin codificar hacía saltar InvalidURL/UnicodeEncodeError, que ningún except de aquí
+        # atrapa (m4174). «%» va en safe: lo ya codificado no se codifica otra vez.
+        url = urllib.parse.quote(urllib.parse.urljoin(self.base, ruta), safe="%/:?=&#+;@,!$'()*[]")
         cuerpo = urllib.parse.urlencode(datos or []).encode() if metodo == "post" else None
         if metodo != "post" and datos:
             url = url.split("?")[0] + "?" + urllib.parse.urlencode(datos)
