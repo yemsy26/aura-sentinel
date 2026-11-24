@@ -465,7 +465,10 @@ class Agente:
         hay_codigo = self._mtime_codigo() > 0
         ultima = self.h.verificacion["paso"]
         if hay_codigo and (ultima < self.h.paso_escritura or ultima < self.inicio_tarea):
-            informe = self.h.verificar_cmd()  # verificación automática del estado final
+            try:
+                informe = self.h.verificar_cmd()  # verificación automática del estado final
+            except Exception as e:  # m4174: que se caiga aquí no debe tirar la misión entera
+                return f"RECHAZADO: la verificación automática falló: {type(e).__name__}: {e}"
             self._mostrar(paso, "verificar", {}, informe)
             if self.h.verificacion["errores"] > 0:
                 return "RECHAZADO: la verificación automática encontró errores:\n" + informe
@@ -533,7 +536,10 @@ class Agente:
         self.h._cargar_checkpoints()
         if not self.h.checkpoints:
             return ""
-        self.h.verificar_cmd()
+        try:
+            self.h.verificar_cmd()
+        except Exception as e:  # m4174: que se caiga aquí no debe tirar la misión entera
+            return f"\nLa verificación final falló: {type(e).__name__}: {e}."
         if self.h.verificacion["errores"] == 0:
             return ""
         r = self.h.restaurar()
