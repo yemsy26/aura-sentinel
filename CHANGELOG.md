@@ -5,6 +5,24 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.20] — 2026-11-24 (hasta 200 pasos, `editar` ayuda más cuando falla y una verificación que se cae ya no tira la misión entera)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de las ferreterías y veterinarias de las últimas tandas con Qwen3.6 (algunas llegaban al tope de pasos o se caían) y de una ferretería con Gemma que se detenía al editar.
+
+- **Hasta 200 pasos en vez de 150.** Entre las 123 carpetas de pruebas guardadas el percentil 90 era de 151 pasos y el máximo de 200: varias entregas se cortaban en el tope con el plan casi hecho. Es un tope, no una meta: las dos ferreterías de la tanda siguiente terminaron igualmente a los 96-97 pasos.
+- **`editar` ayuda cuando no acierta.** En 8 misiones hubo 17 `editar` que no encontraban el texto, casi todos seguidos de un `leer` del mismo archivo. Ahora, si no lo encuentra, enseña las líneas más parecidas con su número para copiarlas;
+  si `buscar` aparece varias veces, da para cada aparición la línea anterior que la distingue; si el `buscar` trae otra sangría que el archivo, reindenta el reemplazo (un `buscar` de 8 espacios sobre código a 12 dejaba el bloque descolocado y con error de sintaxis);
+  si el `.py` queda roto, dice en qué línea y enseña el trozo; del 3.er intento fallido seguido sobre un archivo recuerda la salida (un `buscar` de una sola línea, o `escribir`);
+  y un reemplazo que deja el archivo exactamente igual ya no se da por «OK editado»: dice «Sin cambios» y no escribe (una pasada con Gemma repitió 16 ediciones así hasta que el bucle la cortó).
+- **Una verificación que se cae ya no tira la misión.** En una veterinaria, `terminar` lanzó la verificación automática, el recorrido web siguió un enlace de la propia app con un espacio sin codificar (`/admin/clientes?q=Juan Perez`) y el programa entero se cerró a los 137 pasos con un error sin mensaje.
+  Ahora `terminar` y el rescate que se hace al llegar al tope de pasos atrapan cualquier error de la verificación (el fin se rechaza con el motivo), y el recorrido codifica los espacios y las letras no ASCII de las direcciones que sigue.
+- **Aviso si la revisión ya aprobó y no se termina.** Dos veterinarias llegaron a los 200 pasos con la revisión aprobada sin llamar nunca a `terminar`. Ahora, a los 8 pasos de una revisión aprobada sin terminar, el agente recibe el aviso de que, si no falta nada del plan, llame a `terminar`.
+- **Un empujón si el primer turno es solo texto.** Con Gemma, un encargo largo acabó en el primer turno con el plan escrito en el chat y ninguna herramienta llamada. Ahora, si el modelo contesta solo con texto a un encargo largo sin haber llamado a ninguna herramienta, se le empuja una vez a empezar con ellas (en las 129 misiones guardadas de otros modelos no habría saltado nunca).
+- Medido sin el modelo: 55 pruebas nuevas (876 pasan, 3 omitidas); las de `editar` y las del recorrido web fallan sin el cambio y pasan con él; ruff limpio. Con Qwen3.6, tras subir el tope y añadir el aviso: de dos veterinarias, una terminó (166 pasos; llamó a `terminar` 22 s después de la revisión aprobada, sin que hiciera falta el aviso)
+  y la otra llegó a los 200 pasos arreglando sus propios tests. **No medido:** los cambios de `editar` con Qwen3.6, el aviso de revisión aprobada en una misión real (no llegó a darse el caso), ni la caída de `terminar` (el error no volvió a aparecer; solo lo prueban las pruebas del motor). Con Gemma 26B (la variante abliterated instalada) la ferretería no se terminó en ninguna de 7 pasadas; los avisos nuevos se disparan pero Gemma no los obedece.
+
+---
+
 ## [4.13.19] — 2026-11-22 (el agente ya no se atasca repitiendo `leer` y `pip install paquete>=3.1` sin comillas deja de perder la salida y la versión)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de la ferretería (23), la repetición del mandato con la 4.13.18: se detuvo a los 106 pasos (plan 7/10, sin ningún `verificar`) y dejó un archivo suelto «3.1».
