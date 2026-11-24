@@ -164,6 +164,30 @@ def reindentar(reemplazar: str, extra: str = "", quitar: str = "", saltar_primer
     return "\n".join(lineas)
 
 
+def contexto_unico(texto: str, buscar: str, maximo: int = 5) -> str:
+    """Si 'buscar' aparece varias veces: para cada aparición, las líneas anteriores mínimas (1 a 4) que la hacen única, con su
+    número como en la zona parecida (m4179: Gemma repitió 4 veces la misma llamada ante «incluye más líneas de contexto»)."""
+    lineas = texto.split("\n")
+    largo = len(buscar.strip("\n").splitlines()) or 1
+    trozos, iguales = [], []
+    for m in list(re.finditer(re.escape(buscar), texto))[:maximo]:
+        n = texto.count("\n", 0, m.start())  # índice (desde 0) de la línea donde empieza
+        resto = texto[texto.rfind("\n", 0, m.start()) + 1:m.start()]
+        for k in range(1, min(4, n) + 1):
+            if texto.count("\n".join(lineas[n - k:n]) + "\n" + resto + buscar) == 1:
+                cuerpo = [f"{j + 1}| {lineas[j].rstrip(chr(13))}" for j in range(n - k, n + min(3, largo))]
+                trozos.append(f"· La de la línea {n + 1}: añade al principio de buscar {'la línea anterior' if k == 1 else f'las {k} líneas anteriores'}:\n"
+                              + "\n".join(cuerpo) + ("\n…" if largo > 3 else ""))
+                break
+        else:
+            iguales.append(n + 1)
+    salida = ("\n" + recortar("\n".join(trozos), 1800)) if trozos else ""
+    if iguales:
+        salida += (f"\nLas apariciones de las líneas {', '.join(map(str, iguales))} son idénticas aunque se añadan 4 líneas de "
+                   "contexto: lee más arriba para distinguirlas o cámbialas una a una con escribir.")
+    return salida
+
+
 def decodificar(datos: bytes) -> str:
     try:
         return datos.decode("utf-8")
@@ -214,6 +238,7 @@ class Herramientas:
         self.revisar_cb = None      # lo conecta el bucle o el servidor MCP (necesita el modelo)
         self.cfg_llm = None         # config del agente (servidor/modelo) para ver_pantalla; None = agente.json
         self.reescrituras: dict[str, int] = {}
+        self.editar_fallos: dict[str, int] = {}  # editar fallidos seguidos por archivo (se pone a 0 al escribirlo)
         self.leidos: dict[Path, tuple] = {}  # leído desde la línea 1 en la tarea: (mtime, tamaño, última línea)
         self.inicio_tarea = 0
         self.checkpoints: list[dict] = []   # estados que pasaron verificar sin errores
@@ -317,6 +342,7 @@ class Herramientas:
             if os.path.exists(tmp):
                 os.unlink(tmp)
         self.paso_escritura = self.paso
+        self.editar_fallos.pop(str(p), None)
 
     # ---------- archivos ----------
     def listar(self, ruta: str = ".", profundidad: int = 2) -> str:
@@ -456,6 +482,15 @@ class Herramientas:
                     f"Líneas {ini}-{fin}:\n{trozo}]")
         return ""
 
+    def _racha_de_fallos(self, p: Path) -> str:
+        """Del 3.º editar fallido seguido sobre un archivo en adelante, la salida que el modelo no estaba viendo (m4179: Gemma
+        encadenó 17 «No encontré» y otra vez la misma llamada 4 veces)."""
+        n = self.editar_fallos[str(p)] = self.editar_fallos.get(str(p), 0) + 1
+        if n < 3:
+            return ""
+        return (f"\n[Llevas {n} editar seguidos sin acierto en {self.rel(p)}. Para salir: usa como buscar UNA sola línea (la más "
+                "distintiva, copiada tal cual) y pon en reemplazar esa línea ya cambiada; o reescribe el archivo con escribir.]")
+
     def editar(self, ruta: str, buscar: str, reemplazar: str) -> str:
         p = self.ruta(ruta)
         if not p.is_file():
@@ -465,7 +500,7 @@ class Herramientas:
         if veces > 1:
             donde = [texto.count("\n", 0, m.start()) + 1 for m in re.finditer(re.escape(buscar), texto)][:8]
             return (f"'buscar' aparece {veces} veces en {ruta} (empieza en las líneas {', '.join(map(str, donde))}). "
-                    "Incluye más líneas de contexto para que sea único.")
+                    f"Incluye más líneas de contexto para que sea único.{contexto_unico(texto, buscar)}{self._racha_de_fallos(p)}")
         if veces == 1:
             i = texto.index(buscar)
             previo = texto[texto.rfind("\n", 0, i) + 1:i]
@@ -479,7 +514,7 @@ class Herramientas:
             ini = next((i for i in range(len(lineas) - len(objetivo) + 1)
                         if objetivo and [l.strip() for l in lineas[i:i + len(objetivo)]] == objetivo), None)
             if ini is None:
-                rota = self._donde_rompe(p, texto)
+                rota = self._donde_rompe(p, texto) + self._racha_de_fallos(p)
                 zona = zona_parecida(texto, buscar)
                 if zona:
                     return (f"No encontré el texto a reemplazar en {ruta}. Lo más parecido que hay en el archivo (copia de aquí el "
