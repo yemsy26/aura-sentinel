@@ -527,6 +527,10 @@ class Herramientas:
                               else reindentar(reemplazar, quitar=bi[len(fi):]))
             fin_linea = "\n" if lineas[ini + len(objetivo) - 1].endswith("\n") else ""
             nuevo = "".join(lineas[:ini]) + reemplazar.rstrip("\n") + fin_linea + "".join(lineas[ini + len(objetivo):])
+        if nuevo == texto:  # m4182: Gemma repetía «OK editado» de ediciones que no cambiaban nada
+            return (f"Sin cambios en {ruta}: 'reemplazar' deja el archivo exactamente igual (ya está así). Si este cambio ya "
+                    "está hecho, sigue con el siguiente paso; si querías cambiar algo, 'reemplazar' tiene que ser distinto "
+                    f"de 'buscar'.{self._racha_de_fallos(p)}")
         self._guardar(p, nuevo)
         return f"OK editado: {self.rel(p)}.{self._validar(p, nuevo)}"
 

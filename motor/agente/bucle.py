@@ -307,6 +307,14 @@ class Agente:
                 "Continúa con el plan usando las herramientas (no describas, actúa). "
                 f"Pasos:\n{self.h.plan_texto()}")})
             return None
+        caps = (getattr(self.llm, "info", None) or {}).get("capabilities") or {}
+        if m.encargo and not m.actuo and not pregunta and caps.get("trained_for_tool_use") is not False and m.empujones < 1:
+            m.empujones += 1  # m4182: Gemma contestó al primer turno con el plan escrito en el chat y la tarea acabó sin tocar nada
+            self.ctx.mensajes.append({"role": "user", "content": (
+                "Aún no has hecho nada en el proyecto: no describas el plan en el chat. Empieza ya con las herramientas: abre "
+                "la guía con guia, crea el plan con plan(...) y escribe los archivos con escribir. Si el encargo no necesita "
+                "tocar el proyecto (solo es una pregunta), responde en una frase.")})
+            return None
         # Acabar con texto se saltaba la puerta de terminar: con otro modelo, una misión dijo «He completado todas las
         # fases» con un paso del plan sin hacer, sin verificar ni revisar. Con el plan a medias y archivos cambiados en
         # la tarea, pasa la misma puerta (un arreglo pequeño que acaba con texto y sin plan pendiente, no).
@@ -315,7 +323,6 @@ class Agente:
             m.rechazos_fin += 1
             self.ctx.mensajes.append({"role": "user", "content": f"{motivo}\nCuando esté, llama a terminar."})
             return None
-        caps = (getattr(self.llm, "info", None) or {}).get("capabilities") or {}
         if m.encargo and not m.actuo and caps.get("trained_for_tool_use") is False:
             contenido = (f"[AVISO: el modelo {self.llm.modelo} no está entrenado para usar herramientas y no ha hecho "
                          "nada en el proyecto. Elige uno con «tool use», como qwen3.6-35b-a3b.]\n" + contenido)
