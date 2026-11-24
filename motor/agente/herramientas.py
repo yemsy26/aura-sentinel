@@ -50,6 +50,8 @@ from .verificacion import (
     chequeo_rapido,
     con_call,
     herramienta_de_aura_como_orden,
+    manifiestos_bat,
+    mensaje_manifiesto,
     muertos_ahora,
     ordenes_bat,
     pip_sin_comillas,
@@ -921,6 +923,11 @@ class Herramientas:
                 return (f"ERROR: la orden «{str(c).strip()}» lleva `{espec}` sin comillas: en un .bat cmd toma el `>` (o el `<`) por una redirección y "
                         "cada ejecución dejaría un archivo con la salida de pip e instalaría el paquete sin esa versión. Ponlo entre comillas dobles "
                         f"(pip install \"{espec}\") o déjalo en requirements.txt. No he creado {nombre}.")
+        # m4185 rust_palabras: run.bat en la raíz con `cargo run` y el proyecto en palabras\: con doble clic no arrancaba.
+        # Solo si el manifiesto está en una subcarpeta (el error visto); si no está en ninguna, el proyecto puede crearse después.
+        for _, orden, manifiesto, cerca in manifiestos_bat(self.ruta(nombre).parent, ['cd /d "%~dp0"', *map(str, comandos)]):
+            if cerca:
+                return f"ERROR: {mensaje_manifiesto(orden, manifiesto, cerca)} No he creado {nombre}."
         lineas = ["@echo off", "setlocal EnableExtensions", "chcp 65001 >nul", 'cd /d "%~dp0"',
                   'set "PYTHONUTF8=1"',  # tildes y símbolos sin error aunque la salida vaya a un archivo o una tubería
                   f"title {Path(nombre).stem}", 'set "RC=0"']

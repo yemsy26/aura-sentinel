@@ -1587,6 +1587,113 @@ def bat_sin_calculo(raiz: Path, lista: list[Path], inf: Informe) -> None:
             return
 
 
+# Un run.bat de Rust estaba en la raíz y el proyecto en palabras\ (cargo new palabras): con doble clic, «could not find Cargo.toml»
+# (m4185 rust_palabras). El agente probó el .exe a mano y verificar(ruta="palabras") no miraba el .bat de la raíz. Cada orden
+# de construcción lee su manifiesto de la carpeta donde corre: aquí se sigue el cd del .bat y se comprueba que está.
+MANIFIESTOS = (
+    (re.compile(r"(?i)^cargo(?:\.exe)?\s+(?:\+\S+\s+)?(?:run|r|test|t|build|b|check|clippy|fmt|bench|doc)\b"), ("Cargo.toml",),
+     re.compile(r"--manifest-path")),
+    (re.compile(r"(?i)^go(?:\.exe)?\s+(?:run|test|build|vet|mod\s+(?:tidy|download|vendor))\b"), ("go.mod",),
+     re.compile(r"\S\.go\b|(?:^|\s)-C\s")),
+    (re.compile(r"(?i)^(?:npm|pnpm|yarn)(?:\.cmd)?\s+(?:run(?:-script)?|start|test|install|i|ci|build|dev)\b"), ("package.json",),
+     re.compile(r"--prefix|--cwd|--workspace|(?:^|\s)-[Cw]\s")),
+    (re.compile(r"(?i)^dotnet(?:\.exe)?\s+(?:run|build|test|publish|restore|watch|clean)\b"),
+     ("*.csproj", "*.sln", "*.slnx", "*.fsproj", "*.vbproj"), re.compile(r"--project|\.(?:cs|fs|vb)proj\b|\.slnx?\b|(?:^|\s)-p\s")),
+    (re.compile(r"(?i)^(?:mvn|mvnw)(?:\.cmd)?\s+(?:-\S+\s+)*(?:clean|compile|package|install|test|verify|spring-boot:\S+|exec:\S+)\b"),
+     ("pom.xml",), re.compile(r"(?:^|\s)(?:-f|--file)\s")),
+    (re.compile(r"(?i)^(?:gradle|gradlew)(?:\.bat)?\s+(?:-\S+\s+)*(?:run|build|test|assemble\w*|install\w*|bootRun|clean|check|jar)\b"),
+     ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"),
+     re.compile(r"(?:^|\s)(?:-p|--project-dir|-c|--settings-file)\s")),
+    (re.compile(r"(?i)^flutter(?:\.bat)?\s+(?:run|build|test|pub|analyze)\b"), ("pubspec.yaml",), re.compile(r"$^")),
+    (re.compile(r"(?i)^docker(?:\s+|-)compose\s+(?:-\S+\s+)*(?:up|down|build|run|start|stop|logs|ps|exec|pull)\b"),
+     ("compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"), re.compile(r"(?:^|\s)(?:-f|--file)\s")),
+)
+CREA_MANIFIESTO = re.compile(r"(?i)\b(?:cargo\s+(?:init|new)|npm\s+init|go\s+mod\s+init|dotnet\s+new|flutter\s+create|"
+                             r"pnpm\s+(?:init|create)|yarn\s+init)\b")
+CD_BAT = re.compile(r"(?i)^(cd|chdir|pushd)(?:\s+/d)?(?:\s+(.*))?$")
+SIN_MIRAR = re.compile(r"(?i)^(?:rem\b|::|:|@?echo\b|set\b|title\b|exit\b|goto\b|chcp\b|setlocal\b)")
+NO_BUSCAR = {".git", ".venv", "venv", "node_modules", "target", ".agente", "__pycache__", "dist", "build"}
+
+
+def _destino_cd(destino: str, cwd: Path | None, carpeta: Path) -> Path | None:
+    """La carpeta a la que lleva el cd, o None si no se puede saber (variable) o no existe todavía."""
+    t = destino.strip().strip('"').strip().replace("%~dp0", str(carpeta) + os.sep)
+    if "%" in t or "!" in t or not t:
+        return None
+    p = Path(t)
+    if not p.is_absolute():
+        if cwd is None:
+            return None
+        p = cwd / p
+    p = Path(os.path.normpath(p))
+    return p if p.is_dir() else None
+
+
+def _manifiesto_cerca(cwd: Path, nombres: tuple[str, ...]) -> list[str]:
+    """Subcarpetas (hasta 2 niveles) de cwd donde está el manifiesto."""
+    hallados = []
+    for n in nombres:
+        for patron in (f"*/{n}", f"*/*/{n}"):
+            for f in sorted(cwd.glob(patron)):
+                rel = f.parent.relative_to(cwd)
+                if not (set(rel.parts) & NO_BUSCAR) and rel.as_posix() not in hallados:
+                    hallados.append(rel.as_posix())
+    return hallados[:3]
+
+
+def manifiestos_bat(carpeta: Path, lineas: list[str]) -> list[tuple[int, str, str, list[str]]]:
+    """(línea, orden, manifiesto que falta, subcarpetas donde sí está) de las órdenes del .bat (que vive en carpeta) cuyo
+    manifiesto no está en la carpeta donde corren, siguiendo cd, pushd y popd."""
+    if CREA_MANIFIESTO.search("\n".join(lineas)):
+        return []
+    cwd: Path | None = carpeta
+    pila: list[Path | None] = []
+    fallos = []
+    for i, linea in enumerate(lineas):
+        l = linea.strip()
+        if not l or SIN_MIRAR.match(l):
+            continue
+        if re.match(r"(?i)(?:if|for)\b", l):
+            if re.search(r"(?i)\b(?:cd|chdir|pushd|popd)\b", l):
+                cwd = None  # un cd dentro de un if/for: a partir de ahí no se sabe dónde corre
+            continue
+        for o in ordenes_bat(l)[::2]:
+            o = re.sub(f"(?i)^(?:call\\s+)?{LANZADOR}", "", o.strip().lstrip("@(").strip()).strip()
+            if (m := CD_BAT.match(o)):
+                if m[1].lower() == "pushd":
+                    pila.append(cwd)
+                if m[2]:
+                    cwd = _destino_cd(m[2], cwd, carpeta)
+                continue
+            if re.match(r"(?i)popd\b", o):
+                cwd = pila.pop() if pila else cwd
+                continue
+            if cwd is None:
+                continue
+            for patron, nombres, aparte in MANIFIESTOS:
+                if patron.match(o) and not aparte.search(o):
+                    if not any(next(cwd.glob(n), None) for n in nombres):
+                        fallos.append((i + 1, o[:50], nombres[0], _manifiesto_cerca(cwd, nombres)))
+                    break
+    return fallos
+
+
+def mensaje_manifiesto(orden: str, manifiesto: str, cerca: list[str]) -> str:
+    base = (f"'{orden}' necesita {manifiesto} en la carpeta donde corre y no está: con doble clic fallará "
+            f"(«could not find {manifiesto}» o similar). ")
+    if cerca:
+        sub = cerca[0].replace("/", "\\")
+        return base + f"Está en {', '.join(cerca)}: pon antes de esa orden 'cd /d \"%~dp0{sub}\"' o crea el .bat dentro de esa carpeta."
+    return base + "Créalo, o corrige el cd que hay antes."
+
+
+def manifiesto_bat(raiz: Path, b: Path, inf: Informe, lineas: list[str] | None = None) -> None:
+    if lineas is None:
+        lineas = b.read_text(encoding="utf-8", errors="replace").splitlines()
+    for n, orden, manifiesto, cerca in manifiestos_bat(b.parent, lineas):
+        inf.errores.append(f"{relativa(b, raiz)}:{n} " + mensaje_manifiesto(orden, manifiesto, cerca))
+
+
 def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
     escucha = puertos_escucha(raiz) if lista else set()
     for b in lista:
@@ -1597,6 +1704,7 @@ def bats(raiz: Path, lista: list[Path], inf: Informe) -> None:
         if (m := re.search(r"&(?:gt|lt|amp|quot);", texto)):
             inf.errores.append(f"{rel}: tiene '{m[0]}', que es código de HTML, y cmd lo ejecuta tal cual. Escribe > < & \" sin más.")
         lineas = [l.strip() for l in texto.splitlines()]
+        manifiesto_bat(raiz, b, inf, lineas)
         for i, l in enumerate(lineas):
             if not l or re.match(r"(?i)(echo|rem|::|:|set|title|start|if|for|goto|exit)\b|@?echo\b", l):
                 continue
@@ -1922,6 +2030,9 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
     if bat:
         bats(raiz, bat, inf)
         bat_sin_calculo(raiz, bat, inf)
+    if base != raiz:  # verificar("palabras") no miraba el run.bat de la raíz, que es el que abre el usuario (m4185)
+        for b in sorted({*raiz.glob("*.bat"), *raiz.glob("*.cmd")} - set(bat)):
+            manifiesto_bat(raiz, b, inf)
     if base == raiz:
         bat_citado_que_no_existe(raiz, inf)
         pip_suelto(raiz, inf)
