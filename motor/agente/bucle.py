@@ -91,6 +91,8 @@ class Agente:
         self.requeridos: set[str] = set()
         self.inicio_tarea = 0
         self.revisiones = 0
+        self._revision_real: dict | None = None  # la última que escribió el motor: revision.json no se falsifica (m4185)
+        self._tam_registro = 0
         self.h.revisar_cb = self._revisar
         self.h.preguntar_cb = self._preguntar if interactivo else None
         self.emitir = None  # modo --json: emitir(tipo, **datos) publica un evento para el IDE
@@ -151,8 +153,20 @@ class Agente:
             print(color("\nAgente: ", "negrita") + texto)
 
     def _log(self, texto: str) -> None:
+        hora = time.strftime("%H:%M:%S")
+        try:
+            tam = self.registro.stat().st_size
+        except OSError:
+            tam = 0
+        # m4185: el modelo vació el registro con `echo [] > registro.log`; no se puede restaurar, pero queda dicho.
+        aviso = (f"[{hora}] MANIPULACIÓN: este registro tenía {self._tam_registro} bytes y ahora {tam}: se vació o se recortó "
+                 "fuera del motor.\n") if tam < self._tam_registro else ""
         with open(self.registro, "a", encoding="utf-8") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] {texto}\n")
+            f.write(f"{aviso}[{hora}] {texto}\n")
+        try:
+            self._tam_registro = self.registro.stat().st_size
+        except OSError:
+            pass
 
     def _medir(self, c: dict, args: dict, inicio: float, resultado: str) -> None:
         metricas.anotar(self.h.dir_agente, tipo="llamada", paso=self.pasos_totales, nombre=c["name"],
@@ -455,8 +469,8 @@ class Agente:
         texto, ok = revisar(self.llm, self.h.raiz, requisitos or self.requisitos_parte or self.ctx.tarea,
                             self.h.verificacion["informe"], enfoque, self.h.evidencia_texto())
         self.h.dir_agente.mkdir(exist_ok=True)
-        (self.h.dir_agente / "revision.json").write_text(json.dumps(
-            {"aprobado": ok, "fecha": time.time(), "texto": texto[:5000]}, ensure_ascii=False), encoding="utf-8")
+        self._revision_real = {"aprobado": ok, "fecha": time.time(), "texto": texto[:5000]}
+        (self.h.dir_agente / "revision.json").write_text(json.dumps(self._revision_real, ensure_ascii=False), encoding="utf-8")
         self._log(f"REVISIÓN ({'aprobada' if ok else 'cambios'}): {texto[:1500]}")
         return texto, ok
 
@@ -561,9 +575,21 @@ class Agente:
     def _revision_previa(self) -> dict | None:
         f = self.h.dir_agente / "revision.json"
         try:
-            return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
-        except ValueError:
-            return None
+            leida = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+        except (OSError, ValueError):
+            leida = None
+        real = self._revision_real
+        if real is not None and leida != real:
+            # m4185 tienda_roles: el modelo borró o reescribió revision.json (con editar, del, echo >) para saltarse una
+            # revisión que pedía cambios y terminar pasó. Vale la que escribió el motor, y el archivo se restaura.
+            self._log("MANIPULACIÓN: .agente/revision.json no es el que escribió el motor ("
+                      f"{'borrado' if leida is None else 'cambiado'}); se usa la revisión real y se restaura el archivo.")
+            try:
+                f.write_text(json.dumps(real, ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                pass
+            return real
+        return leida
 
     def nueva_regla(self, texto: str) -> str:
         previo = REGLAS_USUARIO.read_text(encoding="utf-8") if REGLAS_USUARIO.exists() else "# Reglas del usuario\n"

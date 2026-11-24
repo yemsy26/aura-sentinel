@@ -17,6 +17,9 @@ from pathlib import Path
 from . import android, conocimiento, inversa, lecciones, matematicas, pantalla, procesos
 from . import mapa as mapa_repo
 from .borrados import aviso, peligrosos
+from .estado_motor import MENSAJE as BLOQUEO_ESTADO
+from .estado_motor import bloqueo as bloqueo_estado
+from .estado_motor import es_estado
 from .idiomas import resumen_idiomas
 from .mapa import PATRONES_MAPA
 from .permisos import (
@@ -428,6 +431,8 @@ class Herramientas:
 
     def escribir(self, ruta: str, contenido: str, anadir: bool = False) -> str:
         p = self.ruta(ruta)
+        if es_estado(p, self.dir_agente):  # m4185: el modelo reescribió revision.json para saltarse la puerta de calidad
+            return BLOQUEO_ESTADO.format(que=self.rel(p))
         existia = p.exists()
         antes = p.read_text(encoding="utf-8", errors="replace") if existia else ""
         if anadir:  # archivo largo por partes: cada parte cabe en una respuesta del modelo
@@ -493,6 +498,8 @@ class Herramientas:
 
     def editar(self, ruta: str, buscar: str, reemplazar: str) -> str:
         p = self.ruta(ruta)
+        if es_estado(p, self.dir_agente):
+            return BLOQUEO_ESTADO.format(que=self.rel(p))
         if not p.is_file():
             return f"No existe el archivo: {ruta}."
         texto = p.read_text(encoding="utf-8", errors="replace")
@@ -574,6 +581,8 @@ class Herramientas:
                      "cmd": ".bat"}.get(lenguaje.strip().lower())
         if not extension:
             return "Lenguajes de experimentar: python, node, powershell, bat. Para otros, usa un proyecto temporal."
+        if (bloqueo := bloqueo_estado(codigo)):
+            return bloqueo
         carpeta = self.dir_agente / "experimento"
         shutil.rmtree(carpeta, ignore_errors=True)
         carpeta.mkdir(parents=True, exist_ok=True)  # en Windows el borrado puede tardar: mkdir fallaba a veces
@@ -726,6 +735,8 @@ class Herramientas:
             return (f"RECHAZADO: en cmd `{espec}` sin comillas es una redirección: el `>` manda la salida de pip a un archivo (saldría exit=0 "
                     "y nada más, y el archivo se quedaría en la carpeta) y el paquete se instalaría sin la versión pedida. No he ejecutado "
                     f"nada. Pon el requisito entre comillas dobles: {comando.replace(espec, chr(34) + espec + chr(34), 1)}")
+        if (bloqueo := bloqueo_estado(comando)):  # antes de _permitido: `del x` y `echo > x` no piden permiso y vaciaban el registro
+            return bloqueo
         if (cerrado := self._cerrar_propios(comando)) is not None:
             return cerrado
         if (bloqueo := self._permitido(comando) or self._npm_fuera(comando) or self._sin_borrados()):
@@ -902,6 +913,9 @@ class Herramientas:
                 return (f"ERROR: '{t}' es una herramienta de Aura (como escribir o ejecutar): no existe como comando de Windows ni "
                         f"está en el PATH, así que el .bat fallaría con doble clic («\"{t}\" no se reconoce»). Llámala tú ahora con "
                         f"la herramienta y haz que el .bat lance un script del proyecto (por ejemplo python solver.py). No he creado {nombre}.")
+        for c in comandos:
+            if (bloqueo := bloqueo_estado(str(c))):  # un .bat no es forma de tocar el estado del motor
+                return bloqueo + f" No he creado {nombre}."
         for c in comandos:
             if (espec := pip_sin_comillas(str(c).strip())):
                 return (f"ERROR: la orden «{str(c).strip()}» lleva `{espec}` sin comillas: en un .bat cmd toma el `>` (o el `<`) por una redirección y "
