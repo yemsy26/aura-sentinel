@@ -221,7 +221,7 @@ class ResolverSat(unittest.TestCase):
     def test_el_multiplicador_de_la_guia_multiplica(self):
         codigo = re.search(r"```python\n(\s+clausulas, n = .*?)```", conocimiento.guia("matematicas"), re.DOTALL)[1]
         espacio = {}
-        exec(textwrap.dedent(codigo), espacio)
+        exec(textwrap.dedent(codigo), espacio)  # noqa: S102  ejecuta a propósito el ejemplo de la guía para ver que multiplica
         clausulas, a, b = espacio["clausulas"], espacio["a"], espacio["b"]
         for x, y in ((3, 5), (65535, 65535), (40000, 51234)):
             unidades = [[v if x >> i & 1 else -v] for i, v in enumerate(a)] + [[v if y >> i & 1 else -v] for i, v in enumerate(b)]

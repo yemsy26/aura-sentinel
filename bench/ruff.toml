@@ -1,0 +1,2 @@
+# El banco de evaluación usa las mismas reglas que el motor.
+extend = "../motor/ruff.toml"
