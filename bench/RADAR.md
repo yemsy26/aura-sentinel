@@ -56,7 +56,10 @@ El veredicto no ejecuta nada: decide el usuario con la evidencia delante. Ejempl
 
 ## Tarea programada (opcional, pide OK)
 
-Programarlo es configuración persistente: solo con OK del usuario. Texto para una tarea el primer lunes de cada mes:
+Programarlo es configuración persistente: solo con OK del usuario. Se creó el 2026-11-25 como tarea programada de Claude
+(`aura-radar-mensual`, el día 1 de cada mes a las 9:00; solo corre con la app abierta y, si estaba cerrada, al abrirla). Un cron de
+cinco campos no puede decir «primer lunes»: «días 1 a 7» y «lunes» se combinan con O y dispararía unas 11 veces al mes. Resumen de
+lo que hace (el texto completo está en `~\.claude\scheduled-tasks\aura-radar-mensual\SKILL.md`):
 
 > En el repo aura-sentinel ejecuta `python bench\radar.py`. Lee el informe que escribe en `..\aura-radar`, abre las fuentes de la
 > sección 3 y completa las secciones 4 y 5 (máximo 5 puntos, con fuente primaria; sin cifras de blogs). No cambies código ni
