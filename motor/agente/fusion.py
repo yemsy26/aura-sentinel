@@ -20,6 +20,17 @@ class Perdida:
     otro_la_toco: bool    # el otro lado también cambió esa parte de la base: es un conflicto de verdad
 
 
+# `git commit` o `git merge --continue` (con opciones de git delante: -c k=v, -C dir, --no-pager), también dentro de una cadena
+# con && o ;. No coinciden «git log --grep commit», «git commit-tree», «echo git commit» ni «git merge x».
+CIERRA_FUSION = re.compile(r"(?:^|[&|;(\s])git(?:\.exe)?(?:\s+-{1,2}[\w-]+(?:[= ][^\s&|;-]\S*)?)*\s+(?:commit|merge\s+--continue)(?![\w-])",
+                           re.IGNORECASE)
+
+
+def cierra_fusion(comando: str) -> bool:
+    """¿El comando hace el commit con el que termina un merge? Quita primero lo que está entre comillas de un echo."""
+    return bool(CIERRA_FUSION.search(re.sub(r"(?i)\becho\b[^&|;]*", " ", comando)))
+
+
 def marcas_sin_quitar(texto: str) -> bool:
     return bool(MARCA.search(texto))
 

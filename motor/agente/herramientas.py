@@ -20,7 +20,7 @@ from .borrados import aviso, peligrosos
 from .estado_motor import MENSAJE as BLOQUEO_ESTADO
 from .estado_motor import bloqueo as bloqueo_estado
 from .estado_motor import es_estado
-from .fusion import marcas_sin_quitar, nota_de_conflictos, perdidas, rechazo
+from .fusion import cierra_fusion, marcas_sin_quitar, nota_de_conflictos, perdidas, rechazo
 from .idiomas import resumen_idiomas
 from .mapa import PATRONES_MAPA
 from .permisos import (
@@ -732,7 +732,15 @@ class Herramientas:
 
     def ejecutar(self, comando: str, segundos: int = 0, fondo: bool = False) -> str:
         comando, aviso = sin_navegador(comando)
-        return self._ejecutar(comando, segundos, fondo) + aviso
+        nota = ""
+        if cierra_fusion(comando):  # m4190: con `ejecutar git commit` se saltaba la comprobación del merge (2 de 3)
+            rechazado, nota = self._comprobar_fusion()
+            if rechazado:
+                return rechazado
+        r = self._ejecutar(comando, segundos, fondo)
+        if re.search(r"CONFLICT \(|Automatic merge failed", r):
+            r += self._pista_conflicto()
+        return r + (nota if r.startswith("exit=0") else "") + aviso
 
     def _ejecutar(self, comando: str, segundos: int = 0, fondo: bool = False) -> str:
         # cmd ejecuta solo la primera línea y calla el resto: un «python -c "» de varias líneas daba exit=0 sin salida,
@@ -989,6 +997,17 @@ class Herramientas:
             return False
         return not dentro and self._git("init")[0] == 0
 
+    def _anotar_git(self, accion: str, comando: str, mensaje: str, codigo: int, salida: str) -> None:
+        """Lo que se hizo con la herramienta git entra en los comandos que ve el revisor: en m4189 revisar pedía «pruebas» de un
+        merge que sí se había hecho (4, 3 y 4 terminar rechazados) porque solo ejecutar y experimentar anotaban evidencia.
+        diff no (es largo y no prueba nada); de estado y log, solo la última."""
+        if accion == "diff":
+            return
+        etiqueta = {"commit": f"git commit «{mensaje.strip()[:60]}»", "otro": f"git {comando}"[:120]}.get(accion, f"git {accion}")
+        if accion in ("estado", "log"):
+            self.evidencia[:] = [e for e in self.evidencia if not e.startswith(etiqueta + " ->")]
+        self._anotar(etiqueta, f"exit={codigo}", "\n".join(salida.splitlines()[:3]))
+
     def _pista_conflicto(self) -> str:
         sin = [l.strip() for l in self._git("diff", "--name-only", "--diff-filter=U")[1].splitlines() if l.strip()]
         return ("\n[Conflicto" + (f" en {', '.join(sin[:8])}" if sin else "") + ": cada bloque trae la BASE entre `|||||||` y `=======`. "
@@ -1081,9 +1100,17 @@ class Herramientas:
                 return "BLOQUEADO: el agente nunca hace push. Súbelo tú cuando hayas revisado los commits."
             if (bloqueo := self._permitido("git " + comando)):
                 return bloqueo
+            nota = ""
+            if cierra_fusion("git " + comando):
+                rechazado, nota = self._comprobar_fusion()
+                if rechazado:
+                    return rechazado
             codigo, salida = self._git(linea=comando)
+            if codigo == 0:
+                salida += nota
         else:
             return "accion debe ser: estado, diff, log, commit, rama u otro."
+        self._anotar_git(accion, comando, mensaje, codigo, salida)
         if re.search(r"CONFLICT \(|Automatic merge failed", salida):
             salida += self._pista_conflicto()
         if "not a git repository" in salida:
