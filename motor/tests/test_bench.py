@@ -39,9 +39,12 @@ class TestReglas(unittest.TestCase):
             with self.subTest(n=n):
                 self.assertIn(esperado, C.q2(n, 12))
 
-    def test_q2_con_menos_misiones_es_proporcional(self):
-        self.assertIn("base sólida", C.q2(2, 2))
-        self.assertIn("no pasar", C.q2(0, 2))
+    def test_q2_con_menos_de_doce_no_da_veredicto(self):
+        for total in (1, 2, 11, 13, 24):
+            with self.subTest(total=total):
+                r = C.q2(total, total)
+                self.assertIn("sin veredicto", r)
+                self.assertNotIn("base sólida", r)
 
     def test_metricas_del_registro(self):
         with tempfile.TemporaryDirectory() as t:
@@ -230,6 +233,15 @@ class TestCLI(unittest.TestCase):
             self.assertIn("no pasar a mejoras nuevas", r.stdout)
             self.assertIn("(contra)", r.stdout)
             self.assertIn("(FUNCIONA)", r.stdout)
+
+    def test_resumen_parcial_no_da_base_solida_ni_lista_nunca_llamadas(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = Path(t) / "a.jsonl"
+            a.write_text("\n".join(json.dumps(_fila(k)) for k in ("bug_py", "csv_ventas")) + "\n", encoding="utf-8")
+            r = self.correr("--resumen", str(a))
+        self.assertIn("Q2: 2 de 2 FUNCIONA → sin veredicto", r.stdout)
+        self.assertNotIn("base sólida", r.stdout)
+        self.assertIn("solo se dice con las 12 misiones", r.stdout)
 
     def test_q3_marca_herramientas_con_muchos_errores(self):
         with tempfile.TemporaryDirectory() as t:

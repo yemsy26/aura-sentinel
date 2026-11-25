@@ -37,7 +37,8 @@ real). Cada misión tiene su tope de tiempo; la que lo pasa se corta y cuenta co
 
 - **Q1** FUNCIONA = termina (`FIN:`) **y** el juez pasa. PARCIAL = una de las dos. FALLA = ninguna, o el proceso cae (traceback).
 - **Q2** con 12 misiones: 10 o más FUNCIONA → base sólida; 7 a 9 → corregir los fallos concretos antes de añadir nada, por frecuencia;
-  6 o menos → no pasar a mejoras nuevas. Con menos misiones, la misma proporción.
+  6 o menos → no pasar a mejoras nuevas. Q2 solo vale con las 12: con una tanda parcial (p. ej. `bug_py csv_ventas`, que sirve de
+  humo para comprobar el cableado) el resumen dice «sin veredicto» y no lista las herramientas nunca llamadas.
 - **Q3** herramienta con 8 o más llamadas y 25 % o más de errores, o nunca llamada (se dice si es por diseño de la batería).
 - Un fallo con n = 1 es un indicio; uno que se repite en varias misiones o mata el proceso pesa más. El motor no se toca durante una
   batería. Las imágenes de Docker que deja el agente se listan y se preguntan antes de quitarlas.

@@ -11,7 +11,6 @@
 import argparse
 import collections
 import json
-import math
 import re
 import subprocess
 import sys
@@ -39,10 +38,12 @@ def veredicto(termina: bool, juez_ok: bool, traceback: bool = False) -> str:
 
 
 def q2(funcionan: int, total: int = 12) -> str:
-    """Q2: ≥ 10 de 12 → base sólida; 7-9 → corregir antes de añadir nada; ≤ 6 → no pasar a mejoras nuevas (proporcional si son menos)."""
-    if funcionan >= math.ceil(total * 10 / 12):
+    """Q2: ≥ 10 de 12 → base sólida; 7-9 → corregir antes de añadir nada; ≤ 6 → no pasar a mejoras nuevas. Solo vale con las 12."""
+    if total != 12:
+        return f"sin veredicto: son {total} de 12 misiones y Q2 pide la batería entera (una tanda parcial sirve de humo, no de medida)"
+    if funcionan >= 10:
         return "base sólida: se puede pasar a lo que le falta al agente"
-    if funcionan >= math.ceil(total * 7 / 12):
+    if funcionan >= 7:
         return "hay fallos concretos que corregir antes, listados por frecuencia"
     return "no pasar a mejoras nuevas: la base falla"
 
@@ -94,7 +95,8 @@ def resumen(archivo: Path, contra: Path | None = None) -> None:
             err[k] += e
     q3 = [f"{k} ({err[k]}/{tot[k]} errores)" for k in tot if tot[k] >= 8 and err[k] / tot[k] >= 0.25]
     sin_uso = [k for k in HERRAMIENTAS if not tot[k]]
-    print(f"Q3: con ≥ 25 % de error: {', '.join(q3) or 'ninguna'}; nunca llamadas: {', '.join(sin_uso) or 'ninguna'}")
+    nunca = f"nunca llamadas: {', '.join(sin_uso) or 'ninguna'}" if len(filas) == 12 else "nunca llamadas: solo se dice con las 12 misiones"
+    print(f"Q3: con ≥ 25 % de error: {', '.join(q3) or 'ninguna'}; {nunca}")
 
 
 def cargar_modelo(modelo: str, motor: Path) -> None:
