@@ -20,6 +20,7 @@ from .borrados import aviso, peligrosos
 from .estado_motor import MENSAJE as BLOQUEO_ESTADO
 from .estado_motor import bloqueo as bloqueo_estado
 from .estado_motor import es_estado
+from .fusion import marcas_sin_quitar, nota_de_conflictos, perdidas, rechazo
 from .idiomas import resumen_idiomas
 from .mapa import PATRONES_MAPA
 from .permisos import (
@@ -251,6 +252,7 @@ class Herramientas:
         self.evidencia: list[str] = []      # comandos ejecutados en la tarea y su resultado (para revisar)
         self.preguntar_cb = None            # preguntar_cb(pregunta, opciones) -> respuesta; lo conecta el bucle
         self.preguntas = 0
+        self.fusion_rechazos = 0            # commits de un merge rechazados por dejar fuera cambios del otro lado (por tarea)
         self.errores_previos: set[str] | None = None  # modo grande: errores que ya estaban (no cuentan)
         self.muertos_previos: set[str] = set()  # código sin usar que ya estaba al empezar la tarea (no cuenta)
         self.idiomas_parcial: list[str] | None = None  # modo grande: archivos de la parte en curso (idiomas a medias)
@@ -260,6 +262,7 @@ class Herramientas:
         self.leidos.clear()
         self.evidencia.clear()
         self.preguntas = 0
+        self.fusion_rechazos = 0
         self.inicio_tarea = paso_inicio
         if texto.strip():
             (self.dir_agente / pantalla.SESION).unlink(missing_ok=True)  # «continúa» conserva la sesión del navegador
@@ -551,6 +554,11 @@ class Herramientas:
         if venv.is_dir():  # el venv del proyecto tiene prioridad
             env["PATH"] = f"{venv}{os.pathsep}{env.get('PATH', '')}"
             env["VIRTUAL_ENV"] = str(venv.parent)
+        try:  # la base entre ||||||| en las marcas de conflicto (m4185): sin tocar la config del repo ni la del usuario
+            n = int(env.get("GIT_CONFIG_COUNT") or 0)
+        except ValueError:
+            n = 0
+        env.update({"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "merge.conflictStyle", f"GIT_CONFIG_VALUE_{n}": "diff3"})
         return inversa.con_herramientas(android.con_android(env))
 
     def abrir_android_studio(self, ruta: str = ".") -> str:
@@ -981,6 +989,57 @@ class Herramientas:
             return False
         return not dentro and self._git("init")[0] == 0
 
+    def _pista_conflicto(self) -> str:
+        sin = [l.strip() for l in self._git("diff", "--name-only", "--diff-filter=U")[1].splitlines() if l.strip()]
+        return ("\n[Conflicto" + (f" en {', '.join(sin[:8])}" if sin else "") + ": cada bloque trae la BASE entre `|||||||` y `=======`. "
+                "Lo que solo cambió un lado se conserva; solo si los DOS cambiaron la misma línea eliges una y lo dices. Al hacer "
+                "commit el motor comprueba que no dejas fuera cambios del otro lado.]")
+
+    def _comprobar_fusion(self) -> tuple[str, str]:
+        """(rechazo, nota) para el commit de un merge en curso: marcas de conflicto sin quitar, o cambios de un lado que el
+        resultado deja fuera sin que el otro lado los tocara (m4185 git_conflicto: se perdió `"nombre": "demo-main"`). El 3.er
+        commit se deja pasar con aviso: el usuario puede haber pedido quedarse con un lado entero."""
+        if self._git("rev-parse", "-q", "--verify", "MERGE_HEAD")[0] != 0:
+            return "", ""
+        codigo, base = self._git("merge-base", "HEAD", "MERGE_HEAD")
+        base = base.strip()
+        if codigo != 0 or not base or "\n" in base:
+            return "", ""
+        sin_resolver = {l.strip() for l in self._git("diff", "--name-only", "--diff-filter=U")[1].splitlines() if l.strip()}
+        nombres = lambda rev: {l.strip() for l in self._git("diff", "--name-only", base, rev)[1].splitlines() if l.strip()}
+        ambos = nombres("HEAD") & nombres("MERGE_HEAD")
+        quien = ("HEAD", "la otra rama")
+        try:
+            msg = (self.raiz / self._git("rev-parse", "--git-path", "MERGE_MSG")[1].strip()).read_text(encoding="utf-8")
+            quien = (self._git("rev-parse", "--abbrev-ref", "HEAD")[1].strip() or "HEAD",
+                     (re.search(r"Merge (?:remote-tracking )?(?:branch|commit) '([^']+)'", msg) or [0, "la otra rama"])[1])
+        except (OSError, IndexError):
+            pass
+        por_archivo = {}
+        for f in sorted(ambos | sin_resolver):
+            p = self.raiz / f
+            if not p.is_file() or p.stat().st_size > 300_000:
+                continue
+            resultado = p.read_text(encoding="utf-8", errors="replace")
+            if marcas_sin_quitar(resultado):
+                return (f"RECHAZADO: {f} sigue teniendo marcas de conflicto (<<<<<<<, =======, >>>>>>>). Resuélvelo (con la base "
+                        "entre ||||||| ves qué cambió cada lado) y quita las marcas antes del commit."), ""
+            textos = [self._git("show", f"{rev}:{f}") for rev in (base, "HEAD", "MERGE_HEAD")]
+            if f not in ambos or any(c != 0 or "\x00" in t for c, t in textos):
+                continue
+            if (halladas := perdidas(textos[0][1], textos[1][1], textos[2][1], resultado, quien)):
+                por_archivo[f] = halladas
+        conservar = {f: [p for p in ps if not p.otro_la_toco] for f, ps in por_archivo.items()}
+        conservar = {f: ps for f, ps in conservar.items() if ps}
+        nota = nota_de_conflictos(por_archivo)
+        if conservar and self.fusion_rechazos < 2:
+            self.fusion_rechazos += 1
+            return rechazo(conservar), ""
+        if conservar:
+            nota += "\n[AVISO: el commit se hizo aunque estas líneas de un lado no están en el resultado: " + "; ".join(
+                f"{f}: `{p.linea}`" for f, ps in conservar.items() for p in ps[:3]) + ". Dilo en tu resumen.]"
+        return "", nota
+
     def git(self, accion: str = "estado", mensaje: str = "", nombre: str = "", ruta: str = "", comando: str = "") -> str:
         rutas = ["--", self.rel(self.ruta(ruta))] if ruta else NO_VERSIONAR
         if accion == "estado":
@@ -998,12 +1057,17 @@ class Herramientas:
         elif accion == "commit":
             if not mensaje.strip():
                 return "Indica 'mensaje' para el commit (una frase: qué cambia y por qué)."
+            rechazado, nota = self._comprobar_fusion()
+            if rechazado:
+                return rechazado
             creado = self._crear_repo()
             codigo, salida = self._git("add", "-A", *rutas)
             if codigo == 0:
                 codigo, salida = self._git("commit", "-m", mensaje.strip(), *(rutas if ruta else []))
                 if codigo == 0 and creado:
                     salida = "Repositorio git creado en la carpeta del proyecto.\n" + salida
+                if codigo == 0:
+                    salida += nota
         elif accion == "rama":
             if not re.fullmatch(r"[\w][\w./-]*", nombre or ""):
                 return "Indica 'nombre' para la rama (letras, números, - _ / .)."
@@ -1020,6 +1084,8 @@ class Herramientas:
             codigo, salida = self._git(linea=comando)
         else:
             return "accion debe ser: estado, diff, log, commit, rama u otro."
+        if re.search(r"CONFLICT \(|Automatic merge failed", salida):
+            salida += self._pista_conflicto()
         if "not a git repository" in salida:
             return "exit=128 La carpeta del proyecto no es un repositorio git. Créalo con git(accion='otro', comando='init')."
         return f"exit={codigo} git {accion}\n{recortar(salida, self.max_chars)}" if codigo else recortar(salida or "OK", self.max_chars)
