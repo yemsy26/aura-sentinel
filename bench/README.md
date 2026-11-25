@@ -25,6 +25,7 @@ python bench\correr.py --seco                           # fixtures y jueces sobr
 python bench\correr.py --rejuzgar --salida C:\Proyectos --prefijo m4192   # solo los jueces, sobre carpetas ya hechas
 python bench\correr.py --resumen m4192.jsonl            # Q1/Q2/Q3 de un resultado
 python bench\correr.py --resumen nuevo.jsonl --contra anterior.jsonl     # y el veredicto de la otra tanda al lado
+python bench\correr.py --puerta nuevo.jsonl --contra base.jsonl          # ¿se adopta el modelo, el llama.cpp o la mejora? (RADAR.md)
 ```
 
 Cada misión crea su carpeta `<salida>\<prefijo>_<misión>` (por defecto `..\aura-bench\bench_<misión>`, que **debe estar vacía**),
@@ -70,6 +71,8 @@ tras el rechazo de `crear_bat` (C15) y se ejecuta y prueba desde su carpeta. Un 
 2. Congelar el motor: `git archive <commit> motor | tar -x -C D:\medidas\motor_NNNN` y pasar `--motor D:\medidas\motor_NNNN\motor`.
 3. Mismo modelo, mismas misiones, `--prefijo` nuevo; para un modelo nuevo o llama.cpp, el mismo motor y `--modelo`.
 4. `--resumen nuevo.jsonl --contra anterior.jsonl` y mirar misión por misión, no solo el total.
+5. `--puerta nuevo.jsonl --contra anterior.jsonl`: RECHAZAR, REPETIR, ADOPTAR o NO ADOPTAR (reglas en `RADAR.md`). Para saber qué modelos
+   y versiones de llama.cpp merece la pena medir, `radar.py` (también en `RADAR.md`).
 
 ## Añadir una misión
 

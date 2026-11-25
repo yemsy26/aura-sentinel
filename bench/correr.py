@@ -12,6 +12,7 @@ import argparse
 import collections
 import json
 import re
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -99,6 +100,49 @@ def resumen(archivo: Path, contra: Path | None = None) -> None:
     print(f"Q3: con ≥ 25 % de error: {', '.join(q3) or 'ninguna'}; {nunca}")
 
 
+def _por_mision(filas: list[dict]) -> dict:
+    """Una entrada por misión aunque haya varias repeticiones: vale lo que dice la mayoría (más de la mitad FUNCIONA → FUNCIONA;
+    si no, el veredicto más repetido y, en empate, el peor), con la mediana de minutos."""
+    grupos = collections.defaultdict(list)
+    for r in filas:
+        grupos[r["mision"]].append(r)
+    peor = {"FALLA": 2, "PARCIAL": 1}
+    salida = {}
+    for k, rs in grupos.items():
+        vs = [veredicto(r["termina"], r["juez_ok"], r.get("traceback", False)) for r in rs]
+        v = "FUNCIONA" if vs.count("FUNCIONA") * 2 > len(vs) else max({x for x in vs if x != "FUNCIONA"}, key=lambda x: (vs.count(x), peor[x]))
+        salida[k] = {"v": v, "min": statistics.median(r["min"] for r in rs), "traceback": any(r.get("traceback") for r in rs), "n": len(rs)}
+    return salida
+
+
+def puerta(nuevo: list[dict], base: list[dict]) -> tuple[str, list[str]]:
+    """Puerta de entrada de un modelo, una versión de llama.cpp o una mejora del motor (precedencia de arriba abajo):
+    RECHAZAR si FUNCIONA baja o hay traceback; REPETIR si alguna misión cae de FUNCIONA a PARCIAL/FALLA (con n = 1 es ruido probable);
+    ADOPTAR si no hay caídas y FUNCIONA sube o, con el mismo FUNCIONA, los minutos de las misiones FUNCIONA en las dos bajan a 80 % o menos;
+    NO ADOPTAR en otro caso. Hacen falta las 12 misiones en las dos tandas."""
+    pn, pb = _por_mision(nuevo), _por_mision(base)
+    falta = [k for k in M.MISIONES if k not in pn or k not in pb]
+    if falta:
+        return "SIN VEREDICTO", [f"faltan misiones en una de las tandas: {', '.join(falta)} (hacen falta las {len(M.MISIONES)})"]
+    fn = sum(pn[k]["v"] == "FUNCIONA" for k in M.MISIONES)
+    fb = sum(pb[k]["v"] == "FUNCIONA" for k in M.MISIONES)
+    razones = [f"FUNCIONA: base {fb} → nuevo {fn}"] + [f"{k}: {pb[k]['v']} → {pn[k]['v']}" for k in M.MISIONES if pb[k]["v"] != pn[k]["v"]]
+    tracebacks = [k for k in M.MISIONES if pn[k]["traceback"]]
+    if fn < fb or tracebacks:
+        return "RECHAZAR", razones + ([f"traceback en: {', '.join(tracebacks)}"] if tracebacks else [])
+    caidas = [k for k in M.MISIONES if pb[k]["v"] == "FUNCIONA" and pn[k]["v"] != "FUNCIONA"]
+    if caidas:
+        return "REPETIR", razones + [f"repetir con --rep 2 y --rep 3: {' '.join(caidas)} (decide la mayoría; añadir las filas al .jsonl nuevo)"]
+    if fn > fb:
+        return "ADOPTAR", razones + ["FUNCIONA sube y ninguna misión cae"]
+    ambas = [k for k in M.MISIONES if pb[k]["v"] == pn[k]["v"] == "FUNCIONA"]
+    tb, tn = sum(pb[k]["min"] for k in ambas), sum(pn[k]["min"] for k in ambas)
+    razones.append(f"minutos de las {len(ambas)} misiones FUNCIONA en las dos: base {tb:.1f} → nuevo {tn:.1f}")
+    if tb and tn <= 0.8 * tb + 1e-9:
+        return "ADOPTAR", razones + [f"mismo FUNCIONA y {tn / tb:.0%} del tiempo"]
+    return "NO ADOPTAR", razones + ["sin mejora: lo nuevo no compensa el cambio"]
+
+
 def cargar_modelo(modelo: str, motor: Path) -> None:
     M.ejecutar([str(M.PY), "-m", "agente.modelo", "descargar"], motor, 120)
     usada = int(subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
@@ -128,8 +172,15 @@ def main() -> None:
     ap.add_argument("--rejuzgar", action="store_true")
     ap.add_argument("--sin-cargar", action="store_true", help="no cargar el modelo: ya está cargado")
     ap.add_argument("--resumen", type=Path)
+    ap.add_argument("--puerta", type=Path, help="NUEVO.jsonl: ¿se adopta el modelo, el llama.cpp o la mejora? (con --contra BASE.jsonl)")
     ap.add_argument("--contra", type=Path)
     a = ap.parse_args()
+    if a.puerta:
+        if not a.contra:
+            sys.exit("--puerta necesita --contra BASE.jsonl (la tanda de la que se parte)")
+        veredicto_puerta, razones = puerta(leer(a.puerta), leer(a.contra))
+        print(f"Puerta: {veredicto_puerta}")
+        return print("\n".join(f"  - {r}" for r in razones))
     if a.resumen:
         return resumen(a.resumen, a.contra)
     claves = a.claves or list(M.MISIONES)

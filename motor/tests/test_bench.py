@@ -252,6 +252,98 @@ class TestCLI(unittest.TestCase):
         self.assertNotIn("leer (", r.stdout)
 
 
+def _tanda(**cambios):
+    """Las 12 misiones, todas FUNCIONA y 10 min cada una; `cambios` = {misión: dict con los campos que cambian, o lista de filas}."""
+    filas = []
+    for k in M.MISIONES:
+        c = cambios.get(k, {})
+        for extra in (c if isinstance(c, list) else [c]):
+            filas.append(_fila(k, min=10.0) | extra)
+    return filas
+
+
+FALLA = {"termina": False, "juez_ok": False}
+PARCIAL = {"termina": False, "juez_ok": True}
+OK = {"termina": True, "juez_ok": True}
+
+
+@unittest.skipUnless(HAY_BENCH, "bench/ no está (el instalador no lo lleva)")
+class TestPuerta(unittest.TestCase):
+    """C.puerta(nuevo, base) (m4194): RECHAZAR > REPETIR > ADOPTAR / NO ADOPTAR; hacen falta las 12 misiones."""
+
+    def veredicto(self, nuevo, base):
+        return C.puerta(nuevo, base)[0]
+
+    def test_rechazar_si_baja_funciona(self):
+        self.assertEqual(self.veredicto(_tanda(bug_py=FALLA, csv_ventas=FALLA), _tanda()), "RECHAZAR")
+
+    def test_rechazar_si_hay_traceback_aunque_no_baje(self):
+        self.assertEqual(self.veredicto(_tanda(bug_py={"traceback": True}), _tanda(bug_py=PARCIAL)), "RECHAZAR")
+
+    def test_repetir_si_una_cae_aunque_funciona_no_baje(self):
+        base = _tanda(bug_py=PARCIAL, csv_ventas=PARCIAL, mochila_sat=PARCIAL)
+        nuevo = _tanda(git_conflicto=PARCIAL, bug_py=OK, csv_ventas=OK, mochila_sat=OK)
+        self.assertEqual(self.veredicto(_tanda(git_conflicto=FALLA), _tanda()), "RECHAZAR")  # 11 frente a 12 FUNCIONA
+        self.assertEqual(self.veredicto(nuevo, base), "REPETIR")  # sube 9 → 11 pero git_conflicto cae
+        v, razones = C.puerta(_tanda(tienda_roles=FALLA, bug_py=OK), _tanda(bug_py=PARCIAL))
+        self.assertEqual(v, "REPETIR")
+        self.assertIn("tienda_roles", " ".join(razones))
+
+    def test_adoptar_si_sube_sin_caidas(self):
+        self.assertEqual(self.veredicto(_tanda(), _tanda(bug_py=PARCIAL)), "ADOPTAR")
+
+    def test_adoptar_con_mismo_funciona_y_menos_tiempo(self):
+        base = _tanda()
+        self.assertEqual(self.veredicto(_tanda(**{k: {"min": 7.0} for k in M.MISIONES}), base), "ADOPTAR")
+        self.assertEqual(self.veredicto(_tanda(**{k: {"min": 8.0} for k in M.MISIONES}), base), "ADOPTAR")  # justo el 80 %
+        self.assertEqual(self.veredicto(_tanda(**{k: {"min": 8.1} for k in M.MISIONES}), base), "NO ADOPTAR")
+        self.assertEqual(self.veredicto(_tanda(**{k: {"min": 9.0} for k in M.MISIONES}), base), "NO ADOPTAR")
+
+    def test_no_adoptar_si_es_igual(self):
+        v, razones = C.puerta(_tanda(), _tanda())
+        self.assertEqual(v, "NO ADOPTAR")
+        self.assertIn("sin mejora", " ".join(razones))
+
+    def test_el_tiempo_solo_cuenta_misiones_que_funcionan_en_las_dos(self):
+        base = _tanda(bug_py=PARCIAL | {"min": 100.0})
+        nuevo = _tanda(**{k: {"min": 7.0} for k in M.MISIONES if k != "bug_py"})
+        self.assertEqual(self.veredicto(nuevo, base), "ADOPTAR")  # sube y, además, no cuenta el minutaje de bug_py
+
+    def test_sin_veredicto_si_faltan_misiones(self):
+        v, razones = C.puerta(_tanda()[:5], _tanda())
+        self.assertEqual(v, "SIN VEREDICTO")
+        self.assertIn("faltan misiones", razones[0])
+        self.assertEqual(self.veredicto(_tanda(), _tanda()[:3]), "SIN VEREDICTO")
+
+    def test_las_repeticiones_deciden_por_mayoria(self):
+        base = _tanda()
+        dos_de_tres = _tanda(tienda_roles=[OK, OK, FALLA])
+        self.assertEqual(self.veredicto(dos_de_tres, base), "NO ADOPTAR")  # ya no hay caída
+        self.assertEqual(self.veredicto(_tanda(tienda_roles=[OK, FALLA]), base), "RECHAZAR")  # empate = la peor
+        self.assertEqual(self.veredicto(_tanda(tienda_roles=[FALLA, FALLA, OK]), base), "RECHAZAR")
+        pm = C._por_mision(_tanda(tienda_roles=[PARCIAL, PARCIAL, FALLA]))
+        self.assertEqual(pm["tienda_roles"]["v"], "PARCIAL")
+        pm = C._por_mision(_tanda(tienda_roles=[PARCIAL, FALLA]))
+        self.assertEqual(pm["tienda_roles"]["v"], "FALLA")
+        pm = C._por_mision(_tanda(tienda_roles=[{"min": 5.0}, {"min": 20.0}, {"min": 9.0}]))
+        self.assertEqual(pm["tienda_roles"]["min"], 9.0)
+
+    def test_por_cli(self):
+        with tempfile.TemporaryDirectory() as t:
+            a, b = Path(t) / "nuevo.jsonl", Path(t) / "base.jsonl"
+            a.write_text("\n".join(json.dumps(f) for f in _tanda()) + "\n", encoding="utf-8")
+            b.write_text("\n".join(json.dumps(f) for f in _tanda(bug_py=PARCIAL)) + "\n", encoding="utf-8")
+            cmd = [sys.executable, str(BENCH / "correr.py")]
+            r = subprocess.run([*cmd, "--puerta", str(a), "--contra", str(b)], capture_output=True, text=True, encoding="utf-8", timeout=120,
+                               check=False, stdin=subprocess.DEVNULL)
+            self.assertIn("Puerta: ADOPTAR", r.stdout)
+            self.assertIn("bug_py: PARCIAL → FUNCIONA", r.stdout)
+            r = subprocess.run([*cmd, "--puerta", str(a)], capture_output=True, text=True, encoding="utf-8", timeout=120, check=False,
+                               stdin=subprocess.DEVNULL)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("--contra", r.stderr + r.stdout)
+
+
 class TestInstalador(unittest.TestCase):
     def test_bench_no_va_en_los_recursos_de_tauri(self):
         conf = RAIZ / "src-tauri" / "tauri.conf.json"
