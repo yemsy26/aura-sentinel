@@ -84,6 +84,55 @@ INTERNAS_CMD = {"assoc", "call", "cd", "chdir", "cls", "copy", "del", "dir", "ec
                 "shift", "start", "title", "type", "ver", "vol"}
 PATH_DEL_USUARIO = ('if defined FALTA for /f "skip=2 tokens=2,*" %%A in (\'reg query HKCU\\Environment /v Path 2^>nul\') '
                     'do call set "PATH=%%PATH%%;%%B"')
+# Lo que, tras un & o un | en un mensaje, sí es una orden (además de los programas del PATH). Sin «ver»: es palabra corriente.
+ORDENES_TRAS_MENSAJE = (INTERNAS_CMD - {"ver"}) | {"python", "python3", "py", "pip", "node", "npm", "npx", "uv", "git", "docker"}
+
+
+def texto_bat(texto: str) -> str:
+    """Texto puro tras echo o title: se escapa todo & | < > que cmd leería como operador (entre comillas o tras ^ no lo es)."""
+    return re.sub(r'(\^.|"[^"]*"?)|[&|<>]', lambda m: m[1] or "^" + m[0], texto)
+
+
+def _es_orden_bat(resto: str, raiz: Path) -> bool:
+    m = re.match(r'\s*[@(]*\s*("[^"]*"?|[^\s&|<>()=,;]+)', resto)
+    p = m[1].strip('"').lower() if m else ""
+    if p.startswith("%") or "\\" in p or re.match(r"(echo|cd)\b", p) or p in ORDENES_TRAS_MENSAJE:
+        return True
+    return p.endswith((".exe", ".bat", ".cmd", ".com", ".py")) or bool(re.fullmatch(r"[\w+-]+", p)) and (
+        shutil.which(p) is not None or any((raiz / f"{p}{ext}").is_file() for ext in (".bat", ".cmd", ".exe")))
+
+
+def mensaje_bat(linea: str, raiz: Path) -> str:
+    """Línea echo o title escrita por el modelo: escapa los > < | & que son parte del texto y deja las redirecciones y las
+    órdenes encadenadas. Sin esto «echo C -> F» no imprimía nada y creaba un archivo «F» (m4204, condiciones y límites)."""
+    libre = len(linea)  # desde aquí empieza otra orden: no se toca
+
+    def cambiar(m: re.Match) -> str:
+        nonlocal libre
+        t = m[0]
+        if m.start() >= libre or t[0] in '^"' or re.match(r">+&\d", t):
+            return t
+        resto = linea[m.end():]
+        if t[0] == ">":
+            d = re.match(r'[ \t]*("[^"]*"?|[^\s&|<>]*)', resto)
+            destino, detras = d[1], resto[d.end():].strip()
+            suelta = (not re.search(r'["\\/%]|\.\w+$', destino) and destino.lower().rstrip(":") not in ("nul", "con", "prn"))
+            antes = linea[:m.start()]
+            flecha = antes.endswith(("-", "=")) and (suelta or not re.search(r"\w=$", antes))  # «CLAVE=> .env» sí escribe
+            es_texto = (len(t) > 2 or not destino or flecha or destino.startswith("=")
+                        or "://" in destino or re.fullmatch(r"v?\d[\d.,]*[%)\]!?:;]*", destino)
+                        or suelta and detras and not re.match(r"[&|<>]|\d>", detras))
+            if not es_texto:
+                return t
+        elif t[0] in "&|" and len(t) <= 2 and _es_orden_bat(resto, raiz):
+            if not re.match(r"(?i)\s*[@(]*\s*(echo|title)\b", resto):
+                libre = m.end()
+            return t
+        return "".join("^" + c if c in "&|<>" else c for c in t)
+
+    return re.sub(r'\^.|"[^"]*"?|>+&\d|<[^<>"|&]*[^<>"|&\s]>|>+|<+|&+|\|+', cambiar, linea)
+
+
 MAX_PREGUNTAS = 3  # por tarea: más es pedir al usuario lo que el agente puede decidir
 # Archivos que se nombran en un texto (petición del usuario o paso del plan); no las librerías como three.js.
 # Con varios puntos en el nombre (tauri.conf.json, vite.config.ts): antes solo se tomaba lo último («conf.json»).
@@ -953,13 +1002,17 @@ class Herramientas:
         nombre = nombre if nombre.lower().endswith((".bat", ".cmd")) else nombre + ".bat"
         if isinstance(comandos, str):
             comandos = [c for c in comandos.splitlines() if c.strip()]
+        originales = [str(c) for c in comandos]
+        # Los mensajes van escapados desde aquí, para que las comprobaciones y la búsqueda de programas vean lo que cmd
+        # ejecutará: «echo Compilar & ejecutar» se rechazaba como si lanzara la herramienta «ejecutar».
+        comandos = [mensaje_bat(c.strip(), self.raiz) if re.match(r"\s*(echo|title)\b", c, re.IGNORECASE) else c for c in originales]
         for c in comandos:
-            if (t := herramienta_de_aura_como_orden(str(c).strip(), self.raiz)):
+            if (t := herramienta_de_aura_como_orden(c.strip(), self.raiz)):
                 return (f"ERROR: '{t}' es una herramienta de Aura (como escribir o ejecutar): no existe como comando de Windows ni "
                         f"está en el PATH, así que el .bat fallaría con doble clic («\"{t}\" no se reconoce»). Llámala tú ahora con "
                         f"la herramienta y haz que el .bat lance un script del proyecto (por ejemplo python solver.py). No he creado {nombre}.")
-        for c in comandos:
-            if (bloqueo := bloqueo_estado(str(c))):  # un .bat no es forma de tocar el estado del motor
+        for c in originales:
+            if (bloqueo := bloqueo_estado(c)):  # un .bat no es forma de tocar el estado del motor
                 return bloqueo + f" No he creado {nombre}."
         for c in comandos:
             if (espec := pip_sin_comillas(str(c).strip())):
@@ -973,9 +1026,8 @@ class Herramientas:
                 return f"ERROR: {mensaje_manifiesto(orden, manifiesto, cerca)} No he creado {nombre}."
         lineas = ["@echo off", "setlocal EnableExtensions", "chcp 65001 >nul", 'cd /d "%~dp0"',
                   'set "PYTHONUTF8=1"',  # tildes y símbolos sin error aunque la salida vaya a un archivo o una tubería
-                  f"title {Path(nombre).stem}", 'set "RC=0"']
-        if descripcion:
-            lineas.append(f"echo {descripcion}")
+                  f"title {texto_bat(Path(nombre).stem)}", 'set "RC=0"']
+        lineas += [f"echo {texto_bat(t)}" for t in str(descripcion or "").splitlines() if t.strip()]
         lineas += self._buscar_programas(comandos, usar_venv)
         if usar_venv:
             lineas += ['if not exist ".venv\\Scripts\\python.exe" (',
