@@ -4,10 +4,10 @@ import json
 import re
 import uuid
 
-from .esquemas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS
+from .esquemas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS, esquemas_mcp
 
 TIPOS = {e["function"]["name"]: {k: v.get("type") for k, v in e["function"]["parameters"]["properties"].items()}
-         for e in [*ESQUEMAS, ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES]}
+         for e in [*ESQUEMAS, ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, *esquemas_mcp([])]}
 
 
 def coaccionar(nombre: str, args: dict) -> dict:
@@ -24,6 +24,11 @@ def coaccionar(nombre: str, args: dict) -> dict:
                     args[k] = json.loads(v)
                 except ValueError:
                     args[k] = [l for l in v.splitlines() if l.strip()]
+            elif tipo == "object":
+                try:
+                    args[k] = json.loads(v) if v.strip() else {}
+                except ValueError:
+                    pass  # la herramienta contesta que debe ser un objeto JSON
     return {k: v for k, v in args.items() if k in TIPOS.get(nombre, args)}
 
 

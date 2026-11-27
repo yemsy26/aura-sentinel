@@ -10,7 +10,7 @@ from . import grande, lecciones, metricas
 from . import llm as cliente
 from . import mapa as mapa_repo
 from .contexto import Contexto
-from .esquemas import ESQUEMA_MAPA, ESQUEMAS
+from .esquemas import ESQUEMA_MAPA, ESQUEMAS, esquemas_mcp
 from .herramientas import Herramientas, archivos_pedidos, despachar
 from .llamadas import coaccionar, llamadas_en_texto, sin_llamadas
 from .prompts import REGLAS_USUARIO, entorno, sistema
@@ -22,14 +22,14 @@ ICONOS = {"plan": "PLAN", "paso_hecho": "HECHO", "listar": "ls", "leer": "leer",
           "editar": "~", "ejecutar": ">", "procesos": "ps", "crear_bat": "bat", "web_buscar": "web", "web_leer": "web",
           "investigar": "web", "guia": "guia", "version": "ver", "verificar": "QA", "revisar": "REV",
           "aprender": "nota", "restaurar": "UNDO", "ver_pantalla": "VER", "git": "git", "mapa": "mapa",
-          "plan_partes": "PARTES", "terminar": "FIN"}
+          "plan_partes": "PARTES", "terminar": "FIN", "mcp_listar": "mcp", "mcp_usar": "mcp"}
 ARG_VISIBLE = ("ruta", "comando", "consulta", "pregunta", "url", "nombre", "patron", "tema", "paquete", "accion",
                "numero", "enfoque")
 ES_ERROR = (r"(exit=[1-9-]|ERROR|TIMEOUT|RECHAZADO|Argumentos|VERIFICACIÓN \([^)]*\): [1-9]|VISUAL: PROBLEMAS|"
             r"'buscar' aparece|"
             r"REVISIÓN:(?=[\s\S]*CAMBIOS NECESARIOS))")
 # Tras estas herramientas el IDE refresca el editor y el árbol de archivos (modo --json).
-CAMBIAN_ARCHIVOS = {"escribir", "editar", "crear_bat", "restaurar", "ejecutar", "git"}
+CAMBIAN_ARCHIVOS = {"escribir", "editar", "crear_bat", "restaurar", "ejecutar", "git", "mcp_usar"}
 AVISO_MAPA = "\n\n(Repositorio grande: mira mapa() antes de listar o leer archivos.)"
 # Importar una herramienta desde un script: sin este aviso, el modelo acaba programando su propio resolvedor.
 MODULO_ES_HERRAMIENTA = re.compile(r"No module named '(resolver_sat|calcular)'")
@@ -77,8 +77,9 @@ class Agente:
         confirmar = (lambda c: True) if not cfg["confirmar_peligrosos"] else self._confirmar if interactivo else None
         self.h = Herramientas(raiz, max_chars, cfg["timeout_comando"], confirmar)
         self.h.cfg_llm = cfg  # ver_pantalla consulta al mismo servidor/modelo
-        self.tokens_herr = len(json.dumps(ESQUEMAS, ensure_ascii=False)) // 3 + 400
-        self.esquemas = ESQUEMAS  # + mapa en repos grandes (se decide al empezar cada mandato y ya no se quita)
+        # + mcp_* si hay mcp.json; + mapa en repos grandes (se decide al empezar cada mandato y ya no se quita)
+        self.esquemas = [*ESQUEMAS, *esquemas_mcp(self.h.mcp.nombres)] if self.h.mcp.nombres else ESQUEMAS
+        self.tokens_herr = len(json.dumps(self.esquemas, ensure_ascii=False)) // 3 + 400
         self.con_mapa = False
         self.hilo_mapa = None  # caché del mapa poniéndose al día en segundo plano
         self.requisitos_parte = ""  # modo grande: lo que la revisión debe exigir en la parte en curso
@@ -259,6 +260,9 @@ class Agente:
         if self.con_mapa and max_pasos is None:
             self.ctx.mensajes[-1]["content"] += AVISO_MAPA
         self._log(etiqueta or f"USUARIO: {texto}")
+        if self.h.mcp.aviso:  # mcp.json mal escrito: sin esto el usuario no sabría por qué faltan sus herramientas
+            self._salida("aviso", self.h.mcp.aviso, "amarillo")
+            self.h.mcp.aviso = ""
         nuevos = archivos_pedidos(texto)
         sigue = bool(re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.IGNORECASE))
         # Las lecciones que tocan van con la tarea, no en el prompt de sistema: así este no cambia entre tareas
@@ -529,7 +533,7 @@ class Agente:
         if not mapa_repo.es_grande(self.h.raiz):
             return False
         if not self.con_mapa:
-            self.con_mapa, self.esquemas = True, [*ESQUEMAS, ESQUEMA_MAPA]
+            self.con_mapa, self.esquemas = True, [*self.esquemas, ESQUEMA_MAPA]
             extra = len(json.dumps(ESQUEMA_MAPA, ensure_ascii=False)) // 3
             self.tokens_herr += extra
             self.ctx.fijos += extra

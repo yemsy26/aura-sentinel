@@ -275,6 +275,20 @@ del equipo; `DROP`, `TRUNCATE`, `DELETE` sin `WHERE`, `FLUSHALL`, `docker compos
 confirmación. Aceptar las licencias del SDK de Android (`sdkmanager --licenses`) lo decide el usuario.
 **`ejecutar` no es un sandbox**: corre con tus permisos. Úsalo en carpetas de proyecto.
 
+## Herramientas externas: Aura como cliente MCP
+
+Para usar un servidor MCP (stdio), crea `mcp.json` en la carpeta del motor (en la app instalada:
+`%LOCALAPPDATA%\AuraSentinel\motor\mcp.json`) con el formato habitual:
+
+```json
+{"mcpServers": {"archivos": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "${proyecto}"]}}}
+```
+
+- El agente recibe solo `mcp_listar` y `mcp_usar`; sin `mcp.json` no cambia nada. El servidor arranca al usarlo y se cierra con Aura.
+- **Cada llamada pide tu permiso**, salvo en un servidor con `"confirmar": false` (ponlo solo si confías en él).
+- Admite `env`, `cwd` (por defecto la carpeta del motor), `disabled` y `${proyecto}`. Un `mcp.json` dentro del proyecto se ignora.
+- Un servidor es un programa que corre con tus permisos: añade solo los que conozcas. Todavía no hay servidores por HTTP.
+
 ## Usarlo desde Bionic / LM Studio (MCP)
 
 `instalar.bat` registra `agente-local` (mismas herramientas + `proyecto(ruta)`) y desactiva `bionic-core` en Bionic
@@ -296,7 +310,7 @@ Si el modelo no está cargado, lo carga con el ajuste de VRAM.
   `{"tipo":"nuevo"}`, `{"tipo":"verificar"}`, `{"tipo":"plan"}`, `{"tipo":"salir"}`.
 - Eventos por la salida: `listo` (modelo, contexto), `paso` (herramienta, detalle, resultado, error, plan),
   `archivos` (rutas cambiadas; vacía = refrescar todo), `nota`, `aviso`, `progreso`, `error`.
-- `confirmar` (`comando` y `motivo`: destructivo, conectarse o publicar fuera del equipo, o una transacción en
+- `confirmar` (`comando` y `motivo`: destructivo, conectarse o publicar fuera del equipo, una herramienta externa (MCP) o una transacción en
   blockchain) espera
   `{"tipo":"respuesta","si":true|false}`.
 - `pregunta` (`pregunta` y `opciones`) espera `{"tipo":"respuesta","texto":"..."}`.

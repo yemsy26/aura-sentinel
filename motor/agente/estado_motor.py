@@ -57,3 +57,15 @@ def _alcanza(m: re.Match) -> bool:
 def bloqueo(texto: str) -> str | None:
     """El mensaje de BLOQUEADO si el comando o código toca el estado del motor, o None."""
     return MENSAJE.format(que=que) if (que := toca_estado(texto)) else None
+
+
+def bloqueo_argumentos(valor) -> str | None:
+    """BLOQUEADO si algún texto de los argumentos de una herramienta externa apunta al estado del motor: no se sabe si lo
+    va a leer o a escribir."""
+    if isinstance(valor, dict):
+        valor = [*valor.keys(), *valor.values()]
+    if isinstance(valor, list):
+        return next((r for v in valor if (r := bloqueo_argumentos(v))), None)
+    if isinstance(valor, str) and any(_alcanza(m) for m in _RUTA_RE.finditer(valor)):
+        return MENSAJE.format(que=valor[:100])
+    return None

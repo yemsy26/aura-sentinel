@@ -22,6 +22,7 @@ motor/reglas.md
 motor/lecciones.md
 /motor/aprendido/
 /motor/pasajes.db*
+/motor/mcp.json
 /motor/lecciones_uso.*
 /motor/complementos/
 /motor/.herramientas/
