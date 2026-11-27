@@ -290,7 +290,7 @@ Para usar un servidor MCP (stdio), crea `mcp.json` en la carpeta del motor (en l
 {"mcpServers": {"archivos": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "${proyecto}"]}}}
 ```
 
-- El agente recibe solo `mcp_listar` y `mcp_usar`; sin `mcp.json` no cambia nada. El servidor arranca al usarlo y se cierra con Aura.
+- El agente recibe cada herramienta del servidor como herramienta propia (`servidor__herramienta`); sin `mcp.json` no cambia nada. Los servidores arrancan con la primera tarea y se cierran con Aura. Si uno falla o sus herramientas no caben, quedan `mcp_listar` y `mcp_usar` como respaldo.
 - **Cada llamada pide tu permiso**, salvo en un servidor con `"confirmar": false` (ponlo solo si confías en él).
 - Admite `env`, `cwd` (por defecto la carpeta del motor), `disabled` y `${proyecto}`. Un `mcp.json` dentro del proyecto se ignora.
 - Un servidor es un programa que corre con tus permisos: añade solo los que conozcas. Todavía no hay servidores por HTTP.

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import procesos
 from .config import RAIZ_INSTALACION
+from .esquemas import esquema_externo
 
 ARCHIVO = RAIZ_INSTALACION / "mcp.json"
 MODERNA, ANTIGUA = "2026-07-28", "2025-11-25"
@@ -222,6 +223,31 @@ class Gestor:
         self.definiciones, self.aviso = configurados(archivo or ARCHIVO)
         self.proyecto = proyecto
         self._abiertos: dict[str, Servidor] = {}
+        self.propias: dict[str, tuple[str, str]] = {}  # herramienta ofrecida al modelo -> (servidor, nombre en él)
+
+    def ofrecer(self, presupuesto: int) -> tuple[list, list[str]]:
+        """Arranca los servidores y da sus herramientas como esquemas propios, más lo que no se pudo ofrecer así.
+        presupuesto = caracteres que pueden ocupar los esquemas."""
+        esquemas, problemas = [], []
+        for servidor in self.nombres:
+            try:
+                herramientas = self.servidor(servidor).herramientas()
+            except Exception as e:  # un servidor raro no puede tumbar la tarea
+                problemas.append(f"{servidor}: {e}")
+                continue
+            fuera = []
+            for h in herramientas:
+                esquema = esquema_externo(servidor, h["name"], h.get("description"), h.get("inputSchema"))
+                nombre, ocupa = esquema["function"]["name"], len(json.dumps(esquema, ensure_ascii=False))
+                if nombre in self.propias or ocupa > presupuesto:
+                    fuera.append(str(h["name"]))
+                    continue
+                presupuesto -= ocupa
+                self.propias[nombre] = (servidor, h["name"])
+                esquemas.append(esquema)
+            if fuera:
+                problemas.append(f"{servidor}: no caben o repiten nombre: {', '.join(fuera)}"[:200])
+        return esquemas, problemas
 
     @property
     def nombres(self) -> list[str]:

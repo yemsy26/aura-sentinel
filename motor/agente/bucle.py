@@ -12,7 +12,7 @@ from . import mapa as mapa_repo
 from .contexto import Contexto
 from .esquemas import ESQUEMA_MAPA, ESQUEMAS, esquemas_mcp
 from .herramientas import Herramientas, archivos_pedidos, despachar
-from .llamadas import coaccionar, llamadas_en_texto, sin_llamadas
+from .llamadas import coaccionar, llamadas_en_texto, registrar, sin_llamadas
 from .prompts import REGLAS_USUARIO, entorno, sistema
 from .proyecto import es_codigo, ignorado
 from .revision import criticos, mtime_fuentes, revisar
@@ -77,10 +77,10 @@ class Agente:
         confirmar = (lambda c: True) if not cfg["confirmar_peligrosos"] else self._confirmar if interactivo else None
         self.h = Herramientas(raiz, max_chars, cfg["timeout_comando"], confirmar)
         self.h.cfg_llm = cfg  # ver_pantalla consulta al mismo servidor/modelo
-        # + mcp_* si hay mcp.json; + mapa en repos grandes (se decide al empezar cada mandato y ya no se quita)
-        self.esquemas = [*ESQUEMAS, *esquemas_mcp(self.h.mcp.nombres)] if self.h.mcp.nombres else ESQUEMAS
+        # + mapa en repos grandes y las de mcp.json (se deciden al empezar un mandato y ya no se quitan)
+        self.esquemas = ESQUEMAS
         self.tokens_herr = len(json.dumps(self.esquemas, ensure_ascii=False)) // 3 + 400
-        self.con_mapa = False
+        self.con_mapa = self.con_mcp = False
         self.hilo_mapa = None  # caché del mapa poniéndose al día en segundo plano
         self.requisitos_parte = ""  # modo grande: lo que la revisión debe exigir en la parte en curso
         self.entorno = entorno()
@@ -263,6 +263,8 @@ class Agente:
         if self.h.mcp.aviso:  # mcp.json mal escrito: sin esto el usuario no sabría por qué faltan sus herramientas
             self._salida("aviso", self.h.mcp.aviso, "amarillo")
             self.h.mcp.aviso = ""
+        if self.h.mcp.nombres and not self.con_mcp:
+            self._ofrecer_mcp()
         nuevos = archivos_pedidos(texto)
         sigue = bool(re.match(r"\s*(contin|sigue|segu|finaliza|termina)", texto, re.IGNORECASE))
         # Las lecciones que tocan van con la tarea, no en el prompt de sistema: así este no cambia entre tareas
@@ -366,6 +368,9 @@ class Agente:
             self._medir(c, {}, t_llamada, resultado)
             return None, True
 
+        if c["name"] in self.h.mcp.propias:  # lo mismo que mcp_usar: permiso, «datos externos», plan por aprobar
+            servidor, herramienta = self.h.mcp.propias[c["name"]]
+            c, args = {**c, "name": "mcp_usar"}, {"servidor": servidor, "herramienta": herramienta, "argumentos": args}
         clave = c["name"] + json.dumps(args, sort_keys=True, ensure_ascii=False)
         if c["name"] in DEPENDEN_DEL_ESTADO:  # tras modificar archivos, repetir la prueba es progreso
             clave += f"|{self.h.paso_escritura}"
@@ -539,6 +544,20 @@ class Agente:
             self.ctx.fijos += extra
         self.hilo_mapa = mapa_repo.precalentar(self.h.raiz)
         return True
+
+    def _ofrecer_mcp(self) -> None:
+        """Cada herramienta de los servidores de mcp.json, como herramienta propia: con mcp_listar/mcp_usar Qwen no las
+        buscaba (m4202). Una vez, en la primera tarea: cambiar la lista invalida la caché de prompt."""
+        self.con_mcp = True
+        nuevas, problemas = self.h.mcp.ofrecer(int(self.llm.contexto * 0.3))  # caracteres: ~10 % de la ventana
+        registrar(nuevas)
+        if problemas:  # que sigan alcanzables
+            self._salida("aviso", "MCP: " + "; ".join(problemas), "amarillo")
+            nuevas += esquemas_mcp(self.h.mcp.nombres)
+        self.esquemas = [*self.esquemas, *nuevas]
+        extra = len(json.dumps(nuevas, ensure_ascii=False)) // 3
+        self.tokens_herr += extra
+        self.ctx.fijos += extra
 
     def esperar_mapa(self) -> None:
         """Antes de cualquier herramienta: en Windows, leer un archivo a la vez que otro lo reescribe o lo borra falla.

@@ -6,8 +6,16 @@ import uuid
 
 from .esquemas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS, esquemas_mcp
 
-TIPOS = {e["function"]["name"]: {k: v.get("type") for k, v in e["function"]["parameters"]["properties"].items()}
-         for e in [*ESQUEMAS, ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, *esquemas_mcp([])]}
+TIPOS: dict[str, dict] = {}
+
+
+def registrar(esquemas: list) -> None:
+    """Las herramientas que existen: solo esas valen como llamada escrita en texto, y de ahí salen sus tipos."""
+    TIPOS.update({e["function"]["name"]: {k: v.get("type") for k, v in e["function"]["parameters"]["properties"].items()}
+                  for e in esquemas})
+
+
+registrar([*ESQUEMAS, ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, *esquemas_mcp([])])
 
 
 def coaccionar(nombre: str, args: dict) -> dict:
@@ -29,6 +37,8 @@ def coaccionar(nombre: str, args: dict) -> dict:
                     args[k] = json.loads(v) if v.strip() else {}
                 except ValueError:
                     pass  # la herramienta contesta que debe ser un objeto JSON
+    if "__" in nombre:  # externa («servidor__herramienta»): qué sobra lo decide su servidor, su esquema llega recortado
+        return args
     return {k: v for k, v in args.items() if k in TIPOS.get(nombre, args)}
 
 
