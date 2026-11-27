@@ -865,6 +865,14 @@ def probar_tk(raiz: Path, entrada: Path, python: str, inf: Informe, segundos: in
 
 
 # ---------------------------------------------------------------- HTML / JS
+# Lo único que el navegador ejecuta como JavaScript: sin type, module y los tipos MIME de JavaScript. Otro type es un
+# bloque de datos (importmap, ld+json, text/babel, plantillas, shaders) y node --check acusaba código correcto.
+TIPOS_JS = frozenset(
+    {"", "module"} | {f"application/{t}" for t in ("javascript", "ecmascript", "x-javascript", "x-ecmascript")}
+    | {f"text/{t}" for t in ("javascript", "ecmascript", "x-javascript", "x-ecmascript", "jscript", "livescript")}
+    | {f"text/javascript1.{n}" for n in range(6)})
+
+
 class _HtmlInfo(html.parser.HTMLParser):
     VACIOS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source",
                         "track", "wbr", "param", "!doctype"})
@@ -872,7 +880,7 @@ class _HtmlInfo(html.parser.HTMLParser):
     def __init__(self):
         super().__init__()
         self.ids, self.refs, self.scripts, self.pila, self.mal_cerradas = [], [], [], [], []
-        self.modulo, self._en_script = False, False
+        self._tipo, self._en_script = "", False  # scripts: (type, código) de cada <script> en línea
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -884,7 +892,7 @@ class _HtmlInfo(html.parser.HTMLParser):
                 self.refs.append(v.split("?")[0].split("#")[0])
         if tag == "script":
             self._en_script = not a.get("src")
-            self.modulo |= a.get("type") == "module"
+            self._tipo = (a.get("type") or "").strip().lower()
         if tag not in self.VACIOS and not tag.startswith("!"):
             self.pila.append(tag)
 
@@ -898,7 +906,7 @@ class _HtmlInfo(html.parser.HTMLParser):
 
     def handle_data(self, data):
         if self._en_script and data.strip():
-            self.scripts.append(data)
+            self.scripts.append((self._tipo, data))
 
 
 CDN = re.compile(r"cdnjs\.cloudflare\.com/ajax/libs/([\w.-]+)/(r?\d[\d.]*)|"
@@ -963,8 +971,17 @@ def html_estatico(raiz: Path, htmls: list[Path], jss: list[Path], inf: Informe) 
         abiertas = [t for t in p.mal_cerradas + p.pila if t not in ("html", "body", "head", "p", "li", "td", "tr", "option")]
         if abiertas:
             inf.avisos.append(f"{relativa(h, raiz)}: etiquetas sin cerrar: {', '.join(sorted(set(abiertas)))[:120]}")
-        for i, s in enumerate(p.scripts):
-            _node_check(raiz, s, f"{relativa(h, raiz)} <script> #{i + 1}", inf, p.modulo)
+        for i, (tipo, s) in enumerate(p.scripts):
+            nombre = f"{relativa(h, raiz)} <script> #{i + 1}"
+            if tipo in TIPOS_JS:
+                _node_check(raiz, s, nombre, inf, tipo == "module")
+            elif tipo in ("importmap", "speculationrules") or tipo.endswith(("/json", "+json")):
+                try:
+                    json.loads(s)
+                except json.JSONDecodeError as e:
+                    # un importmap roto deja la página sin sus módulos: error. El resto son datos: aviso.
+                    (inf.errores if tipo == "importmap" else inf.avisos).append(
+                        f'{nombre} (type="{tipo}"): JSON mal escrito en su línea {e.lineno}: {e.msg}')
     cargas = cache(partial(_cargas_html, raiz))  # solo se miran los .html si algún .js tiene JSX, y una vez
     jsx = [relativa(j, raiz) for j in jss if _node_check(raiz, j, relativa(j, raiz), inf, cargas=cargas)]
     if jsx:
