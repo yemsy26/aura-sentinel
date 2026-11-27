@@ -253,6 +253,7 @@ class TestPreexistentes(Temporal):
     def test_solo_cuentan_los_errores_nuevos(self):
         escribir(self.dir, "viejo.py", "def f(:\n")
         h = Herramientas(self.dir)
+        h.autoria.cambia(True)  # lo que se escribe a mano hace de cambio de la tarea
         informe = h.verificar_cmd()
         self.assertGreater(h.verificacion["errores"], 0)
         from agente.verificacion import informe_proyecto
@@ -286,6 +287,7 @@ class TestCodigoSinUsarPrevio(Temporal):
         escribir(self.dir, "util.py", self.PREVIO + "print(Caja, Caja().abrir())\n")
         h = Herramientas(self.dir)
         h.nueva_tarea(1, "añade algo")
+        h.autoria.cambia(True)  # lo que se escribe a mano hace de cambio de la tarea
         escribir(self.dir, "nuevo.py", "def sin_conectar():\n    return 1\n")
         informe = h.verificar_cmd()
         self.assertEqual(h.verificacion["errores"], 1, informe)
@@ -298,6 +300,7 @@ class TestCodigoSinUsarPrevio(Temporal):
         escribir(self.dir, "util.py", "def ayuda():\n    return 1\n\n\nprint(ayuda())\n")
         h = Herramientas(self.dir)
         h.nueva_tarea(1, "quita el print")
+        h.autoria.cambia(True)
         escribir(self.dir, "util.py", "def ayuda():\n    return 1\n")
         informe = h.verificar_cmd()
         self.assertEqual(h.verificacion["errores"], 1, informe)
@@ -307,6 +310,7 @@ class TestCodigoSinUsarPrevio(Temporal):
         escribir(self.dir, "viejo.py", "".join(f"def vieja_{chr(97 + i)}():\n    return {i}\n\n\n" for i in range(20)))
         h = Herramientas(self.dir)
         h.nueva_tarea(1, "añade algo")
+        h.autoria.cambia(True)
         self.assertEqual(len(h.muertos_previos), 20)  # la foto no se queda en los 12 primeros
         escribir(self.dir, "zzz.py", "def nueva():\n    return 1\n")  # vulture la lista la última
         informe = h.verificar_cmd()
@@ -322,6 +326,7 @@ class TestCodigoSinUsarPrevio(Temporal):
         escribir(self.dir, "del_usuario.py", "def suya():\n    return 1\n")  # la escribe el usuario tras parar
         h = Herramientas(self.dir)  # se reabrió Aura
         h.nueva_tarea(9, "otra petición")
+        h.autoria.cambia(True)
         informe = h.verificar_cmd()
         self.assertEqual(h.verificacion["errores"], 1, informe)
         self.assertIn("'sin_conectar' NUNCA se usa", informe)

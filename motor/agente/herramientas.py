@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import android, conocimiento, inversa, lecciones, matematicas, mcp_cliente, pantalla, procesos
 from . import mapa as mapa_repo
-from .autoria import Autoria
+from .autoria import Autoria, es_ejecutable
 from .borrados import aviso, peligrosos
 from .estado_motor import MENSAJE as BLOQUEO_ESTADO
 from .estado_motor import bloqueo as bloqueo_estado
@@ -45,13 +45,14 @@ from .permisos import (
     externo,
     transaccion,
 )
-from .proyecto import IGNORAR, correr, es_codigo, ignorado
+from .proyecto import IGNORAR, VIEJOS, correr, es_codigo, ignorado, normalizar
 from .verificacion import (
     LANZADOR,
     borrados_fuera,
     chequeo_rapido,
     con_call,
     herramienta_de_aura_como_orden,
+    informe_proyecto,
     manifiestos_bat,
     mensaje_manifiesto,
     muertos_ahora,
@@ -268,7 +269,7 @@ class Herramientas:
         self.fusion_rechazos = 0
         self.inicio_tarea = paso_inicio
         if texto.strip():
-            self.autoria.cambia(False)  # «continúa» conserva que la tarea ya cambió código
+            self.autoria.nueva()  # «continúa» conserva que la tarea ya cambió código y su foto de errores
             (self.dir_agente / pantalla.SESION).unlink(missing_ok=True)  # «continúa» conserva la sesión del navegador
             self._anotar_checkpoints(texto)
             self.muertos_previos = muertos_ahora(self.raiz) - set(self._foto().get("sin_conectar", []))
@@ -359,8 +360,23 @@ class Herramientas:
     def _escribir_propio(self, p: Path, contenido: str) -> None:
         """Lo que escribe el modelo (escribir, editar, crear_bat): queda anotado como código suyo. restaurar no: devuelve
         archivos de un punto guardado, también los que ya estaban."""
+        self._foto_de_errores(p)
         self._guardar(p, contenido)
         self.autoria.anotar(p)
+
+    def _foto_de_errores(self, p: Path) -> None:
+        """Antes de la primera escritura de la tarea en código ajeno: qué errores tenía ya (sin ejecutar nada). Así, en
+        una auditoría, escribir el informe no hace que cuenten, y lo que la tarea rompa sí cuenta, se anote donde se anote.
+        Si lo que se escribe es código no hace falta: desde entonces cuentan todos."""
+        if (es_ejecutable(p) or self.autoria.antes is not None or self.errores_previos is not None
+                or self.autoria.puede_ejecutar()):
+            return
+        try:
+            inf = informe_proyecto(self.raiz, self.python_proyecto(), ejecutar=False)
+            antes = {normalizar(e) for e in inf.errores}
+        except Exception:  # sin foto cuentan todos
+            antes = set()
+        self.autoria.recordar(antes)
 
     # ---------- archivos ----------
     def listar(self, ruta: str = ".", profundidad: int = 2) -> str:
@@ -1242,12 +1258,20 @@ class Herramientas:
         nota = ""
         if re.match(r"https?://", ruta or ""):  # la página la abre verificar; una URL daba «No existe» y otra vuelta
             ruta, nota = ".", "\n(verificar revisa el proyecto, también la web en el navegador; para mirar una URL usa ver_pantalla)"
+        ejecutar, antes = self.autoria.puede_ejecutar(), self.autoria.antes
+        # Auditoría (código ajeno sin cambiar): lo que ya había no es de la tarea. Sin foto es que no se ha escrito nada.
+        ya_estaba = ((lambda e: antes is None or normalizar(e) in antes)
+                     if not ejecutar and self.errores_previos is None else None)
         informe, errores = verificar(self.raiz, self.python_proyecto(), ruta, max(4, min(int(segundos), 60)), self.max_chars,
                                      previos=self.muertos_previos if self.errores_previos is None else self.errores_previos,
-                                     idiomas_parcial=self.idiomas_parcial, ejecutar=self.autoria.puede_ejecutar())
+                                     idiomas_parcial=self.idiomas_parcial, ejecutar=ejecutar, ya_estaba=ya_estaba)
         subcarpeta = ruta not in ("", ".") and (self.raiz / ruta).is_dir()  # un archivo verifica todo el proyecto
         self.verificacion = {"paso": self.paso, "errores": errores, "informe": informe, "ruta": ruta if subcarpeta else "."}
-        if errores == 0:
+        if errores == 0 and VIEJOS in informe:  # no es un estado «sin errores»: sin checkpoint al que volver
+            self.paso_prueba = self.paso
+            informe += ("\nSin errores de esta tarea. No toques los que ya estaban salvo que te lo hayan pedido. "
+                        "Sigue con el plan.")
+        elif errores == 0:
             self.paso_prueba = self.paso
             n = self._checkpoint()
             informe += (f"\nSIN ERRORES: guardado checkpoint #{n} (sin errores de verificar). Los avisos son secundarios: "

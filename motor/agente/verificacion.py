@@ -21,6 +21,7 @@ import tempfile
 import threading
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from functools import cache, partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from itertools import pairwise
@@ -2083,9 +2084,10 @@ def claves_inventadas(raiz: Path, resumen: str) -> str:
 
 def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maximo: int = 6000,
               previos: set[str] | None = None, idiomas_parcial: list[str] | None = None,
-              ejecutar: bool = True) -> tuple[str, int]:
+              ejecutar: bool = True, ya_estaba: Callable[[str], bool] | None = None) -> tuple[str, int]:
     """Devuelve (informe, número de errores). previos = errores y avisos normalizados que ya estaban: no cuentan.
-    ejecutar=False: no lanza nada del proyecto, solo lo analiza (código ajeno que la tarea no ha cambiado)."""
+    ejecutar=False: no lanza nada del proyecto, solo lo analiza (código ajeno que la tarea no ha cambiado).
+    ya_estaba: en una auditoría, dice si un error lo tenía ya el código: se enseña, pero no cuenta."""
     inf = informe_proyecto(raiz, python, ruta, segundos, idiomas_parcial, previos, ejecutar)
     if isinstance(inf, str):
         return inf, 1
@@ -2093,6 +2095,9 @@ def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maxim
         inf.previos = [re.sub(r"(NUNCA se usa).*", r"\1", e) for e in inf.errores + inf.avisos if normalizar(e) in previos]
         inf.errores = [e for e in inf.errores if normalizar(e) not in previos]
         inf.avisos = [a for a in inf.avisos if normalizar(a) not in previos]
+    if ya_estaba:
+        inf.viejos = [e for e in inf.errores if ya_estaba(e)]
+        inf.errores = [e for e in inf.errores if e not in inf.viejos]
     return inf.texto(maximo), len(inf.errores)
 
 

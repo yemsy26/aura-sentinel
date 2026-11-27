@@ -6,17 +6,32 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_agente import llamada, sin_lecciones_reales
 
-from agente import ecosistemas, grande
+from agente import config, ecosistemas, grande, herramientas
 from agente import verificacion as V
 from agente.autoria import Autoria, es_ejecutable
 from agente.estado_motor import toca_estado
 from agente.herramientas import Herramientas
 
 MARCA = "from pathlib import Path\nPath(r'{}').write_text('ejecutado')\n"
+FIN = {"content": "Listo.", "tool_calls": [], "finish_reason": "stop", "usage": {}}
+setUpModule = sin_lecciones_reales
+
+
+class LLMGuion:
+    respuestas: ClassVar[list] = []
+
+    def __init__(self, base, modelo, contexto, cfg):
+        self.contexto = contexto
+
+    def chat(self, mensajes, herramientas, max_tokens, razonar, al_progreso=None):
+        return LLMGuion.respuestas.pop(0)
 
 
 class Base(unittest.TestCase):
@@ -199,6 +214,118 @@ class TestModoGrande(Base):
 
     def test_un_plan_que_toca_codigo_ejecuta(self):
         self.assertTrue(self.inicial(["app.py", "README.md"]))
+
+
+class TestErroresQueYaEstaban(Base):
+    """m4200: en una auditoría, los errores que el repositorio ya traía se enseñan, pero no frenan el final."""
+
+    VIEJO = "roto.py:1 ERROR DE SINTAXIS"
+
+    def repo_con_error(self):
+        self.juguete()
+        self.poner("roto.py", "def (:\n")
+
+    def assert_no_cuenta(self, h: Herramientas, informe: str):
+        self.assertEqual(h.verificacion["errores"], 0, informe)
+        self.assertRegex(informe.splitlines()[0], r": 0 ERRORES, \d+ AVISOS \(y \d+ errores que ya estaban")
+        self.assertIn(self.VIEJO, informe.split("PREEXISTENTES DEL CÓDIGO (")[1])
+        self.assertNotIn("SIN ERRORES", informe)
+        self.assertFalse(h.archivo_checkpoints.exists())  # no es un estado «sin errores» al que volver
+
+    def assert_cuenta(self, h: Herramientas, informe: str, texto: str):
+        self.assertGreater(h.verificacion["errores"], 0, informe)
+        self.assertIn(texto, informe.split("ERRORES (corrígelos todos):")[1].split("PREEXISTENTES DEL CÓDIGO")[0])
+
+    def test_sin_escribir_nada_se_listan_pero_no_cuentan(self):
+        self.repo_con_error()
+        h = self.abrir()
+        self.assert_no_cuenta(h, h.verificar_cmd())
+        self.assertEqual(self.ejecutado(), [])
+
+    def test_escribir_el_informe_no_los_hace_contar_ni_tras_continuar(self):
+        self.repo_con_error()
+        h = self.abrir()
+        h.escribir("AUDITORIA.md", "# Informe\n")
+        self.assert_no_cuenta(h, h.verificar_cmd())
+        reabierta = Herramientas(self.dir)  # se cerró Aura y se pide «continúa»
+        reabierta.nueva_tarea(9, "")
+        reabierta.escribir("AUDITORIA.md", "más\n", anadir=True)
+        self.assert_no_cuenta(reabierta, reabierta.verificar_cmd())
+
+    def test_lo_que_la_auditoria_rompe_si_cuenta(self):
+        self.repo_con_error()
+        h = self.abrir()
+        h.escribir("README.md", "Para instalar, abre `instalar.bat`.\n")
+        informe = h.verificar_cmd()
+        self.assert_cuenta(h, informe, "README.md cita instalar.bat")
+        self.assertIn(self.VIEJO, informe.split("PREEXISTENTES DEL CÓDIGO (")[1])
+
+    def test_cuenta_aunque_se_anote_en_otro_archivo(self):
+        self.repo_con_error()
+        self.poner("locales/es.json", '{"hola": "Hola"}')
+        self.poner("locales/en.json", '{"hola": "Hello"}')
+        h = self.abrir()
+        h.escribir("locales/es.json", '{"hola": "Hola", "adios": "Adiós"}')
+        self.assert_cuenta(h, h.verificar_cmd(), "en.json: faltan 1 claves")
+
+    def test_una_peticion_nueva_hace_otra_foto(self):
+        self.repo_con_error()
+        h = self.abrir()
+        h.escribir("README.md", "Para instalar, abre `instalar.bat`.\n")
+        h.nueva_tarea(5, "ahora resume lo que hay")
+        h.escribir("RESUMEN.md", "# Resumen\n")  # lo que rompió la anterior ya estaba para esta
+        self.assert_no_cuenta(h, h.verificar_cmd())
+
+    def test_en_cuanto_la_tarea_cambia_codigo_cuentan_todos(self):
+        self.repo_con_error()
+        h = self.abrir("arregla el saludo")
+        h.editar("app.py", "print('hola')", "print('adiós')")
+        self.assertIsNone(h.autoria.antes)  # no se gasta una foto que no va a usarse
+        self.assert_cuenta(h, h.verificar_cmd(), self.VIEJO)
+
+    def test_en_codigo_de_aura_cuentan_todos(self):
+        h = self.abrir("crea un programa")
+        h.escribir("roto.py", "def (:\n")
+        h = self.abrir("revisa que funcione")
+        self.assert_cuenta(h, h.verificar_cmd(), self.VIEJO)
+
+    def test_en_modo_grande_manda_su_propia_foto(self):
+        self.repo_con_error()
+        h = self.abrir("/grande revisa todo")
+        h.errores_previos = set()
+        h.escribir("AUDITORIA.md", "# Informe\n")
+        self.assertIsNone(h.autoria.antes)
+        self.assert_cuenta(h, h.verificar_cmd(), self.VIEJO)
+
+    def test_si_no_se_puede_hacer_la_foto_cuentan_todos(self):
+        self.repo_con_error()
+        h = self.abrir()
+        with mock.patch.object(herramientas, "informe_proyecto", side_effect=RuntimeError("boom")):
+            self.assertTrue(h.escribir("AUDITORIA.md", "# Informe\n").startswith("OK"))
+        self.assert_cuenta(h, h.verificar_cmd(), self.VIEJO)
+
+    def test_verificar_directo_los_sigue_contando(self):
+        self.repo_con_error()
+        informe, errores = V.verificar(self.dir, sys.executable, ejecutar=False)
+        self.assertGreater(errores, 0, informe)
+        self.assertNotIn("PREEXISTENTES DEL CÓDIGO", informe)
+
+    def test_terminar_no_se_rechaza(self):
+        from agente.bucle import Agente
+
+        self.repo_con_error()
+        LLMGuion.respuestas = [llamada("escribir", ruta="AUDITORIA.md", contenido="# Informe\nroto.py no compila.\n"),
+                               llamada("terminar", resumen="Auditoría en AUDITORIA.md."), FIN]
+        falso = mock.patch("agente.bucle.cliente.detectar", lambda cfg: ("http://falso", "falso", 32768))
+        with falso, mock.patch("agente.bucle.cliente.LLM", LLMGuion), mock.patch("agente.bucle.entorno", lambda: "prueba"), \
+                mock.patch.object(Agente, "_revisar", return_value=("APROBADO", True)):
+            a = Agente(config.cargar(), self.dir, interactivo=False)
+            a.tarea("audita sin modificar nada")
+        ids = {c["id"] for m in a.ctx.mensajes if m["role"] == "assistant" for c in m.get("tool_calls") or []
+               if c["function"]["name"] == "terminar"}
+        resultados = [m["content"] for m in a.ctx.mensajes if m["role"] == "tool" and m["tool_call_id"] in ids]
+        self.assertEqual(resultados, ["Tarea terminada."])
+        self.assertEqual(self.ejecutado(), [])
 
 
 class TestQueEsCodigo(unittest.TestCase):

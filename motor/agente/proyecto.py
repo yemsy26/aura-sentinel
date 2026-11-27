@@ -24,25 +24,32 @@ def es_codigo(p: Path) -> bool:
             or nombre.endswith(".dockerfile"))
 
 SIN_VENTANA = 0x08000000  # CREATE_NO_WINDOW
+VIEJOS = "PREEXISTENTES DEL CÓDIGO"  # errores que ya tenía el código ajeno que se audita: no cuentan
 
 
 class Informe:
     def __init__(self):
         self.errores, self.avisos, self.ok, self.tipos = [], [], [], []
         self.previos: list[str] = []  # modo grande: errores que ya estaban antes de empezar (no cuentan)
+        self.viejos: list[str] = []  # auditoría: errores que ya tenía el código ajeno (no cuentan, pero son hallazgos)
         self.ejecutar = True  # False en código ajeno que la tarea no ha cambiado (autoria.py): solo se lee
         self.omitido: list[str] = []  # lo que no se ejecutó por eso
 
     def texto(self, maximo: int) -> str:
         cab = (f"VERIFICACIÓN ({', '.join(self.tipos) or 'sin código'}): {len(self.errores)} ERRORES, "
                f"{len(self.avisos)} AVISOS")
+        if self.viejos:
+            cab += f" (y {len(self.viejos)} errores que ya estaban: ver {VIEJOS})"
         partes = [cab]
         if self.omitido:  # arriba: un informe recortado no puede perderlo
             partes.append(f"NO EJECUTADO ({', '.join(dict.fromkeys(self.omitido))}): este código no lo escribió Aura y la tarea no "
                           "lo ha cambiado, así que solo se ha analizado leyéndolo. No instales dependencias ni cambies lo que no "
                           "te hayan pedido; ejecútalo con ejecutar solo si el usuario lo pide.")
-        for titulo, lista in (("ERRORES (corrígelos todos)", self.errores), ("AVISOS (revisa cada uno)", self.avisos),
-                              ("OK", self.ok)):
+        viejos = (f"{VIEJOS} ({len(self.viejos)}; no son de esta tarea. Si te pidieron auditar o revisar, ponlos en tu "
+                  "informe; corrígelos solo si te lo pidieron)")
+        # Los viejos antes que los avisos: un informe recortado no puede perderlos.
+        for titulo, lista in (("ERRORES (corrígelos todos)", self.errores), (viejos, self.viejos),
+                              ("AVISOS (revisa cada uno)", self.avisos), ("OK", self.ok)):
             if lista:
                 partes.append(f"{titulo}:\n" + "\n".join(f"- {x}" for x in lista[:25]))
         if self.previos:

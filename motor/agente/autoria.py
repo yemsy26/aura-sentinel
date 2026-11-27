@@ -32,15 +32,18 @@ class Autoria:
         try:
             datos = json.loads(self.archivo.read_text(encoding="utf-8"))
             self.escritos, self.tarea_cambia = set(datos["escritos"]), bool(datos["tarea_cambia"])
+            # Errores normalizados que tenía el código ajeno antes de la primera escritura de la tarea (None: sin foto).
+            self.antes: set[str] | None = None if datos.get("antes") is None else set(datos["antes"])
         except (OSError, ValueError, KeyError, TypeError):
-            self.escritos, self.tarea_cambia = set(), False
+            self.escritos, self.tarea_cambia, self.antes = set(), False, None
 
     def _clave(self, p: Path) -> str:
         return p.relative_to(self.raiz).as_posix().lower()  # Windows no distingue mayúsculas
 
     def _guardar(self) -> None:
         self.archivo.parent.mkdir(exist_ok=True)
-        datos = {"escritos": sorted(self.escritos), "tarea_cambia": self.tarea_cambia}
+        datos = {"escritos": sorted(self.escritos), "tarea_cambia": self.tarea_cambia,
+                 "antes": None if self.antes is None else sorted(self.antes)}
         self.archivo.write_text(json.dumps(datos, ensure_ascii=False), encoding="utf-8")
 
     def anotar(self, p: Path) -> None:
@@ -51,10 +54,20 @@ class Autoria:
             self._guardar()
 
     def cambia(self, si: bool) -> None:
-        """Una petición nueva empieza sin cambios (False); el modo grande sabe por su plan si va a tocar código."""
+        """El modo grande sabe por su plan si va a tocar código."""
         if si != self.tarea_cambia:
             self.tarea_cambia = si
             self._guardar()
+
+    def nueva(self) -> None:
+        """Una petición nueva empieza sin cambios y sin foto de errores («continúa» no llama aquí)."""
+        if self.tarea_cambia or self.antes is not None:
+            self.tarea_cambia, self.antes = False, None
+            self._guardar()
+
+    def recordar(self, errores: set[str]) -> None:
+        self.antes = errores
+        self._guardar()
 
     def es_de_aura(self) -> bool:
         archivos = [p for p in self.raiz.rglob("*") if es_ejecutable(p) and p.is_file() and not ignorado(p, self.raiz)]

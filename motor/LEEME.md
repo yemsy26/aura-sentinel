@@ -176,6 +176,9 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
    - **Código ajeno**: solo ejecuta pruebas, programas, navegador o compiladores si la tarea cambió código o si Aura escribió
      la mayoría del proyecto (80 % o más). Si no (una auditoría de un repositorio clonado), analiza leyendo y lo dice.
      Cambiar un archivo de un repositorio ajeno vuelve a ejecutar toda su batería.
+     Mientras no se cambie, los errores que ya tenía antes de la primera escritura de la tarea salen aparte (PREEXISTENTES
+     DEL CÓDIGO: hallazgos para el informe) y no impiden terminar; los que la tarea introduzca (en un README, en las
+     traducciones) sí cuentan. No se detecta lo que se cambie solo con órdenes de `ejecutar`.
    - Python: ruff, **vulture** (funciones/métodos que nunca se llaman = lógica sin conectar), tests (y detecta tests
      falsos que no importan el proyecto), ejecución del programa.
    - **pygame**: juega 3 partidas sin ventana con teclas aleatorias, reloj acelerado (minutos de juego en segundos) y
