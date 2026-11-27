@@ -30,11 +30,17 @@ class Informe:
     def __init__(self):
         self.errores, self.avisos, self.ok, self.tipos = [], [], [], []
         self.previos: list[str] = []  # modo grande: errores que ya estaban antes de empezar (no cuentan)
+        self.ejecutar = True  # False en código ajeno que la tarea no ha cambiado (autoria.py): solo se lee
+        self.omitido: list[str] = []  # lo que no se ejecutó por eso
 
     def texto(self, maximo: int) -> str:
         cab = (f"VERIFICACIÓN ({', '.join(self.tipos) or 'sin código'}): {len(self.errores)} ERRORES, "
                f"{len(self.avisos)} AVISOS")
         partes = [cab]
+        if self.omitido:  # arriba: un informe recortado no puede perderlo
+            partes.append(f"NO EJECUTADO ({', '.join(dict.fromkeys(self.omitido))}): este código no lo escribió Aura y la tarea no "
+                          "lo ha cambiado, así que solo se ha analizado leyéndolo. No instales dependencias ni cambies lo que no "
+                          "te hayan pedido; ejecútalo con ejecutar solo si el usuario lo pide.")
         for titulo, lista in (("ERRORES (corrígelos todos)", self.errores), ("AVISOS (revisa cada uno)", self.avisos),
                               ("OK", self.ok)):
             if lista:

@@ -198,7 +198,10 @@ def tauri(base: Path, raiz: Path, inf: Informe) -> None:
                 inf.errores.append(f"{relativa(p, raiz)}: importa de '@tauri-apps/api/{m.group(1)}', que no existe en Tauri 2: "
                                    'usa `import { invoke } from "@tauri-apps/api/core"`.')
         inf.ok.append(f"{rel}: configuración de Tauri 2 revisada ({len(registrados)} comandos registrados)")
-        abrir_app(d, rel, raiz, inf)
+        if inf.ejecutar:
+            abrir_app(d, rel, raiz, inf)
+        else:
+            inf.omitido.append("la app Tauri")
 
 
 def abrir_app(d: Path, rel: str, raiz: Path, inf: Informe) -> None:
@@ -310,7 +313,7 @@ def node(base: Path, raiz: Path, inf: Informe) -> None:
     if not paquetes:
         return
     inf.tipos.append("node")
-    if not shutil.which("npm"):
+    if inf.ejecutar and not shutil.which("npm"):
         inf.errores.append("Hay package.json pero Node.js no está instalado: https://nodejs.org/")
         return
     for d in paquetes:
@@ -319,6 +322,9 @@ def node(base: Path, raiz: Path, inf: Informe) -> None:
             pkg = json.loads((d / "package.json").read_text(encoding="utf-8"))
         except ValueError as e:
             inf.errores.append(f"{rel}/package.json no es JSON válido: {e}")
+            continue
+        if not inf.ejecutar:  # ni «faltan dependencias»: npm install ejecuta los scripts del repositorio
+            inf.omitido.append("npm (tsc, build y pruebas)")
             continue
         if ({**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
                 and not (d / "node_modules").is_dir()):
@@ -715,6 +721,9 @@ def docker(base: Path, raiz: Path, inf: Informe) -> None:
     errores_antes = len(inf.errores)
     for f in dockerfiles:
         revisar_dockerfile(f, raiz, inf)
+    if not inf.ejecutar:
+        inf.omitido.append("docker")
+        return
     if not shutil.which("docker"):
         inf.avisos.append("Docker no está instalado: solo se revisó el Dockerfile. Dile al usuario que instale "
                           "Docker Desktop (https://docs.docker.com/desktop/) para construir y probar la imagen.")
@@ -839,8 +848,25 @@ def apk(base: Path, raiz: Path, inf: Informe) -> None:
 
 
 # ---------------------------------------------------------------- entrada
+# Lo que solo se comprueba compilando o ejecutando, y compilar ya ejecuta código del repositorio (build.rs, MSBuild, Gradle).
+SOLO_EJECUTANDO = (
+    ("rust", lambda p: p.name == "Cargo.toml"), ("go", lambda p: p.name == "go.mod"),
+    (".net", lambda p: p.suffix.lower() in (".sln", ".slnx", ".csproj", ".fsproj", ".vbproj")),
+    ("solidity", lambda p: p.suffix == ".sol" or p.name == "foundry.toml" or p.name in HARDHAT_CONFIG),
+    ("anchor", lambda p: p.name == "Anchor.toml"), ("android", lambda p: p.name in ("build.gradle", "build.gradle.kts")),
+    ("flutter", lambda p: p.name == "pubspec.yaml"), ("apk", lambda p: p.suffix.lower() == ".apk" or p.name == "apktool.yml"))
+
+
 def verificar_todos(base: Path, raiz: Path, inf: Informe) -> None:
-    for comprobar in (rust, tauri, go, dotnet, node, solidity, anchor, android_gradle, flutter, apk, docker, yaml):
+    if inf.ejecutar:
+        for comprobar in (rust, tauri, go, dotnet, node, solidity, anchor, android_gradle, flutter, apk, docker, yaml):
+            comprobar(base, raiz, inf)
+        return
+    for tipo, es_suyo in SOLO_EJECUTANDO:
+        if _buscar(base, es_suyo):
+            inf.tipos.append(tipo)
+            inf.omitido.append(tipo)
+    for comprobar in (tauri, node, docker, yaml):  # leen; lo que ejecutan lo dejan fuera ellos
         comprobar(base, raiz, inf)
 
 

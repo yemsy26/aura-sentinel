@@ -11,7 +11,7 @@ import re
 # Archivos que están directamente en .agente/ y son del motor. Las subcarpetas (experimento, capturas, tmp...) y otros
 # archivos (la cartera localnet.json de las guías de Solana) siguen siendo del modelo.
 ESTADO = ("revision.json", "registro.log", "checkpoints.json", "plan.md", "plan_anterior.md", "metricas.jsonl", "resumen.md",
-          "sin_usar.json", "grande.json", "grande_anterior.json", "mapa.json", "sesion_navegador.json")
+          "sin_usar.json", "grande.json", "grande_anterior.json", "mapa.json", "sesion_navegador.json", "escritos.json")
 _NOMBRES = "|".join(re.escape(n) for n in ESTADO)
 # Una ruta que cae en ese estado: un archivo de la lista, un comodín bajo .agente\ o la propia carpeta.
 _RUTA = (rf"""(?<![\w.-])\.agente(?:[\\/]+(?:{_NOMBRES})(?![\w.-])|[\\/]+(?P<glob>[^\s"'&|;<>\\/]*[*?])|[\\/]*(?=$|[\s"'&|;)<>*]))""")

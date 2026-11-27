@@ -21,8 +21,9 @@ import tempfile
 import threading
 import urllib.parse
 import urllib.request
-from functools import partial
+from functools import cache, partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from itertools import pairwise
 from pathlib import Path
 
 from . import ecosistemas
@@ -963,8 +964,11 @@ def html_estatico(raiz: Path, htmls: list[Path], jss: list[Path], inf: Informe) 
             inf.avisos.append(f"{relativa(h, raiz)}: etiquetas sin cerrar: {', '.join(sorted(set(abiertas)))[:120]}")
         for i, s in enumerate(p.scripts):
             _node_check(raiz, s, f"{relativa(h, raiz)} <script> #{i + 1}", inf, p.modulo)
-    for j in jss:
-        _node_check(raiz, j, relativa(j, raiz), inf)
+    cargas = cache(partial(_cargas_html, raiz))  # solo se miran los .html si algún .js tiene JSX, y una vez
+    jsx = [relativa(j, raiz) for j in jss if _node_check(raiz, j, relativa(j, raiz), inf, cargas=cargas)]
+    if jsx:
+        inf.avisos.append(f"{len(jsx)} archivo(s) .js con JSX ({', '.join(jsx[:3])}{', …' if len(jsx) > 3 else ''}): Node no "
+                          "entiende JSX y no se comprobó su sintaxis. Es normal en React o Docusaurus: no los cambies por esto.")
 
 
 # getElementById("x") / querySelector("#x ...") con texto literal: una plantilla (${...}), una variable o una suma
@@ -1101,9 +1105,78 @@ def funciones_de_botones(raiz: Path, base: Path, inf: Informe) -> None:
                            + (f" También en {', '.join(dict.fromkeys(sitios[1:4]))}." if len(sitios) > 1 else ""))
 
 
-def _node_check(raiz: Path, codigo_o_ruta, nombre: str, inf: Informe, modulo: bool = False) -> None:
+# React, Docusaurus o Next escriben JSX dentro de .js y node no lo entiende: en la documentación de un repo ajeno daba «ERROR DE SINTAXIS JS» en
+# cinco archivos correctos, y el modelo habría «arreglado» código ajeno (m4198).
+LIBRERIAS_JSX = {"react", "react-dom", "react-native", "preact", "solid-js", "next", "ink", "gatsby", "expo", "react-scripts",
+                 "@docusaurus/core", "@babel/preset-react"}
+IMPORTA_JSX = re.compile(r"""(?:\bfrom|\brequire\(|^[ \t]*import)\s*['"](?:(?:react|react-dom|react-native|preact|solid-js|next|"""
+                         r"""ink|gatsby|expo)(?:/[^'"\n]*)?|(?:@docusaurus|@theme|@theme-original|@site)/[^'"\n]*)['"]""",
+                         re.MULTILINE)
+ABRE_JSX = re.compile(r"<(?:>|[A-Za-z_$][\w$.:-]*(?=[\s/>{]|$))")  # <p, <Foo.Bar, <>; no <!DOCTYPE, «< 1» ni <?xml
+
+
+def _senala_jsx(salida: str) -> bool:
+    """¿El «Unexpected token '<'» de node apunta al principio de una etiqueta o de un fragmento?"""
+    if "SyntaxError: Unexpected token '<'" not in salida:
+        return False
+    for fuente, marca in pairwise(salida.splitlines()):
+        if marca.strip() and not marca.strip().strip("^"):
+            # node cuenta la columna en UTF-16: un emoji antes del «<» ocupa dos
+            antes = fuente.encode("utf-16-le", "surrogatepass")[:2 * marca.index("^")]
+            return bool(ABRE_JSX.match(fuente, len(antes.decode("utf-16-le", "replace"))))
+    return False
+
+
+def _cargas_html(raiz: Path) -> dict[Path, set[str]]:
+    """Con qué type carga cada .html del proyecto cada script ('' = sin type)."""
+    cargas: dict[Path, set[str]] = {}
+    for h in archivos(raiz, ".html", ".htm"):
+        for m in SCRIPT_SRC.finditer(h.read_text(encoding="utf-8", errors="replace")):
+            antes, doble, simple, despues = m.groups()
+            src = (doble or simple or "").split("?")[0].split("#")[0].strip()
+            if not src or re.match(r"(?i)(https?:|//|data:)", src):
+                continue
+            tipo = re.search(r"""\btype\s*=\s*["']?([\w/+.-]+)""", f"{antes} {despues}", re.IGNORECASE)
+            destino = (raiz / src.lstrip("/")) if src.startswith("/") else h.parent / src
+            cargas.setdefault(destino.resolve(), set()).add(tipo.group(1).lower() if tipo else "")
+    return cargas
+
+
+def _dependencias_cerca(carpeta: Path, raiz: Path) -> set[str]:
+    """Lo que declaran los package.json desde la carpeta del archivo hasta la raíz del proyecto."""
+    deps: set[str] = set()
+    for d in (carpeta, *carpeta.parents):
+        try:
+            pkg = json.loads((d / "package.json").read_text(encoding="utf-8", errors="replace"))
+            deps |= {k for clave in ("dependencies", "devDependencies", "peerDependencies") for k in pkg.get(clave) or ()}
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+        if d == raiz or raiz not in d.parents:
+            break
+    return deps
+
+
+def _es_jsx_legitimo(raiz: Path, ruta: Path, salida: str, cargas) -> bool:
+    """Un .js que node rechaza por JSX y que algo transforma antes de ejecutarlo. Ante la duda, no (se acusa)."""
+    if not _senala_jsx(salida):
+        return False
+    texto = ruta.read_text(encoding="utf-8", errors="replace")
+    if texto.lstrip("﻿ \t\r\n").startswith("<"):  # una página HTML guardada como .js
+        return False
+    tipos = cargas().get(ruta.resolve(), set())
+    if tipos & {"text/babel", "text/jsx"}:
+        return True
+    deps = _dependencias_cerca(ruta.parent, raiz)
+    # script corriente en un .html: el navegador lo recibe tal cual (salvo que Parcel empaquete desde ese .html)
+    if tipos and not deps & {"parcel", "parcel-bundler"}:
+        return False
+    return bool(deps & LIBRERIAS_JSX or IMPORTA_JSX.search(texto))
+
+
+def _node_check(raiz: Path, codigo_o_ruta, nombre: str, inf: Informe, modulo: bool = False, cargas=None) -> bool:
+    """Devuelve True si era JSX en un .js: node no puede comprobar su sintaxis y no se acusa."""
     if not shutil.which("node"):
-        return
+        return False
     if isinstance(codigo_o_ruta, Path):
         ruta, temporal = codigo_o_ruta, None
     else:
@@ -1117,10 +1190,13 @@ def _node_check(raiz: Path, codigo_o_ruta, nombre: str, inf: Informe, modulo: bo
         if temporal:
             os.unlink(temporal)
     if codigo not in (0, None):
+        if temporal is None and _es_jsx_legitimo(raiz, ruta, salida, cargas or partial(_cargas_html, raiz)):
+            return True
         lineas = [l for l in salida.splitlines() if l.strip()]
         detalle = next((l for l in lineas if "Error" in l), lineas[-1] if lineas else "")
         donde = next((l.rsplit(":", 1)[-1] for l in lineas if re.search(r":\d+$", l)), "?")
         inf.errores.append(f"{nombre}:{donde} ERROR DE SINTAXIS JS: {detalle[:160]}")
+    return False
 
 
 class Silencioso(SimpleHTTPRequestHandler):
@@ -1312,6 +1388,9 @@ def _de_android(p: Path, base: Path) -> bool:
 
 
 def java(raiz: Path, fuentes: list[Path], inf: Informe, segundos: int) -> None:
+    if not inf.ejecutar:  # sin sus dependencias, javac solo daría errores falsos; mvn y java ejecutan
+        inf.omitido.append("compilar y ejecutar Java")
+        return
     if (raiz / "pom.xml").exists():
         if shutil.which("mvn"):
             codigo, salida = correr_texto("mvn -q -B test", raiz, 600)
@@ -2003,9 +2082,11 @@ def claves_inventadas(raiz: Path, resumen: str) -> str:
 
 
 def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maximo: int = 6000,
-              previos: set[str] | None = None, idiomas_parcial: list[str] | None = None) -> tuple[str, int]:
-    """Devuelve (informe, número de errores). previos = errores y avisos normalizados que ya estaban: no cuentan."""
-    inf = informe_proyecto(raiz, python, ruta, segundos, idiomas_parcial, previos)
+              previos: set[str] | None = None, idiomas_parcial: list[str] | None = None,
+              ejecutar: bool = True) -> tuple[str, int]:
+    """Devuelve (informe, número de errores). previos = errores y avisos normalizados que ya estaban: no cuentan.
+    ejecutar=False: no lanza nada del proyecto, solo lo analiza (código ajeno que la tarea no ha cambiado)."""
+    inf = informe_proyecto(raiz, python, ruta, segundos, idiomas_parcial, previos, ejecutar)
     if isinstance(inf, str):
         return inf, 1
     if previos:
@@ -2016,7 +2097,8 @@ def verificar(raiz: Path, python: str, ruta: str = ".", segundos: int = 8, maxim
 
 
 def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8,
-                     idiomas_parcial: list[str] | None = None, previos: set[str] | None = None) -> "Informe | str":
+                     idiomas_parcial: list[str] | None = None, previos: set[str] | None = None,
+                     ejecutar: bool = True) -> "Informe | str":
     """El informe estructurado de verificar (o un texto si la ruta no existe)."""
     base = (raiz / ruta).resolve() if ruta not in ("", ".") else raiz
     if not base.exists():
@@ -2024,6 +2106,7 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
     if base.is_file():  # verificar("index.html") debe probar el proyecto, no devolver "sin código"
         base = raiz
     inf = Informe()
+    inf.ejecutar = ejecutar
     pys, htmls = archivos(base, ".py"), archivos(base, ".html", ".htm")
     jss, javas, bat = archivos(base, ".js", ".mjs"), archivos(base, ".java"), archivos(base, ".bat", ".cmd")
     if pys:
@@ -2046,6 +2129,8 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
             codigo_muerto(raiz, archivos(raiz, ".py"), inf, solo=base, previos=previos)
         if peligro:
             inf.avisos.append("No ejecuté los tests ni el programa: borrarían fuera del proyecto. Corrige antes esos borrados.")
+        elif not inf.ejecutar:
+            inf.omitido.append("pruebas y programa de Python")
         elif sintaxis_ok:  # con errores de sintaxis no tiene sentido ejecutar
             tests_python(raiz, pys, python, inf)
             ejecutar_python(raiz, pys, python, inf, segundos)
@@ -2057,8 +2142,10 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         funciones_de_botones(raiz, base, inf)
         librerias_cdn(raiz, htmls, inf)
         directas = [h for h in sueltas if not fuente_vite(h)]
-        if directas:
+        if directas and inf.ejecutar:
             navegador(raiz, directas, inf)
+        elif directas:
+            inf.omitido.append("la página en el navegador")
     javas = [p for p in javas if not _de_android(p, base)]  # esos los compila Gradle (android_gradle, flutter)
     if javas:
         inf.tipos.append("java")
@@ -2074,7 +2161,10 @@ def informe_proyecto(raiz: Path, python: str, ruta: str = ".", segundos: int = 8
         pip_suelto(raiz, inf)
     ecosistemas.verificar_todos(base, raiz, inf)
     if (vite := [h for h in htmls if fuente_vite(h)]):  # después de node(): su npm run build deja dist/
-        paginas_vite(raiz, vite, inf)
+        if inf.ejecutar:
+            paginas_vite(raiz, vite, inf)
+        else:
+            inf.omitido.append("la página en el navegador")
     # solo añade algo si el proyecto tiene archivos de idioma
     verificar_idiomas(raiz, inf, idiomas_parcial)
     if not inf.tipos and not bat:

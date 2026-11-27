@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import android, conocimiento, inversa, lecciones, matematicas, mcp_cliente, pantalla, procesos
 from . import mapa as mapa_repo
+from .autoria import Autoria
 from .borrados import aviso, peligrosos
 from .estado_motor import MENSAJE as BLOQUEO_ESTADO
 from .estado_motor import bloqueo as bloqueo_estado
@@ -257,6 +258,7 @@ class Herramientas:
         self.errores_previos: set[str] | None = None  # modo grande: errores que ya estaban (no cuentan)
         self.muertos_previos: set[str] = set()  # código sin usar que ya estaba al empezar la tarea (no cuenta)
         self.idiomas_parcial: list[str] | None = None  # modo grande: archivos de la parte en curso (idiomas a medias)
+        self.autoria = Autoria(self.raiz, self.dir_agente)  # verificar solo ejecuta lo suyo o lo que la tarea cambia
 
     def nueva_tarea(self, paso_inicio: int = 0, texto: str = "") -> None:
         self.reescrituras.clear()
@@ -266,6 +268,7 @@ class Herramientas:
         self.fusion_rechazos = 0
         self.inicio_tarea = paso_inicio
         if texto.strip():
+            self.autoria.cambia(False)  # «continúa» conserva que la tarea ya cambió código
             (self.dir_agente / pantalla.SESION).unlink(missing_ok=True)  # «continúa» conserva la sesión del navegador
             self._anotar_checkpoints(texto)
             self.muertos_previos = muertos_ahora(self.raiz) - set(self._foto().get("sin_conectar", []))
@@ -352,6 +355,12 @@ class Herramientas:
                 os.unlink(tmp)
         self.paso_escritura = self.paso
         self.editar_fallos.pop(str(p), None)
+
+    def _escribir_propio(self, p: Path, contenido: str) -> None:
+        """Lo que escribe el modelo (escribir, editar, crear_bat): queda anotado como código suyo. restaurar no: devuelve
+        archivos de un punto guardado, también los que ya estaban."""
+        self._guardar(p, contenido)
+        self.autoria.anotar(p)
 
     # ---------- archivos ----------
     def listar(self, ruta: str = ".", profundidad: int = 2) -> str:
@@ -443,7 +452,7 @@ class Herramientas:
         antes = p.read_text(encoding="utf-8", errors="replace") if existia else ""
         if anadir:  # archivo largo por partes: cada parte cabe en una respuesta del modelo
             completo = antes + ("" if not antes or antes.endswith("\n") else "\n") + contenido
-            self._guardar(p, completo)
+            self._escribir_propio(p, completo)
             return (f"OK añadido a {self.rel(p)}: ahora tiene {completo.count(chr(10)) + 1} líneas. Sigue con la "
                     "siguiente parte; cuando esté completo, verifica.")
         nota = ""
@@ -462,7 +471,7 @@ class Herramientas:
             return (f"BLOQUEADO: ya reescribiste {self.rel(p)} entero {veces} veces en esta tarea y eso reintroduce "
                     "errores. El archivo actual es válido: usa leer para ver la zona exacta y editar para cambiar solo "
                     "esas líneas.")
-        self._guardar(p, contenido)
+        self._escribir_propio(p, contenido)
         n = contenido.count("\n") + 1
         txt = f"OK {'reemplazado' if existia else 'creado'}: {self.rel(p)} ({n} líneas){nota}.{self._validar(p, contenido)}"
         if existia and re.match(r"(test_|.*_test\.|.*\.test\.)", p.name):
@@ -544,7 +553,7 @@ class Herramientas:
             return (f"Sin cambios en {ruta}: 'reemplazar' deja el archivo exactamente igual (ya está así). Si este cambio ya "
                     "está hecho, sigue con el siguiente paso; si querías cambiar algo, 'reemplazar' tiene que ser distinto "
                     f"de 'buscar'.{self._racha_de_fallos(p)}")
-        self._guardar(p, nuevo)
+        self._escribir_propio(p, nuevo)
         return f"OK editado: {self.rel(p)}.{self._validar(p, nuevo)}"
 
     # ---------- comandos ----------
@@ -974,7 +983,7 @@ class Herramientas:
                    "echo [ERROR] Falló el paso anterior (código %RC%).", ":fin",
                    "if not defined AGENTE_NOPAUSE pause", "exit /b %RC%"]
         p = self.ruta(nombre)
-        self._guardar(p, "\n".join(lineas) + "\n")
+        self._escribir_propio(p, "\n".join(lineas) + "\n")
         return (f"OK creado: {self.rel(p)} ({total} pasos{', con .venv' if usar_venv else ''}). "
                 f"Pruébalo con ejecutar(comando='{self.rel(p)}') o fondo=true si arranca un servidor.")
 
@@ -1235,7 +1244,7 @@ class Herramientas:
             ruta, nota = ".", "\n(verificar revisa el proyecto, también la web en el navegador; para mirar una URL usa ver_pantalla)"
         informe, errores = verificar(self.raiz, self.python_proyecto(), ruta, max(4, min(int(segundos), 60)), self.max_chars,
                                      previos=self.muertos_previos if self.errores_previos is None else self.errores_previos,
-                                     idiomas_parcial=self.idiomas_parcial)
+                                     idiomas_parcial=self.idiomas_parcial, ejecutar=self.autoria.puede_ejecutar())
         subcarpeta = ruta not in ("", ".") and (self.raiz / ruta).is_dir()  # un archivo verifica todo el proyecto
         self.verificacion = {"paso": self.paso, "errores": errores, "informe": informe, "ruta": ruta if subcarpeta else "."}
         if errores == 0:

@@ -372,8 +372,13 @@ class EnVerificar(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)
 
+    def verificar_cmd(self) -> str:
+        h = Herramientas(self.dir)
+        h.autoria.anotar(h.raiz / "app.py")  # como si la hubiera escrito Aura: verificar solo ejecuta lo suyo
+        return h.verificar_cmd()
+
     def test_verificar_da_el_error_de_la_web(self):
-        r = Herramientas(self.dir).verificar_cmd()
+        r = self.verificar_cmd()
         self.assertIn("app.py: al enviar el formulario de /ventas/nueva (POST /ventas) con producto=7", r)
         self.assertIn("la web responde 500", r)
         self.assertIn("ZeroDivisionError", r)
@@ -384,7 +389,7 @@ class EnVerificar(unittest.TestCase):
         # Como la entrega cuyos tests dejaron en la base real un admin de prueba: el del README ya no entraba.
         (self.dir / "README.md").write_text("Entra con usuario `admin` y contraseña `admin123`.\n", encoding="utf-8")
         (self.dir / "app.py").write_text(WEB.replace('"pan123"', '"pan" + "123"'), encoding="utf-8")  # ni en el código
-        r = Herramientas(self.dir).verificar_cmd()
+        r = self.verificar_cmd()
         self.assertIn("app.py: nadie puede entrar en la web con los usuarios y contraseñas que da el proyecto", r)
         self.assertNotIn("usé la web de verdad", r)
 
@@ -394,14 +399,14 @@ class EnVerificar(unittest.TestCase):
         web = WEB.replace('"pan123"', '"pan" + "123"').replace("<button>Entrar</button></form>",
                                                                   '<button>Entrar</button></form><a href="/registro">Regístrate</a>')
         (self.dir / "app.py").write_text(web, encoding="utf-8")
-        r = Herramientas(self.dir).verificar_cmd()
+        r = self.verificar_cmd()
         self.assertNotIn("nadie puede entrar", r)
         self.assertIn("la web tiene registro", r)
 
     def test_si_entrar_falla_no_lo_repite(self):
         (self.dir / "app.py").write_text(WEB.replace('if datos == {"usuario": "ana", "clave": "pan123"}:',
                                                      'if datos["no_existe"]:'), encoding="utf-8")
-        r = Herramientas(self.dir).verificar_cmd()
+        r = self.verificar_cmd()
         self.assertIn("app.py: al entrar como ", r)
         self.assertIn("KeyError", r)
         self.assertNotIn("nadie puede entrar", r)

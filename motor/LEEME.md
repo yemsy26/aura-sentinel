@@ -173,6 +173,9 @@ Con el mmproj el MoE sigue en 64K de contexto: 7183 MiB, expertos de 33/40 capas
    `.js` con `node --check`; `.go` con `gofmt -e`; `.rs` con rustfmt; `.html` referencias rotas; `.bat` archivos que
    no existen y `npm`/`npx` sin `call` (el .bat terminaría ahí); Dockerfile; tabuladores en YAML). Avisa si el archivo lleva una credencial escrita (clave, token).
 2. **`verificar`** (y automático antes de terminar):
+   - **Código ajeno**: solo ejecuta pruebas, programas, navegador o compiladores si la tarea cambió código o si Aura escribió
+     la mayoría del proyecto (80 % o más). Si no (una auditoría de un repositorio clonado), analiza leyendo y lo dice.
+     Cambiar un archivo de un repositorio ajeno vuelve a ejecutar toda su batería.
    - Python: ruff, **vulture** (funciones/métodos que nunca se llaman = lógica sin conectar), tests (y detecta tests
      falsos que no importan el proyecto), ejecución del programa.
    - **pygame**: juega 3 partidas sin ventana con teclas aleatorias, reloj acelerado (minutos de juego en segundos) y

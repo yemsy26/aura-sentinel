@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from . import mapa
+from .autoria import es_ejecutable
 from .contexto import Contexto
 from .esquemas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS
 from .herramientas import NO_VERSIONAR, despachar, recortar
@@ -410,9 +411,12 @@ def _partes(agente, estado: dict) -> str:
     h = agente.h
     if "git" not in estado:
         estado["git"] = preparar_git(h)
+    # Un plan que toca código es una tarea que lo cambia: la verificación inicial ejecuta y separa lo que ya fallaba. Un plan que
+    # solo escribe informes no ejecuta código ajeno.
+    h.autoria.cambia(any(es_ejecutable(Path(a)) for p in estado["partes"] for a in p["archivos"]))
     if "errores_previos" not in estado:
         agente._salida("nota", "(modo grande: verificación inicial para separar los errores que ya había...)", "gris")
-        inf = informe_proyecto(h.raiz, h.python_proyecto())
+        inf = informe_proyecto(h.raiz, h.python_proyecto(), ejecutar=h.autoria.puede_ejecutar())
         previos = {normalizar(e) for e in inf.errores} if not isinstance(inf, str) else set()
         estado["errores_previos"] = sorted(previos | muertos_ahora(h.raiz))
         guardar(h.dir_agente, estado)
