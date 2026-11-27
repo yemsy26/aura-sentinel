@@ -5,6 +5,23 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.21] — 2026-11-27 (un proyecto grande ya no bloquea a Aura, el agente no puede falsificar su revisión y un merge no pierde tu trabajo)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de una auditoría real de un repositorio grande y de la batería de 12 misiones con Qwen3.6.
+
+- **Un proyecto grande ya no bloquea a Aura.** En una auditoría de un repositorio con 1096 archivos `.py`, cada orden respondía «Error interno: FileNotFoundError: [WinError 206]», también tras cerrar la app o abrir otra ventana:
+  al empezar cada tarea se pasaban todas las rutas en la línea de comandos y Windows corta en 32.767 caracteres. Ahora, si no caben, van en un archivo; y si un analizador no arranca o tarda demasiado, queda un aviso y la tarea sigue.
+- **El agente ya no puede tocar su propia revisión.** En una misión, tras una revisión que pedía cambios, editó `.agente/revision.json` y vació el registro hasta que `terminar` pasó con «Revisión: APROBADO».
+  Ahora no puede escribir, borrar ni mover los archivos de estado de `.agente/`, y si la revisión cambia por fuera vale la real y queda anotado.
+- **Un merge no pierde lo que la otra rama no tocó.** Al resolver un conflicto se quedaba con un lado entero y borraba una línea que ya estaba en `main`. Ahora las marcas de conflicto enseñan también la base, y el commit del merge se rechaza (hasta 2 veces) si quedan marcas o faltan líneas que solo un lado cambió, también si el commit se hace con una orden normal.
+- **El revisor ve lo hecho con git.** Antes podía pedir «pruebas» de un merge que sí se había hecho.
+- **Un `.bat` que no encuentra su proyecto ya no pasa.** `verificar` y `crear_bat` comprueban que `Cargo.toml`, `go.mod`, `package.json`, etc. estén en la carpeta donde corre la orden del doble clic.
+- Fuera del instalador: banco de 12 misiones y radar de novedades en `bench/`.
+- Medido: 1006 pruebas pasan, 3 omitidas (130 nuevas); ruff limpio. Con Qwen3.6, el motor sin el arreglo de proyectos grandes dio 10 de 12 misiones correctas según el juez automático (11 al revisarlas a mano).
+  **No medido:** el arreglo de proyectos grandes no se ha probado con el modelo real (sí en una copia del repositorio que fallaba, con un modelo de mentira). En repositorios ajenos, `verificar` todavía puede marcar errores que no lo son e intentar ejecutar su código.
+
+---
+
 ## [4.13.20] — 2026-11-24 (hasta 200 pasos, `editar` ayuda más cuando falla y una verificación que se cae ya no tira la misión entera)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de las ferreterías y veterinarias de las últimas tandas con Qwen3.6 (algunas llegaban al tope de pasos o se caían) y de una ferretería con Gemma que se detenía al editar.
