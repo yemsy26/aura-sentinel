@@ -22,6 +22,7 @@ from agente.llamadas import coaccionar, llamadas_en_texto
 SERVIDOR = r'''
 import json, os, subprocess, sys
 modo, registro = sys.argv[1], sys.argv[2]
+sys.stdin.reconfigure(encoding="utf-8")  # el protocolo es UTF-8; sin esto, en Windows leería cp1252 («ñ» -> «Ã±»)
 def anotar(texto):
     with open(registro, "a", encoding="utf-8") as f:
         f.write(texto + "\n")
