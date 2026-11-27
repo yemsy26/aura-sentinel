@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -40,6 +41,11 @@ from .recorrido_web import (
 from .seguridad import pruebas_borran_la_base, seguridad_web
 
 BIN = Path(sys.executable).parent  # ruff.exe y vulture.exe del venv del agente
+LIMITE_ORDEN = 30_000  # Windows corta una orden en 32.767 caracteres (WinError 206 si se pasa)
+# vulture no acepta un archivo de argumentos: se le llama con las rutas leídas de un archivo (mismos argumentos, misma salida)
+LANZAR_VULTURE = ("import sys; from vulture.core import main; rutas = open(sys.argv[1], encoding='utf-8').read().splitlines(); "
+                  "sys.argv = ['vulture', *rutas, *sys.argv[2:]]; main()")
+SIN_ANALISIS = "No busqué código sin usar: el análisis no pudo ejecutarse o tardó demasiado (proyecto muy grande)."
 _LEIDOS: dict[Path, tuple[tuple[int, int], list]] = {}  # borrados_fuera: lo hallado en cada .py mientras no cambie
 SONDA_PYGAME = Path(__file__).resolve().parent / "sondas" / "pygame_sonda.py"
 SONDA_TK = Path(__file__).resolve().parent / "sondas" / "tk_sonda.py"
@@ -106,13 +112,37 @@ def borrados_fuera(raiz: Path, rutas: list[Path] | None = None) -> list[str]:
     return hallados
 
 
+def _sobre_archivos(orden: list[str], rutas: list[Path], despues: list[str], desde_lista, raiz: Path, segundos: int) -> str | None:
+    """Corre un analizador sobre muchas rutas y devuelve su salida; None si no se pudo (no arrancó o no acabó a tiempo: nunca
+    tira la tarea). Si la orden no cabe en Windows, las rutas van en un archivo y `desde_lista(archivo)` da la orden.
+    m4197: un repositorio de 1096 .py necesitaba 122.000 caracteres, CreateProcess daba WinError 206 y ninguna tarea
+    podía empezar en esa carpeta."""
+    cmd, lista = [*orden, *map(str, rutas), *despues], None
+    try:
+        if len(subprocess.list2cmdline(cmd)) > LIMITE_ORDEN:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".rutas", delete=False) as f:
+                f.write("\n".join(map(str, rutas)))
+                lista = Path(f.name)
+            cmd = desde_lista(str(lista))
+        codigo, salida = correr_texto(cmd, raiz, segundos)
+    except OSError:
+        return None
+    finally:
+        if lista:
+            lista.unlink(missing_ok=True)
+    return None if codigo is None else salida
+
+
 def lint_python(raiz: Path, rutas: list[Path], inf: Informe, rapido: bool = False) -> None:
     ruff = BIN / "ruff.exe"
     if not ruff.exists() or not rutas:
         return
     sel = "E9,F821,F822,F823,F811,F841,F632,B006" if rapido else "E9,F,B006,B012,B018,E722,PLE"
-    _, salida = correr_texto([str(ruff), "check", "--no-cache", "--output-format", "concise", "--select", sel,
-                         "--ignore", "F403,F405,F541", *map(str, rutas)], raiz, 60)
+    orden = [str(ruff), "check", "--no-cache", "--output-format", "concise", "--select", sel, "--ignore", "F403,F405,F541"]
+    salida = _sobre_archivos(orden, rutas, [], lambda lista: [*orden, f"@{lista}"], raiz, 60)
+    if salida is None:
+        inf.avisos.append("No pude pasar ruff por el código Python (no arrancó o tardó demasiado).")
+        return
     for linea in salida.splitlines():
         m = re.match(r"(.+?):(\d+):\d+: (\w+) (.*)", linea)
         if not m:
@@ -132,7 +162,13 @@ def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None
     vulture = BIN / "vulture.exe"
     if not vulture.exists() or not rutas:
         return
-    _, salida = correr_texto([str(vulture), *map(str, rutas), "--min-confidence", "60"], raiz, 60)
+    # vulture busca usos entre archivos: la lista NO se parte en lotes (inventaría «NUNCA se usa»)
+    opciones = ["--min-confidence", "60"]
+    salida = _sobre_archivos([str(vulture)], rutas, opciones,
+                             lambda lista: [str(BIN / "python.exe"), "-c", LANZAR_VULTURE, lista, *opciones], raiz, max(60, len(rutas) // 5))
+    if salida is None:
+        inf.avisos.append(SIN_ANALISIS)
+        return
     decorados: dict[str, set[int]] = {}  # funciones/clases con decorador las registra un framework (rutas, eventos)
     for r in rutas:
         try:
@@ -177,7 +213,7 @@ def muertos_ahora(raiz: Path) -> set[str]:
     del proyecto: al empezar una tarea no son piezas por conectar, y exigir corregirlas hacía borrar código ajeno."""
     inf = Informe()
     codigo_muerto(raiz, archivos(raiz, ".py"), inf, tope=10_000)
-    return {normalizar(e) for e in inf.errores + inf.avisos}
+    return {normalizar(e) for e in inf.errores + inf.avisos if e != SIN_ANALISIS}
 
 
 def _modulos_proyecto(rutas: list[Path]) -> set[str]:
