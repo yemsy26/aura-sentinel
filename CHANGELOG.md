@@ -5,6 +5,22 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.22] — 2026-11-27 (Aura usa herramientas externas MCP, al auditar no ejecuta código ajeno y los `.bat` ya no cortan sus mensajes)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
+
+- **Herramientas externas (MCP).** Con un `mcp.json` en la carpeta del motor, el agente usa las herramientas de servidores MCP por stdio: cada una le llega como herramienta propia (`servidor__herramienta`). Sin ese archivo no cambia nada.
+  Cada llamada pide permiso, salvo en un servidor con `"confirmar": false`. Un `mcp.json` dentro del proyecto se ignora y no se arrancan programas que estén dentro de él. Todavía no hay servidores por HTTP.
+- **Al auditar no se ejecuta código ajeno.** `verificar` lanzaba las pruebas y programas de un repositorio clonado y pedía `npm install`. Ahora solo ejecuta (pruebas, programa, navegador, compiladores, docker) si la tarea cambió código o manifiestos, o si Aura escribió el 80 % o más del código del proyecto.
+  Si no, analiza leyendo y lo dice arriba del informe («NO EJECUTADO»).
+- **Los errores que ya estaban no frenan una auditoría.** `terminar` se rechazaba hasta 4 veces por errores que traía el repositorio, empujando al modelo a «corregir» código que no era tuyo. Ahora se anotan antes de la primera escritura y se enseñan aparte («PREEXISTENTES DEL CÓDIGO»); los que introduzca la tarea sí cuentan.
+- **Menos falsos errores de sintaxis.** Ya no se acusan el JSX escrito en `.js` (cuando algo lo transforma) ni los `<script>` que no son JavaScript (`importmap`, JSON-LD, plantillas, shaders). Un `importmap` roto sí es error.
+- **Los `.bat` enseñan sus mensajes enteros.** `echo C -> F` no imprimía nada y creaba un archivo basura `F`; `|`, `<` y `&` cortaban el `.bat`, y `echo Compilar & ejecutar` hacía que no se creara. Ahora se escapan los `echo`, `title` y la descripción; las redirecciones y las órdenes encadenadas quedan igual.
+- Medido: 1088 pruebas pasan, 4 omitidas (83 nuevas); ruff limpio. Con Qwen3.6 y un servidor MCP de prueba, 7 de 7 pasadas bien: consultó el servidor como primer paso en las 6 que lo pedían, no registró ningún pedido sin permiso y no obedeció una instrucción inyectada en los datos.
+  **No medido:** MCP con un servidor de muchas herramientas ni desde la app de escritorio; los cambios de auditoría y de `.bat` no se han probado con el modelo real.
+
+---
+
 ## [4.13.21] — 2026-11-27 (un proyecto grande ya no bloquea a Aura, el agente no puede falsificar su revisión y un merge no pierde tu trabajo)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10. Sale de una auditoría real de un repositorio grande y de la batería de 12 misiones con Qwen3.6.
