@@ -1,6 +1,7 @@
 """Un .venv que llega con el proyecto (zip, clonado) trae sus propios programas: Aura solo usa el que se creó en esa
 carpeta. Los testigos son un .pth (corre al arrancar su python) y un .bat en sus Scripts."""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -100,6 +101,76 @@ class Propio(Base):
     def test_creado_con_uv(self):
         self.entorno(self.proyecto, ("uv", "venv", "--python", sys.executable))
         self.comprobar()
+
+
+class Bat(Base):
+    """El .bat de crear_bat corre también con doble clic: la comprobación va dentro de él (m4208). Se ejecuta de verdad."""
+
+    def setUp(self):
+        super().setUp()
+        self.proyecto = self.dir / "Mi Peluquería ñ (copia) & más"
+        self.proyecto.mkdir()
+        (self.proyecto / "main.py").write_text("import sys; print('entorno', sys.prefix.endswith('.venv'))", encoding="utf-8")
+
+    def abrir(self, usar_venv=True) -> subprocess.CompletedProcess:
+        Herramientas(self.proyecto).crear_bat("run", ["python main.py"], usar_venv=usar_venv)
+        entorno = {k: v for k, v in os.environ.items() if k.upper() not in ("PATH", "VIRTUAL_ENV", "NODEFAULTCURRENTDIRECTORYINEXEPATH")}
+        entorno["PATH"] = os.pathsep.join([sys.base_prefix, os.path.join(os.environ["SystemRoot"], "System32")])
+        return subprocess.run(["cmd", "/c", "run.bat"], cwd=self.proyecto, env={**entorno, "AGENTE_NOPAUSE": "1"}, check=False,
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+
+    def ajeno(self) -> Path:
+        venv = self.proyecto / ".venv"
+        shutil.copytree(self.entorno(self.dir / "origen"), venv)
+        with (venv / "Scripts" / "activate.bat").open("a", encoding="utf-8") as f:
+            print(f'type nul > "{self.corrio}"', file=f)
+        self.arranco.unlink(missing_ok=True)
+        return venv
+
+    def se_detiene_sin_tocarlo(self, venv: Path):
+        antes = sorted(venv.rglob("*"))
+        r = self.abrir()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("La carpeta .venv no se creó aquí", r.stdout)
+        self.assertNotIn("entorno", r.stdout)
+        self.assertFalse(self.corrio.exists(), r.stdout)
+        self.assertFalse(self.arranco.exists(), r.stdout)
+        self.assertEqual(sorted(venv.rglob("*")), antes)
+
+    def test_ajeno_no_se_activa(self):
+        self.se_detiene_sin_tocarlo(self.ajeno())
+
+    def test_sin_activate_bat_no_se_usa(self):
+        venv = self.ajeno()
+        (venv / "Scripts" / "activate.bat").unlink()
+        self.se_detiene_sin_tocarlo(venv)
+
+    def test_sin_python_exe_no_se_crea_encima(self):
+        venv = self.ajeno()
+        (venv / "Scripts" / "python.exe").unlink()
+        self.se_detiene_sin_tocarlo(venv)
+
+    def usa_el_suyo(self):
+        for _ in range(2):
+            r = self.abrir()
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("entorno True", r.stdout)
+
+    def test_sin_venv_lo_crea_y_despues_lo_usa(self):
+        self.usa_el_suyo()
+
+    def test_creado_con_python_m_venv(self):
+        self.entorno(self.proyecto)
+        self.usa_el_suyo()
+
+    @unittest.skipUnless(shutil.which("uv"), "sin uv")
+    def test_creado_con_uv(self):
+        self.entorno(self.proyecto, ("uv", "venv", "--python", sys.executable))
+        self.usa_el_suyo()
+
+    def test_sin_usar_venv_no_cambia(self):
+        self.abrir(usar_venv=False)
+        self.assertNotIn(".venv", (self.proyecto / "run.bat").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

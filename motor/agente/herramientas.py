@@ -84,6 +84,11 @@ INTERNAS_CMD = {"assoc", "call", "cd", "chdir", "cls", "copy", "del", "dir", "ec
                 "shift", "start", "title", "type", "ver", "vol"}
 PATH_DEL_USUARIO = ('if defined FALTA for /f "skip=2 tokens=2,*" %%A in (\'reg query HKCU\\Environment /v Path 2^>nul\') '
                     'do call set "PATH=%%PATH%%;%%B"')
+# El criterio de Herramientas._venv() dentro del .bat, que corre también con doble clic (m4208): sale con 0 solo si el
+# activate.bat de .venv nombra esa carpeta. Sin ^, % ni comillas dobles: call o cmd los alterarían.
+VENV_ES_DE_AQUI = ("import os,re,sys; t=open('.venv/Scripts/activate.bat',encoding='utf-8',errors='replace').read(); "
+                   "sys.exit(not any(os.path.exists(r.strip()) and os.path.samefile(r.strip(),'.venv') "
+                   r"for r in re.findall(r'[A-Za-z]:\\.*',t.replace(chr(34),chr(10)))))")
 # Lo que, tras un & o un | en un mensaje, sí es una orden (además de los programas del PATH). Sin «ver»: es palabra corriente.
 ORDENES_TRAS_MENSAJE = (INTERNAS_CMD - {"ver"}) | {"python", "python3", "py", "pip", "node", "npm", "npx", "uv", "git", "docker"}
 
@@ -1075,8 +1080,14 @@ class Herramientas:
                   f"title {texto_bat(Path(nombre).stem)}", 'set "RC=0"']
         lineas += [f"echo {texto_bat(t)}" for t in str(descripcion or "").splitlines() if t.strip()]
         lineas += self._buscar_programas(comandos, usar_venv)
-        if usar_venv:
-            lineas += ['if not exist ".venv\\Scripts\\python.exe" (',
+        if usar_venv:  # un .venv que llegó con el proyecto no se activa; tampoco se borra: eso lo decide el usuario
+            lineas += ['if not exist ".venv" goto :crear_venv',
+                       f'call %PY% -I -c "{VENV_ES_DE_AQUI}" 2>nul && goto :crear_venv',
+                       "echo [ERROR] La carpeta .venv no se creó aquí: venía con el proyecto, o la carpeta se movió o se renombró. No la uso.",
+                       "echo Si el proyecto es tuyo, borra la carpeta .venv y vuelve a abrir este archivo: se creará de nuevo.",
+                       'set "RC=1" & goto :error',
+                       ":crear_venv",
+                       'if not exist ".venv\\Scripts\\python.exe" (',
                        "  echo Creando entorno virtual .venv ...",
                        "  %PY% -m venv .venv || (set \"RC=1\" & goto :error)", ")",
                        'call ".venv\\Scripts\\activate.bat"', 'set "PY=python"',
