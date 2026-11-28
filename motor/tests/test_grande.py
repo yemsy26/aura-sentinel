@@ -531,6 +531,29 @@ class TestFlujo(Temporal):
         self.assertEqual([m["role"] for m in a.ctx.mensajes], ["system", "user", "assistant"])  # sigue la conversación
         self.assertIsNone(a.h.errores_previos)
 
+    def test_repositorio_con_hooks_propios_trabaja_sin_commits(self):
+        self._proyecto()
+        a = self.agente()
+        a.h._git("init")
+        a.h._git("add", "-A")
+        a.h._git("commit", "-m", "base")
+        marca = self.dir.parent / f"{self.dir.name}_marca"
+        escribir(self.dir, ".git/hooks/pre-commit", f"#!/bin/sh\necho m >> '{marca.as_posix()}'\n")
+        avisos, salida = [], a._salida
+        a._salida = lambda *x, **k: (avisos.append(" ".join(map(str, x))), salida(*x, **k))
+        LLMGrabador.respuestas = [
+            llamada("plan_partes", partes=[{"titulo": "Ventas", "archivos": ["ventas/iva.py"], "terminado": "t",
+                                            "prueba": "verificar"}]),
+            llamada("escribir", ruta="ventas/iva.py", contenido="def iva(x):\n    return x * 0.21\n\n\nprint(iva(1))\n"),
+            llamada("terminar", resumen="iva listo."), APROBADO]
+        r = a.tarea("/grande añade utilidades a todos los módulos")
+        self.assertTrue(r.startswith("Modo grande terminado: 1 partes"), r)
+        self.assertTrue((self.dir / "ventas" / "iva.py").exists())
+        self.assertIn("Sin commits (el repositorio trae programas propios que un commit ejecutaría (hooks/pre-commit)", r)
+        self.assertEqual(sum("Modo grande sin commits: " in x for x in avisos), 1, avisos)
+        self.assertEqual(a.h._git("log", "--format=%s")[1], "base")
+        self.assertFalse(marca.exists())
+
     def test_reanuda_la_parte_pendiente_tras_cerrar(self):
         self._proyecto()
         a = self.agente()

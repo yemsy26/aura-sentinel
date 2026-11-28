@@ -2,6 +2,7 @@
 configuración y sus hooks, y status, diff, log, show o blame los ejecutaban. src-tauri/src/ide.rs hace lo mismo."""
 import re
 import subprocess
+from pathlib import Path
 
 # Órdenes que solo leen. commit, add, switch... siguen como siempre: sin su filtro se guardaría en claro lo que cifra.
 LECTURAS = frozenset({
@@ -28,6 +29,45 @@ SIN_SUBMODULOS = "--ignore-submodules=dirty"  # mirar dentro lanza git con la co
 BANDERAS = {"status": (SIN_SUBMODULOS,), "diff": (*SIN_DRIVERS, SIN_SUBMODULOS), "log": SIN_DRIVERS, "show": SIN_DRIVERS,
             "whatchanged": SIN_DRIVERS, "range-diff": SIN_DRIVERS, "diff-index": (SIN_SUBMODULOS,),
             "diff-files": (SIN_SUBMODULOS,), "blame": ("--no-textconv",), "annotate": ("--no-textconv",)}
+
+
+# Escribir sí ejecuta lo del repositorio. El modo grande confirma solo: si un commit fuera a ejecutar algo suyo, no los hace
+# (m4210). Apagarlo no vale: saltaría sus comprobaciones y guardaría en claro lo que un filtro cifra.
+HOOKS_COMMIT = ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-index-change",
+                "reference-transaction", "pre-auto-gc")
+CONSULTA_COMMIT = ("config", "--show-scope", "--null", "--get-regexp",
+                   r"^(filter|lfs\.extension|gpg|hook)\.|^core\.(fsmonitor|hookspath)$|^gc\.recentobjectshook$")
+# lfs.extension: lo ejecuta el git-lfs del usuario aunque su filtro sea el de siempre
+AL_CONFIRMAR = re.compile(r"filter\..*\.(clean|process)|lfs\.extension\..*\.clean|gpg\.(.*\.)?program|"
+                          r"gpg\.ssh\.defaultkeycommand|hook\..*\.command|core\.(fsmonitor|hookspath)|gc\.recentobjectshook",
+                          re.DOTALL)
+BOOLEANO = re.compile(r"true|false|yes|no|on|off|\d*", re.IGNORECASE)  # core.fsmonitor así es el vigilante del propio git
+
+
+def propios(raiz: Path, git) -> list[str] | None:
+    """Lo que un commit en `raiz` ejecutaría y no es del usuario; None si no se puede saber. git(*args) -> (código, salida)."""
+    codigo, salida = git(*CONSULTA_COMMIT)
+    if codigo not in (0, 1):  # 1: no hay ninguno
+        return None
+    usuario, repo = {}, {}
+    trozos = salida.split("\0")
+    for ambito, dato in zip(trozos[::2], trozos[1::2]):
+        clave, _, valor = dato.partition("\n")
+        (usuario if ambito in ("system", "global", "command") else repo)[clave] = valor
+    hallado = [c for c, v in repo.items() if AL_CONFIRMAR.fullmatch(c) and v != usuario.get(c)
+               and not (c == "core.fsmonitor" and BOOLEANO.fullmatch(v))]
+    if "core.hookspath" in hallado:  # los hooks son los que diga; no se mira una ruta que elige el repositorio
+        return hallado
+    if (del_usuario := usuario.get("core.hookspath")) is None:
+        codigo, comun = git("rev-parse", "--git-common-dir")
+        if codigo != 0:
+            return None
+        carpeta = raiz / comun.splitlines()[0] / "hooks"
+    else:  # la del usuario cuenta si cae dentro del proyecto: ahí los pone quien trae la carpeta
+        carpeta = raiz / Path(del_usuario).expanduser()
+        if not carpeta.resolve().is_relative_to(raiz.resolve()):
+            return hallado
+    return hallado + [f"hooks/{n}" for n in HOOKS_COMMIT if (carpeta / n).exists() or (carpeta / f"{n}.exe").exists()]
 
 
 def con_config(env: dict, pares) -> dict:

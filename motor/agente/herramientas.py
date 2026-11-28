@@ -1110,11 +1110,11 @@ class Herramientas:
                 f"Pruébalo con ejecutar(comando='{self.rel(p)}') o fondo=true si arranca un servidor.")
 
     # ---------- git ----------
-    def _git(self, *args: str, linea: str = "") -> tuple[int, str]:
+    def _git(self, *args: str, linea: str = "", extra: dict | None = None) -> tuple[int, str]:
         """Solo el repositorio de la carpeta del proyecto: nunca sube a uno de una carpeta superior. Las lecturas no ejecutan
         nada de su .git (git_seguro)."""
         env = git_seguro.con_config(dict(self._entorno(), GIT_CEILING_DIRECTORIES=str(self.raiz.parent),
-                                         GIT_TERMINAL_PROMPT="0"), git_seguro.SIEMPRE)
+                                         GIT_TERMINAL_PROMPT="0", **(extra or {})), git_seguro.SIEMPRE)
         base = ["git", "--no-pager", "-c", "color.ui=false", "-c", "core.quotepath=false"]
 
         def correr(resto, entorno):

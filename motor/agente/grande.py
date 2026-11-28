@@ -16,7 +16,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import mapa
+from . import git_seguro, mapa
 from .autoria import es_ejecutable
 from .contexto import Contexto
 from .esquemas import ESQUEMA_MAPA, ESQUEMA_PLAN_PARTES, ESQUEMAS
@@ -101,11 +101,13 @@ def preparar_git(h) -> str:
     """'repo', 'init' o 'sin git: motivo'. Nunca crea un repo dentro de otro (subcarpeta de un monorepo)."""
     try:
         if h._git("rev-parse", "--show-toplevel")[0] == 0:
-            return "repo"
+            return _impedimento(h) or "repo"
         r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=h.raiz, capture_output=True, text=True,
                            timeout=30, creationflags=subprocess.CREATE_NO_WINDOW, check=False)
         if r.returncode == 0:
             return f"sin git: la carpeta está dentro de otro repositorio ({r.stdout.strip()}); no hago commits"
+        if (h.raiz / ".git").exists():  # git init encima conservaría su configuración y sus hooks
+            return "sin git: hay un .git que git no reconoce; no lo toco ni hago commits"
         codigo, salida = h._git("init")
         if codigo != 0:
             return f"sin git: {salida[:200]}"
@@ -113,6 +115,26 @@ def preparar_git(h) -> str:
         return "init"
     except (OSError, subprocess.SubprocessError) as e:
         return f"sin git: {e}"
+
+
+def _impedimento(h) -> str:
+    """'' si se puede confirmar sin ejecutar nada que traiga el repositorio; si no, el 'sin git: motivo'."""
+    try:
+        hallado = git_seguro.propios(h.raiz, h._git)
+    except (OSError, subprocess.SubprocessError):
+        hallado = None
+    if hallado is None:
+        return "sin git: no pude comprobar qué ejecutaría un commit en este repositorio; no hago commits"
+    if not hallado:
+        return ""
+    nombres = ", ".join(hallado[:5]) + (f" y {len(hallado) - 5} más" if len(hallado) > 5 else "")
+    return f"sin git: el repositorio trae programas propios que un commit ejecutaría ({nombres}); no hago commits"
+
+
+def _avisar_sin_commits(agente, estado: dict) -> None:
+    if estado["git"].startswith("sin git: "):
+        motivo = estado["git"].removeprefix("sin git: ").removesuffix("; no hago commits")
+        agente._salida("aviso", f"Modo grande sin commits: {motivo}.")
 
 
 def _sucios(h) -> dict[str, str]:
@@ -141,9 +163,12 @@ def _commit(h, estado: dict, mensaje: str, antes: dict[str, str]) -> str:
     cambiados = sorted(p for p, huella in _sucios(h).items() if antes.get(p) != huella)
     if not cambiados:
         return "sin cambios"
-    codigo, salida = h._git("add", "-A", "--", *cambiados)
+    if motivo := _impedimento(h):  # cada vez: pueden aparecer a mitad de la tarea (husky, pre-commit install)
+        estado["git"] = motivo
+        return ""
+    codigo, salida = h._git("add", "-A", "--", *cambiados, extra=git_seguro.SIN_RED)  # un clon parcial no descarga
     if codigo == 0:
-        codigo, salida = h._git("commit", "-m", mensaje, "--", *cambiados)
+        codigo, salida = h._git("commit", "-m", mensaje, "--", *cambiados, extra=git_seguro.SIN_RED)
     if codigo != 0:
         return f"sin commit: {(salida.strip().splitlines() or ['?'])[-1][:150]}"
     return h._git("rev-parse", "--short", "HEAD")[1].strip()
@@ -365,7 +390,10 @@ def _una_parte(agente, estado: dict, k: int) -> tuple[bool, str]:
     if h.verificacion["errores"] > 0:
         return False, "la verificación tiene errores nuevos:\n" + h.verificacion["informe"][:1500]
     parte["resumen"] = " ".join(respuesta.split())[:280]
+    previo = estado.get("git")
     parte["commit"] = _commit(h, estado, f"Parte {k}/{n}: {parte['titulo']}", parte["sucios_antes"])
+    if estado.get("git") != previo:
+        _avisar_sin_commits(agente, estado)
     return True, ""
 
 
@@ -411,6 +439,7 @@ def _partes(agente, estado: dict) -> str:
     h = agente.h
     if "git" not in estado:
         estado["git"] = preparar_git(h)
+        _avisar_sin_commits(agente, estado)
     # Un plan que toca código es una tarea que lo cambia: la verificación inicial ejecuta y separa lo que ya fallaba. Un plan que
     # solo escribe informes no ejecuta código ajeno.
     h.autoria.cambia(any(es_ejecutable(Path(a)) for p in estado["partes"] for a in p["archivos"]))
@@ -441,9 +470,10 @@ def _partes(agente, estado: dict) -> str:
             estado["estado"] = "detenido"
             guardar(h.dir_agente, estado)
             _plan_global(h, estado)
+            commits = "Las partes hechas tienen su commit; el" if estado["git"] in ("repo", "init") else "El"
             texto = (f"Detenido: la parte {k}/{len(estado['partes'])} ({parte['titulo']}) no quedó terminada tras "
-                     f"{INTENTOS} intentos: {parte['motivo'][:600]}\nLas partes hechas tienen su commit; el estado queda "
-                     "en .agente/grande.json. Escribe 'continúa' para reintentarla.")
+                     f"{INTENTOS} intentos: {parte['motivo'][:600]}\n{commits} estado queda en .agente/grande.json. "
+                     "Escribe 'continúa' para reintentarla.")
             _seguir_conversacion(agente, estado, texto)
             agente._salida("aviso", texto, "rojo")
             return texto
