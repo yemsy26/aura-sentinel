@@ -288,7 +288,7 @@ class TestCodigoSinUsarPrevio(Temporal):
         h = Herramientas(self.dir)
         h.nueva_tarea(1, "añade algo")
         h.autoria.cambia(True)  # lo que se escribe a mano hace de cambio de la tarea
-        escribir(self.dir, "nuevo.py", "def sin_conectar():\n    return 1\n")
+        h.escribir("nuevo.py", "def sin_conectar():\n    return 1\n")
         informe = h.verificar_cmd()
         self.assertEqual(h.verificacion["errores"], 1, informe)
         self.assertIn("'sin_conectar' NUNCA se usa", informe)
@@ -312,7 +312,7 @@ class TestCodigoSinUsarPrevio(Temporal):
         h.nueva_tarea(1, "añade algo")
         h.autoria.cambia(True)
         self.assertEqual(len(h.muertos_previos), 20)  # la foto no se queda en los 12 primeros
-        escribir(self.dir, "zzz.py", "def nueva():\n    return 1\n")  # vulture la lista la última
+        h.escribir("zzz.py", "def nueva():\n    return 1\n")  # vulture la lista la última
         informe = h.verificar_cmd()
         self.assertEqual(h.verificacion["errores"], 1, informe)
         self.assertIn("'nueva' NUNCA se usa", informe)
@@ -321,7 +321,7 @@ class TestCodigoSinUsarPrevio(Temporal):
         escribir(self.dir, "util.py", "def vieja():\n    return 1\n")
         h = Herramientas(self.dir)
         h.nueva_tarea(1, "primera")
-        escribir(self.dir, "a_medias.py", "def sin_conectar():\n    return 1\n")
+        h.escribir("a_medias.py", "def sin_conectar():\n    return 1\n")
         h.tarea_interrumpida()
         escribir(self.dir, "del_usuario.py", "def suya():\n    return 1\n")  # la escribe el usuario tras parar
         h = Herramientas(self.dir)  # se reabrió Aura

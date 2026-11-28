@@ -62,6 +62,53 @@ class Base(unittest.TestCase):
         return h
 
 
+class TestCodigoQueLlega(Base):
+    """m4205: la tarea empieza con la carpeta vacía y clona un repositorio; su código sin usar no es de la tarea (la
+    revisión lo pedía tocar y el agente borró líneas de terceros)."""
+
+    AJENO = ("class Agente:\n    def __init__(self):\n        self.comillas = True\n\n\n"
+             "def pascal_a_snake(x):\n    return x\n")
+    LIB = "ajeno/tools/gen.py"
+    NOMBRES = ("'Agente'", "'comillas'", "'pascal_a_snake'")
+
+    def assert_solo_cuenta(self, h: Herramientas, *propios: str) -> None:
+        informe = h.verificar_cmd()
+        antes = informe.split("PREEXISTENTES (")[0]
+        self.assertEqual(h.verificacion["errores"], len(propios), informe)
+        for nombre in propios:
+            self.assertIn(f"{nombre} NUNCA se usa", antes)
+        for nombre in self.NOMBRES:
+            self.assertNotIn(nombre, antes, informe)
+
+    def test_no_cuenta_ni_antes_ni_despues_de_editarlo(self):
+        h = self.abrir()
+        self.poner(self.LIB, self.AJENO)  # como git clone: aparece en disco sin pasar por las herramientas
+        h.escribir("informe.md", "# Informe\n")
+        self.assert_solo_cuenta(h)
+        h.editar(self.LIB, "self.comillas = True", "self.comillas = False")
+        self.assert_solo_cuenta(h)
+
+    def test_lo_que_la_tarea_deja_sin_usar_si_cuenta(self):
+        h = self.abrir("crea una utilidad")
+        self.poner(self.LIB, self.AJENO)
+        h.editar(self.LIB, "    return x\n", "    return x\n\n\ndef anadida():\n    return 2\n")  # sin verificar antes
+        h.escribir("mio.py", "def sin_conectar():\n    return 1\n")
+        self.assert_solo_cuenta(h, "'anadida'", "'sin_conectar'")
+
+    def test_interrumpida_y_continua_tras_reabrir(self):
+        h = self.abrir("crea una utilidad")
+        self.poner(self.LIB, self.AJENO)
+        h.escribir("mio.py", "def a_medias():\n    return 1\n")
+        h.tarea_interrumpida()
+        guardado = json.loads((self.dir / ".agente" / "sin_usar.json").read_text(encoding="utf-8"))
+        self.assertEqual([x for x in guardado["sin_conectar"] if "pascal_a_snake" in x], [])
+        self.assertTrue(any("a_medias" in x for x in guardado["sin_conectar"]), guardado)
+        h = Herramientas(self.dir)  # se reabrió Aura
+        h.nueva_tarea(9, "")  # continúa
+        self.poner("otro/lib.py", "def otra_ajena():\n    return 1\n")
+        self.assert_solo_cuenta(h, "'a_medias'")
+
+
 class TestRegla(Base):
     def assert_solo_lectura(self, informe: str):
         self.assertEqual(self.ejecutado(), [], informe)

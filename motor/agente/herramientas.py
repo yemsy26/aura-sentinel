@@ -45,7 +45,7 @@ from .permisos import (
     externo,
     transaccion,
 )
-from .proyecto import IGNORAR, VIEJOS, correr, es_codigo, ignorado, normalizar
+from .proyecto import IGNORAR, VIEJOS, archivos, correr, es_codigo, ignorado, normalizar, relativa
 from .verificacion import (
     LANZADOR,
     borrados_fuera,
@@ -307,6 +307,7 @@ class Herramientas:
         self.fusion_rechazos = 0            # commits de un merge rechazados por dejar fuera cambios del otro lado (por tarea)
         self.errores_previos: set[str] | None = None  # modo grande: errores que ya estaban (no cuentan)
         self.muertos_previos: set[str] = set()  # código sin usar que ya estaba al empezar la tarea (no cuenta)
+        self.conocidos: set[str] | None = None  # .py ajenos ya contados en esa foto (None: sin foto)
         self.idiomas_parcial: list[str] | None = None  # modo grande: archivos de la parte en curso (idiomas a medias)
         self.autoria = Autoria(self.raiz, self.dir_agente)  # verificar solo ejecuta lo suyo o lo que la tarea cambia
 
@@ -321,14 +322,32 @@ class Herramientas:
             self.autoria.nueva()  # «continúa» conserva que la tarea ya cambió código y su foto de errores
             (self.dir_agente / pantalla.SESION).unlink(missing_ok=True)  # «continúa» conserva la sesión del navegador
             self._anotar_checkpoints(texto)
+            self.conocidos = set(self.autoria.ajenos(archivos(self.raiz, ".py")))
             self.muertos_previos = muertos_ahora(self.raiz) - set(self._foto().get("sin_conectar", []))
             self._guardar_foto(foto=sorted(self.muertos_previos))
         elif not self.muertos_previos:  # 'continúa' tras reabrir Aura sigue con la foto de la tarea que continúa
-            self.muertos_previos = set(self._foto().get("foto", []))
+            foto = self._foto()
+            self.muertos_previos = set(foto.get("foto", []))
+            self.conocidos = set(foto["archivos"]) if "archivos" in foto else None
 
     def tarea_interrumpida(self) -> None:
         """Lo que queda sin conectar es trabajo a medias de la tarea: la siguiente no debe tomarlo por código previo."""
+        self._foto_de_llegados()
         self._guardar_foto(foto=sorted(self.muertos_previos), sin_conectar=sorted(muertos_ahora(self.raiz) - self.muertos_previos))
+
+    def _foto_de_llegados(self) -> None:
+        """Los .py que aparecen durante la tarea sin haberlos escrito Aura (git clone, un zip, una copia) ya existían: su
+        código sin usar no es de la tarea. Si no, empezar con la carpeta vacía y clonar hacía contar el de terceros, y la
+        revisión pedía tocarlo."""
+        if self.conocidos is None or self.errores_previos is not None:  # el modo grande lleva su propia lista
+            return
+        llegados = self.autoria.ajenos(archivos(self.raiz, ".py"), self.conocidos)
+        if not llegados:
+            return
+        prefijos = tuple(normalizar(relativa(p, self.raiz)) + ":N " for p in llegados.values())
+        self.muertos_previos |= {e for e in muertos_ahora(self.raiz) if e.startswith(prefijos)}
+        self.conocidos |= llegados.keys()
+        self._guardar_foto(**{**self._foto(), "foto": sorted(self.muertos_previos)})
 
     def _foto(self) -> dict:
         try:
@@ -337,6 +356,8 @@ class Herramientas:
             return {}
 
     def _guardar_foto(self, **datos) -> None:
+        if self.conocidos is not None:
+            datos["archivos"] = sorted(self.conocidos)
         self.dir_agente.mkdir(exist_ok=True)
         (self.dir_agente / "sin_usar.json").write_text(json.dumps(datos, ensure_ascii=False), encoding="utf-8")
 
@@ -410,6 +431,8 @@ class Herramientas:
         """Lo que escribe el modelo (escribir, editar, crear_bat): queda anotado como código suyo. restaurar no: devuelve
         archivos de un punto guardado, también los que ya estaban."""
         self._foto_de_errores(p)
+        if self.conocidos is not None and p.suffix.lower() == ".py" and p.is_file() and self.autoria.ajenos([p], self.conocidos):
+            self._foto_de_llegados()  # antes de tocarlo: después contaría como escrito por Aura
         self._guardar(p, contenido)
         self.autoria.anotar(p)
 
@@ -1310,6 +1333,7 @@ class Herramientas:
         nota = ""
         if re.match(r"https?://", ruta or ""):  # la página la abre verificar; una URL daba «No existe» y otra vuelta
             ruta, nota = ".", "\n(verificar revisa el proyecto, también la web en el navegador; para mirar una URL usa ver_pantalla)"
+        self._foto_de_llegados()
         ejecutar, antes = self.autoria.puede_ejecutar(), self.autoria.antes
         # Auditoría (código ajeno sin cambiar): lo que ya había no es de la tarea. Sin foto es que no se ha escrito nada.
         ya_estaba = ((lambda e: antes is None or normalizar(e) in antes)

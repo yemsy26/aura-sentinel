@@ -40,6 +40,10 @@ class Autoria:
     def _clave(self, p: Path) -> str:
         return p.relative_to(self.raiz).as_posix().lower()  # Windows no distingue mayúsculas
 
+    def ajenos(self, rutas: list[Path], conocidos: set[str] | frozenset = frozenset()) -> dict[str, Path]:
+        """{clave: ruta} de las que Aura no ha escrito y no están en conocidos."""
+        return {c: p for p in rutas if (c := self._clave(p)) not in self.escritos and c not in conocidos}
+
     def _guardar(self) -> None:
         self.archivo.parent.mkdir(exist_ok=True)
         datos = {"escritos": sorted(self.escritos), "tarea_cambia": self.tarea_cambia,
