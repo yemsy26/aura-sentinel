@@ -361,9 +361,26 @@ class Herramientas:
         self.dir_agente.mkdir(exist_ok=True)
         (self.dir_agente / "sin_usar.json").write_text(json.dumps(datos, ensure_ascii=False), encoding="utf-8")
 
+    def _venv(self) -> Path | None:
+        """El .venv del proyecto, solo si se creó en esta carpeta: su activate.bat la nombra (venv y uv). Uno que llegó
+        en un zip o un repositorio trae sus propios programas y no puede saber la ruta de este equipo (m4207)."""
+        venv = self.raiz / ".venv"
+        try:
+            texto = (venv / "Scripts" / "activate.bat").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        for ruta in re.findall(r'[A-Za-z]:\\[^"\r\n]*', texto):  # sin rutas de red: abrirlas saldría del equipo
+            try:
+                if os.path.samefile(ruta.strip(), venv):
+                    return venv
+            except (OSError, ValueError):
+                pass
+        return None
+
     def python_proyecto(self) -> str:
-        venv = self.raiz / ".venv" / "Scripts" / "python.exe"
-        return str(venv) if venv.exists() else "python"
+        venv = self._venv()
+        python = venv / "Scripts" / "python.exe" if venv else None
+        return str(python) if python and python.exists() else "python"
 
     # ---------- utilidades ----------
     def ruta(self, r: str) -> Path:
@@ -648,10 +665,9 @@ class Herramientas:
     def _entorno(self) -> dict:
         env = dict(os.environ, AGENTE_NOPAUSE="1", PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
                    PIP_DISABLE_PIP_VERSION_CHECK="1", PYTHONDONTWRITEBYTECODE="1", CI="1")
-        venv = self.raiz / ".venv" / "Scripts"
-        if venv.is_dir():  # el venv del proyecto tiene prioridad
-            env["PATH"] = f"{venv}{os.pathsep}{env.get('PATH', '')}"
-            env["VIRTUAL_ENV"] = str(venv.parent)
+        if venv := self._venv():  # el venv del proyecto tiene prioridad
+            env["PATH"] = f"{venv / 'Scripts'}{os.pathsep}{env.get('PATH', '')}"
+            env["VIRTUAL_ENV"] = str(venv)
         try:  # la base entre ||||||| en las marcas de conflicto (m4185): sin tocar la config del repo ni la del usuario
             n = int(env.get("GIT_CONFIG_COUNT") or 0)
         except ValueError:
@@ -838,7 +854,14 @@ class Herramientas:
         r = self._ejecutar(comando, segundos, fondo)
         if re.search(r"CONFLICT \(|Automatic merge failed", r):
             r += self._pista_conflicto()
-        return r + (nota if r.startswith("exit=0") else "") + aviso
+        return r + (nota if r.startswith("exit=0") else "") + aviso + self._aviso_venv()
+
+    def _aviso_venv(self) -> str:
+        if not (self.raiz / ".venv" / "Scripts").is_dir() or self._venv():
+            return ""
+        return ("\n[Aviso: el .venv de esta carpeta no se creó aquí (venía con el proyecto, o la carpeta se movió o se "
+                "renombró): no lo uso ni lo pongo en el PATH. No ejecutes sus programas; si el usuario confirma que es "
+                "suyo, se rehace con «python -m venv --clear .venv».]")
 
     def _ejecutar(self, comando: str, segundos: int = 0, fondo: bool = False) -> str:
         # cmd ejecuta solo la primera línea y calla el resto: un «python -c "» de varias líneas daba exit=0 sin salida,
