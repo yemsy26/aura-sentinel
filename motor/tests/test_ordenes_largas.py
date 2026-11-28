@@ -1,5 +1,6 @@
 """m4197: en un proyecto grande la orden con todas las rutas pasaba de 32.767 caracteres (WinError 206) y ninguna tarea podía
 empezar en esa carpeta: `nueva_tarea` analiza el código sin usar de todo el proyecto antes de que el modelo haga nada."""
+import os
 import shutil
 import subprocess
 import sys
@@ -85,6 +86,45 @@ class TestMismoResultado(unittest.TestCase):
         self.assertEqual(normal, por_archivo)
         self.assertTrue(any("no_existe" in e for e in por_archivo[0]))
         self.assertTrue(any("nadie_me_llama" in e for e in por_archivo[2]))
+
+
+class TestNoEjecutaLoAnalizado(unittest.TestCase):
+    """m4206: el camino con archivo de rutas lanza python con cwd = proyecto; nada de la carpeta analizada puede ejecutarse."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="agente_ajeno_"))
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        (self.dir / "módulo_ñ.py").write_text("def función_sin_uso_ñ():\n    pass\n", encoding="utf-8")
+
+    def analizar(self, limite: int = 0) -> list[str]:
+        inf = Informe()
+        with mock.patch.object(V, "LIMITE_ORDEN", limite):
+            V.codigo_muerto(self.dir, archivos(self.dir, ".py"), inf)
+        return inf.errores + inf.avisos
+
+    def no_se_ejecuta(self, nombre: str):
+        (self.dir / nombre).write_text("open(__file__ + '.ejecutado', 'w').close()\n", encoding="utf-8")
+        hallados = self.analizar()
+        self.assertFalse((self.dir / f"{nombre}.ejecutado").exists(), f"se ejecutó {nombre} de la carpeta analizada")
+        self.assertTrue(any("función_sin_uso_ñ" in x for x in hallados), hallados)
+
+    def test_un_vulture_py_en_la_raiz(self):
+        self.no_se_ejecuta("vulture.py")
+
+    def test_un_modulo_con_el_nombre_de_uno_que_vulture_importa(self):
+        self.no_se_ejecuta("tomllib.py")
+
+    def test_acentos_igual_que_la_orden_corta(self):
+        with mock.patch.dict("os.environ", {"PYTHONUTF8": "1"}):  # como arranca el motor
+            corta = self.analizar(V.LIMITE_ORDEN)
+            self.assertEqual(self.analizar(), corta)
+        self.assertTrue(any("módulo_ñ.py" in x and "función_sin_uso_ñ" in x for x in corta), corta)
+
+    def test_acentos_sin_la_variable_de_entorno(self):
+        with mock.patch.dict("os.environ"):
+            os.environ.pop("PYTHONUTF8", None)
+            hallados = self.analizar()
+        self.assertTrue(any("módulo_ñ.py" in x and "función_sin_uso_ñ" in x for x in hallados), hallados)
 
 
 class TestElAnalizadorNuncaTiraLaTarea(unittest.TestCase):

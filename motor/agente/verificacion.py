@@ -166,8 +166,11 @@ def codigo_muerto(raiz: Path, rutas: list[Path], inf: Informe, solo: Path | None
         return
     # vulture busca usos entre archivos: la lista NO se parte en lotes (inventaría «NUNCA se usa»)
     opciones = ["--min-confidence", "60"]
+    # -I: con -c la carpeta de trabajo entra en sys.path y un vulture.py (o tomllib.py) del proyecto analizado se ejecutaba.
+    # -I ignora PYTHONUTF8, por eso -X utf8.
     salida = _sobre_archivos([str(vulture)], rutas, opciones,
-                             lambda lista: [str(BIN / "python.exe"), "-c", LANZAR_VULTURE, lista, *opciones], raiz, max(60, len(rutas) // 5))
+                             lambda lista: [str(BIN / "python.exe"), "-I", "-X", "utf8", "-c", LANZAR_VULTURE, lista, *opciones],
+                             raiz, max(60, len(rutas) // 5))
     if salida is None:
         inf.avisos.append(SIN_ANALISIS)
         return
