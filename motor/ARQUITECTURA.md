@@ -16,7 +16,7 @@ De abajo arriba; cada capa usa solo las anteriores.
 
 | Capa | Módulos | Qué hacen |
 | --- | --- | --- |
-| Base | `config`, `entorno`, `procesos`, `llm`, `metricas`, `android`, `inversa` | Configuración, entorno de los comandos, control de procesos, cliente del modelo, métricas; SDK de Android y herramientas de ingeniería inversa (apktool, jadx) |
+| Base | `config`, `entorno`, `procesos`, `llm`, `metricas`, `android`, `inversa`, `git_seguro` | Configuración, entorno de los comandos, control de procesos, cliente del modelo, métricas; SDK de Android y herramientas de ingeniería inversa (apktool, jadx); leer un repositorio sin ejecutar nada de su `.git` |
 | Contratos y reglas | `esquemas`, `permisos`, `borrados`, `proyecto`, `autoria` | Qué puede pedir el modelo; qué se puede hacer sin preguntar; qué código borra fuera de lo suyo; qué es código, el `Informe` y cómo correr un comando; qué código escribió Aura y por tanto puede ejecutar `verificar` |
 | Modelo | `compat`, `modelo`, `descargar`, `prueba_modelo`, `llamadas` | Fichas de modelos, carga en la VRAM, descargas, prueba de un modelo, lectura de las llamadas que escribe |
 | Conocimiento | `pasajes`, `conocimiento`, `lecciones`, `mapa`, `idiomas`, `complementos`, `matematicas` | Lo investigado, guías, lecciones, mapa del repositorio, idiomas, motores opcionales y cálculo exacto |

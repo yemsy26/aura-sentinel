@@ -60,24 +60,97 @@ pub async fn get_system_stats() -> Value {
 
 // ── Git ─────────────────────────────────────────────────────────────────────
 
+// Leer un repositorio no ejecuta nada de lo que trae en `.git` (m4209): una carpeta copiada o descomprimida llega con
+// su configuración y sus hooks. Es lo mismo que hace `motor/agente/git_seguro.py` en las lecturas del agente.
+const GIT_OFF: [(&str, &str); 6] = [
+    ("safe.bareRepository", "explicit"),
+    ("core.fsmonitor", "false"),
+    ("log.showSignature", "false"),
+    ("status.submoduleSummary", "false"),
+    ("diff.submodule", "short"),
+    ("core.hooksPath", "<sin-hooks>"), // nombre imposible en Windows
+];
+
+/// git sin red y con esa configuración más `config`: (código, stdout) o None si no arranca o tarda más de `secs`.
+async fn git(args: &[&str], cwd: &Path, config: &[(String, String)], secs: u64) -> Option<(i32, Vec<u8>)> {
+    let mut command = Command::new("git");
+    quiet(&mut command).arg("--no-pager").args(args).current_dir(cwd);
+    // Un clon parcial descarga lo que le falta con la orden que diga su configuración.
+    command.envs([("GIT_NO_LAZY_FETCH", "1"), ("GIT_ALLOW_PROTOCOL", "ninguno"), ("GIT_TERMINAL_PROMPT", "0")]);
+    let mut n: usize = std::env::var("GIT_CONFIG_COUNT").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    for (key, value) in GIT_OFF.into_iter().chain(config.iter().map(|(k, v)| (k.as_str(), v.as_str()))) {
+        command.env(format!("GIT_CONFIG_KEY_{n}"), key).env(format!("GIT_CONFIG_VALUE_{n}"), value);
+        n += 1;
+    }
+    command.env("GIT_CONFIG_COUNT", n.to_string());
+    let out = tokio::time::timeout(Duration::from_secs(secs), command.output()).await.ok()?.ok()?;
+    Some((out.status.code().unwrap_or(-1), out.stdout))
+}
+
+/// Claves que nombran un programa y no se apagan con una opción fija (filtros, textconv, diff externo, gpg).
+fn is_program(key: &str) -> bool {
+    let name = key.rsplit('.').next().unwrap_or_default();
+    match key.split('.').next().unwrap_or_default() {
+        "filter" => matches!(name, "clean" | "smudge" | "process" | "required"),
+        "lfs" => key.starts_with("lfs.extension.") && matches!(name, "clean" | "smudge"),
+        "diff" => key == "diff.external" || matches!(name, "command" | "textconv"),
+        "gpg" => name == "program",
+        _ => false,
+    }
+}
+
+/// De `git config --show-scope --null`: lo que nombra el repositorio, devuelto a lo que digan el sistema y el usuario
+/// (su git-lfs sigue funcionando) o apagado si ellos no dicen nada.
+fn repo_programs(listing: &str) -> Vec<(String, String)> {
+    let (mut user, mut repo) = (HashMap::new(), Vec::new());
+    let mut fields = listing.split('\0');
+    while let (Some(scope), Some(entry)) = (fields.next(), fields.next()) {
+        let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+        if matches!(scope, "system" | "global" | "command") {
+            user.insert(key, value);
+        } else if is_program(key) && !repo.contains(&key) {
+            repo.push(key);
+        }
+    }
+    let fallback = |key: &str| match key {
+        "gpg.program" | "gpg.openpgp.program" => "gpg",
+        "gpg.x509.program" => "gpgsm",
+        "gpg.ssh.program" => "ssh-keygen",
+        _ if key.ends_with(".required") => "false",
+        _ if key.ends_with(".textconv") => "cat",
+        _ => "",
+    };
+    repo.into_iter()
+        .map(|key| (key.to_string(), user.get(key).copied().unwrap_or_else(|| fallback(key)).to_string()))
+        .collect()
+}
+
 /// Rama, raíz del repositorio, archivos cambiados (`git status --porcelain`, rutas relativas a la raíz,
 /// que puede estar por encima de la carpeta abierta) y últimos commits; `branch` null fuera de git.
 #[tauri::command]
 pub async fn get_git_info(workspace_path: String) -> Value {
+    let none = json!({"branch": null, "root": null, "changes": [], "log": []});
     let dir = Path::new(&workspace_path);
-    let Some((0, branch)) = output("git", &["rev-parse", "--abbrev-ref", "HEAD"], dir, 10).await else {
-        return json!({"branch": null, "root": null, "changes": [], "log": []});
-    };
-    let root = output("git", &["rev-parse", "--show-toplevel"], dir, 10).await.map(|o| o.1).unwrap_or_default();
+    // Código 1: no hay ninguno. Si no se puede saber qué trae el repositorio, no se lee.
+    let query = ["config", "--show-scope", "--null", "--get-regexp", r"^(filter|lfs\.extension|gpg|diff)\."];
+    let Some((0 | 1, listing)) = git(&query, dir, &[], 10).await else { return none };
+    let Ok(listing) = String::from_utf8(listing) else { return none };
+    let off = repo_programs(&listing);
+    let text = |out: Vec<u8>| String::from_utf8_lossy(&out).into_owned();
+    let Some((0, branch)) = git(&["rev-parse", "--abbrev-ref", "HEAD"], dir, &off, 10).await else { return none };
+    let root = git(&["rev-parse", "--show-toplevel"], dir, &off, 10).await.map(|o| text(o.1)).unwrap_or_default();
     let root = root.trim().replace('/', "\\");
-    let status = output("git", &["status", "--porcelain=v1", "-uall"], dir, 20).await.map(|o| o.1).unwrap_or_default();
+    // Mirar dentro de un submódulo lanza git con la configuración del submódulo.
+    let args = ["status", "--porcelain=v1", "-uall", "--ignore-submodules=dirty"];
+    let status = git(&args, dir, &off, 20).await.map(|o| text(o.1)).unwrap_or_default();
     let changes: Vec<Value> = status
         .lines()
         .filter(|line| line.len() > 3)
         .map(|line| json!({"status": line[..2].trim(), "path": line[3..].trim_matches('"')}))
         .collect();
-    let log = output("git", &["log", "--oneline", "-12"], dir, 10).await.map(|o| o.1).unwrap_or_default();
-    json!({"branch": branch.trim(), "root": root, "changes": changes, "log": log.lines().collect::<Vec<_>>()})
+    let args = ["log", "--oneline", "-12", "--no-ext-diff", "--no-textconv"];
+    let log = git(&args, dir, &off, 10).await.map(|o| text(o.1)).unwrap_or_default();
+    json!({"branch": text(branch).trim(), "root": root, "changes": changes, "log": log.lines().collect::<Vec<_>>()})
 }
 
 // ── Puntos de restauración de Agente Local ──────────────────────────────────
@@ -306,6 +379,58 @@ mod tests {
         std::fs::write(ws.join("run.bat"), "@echo off").unwrap();
         let (w, p) = (ws.to_string_lossy().into_owned(), ws.join("run.bat").to_string_lossy().into_owned());
         tokio::runtime::Runtime::new().unwrap().block_on(reveal_in_folder(w, p)).unwrap();
+    }
+
+    /// m4209: abrir una carpeta copiada con su `.git` ejecutaba las órdenes que trae.
+    #[test]
+    fn git_info_runs_nothing_the_repository_brings() {
+        let base = std::env::temp_dir().join(format!("aura_git_{}", std::process::id()));
+        let repo = base.join("repo");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&repo).output();
+        if git(&["init", "-q"]).is_err() {
+            return; // sin git no hay nada que probar
+        }
+        std::fs::write(repo.join(".gitattributes"), "*.txt filter=x\n").unwrap();
+        std::fs::write(repo.join("a.txt"), "1\n").unwrap();
+        let ident = ["-c", "user.name=a", "-c", "user.email=a@a", "-c", "commit.gpgsign=false"];
+        git(&["add", "-A"]).unwrap();
+        assert!(git(&[&ident[..], &["commit", "-qm", "uno"]].concat()).unwrap().status.success());
+
+        let marks = base.display().to_string().replace('\\', "/");
+        let filter = format!("echo m >> '{marks}/filtro'; cat");
+        let monitor = format!("echo m >> '{marks}/monitor'; false");
+        git(&["config", "filter.x.clean", &filter]).unwrap();
+        git(&["config", "core.fsmonitor", &monitor]).unwrap();
+        let hook = format!("#!/bin/sh\necho m >> '{marks}/hook'\n");
+        std::fs::write(repo.join(".git").join("hooks").join("post-index-change"), hook).unwrap();
+        std::fs::write(repo.join("a.txt"), "1\n").unwrap(); // mismo contenido: status tiene que releerlo
+        std::fs::write(repo.join("nuevo.md"), "x").unwrap();
+
+        let path = repo.display().to_string();
+        let info = tokio::runtime::Runtime::new().unwrap().block_on(get_git_info(path));
+        for mark in ["filtro", "monitor", "hook"] {
+            assert!(!base.join(mark).exists(), "se ejecutó: {mark}");
+        }
+        assert_eq!(info["changes"], json!([{"status": "??", "path": "nuevo.md"}]));
+        assert_eq!(info["log"].as_array().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn repository_programs_fall_back_to_the_users() {
+        let listing = "global\0filter.lfs.clean\ngit-lfs clean -- %f\0local\0filter.lfs.clean\nmalo\0\
+                       local\0filter.x.required\ntrue\0local\0diff.y.textconv\nmalo\0local\0diff.external\nmalo\0\
+                       worktree\0gpg.ssh.program\nmalo\0local\0diff.algorithm\nhistogram\0";
+        let expected = [
+            ("filter.lfs.clean", "git-lfs clean -- %f"),
+            ("filter.x.required", "false"),
+            ("diff.y.textconv", "cat"),
+            ("diff.external", ""),
+            ("gpg.ssh.program", "ssh-keygen"),
+        ];
+        assert_eq!(repo_programs(listing), expected.map(|(k, v)| (k.to_string(), v.to_string())));
     }
 
     #[test]

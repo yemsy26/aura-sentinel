@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import android, conocimiento, inversa, lecciones, matematicas, mcp_cliente, pantalla, procesos
+from . import android, conocimiento, git_seguro, inversa, lecciones, matematicas, mcp_cliente, pantalla, procesos
 from . import mapa as mapa_repo
 from .autoria import Autoria, es_ejecutable
 from .borrados import aviso, peligrosos
@@ -673,11 +673,8 @@ class Herramientas:
         if venv := self._venv():  # el venv del proyecto tiene prioridad
             env["PATH"] = f"{venv / 'Scripts'}{os.pathsep}{env.get('PATH', '')}"
             env["VIRTUAL_ENV"] = str(venv)
-        try:  # la base entre ||||||| en las marcas de conflicto (m4185): sin tocar la config del repo ni la del usuario
-            n = int(env.get("GIT_CONFIG_COUNT") or 0)
-        except ValueError:
-            n = 0
-        env.update({"GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "merge.conflictStyle", f"GIT_CONFIG_VALUE_{n}": "diff3"})
+        # la base entre ||||||| en las marcas de conflicto (m4185): sin tocar la config del repo ni la del usuario
+        git_seguro.con_config(env, [("merge.conflictStyle", "diff3")])
         return inversa.con_herramientas(android.con_android(env))
 
     def abrir_android_studio(self, ruta: str = ".") -> str:
@@ -1114,12 +1111,18 @@ class Herramientas:
 
     # ---------- git ----------
     def _git(self, *args: str, linea: str = "") -> tuple[int, str]:
-        """Solo el repositorio de la carpeta del proyecto: nunca sube a uno de una carpeta superior."""
-        env = dict(self._entorno(), GIT_CEILING_DIRECTORIES=str(self.raiz.parent), GIT_TERMINAL_PROMPT="0")
+        """Solo el repositorio de la carpeta del proyecto: nunca sube a uno de una carpeta superior. Las lecturas no ejecutan
+        nada de su .git (git_seguro)."""
+        env = git_seguro.con_config(dict(self._entorno(), GIT_CEILING_DIRECTORIES=str(self.raiz.parent),
+                                         GIT_TERMINAL_PROMPT="0"), git_seguro.SIEMPRE)
         base = ["git", "--no-pager", "-c", "color.ui=false", "-c", "core.quotepath=false"]
-        r = subprocess.run(subprocess.list2cmdline(base) + " " + linea if linea else base + list(args), cwd=self.raiz,
-                           env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
-                           creationflags=subprocess.CREATE_NO_WINDOW, check=False)
+
+        def correr(resto, entorno):
+            orden = subprocess.list2cmdline(base) + " " + resto if isinstance(resto, str) else base + resto
+            return subprocess.run(orden, cwd=self.raiz, env=entorno, stdin=subprocess.DEVNULL, capture_output=True,
+                                  timeout=120, creationflags=subprocess.CREATE_NO_WINDOW, check=False)
+        resto, env, r = git_seguro.preparar(linea or list(args), env, correr)
+        r = r or correr(resto, env)
         return r.returncode, decodificar(r.stdout + r.stderr).strip()
 
     def _crear_repo(self) -> bool:
@@ -1201,8 +1204,10 @@ class Herramientas:
             codigo, salida = self._git("status", "--short", "--branch", *rutas)
         elif accion == "diff":
             codigo, salida = self._git("diff", "HEAD", "--stat", "--patch", *rutas)
-            if codigo != 0 and "not a git repository" not in salida:  # aún sin commits: lo preparado
-                codigo, salida = self._git("diff", "--cached", "--stat", "--patch", *rutas)
+            if codigo != 0:  # sin repositorio que leer, git diff solo da su ayuda: se dice por qué no lo hay
+                codigo, salida = self._git("rev-parse", "--git-dir")
+                if codigo == 0:  # aún sin commits: lo preparado
+                    codigo, salida = self._git("diff", "--cached", "--stat", "--patch", *rutas)
             if codigo == 0:
                 _, nuevos = self._git("ls-files", "--others", "--exclude-standard", *rutas)
                 salida = "\n".join(x for x in (salida, nuevos and "Archivos nuevos sin seguimiento:\n" + nuevos) if x)
