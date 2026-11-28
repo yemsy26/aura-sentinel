@@ -5,6 +5,20 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.25] — 2026-11-28 (el .bat que crea Aura ya no activa un .venv que llegó con el proyecto)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
+
+- **Seguridad: el `.bat` que Aura crea con entorno virtual activaba el `.venv` que viniera en la carpeta.** Al abrirlo, también con doble clic, corrían los programas de ese entorno. Afecta a la 4.13.24 y anteriores.
+  Ahora el `.bat` comprueba que `.venv` se creó en esa carpeta. Si no, no lo activa: dice por qué, sale con error y no borra nada.
+- **Los `.bat` ya creados no cambian solos:** pide a Aura que los vuelva a crear. No los abras antes en un proyecto cuyo `.venv` no sea tuyo.
+- **Cambia la conducta:** si mueves o renombras tu proyecto, o creaste su entorno con `uv venv --relocatable`, el `.bat` se detiene. Borra la carpeta `.venv` y vuelve a abrirlo: la crea de nuevo e instala lo que diga `requirements.txt`, si lo hay. Los demás paquetes que tuviera hay que reinstalarlos.
+- Sin cubrir: un `activate.bat` falsificado por quien sepa la ruta de destino; un `python.bat` o `python.exe` en la raíz del proyecto; un `.bat` escrito a mano, o el que llegue con el propio proyecto ajeno; una orden que llame a `.venv\Scripts\...` por su ruta; `uv run` y `uv pip`.
+- Medido: 1109 pruebas pasan, 4 omitidas (7 nuevas); ruff limpio. Probado también con `python` como `.bat` intermedio y con solo el lanzador `py`.
+  **No medido:** no se ha probado con el modelo real ni desde la aplicación.
+
+---
+
 ## [4.13.24] — 2026-11-28 (un .venv que llega con el proyecto ya no se ejecuta)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
