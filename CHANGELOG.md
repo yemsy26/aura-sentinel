@@ -5,6 +5,18 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.23] — 2026-11-28 (analizar un proyecto grande ya no ejecuta archivos de la carpeta, y el código descargado durante la tarea no cuenta como de Aura)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
+
+- **Seguridad: analizar un proyecto grande podía ejecutar código de la carpeta.** Cuando las rutas no cabían en una orden de Windows, la búsqueda de código sin usar ejecutaba un archivo de la raíz del proyecto con el nombre de un módulo del analizador (por ejemplo `vulture.py` o `tomllib.py`), con solo empezar una tarea, también en una auditoría de solo lectura.
+  Afecta a la 4.13.21 y la 4.13.22: actualiza si abres con Aura proyectos que no son tuyos.
+- **El código descargado durante la tarea ya no se toma por trabajo de Aura.** Al empezar con la carpeta vacía y clonar un repositorio, la revisión pedía corregir el código sin usar de terceros y el agente llegaba a borrarlo. Ahora los `.py` que aparecen sin que Aura los haya escrito cuentan como código que ya estaba. En modo grande no cambia nada.
+- Medido: 1095 pruebas pasan, 4 omitidas (7 nuevas); ruff limpio. Con una copia de un repositorio real de unos 1100 archivos `.py`, el código sin usar atribuido a la tarea pasa de 176 avisos a 0, y el análisis da la misma salida que antes del arreglo de seguridad.
+  **No medido:** ninguno de los dos cambios se ha probado con el modelo real.
+
+---
+
 ## [4.13.22] — 2026-11-27 (Aura usa herramientas externas MCP, al auditar no ejecuta código ajeno y los `.bat` ya no cortan sus mensajes)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
