@@ -5,6 +5,19 @@ Todos los cambios relevantes del proyecto se documentan aquí. Formato: `[versi�
 
 ---
 
+## [4.13.24] — 2026-11-28 (un .venv que llega con el proyecto ya no se ejecuta)
+
+Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
+
+- **Seguridad: Aura ejecutaba el `.venv` que viniera en la carpeta.** Consultar la versión de un paquete de PyPI, también en una auditoría de solo lectura, corría su `.venv\Scripts\python.exe`, y las órdenes del agente, `git` incluido, tenían sus `Scripts` delante en el PATH. Afecta a la 4.13.23 y anteriores (al menos desde la 4.2.0): actualiza si abres con Aura proyectos que no son tuyos.
+  Ahora solo se usa un `.venv` creado en esa misma carpeta (con `python -m venv`, `uv venv` o `virtualenv`). Otro no se ejecuta ni entra en el PATH, y el resultado de la orden lo avisa.
+- **Cambia la conducta:** si mueves o renombras tu proyecto, o creaste su entorno con `uv venv --relocatable`, Aura deja de usar ese `.venv` hasta que lo rehagas con `python -m venv --clear .venv`. Esa orden borra los paquetes instalados en él: hay que reinstalarlos.
+- Sin cubrir: una orden que llame a `.venv\Scripts\...` por su ruta; un `.bat` que lo active, incluidos los que crea Aura con entorno virtual; `uv run` y `uv pip`; un `python.bat` en la raíz del proyecto; un `activate.bat` falsificado por quien sepa la ruta de destino.
+- Medido: 1102 pruebas pasan, 4 omitidas (7 nuevas); ruff limpio. Un `.venv` creado con virtualenv 20.32.0 se sigue usando y su copia en otra carpeta no.
+  **No medido:** no se ha probado con el modelo real ni desde la aplicación; Poetry no se ha probado.
+
+---
+
 ## [4.13.23] — 2026-11-28 (analizar un proyecto grande ya no ejecuta archivos de la carpeta, y el código descargado durante la tarea no cuenta como de Aura)
 
 Cambia solo el motor; el programa de escritorio es el de la 4.13.10.
